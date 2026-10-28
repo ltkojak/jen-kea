@@ -130,7 +130,18 @@ def valid_ssh_target(value):
     value = (value or "").strip()
     if not value or value.startswith("-"):
         return False
+    if "%" in value:
+        return False  # Q201 (AQ5): an interface scope is not part of an address a certificate can carry (`ssh_target_problem` says so)
     return valid_hostname(value) or valid_ip(value)
+
+
+def ssh_target_problem(value) -> str:
+    """Q201 (AQ5): the sentence for a scoped IPv6 literal `valid_ssh_target` refuses ("" for anything else): DER has no scope, so a certificate issued for `fe80::1%eth0` names `fe80::1` and the record
+    would never compare equal with the host as written."""
+    value = (value or "").strip()
+    if "%" in value and valid_ip(value):
+        return "a certificate cannot carry an interface scope - use the address without it, or a name"
+    return ""
 
 
 def valid_unix_username(value):
@@ -311,6 +322,10 @@ def _endpoint_parts(u):
     except ValueError:
         ip = None  # a name
     if ip is not None:
+        if isinstance(ip, ipaddress.IPv6Address) and ip.scope_id:
+            ip = ipaddress.IPv6Address(
+                ip.packed
+            )  # Q201 (AQ5): a scope is folded away - a certificate cannot carry one, so `fe80::1%eth0` and `fe80::1` are one place to every comparison
         host = str(getattr(ip, "ipv4_mapped", None) or ip)
     return (scheme, host, port) if host else None
 

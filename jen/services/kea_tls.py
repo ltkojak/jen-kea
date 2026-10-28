@@ -1042,7 +1042,7 @@ def name_refusal_remedy(names, rotating: bool = False, prepared: bool = False) -
     return "change the address Jen dials, or replace the CA with Rotate Kea CA (no acknowledgement is needed - the CA is not damaged)"
 
 
-def other_record_on_same_daemon(server: dict, service: str, servers, url_for=None) -> str:
+def other_record_on_same_daemon(server: dict, service: str, servers, url_for=None, for_setup: bool = False) -> str:
     """Q197 (AM5): the NAME of ANOTHER server record that shares this record's SSH host (`same_host`: exact, no DNS) and already holds a Jen-issued record for `service` - "" when there is none. The rule
     the rotation applies (Q196 AL2: one daemon is one target) asked where the world is MADE: an https setup on a second record for the same daemon would put a certificate on the fixed remote paths
     that the first record's copy then no longer matches."""
@@ -1061,8 +1061,8 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
         other_ssh = (other.get("ssh_host") or "").strip()
         if not other_ssh or not (ssh == other_ssh or same_host(ssh, other_ssh)):
             continue
-        if not (url_for(other, service) or "").strip().lower().startswith("https://"):
-            continue  # (second pass, F3) a record whose endpoint is not https now is STALE - Rotate ignores it, so it is no second owner of the daemon
+        if not for_setup and not (url_for(other, service) or "").strip().lower().startswith("https://"):
+            continue  # (Q201 AQ4: the SETUP counts a parked twin - the certificate it installs lands at that daemon's fixed remote paths whatever scheme Jen dials it on; the rotation keeps this exemption) (second pass, F3) a record whose endpoint is not https now is STALE - Rotate ignores it, so it is no second owner of the daemon
         if record_state(other.get("id"), service, server=other, url=url_for(other, service))[0] in (
             *JEN_STATES,
             "refuse",
@@ -1786,67 +1786,104 @@ def _server_label(server: dict, service: str) -> str:
 JEN_STATES = ("jen", "jen-stale")
 
 
-def _certificate_names(cert) -> list:
-    """The DNS names and IP addresses a server certificate carries as SANs ([] when it has no SAN extension, or one that cannot be read)."""
+def _certificate_roles(cert) -> tuple:
+    """Q201 (AQ1): `(bind_name, ssh_name)` of a server certificate Jen issued - read from the ORDER of its SANs, which `issue_server_cert` writes as `[bind address, SSH host]` (deduplicated when equal) and
+    DER keeps: the FIRST name is the address the daemon serves (the bind role), the LAST is the machine the helper installed it on (the SSH role), one name is both, no SAN is `(None, None)`.
+    Never grouped by type: a mixed certificate (an IP first, a DNS name second) is read in the order it was written."""
     try:
         sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
     except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
-        return []
-    return [str(v) for v in sans.get_values_for_type(x509.DNSName)] + [
-        str(v) for v in sans.get_values_for_type(x509.IPAddress)
-    ]
+        return None, None
+    names = [str(g.value) for g in sans if isinstance(g, x509.DNSName | x509.IPAddress)]
+    if not names:
+        return None, None
+    return names[0], names[-1]
 
 
 def ssh_host_refusal(cert, server) -> str:
-    """Q200 (AP1): "" when the SSH host Jen will LOG INTO (the mutation target: the helper installs the pair there and restarts the daemon) is one of the names the certificate was issued for, else
-    the sentence. A URL match proves nothing about the machine the helper reaches (Q199 let any name match any SAN, so an SSH host moved to another machine with the URL unchanged was accepted, and the
-    rollback then put the old host's pair on the new one). No SSH host configured, or a certificate with no SAN, names no destination here and is not judged. `same_host`: no DNS, a dot is a different name."""
+    """Q200 (AP1), by role since Q201 (AQ1): "" when the SSH host Jen will LOG INTO (the mutation target: the helper installs the pair there and restarts the daemon) is the name the certificate was
+    INSTALLED ON - its SSH-role name, compared with `same_host` (no DNS, a dot is a different name) - else the sentence. A URL match proves nothing about the machine the helper reaches, and neither does
+    the certificate's other name: the bind-role name is compared with the URL, never with the SSH host. No SSH host configured, or a certificate with no SAN, names no destination here."""
     from jen.services.auth import same_host
 
     ssh = ((server or {}).get("ssh_host") or "").strip()
-    names = _certificate_names(cert)
-    if not ssh or not names or any(same_host(n, ssh) for n in names):
+    _bind_name, ssh_name = _certificate_roles(cert)
+    if (
+        not ssh or ssh_name is None or ssh_name == ssh or same_host(ssh_name, ssh)
+    ):  # (identical text is one name whether or not `same_host` can parse it)
         return ""
     return (
-        f"its certificate was issued for {', '.join(names)}; this record's SSH host is now {ssh}, a different machine - remove the direct socket and set it up again on it, "
+        f"its certificate names {ssh_name} as the machine it was installed on; this record's SSH host is now {ssh}, a different machine - remove the direct socket and set it up again on it, "
         "or restore the previous SSH host"
     )
 
 
-def orphan_verdict(server_id, service: str) -> str:
-    """Q200 (AP3): which CA issued the certificate an ORPHAN group (no live pair) still holds - the `.prev` pair first (by the stale-marker contract it is what the host holds), else a lone live or
-    previous certificate. "superseded": issued by the CA a rotation replaced (`kea-ca.crt.prev`); "current": by the live CA; "external": by neither; "unknown": no certificate that loads can say
-    (a lone key, a lone marker, a certificate that does not parse) - the caller records `remote-unknown`, never silence."""
+def _group_certificate(server_id, service: str):
+    """Q201 (AQ2): `(certificate | None, [file names present])` - the certificate that represents what the HOST holds for this record GROUP, by the rule `host_material` uses: the live certificate when it
+    loads and no stale marker says otherwise; the `.prev` certificate when the live copy is stale-marked, or when the live copy is absent or unreadable; NEVER `.staged` (a host never accepted it)."""
     crt = server_copy_path(server_id, service)
-    for path in (crt + ".prev", crt):
-        if not os.path.lexists(path):
-            continue
+    files = sorted(os.path.basename(p) for p in _record_paths(server_id, service) if os.path.lexists(p))
+
+    def loaded(path):
+        try:
+            with open(path, "rb") as f:
+                return x509.load_pem_x509_certificate(f.read())
+        except (OSError, ValueError):
+            return None
+
+    live, prev = loaded(crt), loaded(crt + ".prev")
+    if is_stale(server_id, service):
+        return (
+            prev,
+            files,
+        )  # (the stale marker: the host holds the previous pair; one that does not load is no evidence, not the live copy's)
+    return (live if live is not None else prev), files
+
+
+def _group_certificate_path(server_id, service: str) -> str:
+    """The path `_group_certificate` read (for `issued_by`, which takes paths): "" when no certificate loads."""
+    crt = server_copy_path(server_id, service)
+    order = (crt + ".prev", crt) if is_stale(server_id, service) else (crt, crt + ".prev")
+    for path in order:
         try:
             with open(path, "rb") as f:
                 x509.load_pem_x509_certificate(f.read())
+            return path
         except (OSError, ValueError):
+            if is_stale(server_id, service):
+                return ""
             continue
-        previous_ca = ca_paths()[0] + ".prev"
-        if os.path.lexists(previous_ca) and issued_by(path, previous_ca):
-            return "superseded"
-        if issued_by(path, ca_paths()[0]):
-            return "current"
-        try:
-            with open(path, "rb") as f:
-                issuer = x509.load_pem_x509_certificate(f.read()).issuer
-        except (OSError, ValueError):
-            return "unknown"
-        if any(a.value == "Jen" for a in issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
-            return "superseded"  # (second pass F2: a Jen CA from two rotations ago is still an earlier Jen CA, the same test `record_state` makes)
-        return "external"
-    return "unknown"
+    return ""
+
+
+def group_verdict(server_id, service: str) -> str:
+    """Q201 (AQ6 f; Q200 AP3 as `orphan_verdict`): which CA issued the certificate a record GROUP still holds - judged for a parked LIVE pair and for an orphan by the SAME rule, the certificate that
+    represents the host (`_group_certificate`: stale marker first). "superseded": issued by the CA a rotation replaced (`kea-ca.crt.prev`) or by any earlier Jen CA; "current": by the live CA OR by the
+    PREPARED one (`.next` - a pair from the CA about to be adopted is never an earlier CA's); "external": by neither; "unknown": no certificate that loads can say (a lone key, a lone marker, a malformed
+    certificate) - the caller records `remote-unknown`, never silence and never a guess."""
+    path = _group_certificate_path(server_id, service)
+    if not path:
+        return "unknown"
+    live_ca = ca_paths()[0]
+    previous_ca, prepared_ca = live_ca + ".prev", live_ca + ".next"
+    if os.path.lexists(previous_ca) and issued_by(path, previous_ca):
+        return "superseded"
+    if issued_by(path, live_ca) or (os.path.lexists(prepared_ca) and issued_by(path, prepared_ca)):
+        return "current"
+    try:
+        with open(path, "rb") as f:
+            issuer = x509.load_pem_x509_certificate(f.read()).issuer
+    except (OSError, ValueError):
+        return "unknown"
+    if any(a.value == "Jen" for a in issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
+        return "superseded"  # (a Jen CA from two rotations ago is still an earlier Jen CA, the same test `record_state` makes)
+    return "external"
 
 
 def _destination_refusal(cert, server, url) -> str:
-    """Q200 (AP1), replacing Q199's any-of-any: "" when the certificate Jen saved was issued for the daemon this server record names NOW, else the sentence. The comparison is BY ROLE and BOTH must hold,
-    each on its own: the configured `ssh_host` (the machine the helper modifies) names one of the certificate's SANs, AND the URL's host (the endpoint Jen dials) names one. A server certificate Jen issues
-    carries the bind address (the URL host) and the SSH host as its SANs and has since the module's first commit, so a name that matches neither role is another machine. A name configured as empty is not
-    judged; a certificate with no SAN names no destination. `same_host` decides what equates two names (no DNS, a dot is a different name): a legitimate alias it cannot equate is a refusal with the sentence, by design."""
+    """Q200 (AP1), by role since Q201 (AQ1): "" when the certificate Jen saved was issued for the daemon this server record names NOW, else the sentence. BOTH hold, each against its OWN name: the
+    configured `ssh_host` is the SSH-role name (the machine the helper modifies) AND the URL's host is the bind-role name (the address Jen dials). A name that matches the OTHER role proves nothing -
+    the roles are in the certificate's SAN order. A name configured as empty is not judged; a certificate with no SAN names no destination. `same_host` decides what equates two names (no DNS)."""
     from urllib.parse import urlparse
 
     from jen.services.auth import same_host
@@ -1854,31 +1891,49 @@ def _destination_refusal(cert, server, url) -> str:
     refusal = ssh_host_refusal(cert, server)
     if refusal:
         return refusal
-    names = _certificate_names(cert)
+    bind_name, _ssh_name = _certificate_roles(cert)
     try:
         url_host = urlparse(url or "").hostname or ""
     except ValueError:
         url_host = ""
-    if names and url_host and not any(same_host(n, url_host) for n in names):
+    if bind_name is not None and url_host and not (bind_name == url_host or same_host(bind_name, url_host)):
         return (
-            f"its certificate was issued for {', '.join(names)}; this record's address is now {url_host}, a different daemon - remove the direct socket and set it up again, "
+            f"its certificate names {bind_name} as the address it serves; this record's address is now {url_host}, a different daemon - remove the direct socket and set it up again, "
             "or restore the previous address"
         )
     return ""
 
 
 def record_destination_refusal(server_id, service: str, server, url: str) -> str:
-    """Q200 second pass (F1): the destination sentence for the certificate Jen keeps for this server and service, whatever state `record_state` gave it - "" when the record names the machine and
-    address the configuration names now, when there is no readable certificate (nothing to compare), or when it was not issued by Jen. The recovery entry point asks THIS before it turns a
-    `none` / `refuse` state into a target, because an override of a state must not override the wall."""
-    try:
-        with open(server_copy_path(server_id, service), "rb") as f:
-            cert = x509.load_pem_x509_certificate(f.read())
-    except (OSError, ValueError):
+    """Q200 second pass (F1), Q201 (AQ2): the destination sentence for the certificate that represents what the HOST holds for this record GROUP (`_group_certificate`: the live certificate, the `.prev`
+    one when stale-marked or when the live one is absent or unreadable, never `.staged`) - "" when it names the machine and address the configuration names now, when no certificate loads (nothing to
+    compare: `record_group_refusal` is the caller that refuses THAT), or when it was not issued by Jen."""
+    cert, _files = _group_certificate(server_id, service)
+    if cert is None or not any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
+        return ""
+    return _destination_refusal(cert, server, url)
+
+
+def record_group_refusal(server_id, service: str, server, url: str, label: str) -> str:
+    """Q201 (AQ2): what a damaged-CA RECOVERY may not override. The destination sentence of the record group's certificate; or, when the group holds files and NO certificate loads (a lone key, a lone
+    stale marker, an unreadable pair), the sentence that says so - a recovery REFUSES that target instead of making it one. A record with NO files at all keeps the recovery's override by design: there is
+    nothing to compare, and the replacement issues it a pair afresh."""
+    cert, files = _group_certificate(server_id, service)
+    if cert is None:
+        if files:
+            return (
+                f"Jen holds {', '.join(files)} for {label} but no certificate that says which machine they belong to; remove the direct socket and set it up again, "
+                "or restore the previous host, before rotating"
+            )
         return ""
     if not any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
         return ""
-    return _destination_refusal(cert, server, url)
+    wall = _destination_refusal(cert, server, url)
+    return (
+        f"{wall}; remove the direct socket and set it up again, or restore the previous host, before rotating"
+        if wall
+        else ""
+    )
 
 
 def record_state(server_id, service: str, recovery: bool = False, server=None, url: str = "") -> tuple[str, str]:
@@ -1896,7 +1951,12 @@ def record_state(server_id, service: str, recovery: bool = False, server=None, u
                 os.path.basename(p) for p in _record_paths(server_id, service) if os.path.lexists(p)
             )  # (Q199 AO6: files of the group with no live pair are not "never issued" - Jen did issue one)
             if leftovers:
-                previous = orphan_verdict(server_id, service)
+                held, _held_files = _group_certificate(server_id, service)
+                if held is not None and (server is not None or url):
+                    moved = _destination_refusal(held, server, url)
+                    if moved:
+                        return "refuse", moved  # (Q201 AQ2: the ordinary sentence names the moved host too)
+                previous = group_verdict(server_id, service)
                 return (
                     "refuse",
                     f"Jen holds only {', '.join(leftovers)} for it and no certificate record"
@@ -1994,12 +2054,11 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
             label = _server_label(server, service)
             state, why = record_state(sid, service, recovery=recovery, server=server, url=url)
             if recovery and state in ("none", "refuse"):
-                wall = record_destination_refusal(sid, service, server, url)
+                wall = record_group_refusal(sid, service, server, url, label)
                 if wall:
-                    # F1: the SSH host is the mutation target in a recovery too - the override below turns a damaged-CA `refuse` into a target, and must not carry a record onto another machine
-                    refusals.append(
-                        f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({wall}); remove the direct socket and set it up again, or restore the previous host, before rotating"
-                    )
+                    # F1 (Q200), AQ2 (Q201): the SSH host is the mutation target in a recovery too, and the record is judged as a GROUP (what the host holds, by `host_material`'s rule). The override
+                    # below turns a damaged-CA `refuse` into a target, and must not carry a record onto another machine - nor accept a group that has files and no certificate to compare
+                    refusals.append(f"{label} is an https endpoint at {shown_url(url)}: {wall}")
                     continue
             if on_jens_own_ca and state in ("none", "refuse"):
                 # Q193 (AI3): Jen verifies this endpoint against its OWN CA - the file being replaced - so it is Jen's, whatever it holds or does not hold for it: the replacement issues it a pair afresh

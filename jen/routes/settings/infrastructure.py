@@ -1748,6 +1748,8 @@ def _not_put_back_reason(tls: dict) -> str:
             if tls.get("why") == "incomplete"
             else "there is no earlier copy"
         )
+    if remote == "failed" and tls.get("why") == "another-machine":
+        return "its saved pair names another machine than this server's SSH host, so Jen did not install it"
     if remote == "ca-unusable":
         return f"Jen's CA became unusable during the operation ({tls.get('why') or 'damaged'}); the certificate Jen kept cannot be reinstalled until the CA is restored"
     return "the helper refused it"
@@ -1790,7 +1792,7 @@ def _put_tls_back(server: dict, service: str) -> dict:
         logger.error(
             f"kea_tls: refused to reinstall the previous pair on server {server.get('id')}/{service}: its certificate was not issued for this server's SSH host"
         )
-        return {"remote": "failed", "local": "ok"}
+        return {"remote": "failed", "local": "ok", "why": "another-machine"}
     if files is None:
         ca_now, ca_now_why = __tls.ca_state()
         kept = os.path.lexists(__tls.server_copy_path(server.get("id"), service) + ".prev") or os.path.lexists(
@@ -1955,6 +1957,43 @@ def _record_is_from_an_earlier_ca(server_id, service: str) -> bool:
     return (state == "refuse" and "earlier Jen CA" in why) or _has_incident(server_id, service, "tls-superseded")
 
 
+def _rotation_dependencies(inventory, rotated: set) -> list:
+    """Q201 (AQ3): the (server, service) pairs a CA rotation does NOT rotate but whose daemon may depend on the CA it replaces - every parked record (an orphan group included) and every record the operator
+    forgot on their word - de-duplicated, in a stable order. These are the records the rotation owes a note for."""
+    out, seen = [], set()
+    candidates = [tuple(ident.partition("-")[::2]) for ident in inventory.parked]
+    from jen.services import kea_changeset as __changeset
+
+    for incident in __changeset.recovery_incidents():
+        if incident.get("category") == "record-forgotten":
+            candidates.append((str(incident.get("server_id")), str(incident.get("service"))))
+    for sid_text, svc in candidates:
+        server = _server_by_id(int(sid_text)) if sid_text.isdigit() else None
+        key = (sid_text, svc)
+        if server is None or (server.get("id"), svc) in rotated or key in seen:
+            continue
+        seen.add(key)
+        out.append((server, svc))
+    return out
+
+
+def _clear_rotation_pending(items) -> None:
+    """Q201 (AQ3): drop the `rotation-pending` notes a rotation wrote when it did not commit; a clear that fails leaves them, and says so (Health and the next Rotate reconcile them from the files)."""
+    from jen.services import kea_changeset as __changeset
+
+    left = []
+    for server, svc in items:
+        __changeset.resolve_attention(server.get("id"), svc, categories=("rotation-pending",))
+        if _has_incident(server.get("id"), svc, "rotation-pending"):
+            left.append(f"{server.get('name') or 'Kea Server ' + str(server.get('id'))} kea-{svc}")
+    if left:
+        flash(
+            f"The rotation did not finish, and the note for {', '.join(left)} could not be cleared - Servers shows it as pending and Health will reconcile it from Jen's files.",
+            "warning",
+        )
+        __user.audit("ROTATE_KEA_CA", "kea_api", f"rotation-pending not cleared: {', '.join(left)}")
+
+
 def _record_incident(server: dict, service: str, operation: str, category: str, detail: str = "") -> bool:
     """Q187 (AC3): an unproved recovery stays in front of the operator (Servers, Health) until a later operation on this server and service probes the endpoint, or a superadmin acknowledges it."""
     from jen.services import kea_changeset as __changeset
@@ -1982,6 +2021,12 @@ def _record_incident(server: dict, service: str, operation: str, category: str, 
     if not kept:
         # Q189 (AE3/AE6e): the one place that says it, for every caller - the recovery record could not be updated, so the flash and the audit row are all there is
         flash(_RECORD_NOT_KEPT, "warning")
+        # Q201 (AQ3): and the audit row says WHAT was not stored
+        __user.audit(
+            "DIRECT_SOCKET_INCIDENT",
+            service,
+            f"not stored: {category} for {server.get('name') or 'Kea Server ' + str(server.get('id'))}"[:500],
+        )
     return bool(kept)
 
 
@@ -2487,7 +2532,7 @@ def setup_direct_socket(server_id, service):
             return back
         if _refused_for_many_sockets(need_read=True):
             return back
-        twin = __tls.other_record_on_same_daemon(server, service, extensions.KEA_SERVERS)
+        twin = __tls.other_record_on_same_daemon(server, service, extensions.KEA_SERVERS, for_setup=True)
         if twin:
             # Q197 (AM5): the rule the rotation applies (one daemon is one target) applied where the world is MADE - before any local or remote change
             flash(
@@ -2502,6 +2547,15 @@ def setup_direct_socket(server_id, service):
         # would not be the ones the running daemon was started with), so no new material is installed at all: the socket is only re-probed.
         already_there = entry in (pre_read.get("api") or [])
         if not already_there:
+            # Q201 (AQ4): the setup asks the destination question of ITS OWN existing record before it stages anything (the SSH role only - a new address on the same machine is a legitimate re-setup): a
+            # pair installed on another machine must never become `.prev`, the source a rollback would put back
+            moved = __tls.record_destination_refusal(server_id, service, server, "")
+            if moved:
+                flash(
+                    f"Jen's record for {name} {daemon}: {moved}. Remove the direct socket first (which sets the record aside), then set it up here. Nothing was changed on {name}.",
+                    "error",
+                )
+                return back
             # Q194 (AJ2): Jen proves, by writing, that it can keep the record of what it is about to install - before it creates a CA or a client pair of its own and before it asks the host for anything
             # (`keep=False`: a refusal changes nothing, and an empty directory would read as evidence that a CA existed); `stage_issued` is the commit that follows
             storage_now = __tls.copies_dir_writable(keep=False)
@@ -2788,7 +2842,8 @@ def setup_direct_socket(server_id, service):
         else tuple(
             c
             for c in __changeset.ATTENTION_CATEGORIES
-            if c not in ("tls-not-restored", "tls-local-stale", "tls-superseded", "record-forgotten")
+            if c
+            not in ("tls-not-restored", "tls-local-stale", "tls-superseded", "record-forgotten", "rotation-pending")
         ),
     )  # ... and the endpoint was just probed and answered as the daemon: a verified recovery of THIS server and service (of the certificate only when this run replaced it, or when the socket presented exactly the one Jen holds)
     flash(f"{daemon} on {name} answers directly at {__auth.shown_url(new_url)} — written: {written}.", "success")
@@ -2912,6 +2967,30 @@ def rotate_kea_ca():
         )
     trust = __tls.trust_kind()  # Q190 (AF1): how the CA bundle relates to Jen's CA, by certificate identity - what may be rewritten after the promotion follows from it
     planned = {(server.get("id"), service) for server, service, _bind in targets}
+    # Q201 (AQ3): the rotation's bookkeeping is written BEFORE the first remote change. Every record this rotation does not rotate but whose daemon may depend on the CA it replaces gets a
+    # `rotation-pending` note, read back; a note that cannot be stored refuses the rotation before anything is staged (as the storage probe does). Notes a previous run left are reconciled first.
+    __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+    pending_written: list = []
+    pending_kept = [False]
+    for dep_server, dep_service in _rotation_dependencies(inventory, planned):
+        dep_label = f"{dep_server.get('name') or 'Kea Server ' + str(dep_server.get('id'))} kea-{dep_service}"
+        if not (
+            _record_incident(
+                dep_server,
+                dep_service,
+                "a CA rotation is changing what this server's daemon depends on",
+                "rotation-pending",
+            )
+            and _has_incident(dep_server.get("id"), dep_service, "rotation-pending")
+        ):
+            _clear_rotation_pending(pending_written)
+            __user.audit("ROTATE_KEA_CA", "kea_api", f"refused: the rotation note for {dep_label} could not be stored")
+            flash(
+                f"Rotate refused — Jen could not write the note that a rotation is changing what {dep_label} depends on (the incident store is unavailable), and a rotation whose bookkeeping cannot be recorded does not start. Nothing was changed.",
+                "error",
+            )
+            return back
+        pending_written.append((dep_server, dep_service))
     record_lost: set = set()  # AE2: the targets whose pair Jen cannot record (the host holds one Jen cannot name)
     probed: set = (
         set()
@@ -3105,6 +3184,7 @@ def rotate_kea_ca():
                 try:
                     promotion_attempted = True
                     __tls.commit_rotation(staged)
+                    pending_kept[0] = True  # (the CA is promoted: the notes are final, and reconciled below)
                 except OSError as e:
                     failure = f"Jen could not promote the new CA locally ({type(e).__name__}, errno {getattr(e, 'errno', '?')})"
         except Exception as e:  # the boundary: nothing escapes with the hosts on one CA and Jen on another
@@ -3314,6 +3394,10 @@ def rotate_kea_ca():
             )
             return back
     finally:
+        if pending_written and not pending_kept[0]:
+            _clear_rotation_pending(
+                pending_written
+            )  # (a rotation that did not commit changed nothing about what any daemon depends on)
         if staged is not None and not reused:
             __tls.discard_rotation(staged)
         elif staged is not None and os.path.lexists(staged["ca_cert"]):
@@ -3339,54 +3423,14 @@ def rotate_kea_ca():
             f"Jen's CA file changed under {configured_ca}: that path is another name for it, so Jen verifies the rotated endpoints against the new CA without a change.",
             "info",
         )
-    for ident in inventory.parked:
-        parked_sid, _sep, parked_svc = ident.partition("-")
-        parked_server = _server_by_id(int(parked_sid)) if parked_sid.isdigit() else None
-        if ident in inventory.orphans:
-            # Q200 (AP3): a group with no live pair is still a daemon's record when it holds a certificate (a `.prev` pair is what the host holds, by the stale-marker contract). The certificate says whose
-            # CA it is: the CA just replaced -> `tls-superseded` as for a live record; the live CA or an external one -> nothing to say; none that can say (a lone key, a lone marker) -> never silence
-            verdict = __tls.orphan_verdict(parked_sid, parked_svc)
-            if parked_server is not None and verdict == "superseded":
-                _record_incident(
-                    parked_server,
-                    parked_svc,
-                    "the CA rotation (this server was not an https endpoint, so it was not rotated)",
-                    "tls-superseded",
-                )
-            elif parked_server is not None and verdict == "unknown":
-                _record_incident(
-                    parked_server,
-                    parked_svc,
-                    f"the CA rotation: Jen cannot tell whether {parked_server.get('name') or 'Kea Server ' + parked_sid} {_DAEMON_NAME.get(parked_svc, parked_svc)}'s daemon depends on the CA just replaced",
-                    "remote-unknown",
-                )
-            continue
-        if parked_server is not None and __tls.record_state(parked_sid, parked_svc)[0] != "external":
-            # (second pass F3: a certificate no Jen CA issued is the administrator's - the rotation did not replace its CA, so there is nothing to say about it)
-            _record_incident(
-                parked_server,
-                parked_svc,
-                "the CA rotation (this server was not an https endpoint, so it was not rotated)",
-                "tls-superseded",
-            )
-    rotated = {(s.get("id"), svc) for s, svc, _b in targets}
-    for incident in __changeset.recovery_incidents():
-        # second pass, F1: a record the operator forgot on their word was the only thing that tied a parked daemon to the CA; the daemon may still present the certificate the CA just replaced
-        if (
-            incident.get("category") != "record-forgotten"
-            or (incident.get("server_id"), incident.get("service")) in rotated
-        ):
-            continue
-        forgotten_server = (
-            _server_by_id(incident.get("server_id")) if isinstance(incident.get("server_id"), int) else None
+    # Q201 (AQ3): the notes are finished from Jen's files - the same judgment for a parked live pair, an orphan group and a forgotten record (`group_verdict`); one that cannot be finished stays
+    # `rotation-pending` and is said, never lost
+    for unfinished in __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS):
+        flash(
+            f"The CA is rotated; the note for {unfinished} could not be updated - Servers shows it as pending and Health will reconcile it.",
+            "warning",
         )
-        if forgotten_server is not None:
-            _record_incident(
-                forgotten_server,
-                incident.get("service"),
-                "the CA rotation (the record of this socket was forgotten, so it was not rotated)",
-                "tls-superseded",
-            )
+        __user.audit("ROTATE_KEA_CA", "kea_api", f"rotated; rotation-pending left for {unfinished}")
     if inventory.parked:
         flash(
             f"Parked, not rotated (not an https endpoint now, so Jen did not touch it): {', '.join(inventory.parked)}. Jen keeps its record and its daemon keeps the certificate it has - issued by the CA Jen has just "
@@ -3505,15 +3549,20 @@ def forget_stale_kea_records():
         server = _server_by_id(int(sid_text)) if sid_text.isdigit() else None
         if server is None:
             return False
-        return bool(
+        stored = bool(
             _record_incident(
                 server,
                 svc,
                 "forgetting a parked certificate record on the operator's word",
                 "record-forgotten",
             )
-        ) and _has_incident(server.get("id"), svc, "record-forgotten")
+        )
+        readable = stored and _has_incident(server.get("id"), svc, "record-forgotten")
+        if stored and not readable:
+            unread.add(ident)  # (Q201 AQ6 h: stored but could not be read back is not the store being down)
+        return readable
 
+    unread: set = set()
     report = __tls.forget_report(
         extensions.KEA_SERVERS, url_for=_configured_url, include_parked=include_parked, fact_first=_fact_first
     )
@@ -3531,10 +3580,20 @@ def forget_stale_kea_records():
             "kea_api",
             f"0 record(s) forgotten on the operator's word: the fact could not be stored for {', '.join(report['no_fact'])}",
         )
-        flash(
-            f"The record was kept: Jen could not write the fact of its removal (the incident store is unavailable), so it deleted nothing of {', '.join(report['no_fact'])}. Try again when the database is back.",
-            "error",
-        )
+        refused_unstored = [i for i in report["no_fact"] if i not in unread]
+        refused_unread = [i for i in report["no_fact"] if i in unread]
+        if refused_unstored:
+            flash(
+                f"The record was kept: Jen could not write the fact of its removal (the incident store is unavailable), so it deleted nothing of {', '.join(refused_unstored)}. Try again when the database is back.",
+                "error",
+            )
+        if refused_unread:
+            flash(
+                f"The record was kept: the fact of its removal was stored but could not be read back, so Jen deleted nothing of {', '.join(refused_unread)}. Try again when the database answers.",
+                "error",
+            )
+    # (Q201 AQ6 h: a record refused for want of a fact was already told apart above; the 'tick the box' hint is for the ones the operator has not yet ticked it for)
+    parked = [i for i in parked if i not in report["no_fact"]]
     if parked:
         # Q198 (AN2): a record for a server that is configured is PARKED, not stale - its daemon may still present that certificate; it is dropped when the socket is removed, or on the operator's word
         flash(
@@ -4052,12 +4111,18 @@ def remove_direct_socket(server_id, service):
         changed.append(
             f"{daemon}'s single control-socket entry was rewritten in the control-sockets list form (the form Kea 2.7.2 and later reads)"
         )
-    if result.status == "ok":
+    if result.status == "ok" or (result.status == "nothing" and result.last_code == "nochange"):
+        # (Q201 AQ4: `nochange` - the config has no Jen socket to remove - proves what a removal proves: the socket is gone, so Jen's copy of its certificate is a record of nothing)
         # (second pass, Q187, findings 4 and 16) a removal proves only that the socket it removed is gone: it clears the "never answered" note of THAT socket. It proves nothing about whether the
         # daemon runs (a Control Agent can answer while kea-dhcp4 is down), so every other category waits for a probe of the daemon or an acknowledgement.
-        __changeset.resolve_attention(
-            server_id, service, categories=("probe-pending", "tls-superseded", "record-forgotten")
-        )
+        if (
+            result.status == "ok"
+        ):  # (a removal that removed NOTHING clears no note: it proves only that Jen's copy of a socket that is not there is a record of nothing)
+            __changeset.resolve_attention(
+                server_id,
+                service,
+                categories=("probe-pending", "tls-superseded", "record-forgotten", "rotation-pending"),
+            )
         from jen.services import kea_tls as __tls_records
 
         dropped_record = __tls_records.discard_local_record(
@@ -4266,7 +4331,11 @@ def save_infra_ssh():
     kea_conf = request.form.get("kea_conf", "").strip()
     dhcp4_log_path = request.form.get("dhcp4_log_path", "").strip()
     if host and not __auth.valid_ssh_target(host):
-        flash("Invalid SSH host — must be a valid hostname or IP address.", "error")
+        flash(
+            "Invalid SSH host — must be a valid hostname or IP address."
+            + (f" {__auth.ssh_target_problem(host)}." if __auth.ssh_target_problem(host) else ""),
+            "error",
+        )
         return redirect(url_for("settings.settings_kea"))
     if user and not __auth.valid_unix_username(user):
         flash("Invalid SSH user — must be a valid unix username.", "error")
@@ -4351,7 +4420,11 @@ def save_extra_servers():
 
     for h in ssh_hosts:
         if h.strip() and not __auth.valid_ssh_target(h.strip()):
-            flash(f"Invalid SSH host: {h.strip()}", "error")
+            flash(
+                f"Invalid SSH host: {h.strip()}"
+                + (f" - {__auth.ssh_target_problem(h)}" if __auth.ssh_target_problem(h) else ""),
+                "error",
+            )
             return redirect(url_for("settings.settings_kea"))
     for u in ssh_users:
         if u.strip() and not __auth.valid_unix_username(u.strip()):

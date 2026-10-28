@@ -3013,6 +3013,167 @@ def test_22_n_a_record_whose_ssh_host_moved_to_another_machine_is_refused_before
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
 
 
+# NOTE (Q201): 22o and 22p are defined with 22l, 22m and 22n, before 22i, for the same reason: they need a healthy CA and kea-a on its https socket.
+S22O_SCRIPT = r"""
+import contextlib, hashlib, inspect, os, types
+from unittest import mock
+from jen.routes.settings import infrastructure as infra
+from jen.services import capabilities, kea_host, kea_tls
+
+ca = kea_tls.ca_paths()[0]
+client = kea_tls.client_paths()
+one = extensions.KEA_SERVERS[0]
+# the second daemon's record: its certificate names the address 10.9.9.9 FIRST (the bind role) and kea-two.lan LAST (the SSH role)
+two = {"id": 2, "name": "kea-two", "ssh_host": "kea-two.lan"}
+kea_tls.issue_server_cert(two, "dhcp4", "10.9.9.9")
+urls = {1: "https://__ADDR__:8014", 2: "https://10.9.9.9:8004"}
+
+
+def records(sid):
+    out = {}
+    for base in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+        for suffix in ("", ".prev", ".stale"):
+            out[os.path.basename(base) + suffix] = (
+                hashlib.sha256(open(base + suffix, "rb").read()).hexdigest() if os.path.lexists(base + suffix) else None
+            )
+    return out
+
+
+def attempt(moved, recovery):
+    flashes, calls = [], []
+    real_helper = kea_host.helper_call
+    before = {"records": {sid: records(sid) for sid in (1, 2)}, "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (ca, kea_tls.ca_paths()[1], client[0], client[1])}}
+    view = inspect.unwrap(infra.rotate_kea_ca)
+    with app.test_request_context(method="POST", data={"acknowledge_damaged_ca": "1"} if recovery else {}), contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+        stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", [one, moved]))
+        stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""))
+        stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""))
+        stack.enter_context(mock.patch.object(kea_host, "helper_call", lambda *a, **k: calls.append(a[1:3]) or real_helper(*a, **k)))
+        stack.enter_context(mock.patch.object(capabilities, "for_server", lambda sid, *a, **k: types.SimpleNamespace(tls=True)))
+        if recovery:
+            stack.enter_context(mock.patch.object(kea_tls, "ca_state", lambda: ("damaged", "the CA key is missing (test)")))
+        view()
+    after = {"records": {sid: records(sid) for sid in (1, 2)}, "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in before["files"]}}
+    return {"flashes": flashes, "helper_calls": len(calls), "records_unchanged": before["records"] == after["records"], "jen_files_unchanged": before["files"] == after["files"]}
+
+
+# step 1 (AQ1): the SSH host changed to the daemon's ADDRESS - a name the certificate carries, in the other role
+step1 = attempt({**two, "ssh_host": "10.9.9.9"}, False)
+# step 2 (AQ2): a damaged-CA recovery with only the .prev pair left of the moved record
+for base in (kea_tls.server_copy_path(2, "dhcp4"), kea_tls.server_key_path(2, "dhcp4")):
+    os.replace(base, base + ".prev")
+step2 = attempt({**two, "ssh_host": "10.9.9.77"}, True)
+for base in (kea_tls.server_copy_path(2, "dhcp4"), kea_tls.server_key_path(2, "dhcp4")):
+    os.replace(base + ".prev", base)
+emit({"step1": step1, "step2": step2})
+kea_tls.discard_local_record(2, "dhcp4")
+"""
+
+
+def test_22_o_a_role_swapped_ssh_host_and_a_group_with_only_a_previous_pair_are_refused_before_anything_is_installed(
+    stack,
+):
+    """REMOTE-001 section 6a / Q201 (AQ1, AQ2): kea-a is really on an https socket Jen issued the certificate for. A second record's certificate names 10.9.9.9 (the address it serves) and kea-two.lan (the
+    machine it was installed on). (1) Its SSH host is changed to 10.9.9.9 - the OTHER role's name: refused, the helper never called. (2) In a damaged-CA recovery, with only the `.prev` pair left of that
+    record and its SSH host moved to a third machine: refused as well - the live certificate being absent is not a reason to accept the host. Both daemons' TLS files and kea-a's daemon config are the baseline."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    baseline_b = _s22_kea_b_tls()
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22O_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    result = emitted(out)
+    assert result is not None, f"no result from the rotations:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    for step in ("step1", "step2"):
+        texts = " ".join(result[step]["flashes"])
+        assert "Rotate refused" in texts and "Kea CA rotated" not in texts, (step, texts)
+        assert result[step]["helper_calls"] == 0, f"INVARIANT: {step}: the helper is not called before the refusal"
+        assert result[step]["records_unchanged"] and result[step]["jen_files_unchanged"], (
+            f"INVARIANT: {step}: a refusal changes nothing"
+        )
+    assert "names kea-two.lan as the machine it was installed on" in " ".join(result["step1"]["flashes"]), result[
+        "step1"
+    ]["flashes"]
+    assert "a different machine" in " ".join(result["step2"]["flashes"]), result["step2"]["flashes"]
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    assert _s22_kea_b_tls() == baseline_b, "INVARIANT: kea-b's TLS folder is untouched"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+S22P1_SCRIPT = r"""
+import contextlib, inspect
+from unittest import mock
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_changeset, kea_tls
+
+flashes = []
+real_commit = kea_tls.commit_rotation
+real_with = kea_changeset._with_attention
+state = {"committed": False}
+
+
+def commit(staged):
+    out = real_commit(staged)
+    state["committed"] = True
+    return out
+
+
+def failing(fn, strict=True):
+    return False if state["committed"] else real_with(fn, strict)
+
+
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(kea_tls, "commit_rotation", commit))
+    stack.enter_context(mock.patch.object(kea_changeset, "_with_attention", failing))
+    view()  # kea-a's configured address is not https here (Control Agent mode): its record is a parked DEPENDENCY the rotation owes a note for
+emit({
+    "flashes": flashes,
+    "committed": state["committed"],
+    "categories": sorted(i.get("category") for i in kea_changeset.recovery_incidents() if i.get("server_id") == 1),
+})
+"""
+
+S22P2_SCRIPT = r"""
+from jen.services import health, kea_changeset
+
+row = health._kea_tls_expiry({})  # the store answers again: Health finishes the note from Jen's files
+emit({"categories": sorted(i.get("category") for i in kea_changeset.recovery_incidents() if i.get("server_id") == 1), "health": [row.status, row.detail]})
+"""
+
+
+def test_22_p_a_note_the_database_could_not_take_after_the_commit_stays_pending_and_health_finishes_it(stack):
+    """REMOTE-001 section 6a / Q201 (AQ3): kea-a is really on an https socket Jen issued the certificate for, and Jen is in Control Agent mode, so its record is a parked dependency. The rotation writes its
+    `rotation-pending` note BEFORE it stages anything; the database is then made to fail for every note written AFTER the CA is promoted. The CA is rotated, the pending note REMAINS (never lost),
+    the page says so; once the store answers, Health finishes the note from the files (`tls-superseded`) and the pending one is gone. A removal then a setup leaves the world healthy for the scenarios after."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    out, proc = st.jen_py(S22P1_SCRIPT, timeout=500)
+    first = emitted(out)
+    assert first is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(first["flashes"])
+    assert first["committed"] and "Kea CA rotated" in texts, texts
+    assert "could not be updated" in texts and "Health will reconcile it" in texts, texts
+    assert first["categories"] == ["rotation-pending"], first["categories"]
+    out, proc = st.jen_py(S22P2_SCRIPT, timeout=200)
+    second = emitted(out)
+    assert second is not None, f"no result from Health:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    assert second["categories"] == ["tls-superseded"], second
+    # remove, then set up again: the same recovery 22m ends with
+    out, proc = st.jen_py(S22M3_SCRIPT, timeout=500)
+    assert emitted(out) is not None, f"no result from the removal:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    ip = st.container_ip(st.KEA_A)
+    out, proc = _s22_run("write-ok", scheme="https", port="8014", probe=f"https://{ip}:8014")
+    recovered = emitted(out)
+    assert recovered is not None and recovered["answers"] is True, (recovered, proc.stderr[-1500:])
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
 def test_22_m_a_daemon_a_rotation_left_behind_is_a_fact_the_setup_names_the_action_and_removal_with_a_setup_recovers(
     stack,
 ):

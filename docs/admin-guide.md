@@ -314,13 +314,15 @@ the setup tells you to remove the direct socket and set it up again. Forget neve
 drops a parked record unless you tick its box ("no daemon presents these any more"),
 and then Servers keeps a note that the record was forgotten on your word; removing
 the socket under Settings → Kea drops it and ends both notes. The certificate Jen
-keeps names the host it was issued for: the SSH host Jen logs into and the address it dials must each be one of those names. If a server record's SSH host is moved to
+keeps names the host it was issued for, in two roles: the address the daemon serves (the certificate's first name) and the machine Jen installed it on (its last name). The address Jen dials
+must be the first and the SSH host Jen logs into must be the last - a name that is only the OTHER role's does not count, so changing the SSH host to the daemon's address
+(the same machine, written differently) is refused like any alias: remove the direct socket and set it up again. If a server record's SSH host is moved to
 another machine, or its address is pointed at a different daemon, Rotate refuses it (and says so) instead of treating the old
 daemon's certificate as the new one's, and the setup for the new host replaces it.
 Files Jen holds for a server with no certificate record (a key whose certificate is
 gone) are shown as such and are forgotten the same way; a file in the folder whose
 name Jen does not write is named and never touched. A save of the additional
-servers that removes a server names the certificate records it dropped. A record for a server that is **no longer configured**
+servers that removes a server names the certificate records it dropped. A rotation writes a note on Servers (`rotation-pending`) for every record it does not rotate before it changes anything, and finishes it after the new CA is in place; if the database cannot take the final note the rotation still completes, the note stays pending, and Health finishes it by itself once the database answers. A scoped IPv6 address (`fe80::1%eth0`) is not accepted as an SSH host: a certificate cannot carry an interface scope. A record for a server that is **no longer configured**
 is **stale**: nothing can present that certificate, Rotate ignores it, Health
 does not count it and says "stale record for ...", and a superadmin can press
 **Forget stale records** on the Kea CA card; that is a local change that asks no

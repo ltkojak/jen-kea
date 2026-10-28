@@ -48,6 +48,7 @@ the flash lines from `ChangeSetResult.lines` themselves; this module
 never calls `flash()`.
 """
 
+import contextlib
 import logging
 import os
 from dataclasses import dataclass, field
@@ -834,6 +835,7 @@ ATTENTION_CATEGORIES = {
     "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
     "tls-superseded": "A server that is not dialled over https now may still run a certificate from a CA Jen has since replaced. When it is dialled over https again, remove its direct socket and set it up again.",
     "record-forgotten": "Jen's record of a certificate was forgotten on the operator's word while the daemon may still present it; its expiry is not watched. A later setup of the socket, or its removal, ends this.",
+    "rotation-pending": "A CA rotation changed what this server's daemon depends on and has not finished recording it. Health and the next Rotate reconcile it from Jen's files.",
 }
 
 
@@ -1085,3 +1087,48 @@ def apply_change(service: str, mutate_fn, summary: str, **kwargs) -> ChangeSetRe
     result = _run_change(service, mutate_fn, summary, **kwargs)
     record_outcome(result, service, summary)
     return result
+
+
+def reconcile_rotation_pending(servers) -> list:
+    """Q201 (AQ3): finish the bookkeeping of a CA rotation from Jen's FILES. A `rotation-pending` incident (written for every record the rotation does not rotate - a parked daemon, an orphan group, a
+    forgotten record - BEFORE the first remote change) is replaced by what the files say now: `tls-superseded` when the record's certificate was issued by a CA that has since been replaced, `remote-unknown`
+    when no certificate can say, nothing when the record is the live CA's or an administrator's (a rotation that never committed leaves the files as they were, so its note is simply dropped). Returns the
+    labels whose note could NOT be reconciled (the store failed; the pending incident stays and is retried by the next call - Health's, or the next Rotate's)."""
+    from jen.services import kea_tls
+
+    still = []
+    for incident in recovery_incidents():
+        if incident.get("category") != "rotation-pending":
+            continue
+        sid, service = incident.get("server_id"), str(incident.get("service") or "")
+        server = next((s for s in servers or [] if str(s.get("id")) == str(sid)), None)
+        name = (server or {}).get("name") or incident.get("server_name") or f"Kea Server {sid}"
+        label = f"{name} kea-{service}"
+        if server is None:
+            resolve_attention(
+                sid, service, categories=("rotation-pending",)
+            )  # the server is gone: nothing depends on it
+            continue
+        _cert, files = kea_tls._group_certificate(sid, service)
+        forgotten = any(
+            i.get("category") == "record-forgotten"
+            and str(i.get("server_id")) == str(sid)
+            and i.get("service") == service
+            for i in recovery_incidents()
+        )
+        verdict = "superseded" if (not files and forgotten) else kea_tls.group_verdict(sid, service)
+        final = {"superseded": "tls-superseded", "unknown": "remote-unknown"}.get(verdict)
+        if final:
+            operation = (
+                "the CA rotation (this server was not an https endpoint, so it was not rotated)"
+                if final == "tls-superseded"
+                else f"the CA rotation: Jen cannot tell whether {label}'s daemon depends on the CA just replaced"
+            )
+            if final == "remote-unknown" and not kea_tls.is_stale(sid, service):
+                with contextlib.suppress(OSError):
+                    kea_tls.mark_unknown(sid, service)
+            if not record_attention(sid, service, operation, final, server_name=name):
+                still.append(label)
+                continue
+        resolve_attention(sid, service, categories=("rotation-pending",))
+    return still

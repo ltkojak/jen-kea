@@ -31,6 +31,7 @@ Pure - no database, no Kea, no SSH (`pytest --noconftest tests/test_kea_tls_rota
 
 import copy
 import inspect
+import ipaddress
 import logging
 import os
 import pathlib
@@ -166,6 +167,10 @@ class Lab:
         self.hosts = {
             sid: {"files": None, "loaded": None, "installs": [], "restarts": 0, "calls": {}} for sid in SERVERS
         }
+        # Q201 (AQ6 a): the Lab routes a helper call by MACHINE, not by server id. `machine_addr` is the SSH address of the machine each `hosts` entry IS; a server whose `ssh_host` is changed reaches the
+        # machine that address names (`machine_for`), or a THIRD machine (`third_machines`) when it names none the Lab has - so "the helper installed on the wrong machine" is OBSERVED.
+        self.machine_addr = {sid: s.get("ssh_host") for sid, s in SERVERS.items()}
+        self.third_machines = {}
         self.refuse = set()  # (server id, op, nth call of that op): the helper answers not-ok
         self.raise_at = {}  # (server id, op, nth call): an exception the channel raises
         self.faults = {}  # server id -> a persistent fault of the control socket: "refused" | "timeout" | "handshake"
@@ -297,6 +302,25 @@ class Lab:
         self.hosts[sid]["files"] = self.hosts[sid]["loaded"] = copy.deepcopy(files)
         self.answered_before[sid] = self.answers_jens_live_identity(sid)
 
+    def machine_for(self, server):
+        """The machine the helper reaches for this server record RIGHT NOW: the Lab host whose SSH address `same_host` equates with the record's `ssh_host`, else a third machine for that address."""
+        from jen.services.auth import same_host
+
+        ssh = (server.get("ssh_host") or "").strip()
+        for sid, origin in self.machine_addr.items():
+            if origin and ssh and (origin == ssh or same_host(origin, ssh)):
+                return self.hosts[sid]
+        return self.third_machines.setdefault(
+            ssh, {"files": None, "loaded": None, "installs": [], "restarts": 0, "calls": {}}
+        )
+
+    def machines(self) -> dict:
+        """Every machine the Lab has, third machines included - 'both machines byte-equal' is this before == after."""
+        return {
+            **self.hosts,
+            **{f"third:{a}": h for a, h in self.third_machines.items()},
+        }
+
     def add_server(self, sid, name, ssh_host, url, *, jen_issued=True, ca=None, password=None):
         """A server the rotation can see: configured, with a daemon that has loaded a certificate. `jen_issued` False is an administrator-managed endpoint (a certificate Jen's CA did not issue);
         a `password` is a secret the Lab configured, so T4 looks for it."""
@@ -304,6 +328,7 @@ class Lab:
         self.servers[sid] = server
         self.urls[sid] = url
         self.hosts[sid] = {"files": None, "loaded": None, "installs": [], "restarts": 0, "calls": {}}
+        self.machine_addr[sid] = ssh_host
         if jen_issued:
             files = kea_tls.issue_server_cert(server, "dhcp4", ssh_host)
         else:
@@ -323,7 +348,7 @@ class Lab:
     # ── the state before a request, and the invariants after every test ──
     def remote_actions(self) -> int:
         """Every install or restart the route ATTEMPTED - a host that refuses one was still asked (a lost reply may have applied it), so a refusal of the whole request is one where none was asked."""
-        return sum(h["calls"].get("install-tls", 0) + h["calls"].get("service", 0) for h in self.hosts.values())
+        return sum(h["calls"].get("install-tls", 0) + h["calls"].get("service", 0) for h in self.machines().values())
 
     def snapshot(self) -> dict:
         return {
@@ -572,7 +597,7 @@ def lab_world(monkeypatch, tmp_path, caplog):
 
     def helper_call(server, op, payload=None, timeout=60):
         sid = server["id"]
-        host = lab.hosts[sid]
+        host = lab.machine_for(server)  # (Q201 AQ6 a: by MACHINE - the SSH address the record names now)
         n = host["calls"][op] = host["calls"].get(op, 0) + 1
         if (sid, op, n) in lab.raise_at:
             raise lab.raise_at[(sid, op, n)]
@@ -4108,20 +4133,21 @@ class TestTheSecondPassOfQ196:
         )
         assert any("both manage kea-dhcp-ddns on 10.9.9.9" in r for r in inventory.refusals), inventory.refusals
 
-    def test_row_8_two_identical_ssh_host_strings_that_cannot_be_parsed_are_still_one_host(self, lab, monkeypatch):
-        # (Q200: the destination check would refuse a host no certificate can name before the duplicate-daemon rule is asked - this row asks the duplicate rule on its own)
-        monkeypatch.setattr(kea_tls, "_destination_refusal", lambda *a, **k: "")
-        hosts = "h\u200bost"  # a zero-width character: `same_host` cannot name a place, the string is identical
+    def test_row_8_two_identical_ssh_host_strings_that_cannot_be_parsed_are_still_one_host(self, lab):
+        """Rebuilt (Q201 AQ6 d): the odd host is an ASCII name with a control character, which a certificate CAN carry, so both records have a certificate that NAMES it and the destination check passes
+        on its own merits - the duplicate-daemon rule is asked with nothing in the product patched off."""
+        hosts = "h\x07ost"  # a control character: `same_host` cannot name a place, the string is identical
         a = {"id": 61, "name": "odd-a", "ssh_host": hosts}
         b = {"id": 62, "name": "odd-b", "ssh_host": hosts}
         for server in (a, b):
-            kea_tls.issue_server_cert(server, "dhcp4", "10.9.9." + str(server["id"]))
+            _commit_naming(server["id"], ["10.9.9." + str(server["id"]), hosts])
         inventory = kea_tls.rotation_inventory(
             [a, b],
             url_for=lambda s, svc: f"https://10.9.9.{s['id']}:8004" if svc == "dhcp4" else "",
             prove_storage=False,
         )
         assert any("both manage" in r for r in inventory.refusals), inventory.refusals
+        lab.before = None
 
     def test_the_probe_names_are_capped(self):
         from cryptography import x509
@@ -5612,7 +5638,11 @@ class TestARecordCarriesItsDestination:
 
     def test_a_different_daemon_is_refused_and_says_what_to_do(self, lab):
         state, why = self._state(lab, ssh_host="10.0.0.77", url="https://10.0.0.77:8004")
-        assert state == "refuse" and "was issued for 10.0.0.6" in why and "SSH host is now 10.0.0.77" in why, (
+        assert (
+            state == "refuse"
+            and "names 10.0.0.6 as the machine it was installed on" in why
+            and "SSH host is now 10.0.0.77" in why
+        ), (
             state,
             why,
         )
@@ -5630,7 +5660,7 @@ class TestARecordCarriesItsDestination:
         ca_cert, ca_key = kea_tls._load_ca()
         key = kea_tls._new_key()
         cert = kea_tls._leaf(ca_cert, ca_key, key, "kea-dhcp4 no-san", [], client=False)
-        assert kea_tls._certificate_names(cert) == []
+        assert kea_tls._certificate_roles(cert) == (None, None)
         assert kea_tls.ssh_host_refusal(cert, {"id": 5, "ssh_host": "10.0.0.51"}) == ""
         assert kea_tls._destination_refusal(cert, {"id": 5, "ssh_host": "10.0.0.51"}, "https://10.0.0.50:8004") == ""
         bare = {"id": 5, "name": "bare", "ssh_host": ""}
@@ -5649,7 +5679,7 @@ class TestARecordCarriesItsDestination:
         _rotate()
         texts = lab.texts()
         assert "Rotate refused" in texts and "a different machine" in texts, texts
-        assert "was issued for 10.0.0.6" in texts
+        assert "names 10.0.0.6 as the machine it was installed on" in texts
         assert _records(2) == before, "the record is KEPT (recovery material is never destroyed by a reassignment)"
         assert lab.remote_actions() == 0
         row = health._kea_tls_expiry({})
@@ -5728,7 +5758,7 @@ def _hosts_state(lab):
             len(h["installs"]),
             h["restarts"],
         )
-        for sid, h in lab.hosts.items()
+        for sid, h in lab.machines().items()
     }
 
 
@@ -6036,12 +6066,12 @@ class TestAnOrphanIsJudgedByItsPreviousPair:
     def test_record_state_names_the_previous_pairs_state(self, lab):
         self._ghost(lab)
         self._prev_pair_from_current_ca(79)
-        assert kea_tls.orphan_verdict(79, "dhcp4") == "current"
+        assert kea_tls.group_verdict(79, "dhcp4") == "current"
         why = kea_tls.record_state(79, "dhcp4")[1]
         assert "its previous pair was issued by Jen's current CA" in why, why
         lab.before = None
         _rotate()
-        assert kea_tls.orphan_verdict(79, "dhcp4") == "superseded"
+        assert kea_tls.group_verdict(79, "dhcp4") == "superseded"
         assert "its previous pair was issued by an earlier Jen CA" in kea_tls.record_state(79, "dhcp4")[1]
 
     def test_re_enabling_https_after_the_rotation_gives_the_remove_and_set_up_sentence(self, lab):
@@ -6094,10 +6124,10 @@ class TestTheSecondPassOfQ200:
         for path in (kea_tls.server_copy_path(79, "dhcp4"), kea_tls.server_key_path(79, "dhcp4")):
             os.replace(path, path + ".prev")
         _rotate()
-        assert kea_tls.orphan_verdict(79, "dhcp4") == "superseded"
+        assert kea_tls.group_verdict(79, "dhcp4") == "superseded"
         lab.incidents.clear()
         _rotate()
-        assert kea_tls.orphan_verdict(79, "dhcp4") == "superseded", (
+        assert kea_tls.group_verdict(79, "dhcp4") == "superseded", (
             "the second rotation: the CA that issued it is two CAs ago"
         )
         assert (79, "dhcp4", "tls-superseded") in lab.incidents, lab.incidents
@@ -6137,3 +6167,528 @@ class TestTheSecondPassOfQ200:
         monkeypatch.setattr(kea_changeset, "record_attention", lambda *a, **k: False)
         _forget({"include_parked": "1"})
         assert any("the fact could not be stored for 2-dhcp4" in str(a) for a in lab.audits), lab.audits
+
+
+# ── Q201 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def _commit_naming(sid, names, service="dhcp4"):
+    """Commit a record for `sid` whose certificate carries exactly `names`, IN THAT ORDER (the SAN order is the roles), even where today's verifier would refuse to issue one."""
+    ca_cert, ca_key = kea_tls._load_ca()
+    key = kea_tls._new_key()
+    sans = [s for s in (kea_tls._san_for(n) for n in names) if s is not None]
+    cert = kea_tls._leaf(ca_cert, ca_key, key, "kea-dhcp4 named", sans, client=False)
+    files = {
+        "ca.crt": kea_tls._cert_pem(ca_cert).decode(),
+        "server.crt": kea_tls._cert_pem(cert).decode(),
+        "server.key": kea_tls._key_pem(key).decode(),
+    }
+    kea_tls.commit_issued(sid, service, files)
+    return files
+
+
+class TestTheLabRoutesByMachine:
+    """Q201 (AQ6 a): the Lab routes a helper call by the MACHINE the record's SSH host names now, so 'the change landed on the wrong machine' is observed, not inferred."""
+
+    def test_a_record_whose_ssh_host_names_the_other_machine_reaches_that_machine(self, lab):
+        lab.servers[2]["ssh_host"] = lab.servers[1]["ssh_host"]
+        held = copy.deepcopy(lab.hosts[1])
+        kea_host.install_tls(lab.servers[2], "dhcp4", {"ca.crt": "x", "server.crt": "y", "server.key": "z"})
+        assert len(lab.hosts[1]["installs"]) == 1 and lab.hosts[2]["installs"] == []
+        lab.hosts[1].update(
+            held
+        )  # (the test wrote placeholder bytes onto machine 1: put the world back before the invariants look at it)
+        lab.before = None
+
+    def test_a_record_whose_ssh_host_names_no_machine_the_lab_has_reaches_a_third(self, lab):
+        lab.servers[2]["ssh_host"] = "10.0.0.77"
+        kea_host.install_tls(lab.servers[2], "dhcp4", {"ca.crt": "x", "server.crt": "y", "server.key": "z"})
+        assert list(lab.third_machines) == ["10.0.0.77"] and len(lab.third_machines["10.0.0.77"]["installs"]) == 1
+        assert lab.hosts[1]["installs"] == [] and lab.hosts[2]["installs"] == []
+        assert lab.remote_actions() == 1
+        lab.before = None
+
+    def test_an_alias_same_host_equates_reaches_its_own_machine(self, lab):
+        lab.servers[2]["ssh_host"] = "::ffff:10.0.0.6"
+        held = copy.deepcopy(lab.hosts[2])
+        kea_host.install_tls(lab.servers[2], "dhcp4", {"ca.crt": "x", "server.crt": "y", "server.key": "z"})
+        assert len(lab.hosts[2]["installs"]) == 1
+        lab.hosts[2].update(held)
+        lab.before = None
+
+
+class TestTheRolesOfACertificateAreBoundByOrder:
+    """Q201 (AQ1): a server certificate Jen issues carries `[bind address, SSH host]` in its SANs and DER keeps the order; the first name is the address the daemon serves, the last is the machine the helper
+    installed it on, one name is both. Each role is compared with its OWN configured name (reviewer's list, through `record_state` and the real route)."""
+
+    @staticmethod
+    def _arrange(lab, names, ssh_host, url_host):
+        lab.hold_certificate_naming(2, names)
+        lab.servers[2]["ssh_host"] = ssh_host
+        lab.urls[2] = f"https://{url_host}:8004"
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+
+    @staticmethod
+    def _state(lab):
+        return kea_tls.record_state(2, "dhcp4", server=lab.servers[2], url=lab.urls[2])
+
+    def test_ssh_and_api_identical_is_jens(self, lab):
+        self._arrange(lab, ["10.0.0.6"], "10.0.0.6", "10.0.0.6")
+        assert self._state(lab) == ("jen", "")
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+
+    def test_different_names_unchanged_is_jens(self, lab):
+        self._arrange(lab, ["10.0.0.6", "kea-b.lan"], "kea-b.lan", "10.0.0.6")
+        assert self._state(lab) == ("jen", "")
+
+    @pytest.mark.parametrize(
+        ("ssh_host", "url_host"),
+        [
+            ("10.0.0.6", "10.0.0.6"),  # the SSH host changed to the PREVIOUS API NAME (the reviewer's row 1)
+            ("10.0.0.6", "kea-b.lan"),  # the roles swapped
+            ("10.0.0.9", "10.0.0.6"),  # the SSH host to a third name
+            ("kea-b.lan", "10.0.0.9"),  # the API changed, the SSH host constant
+        ],
+    )
+    def test_a_role_that_does_not_match_its_own_name_is_refused_before_anything_is_installed(
+        self, lab, ssh_host, url_host
+    ):
+        self._arrange(lab, ["10.0.0.6", "kea-b.lan"], ssh_host, url_host)
+        assert self._state(lab)[0] == "refuse", self._state(lab)
+        before, records = _hosts_state(lab), _records(2)
+        _rotate()
+        assert "Rotate refused" in lab.texts() and "Kea CA rotated" not in lab.texts(), lab.texts()
+        assert lab.remote_actions() == 0 and _hosts_state(lab) == before and _records(2) == records
+        lab.before = None
+
+    def test_the_roles_are_read_from_the_order_never_from_the_type(self, lab):
+        mixed = _commit_naming(79, ["10.0.0.6", "kea-b.lan"])
+        reversed_ = _commit_naming(78, ["kea-b.lan", "10.0.0.6"])
+        from cryptography import x509
+
+        def cert_of(files):
+            return x509.load_pem_x509_certificate(files["server.crt"].encode())
+
+        assert kea_tls._certificate_roles(cert_of(mixed)) == ("10.0.0.6", "kea-b.lan")
+        assert kea_tls._certificate_roles(cert_of(reversed_)) == ("kea-b.lan", "10.0.0.6")
+        ca_cert, ca_key = kea_tls._load_ca()
+        bare = kea_tls._leaf(ca_cert, ca_key, kea_tls._new_key(), "no san", [], client=False)
+        assert kea_tls._certificate_roles(bare) == (None, None)
+        lab.before = None
+
+    def test_a_one_name_certificate_accepts_that_name_in_both_roles(self, lab):
+        self._arrange(lab, ["10.0.0.6"], "::ffff:10.0.0.6", "10.0.0.6")
+        assert self._state(lab) == ("jen", "")
+        self._arrange(lab, ["10.0.0.6"], "10.0.0.6", "[::ffff:10.0.0.6]")
+        assert self._state(lab) == ("jen", "")
+
+    def test_a_hand_built_certificate_with_the_names_reversed_is_judged_by_its_order(self, lab):
+        """Whatever a human thinks the roles are: the first name is the address it serves, the last is the machine it was installed on."""
+        self._arrange(lab, ["kea-b.lan", "10.0.0.6"], "kea-b.lan", "10.0.0.6")
+        state, why = self._state(lab)
+        assert state == "refuse" and "names 10.0.0.6 as the machine it was installed on" in why, (state, why)
+
+    def test_the_second_wall_refuses_a_prev_pair_whose_ssh_role_name_is_not_the_configured_host(self, lab):
+        _give_prev(2)
+        lab.servers[2]["ssh_host"] = "10.0.0.77"
+        before = _hosts_state(lab)
+        result = infra._put_tls_back(lab.servers[2], "dhcp4")
+        assert result["remote"] == "failed" and result.get("why") == "another-machine", result
+        assert "names another machine" in infra._not_put_back_reason(result)
+        assert infra._reinstall_live_material(lab.servers[2], "dhcp4") == "failed"
+        assert lab.remote_actions() == 0 and _hosts_state(lab) == before, "no machine was asked anything"
+        lab.before = None
+
+    def test_the_rollback_never_installs_host_As_pair_on_host_B_observed_by_machine(self, lab):
+        _give_prev(2, stale=True)
+        lab.servers[2]["ssh_host"] = lab.servers[1]["ssh_host"]  # B is now machine 1
+        before = _hosts_state(lab)
+        assert infra._put_tls_back(lab.servers[2], "dhcp4")["remote"] == "failed"
+        assert lab.hosts[1]["installs"] == [] and _hosts_state(lab) == before
+        lab.before = None
+
+    def test_two_servers_with_swapped_ssh_hosts_are_both_refused(self, lab):
+        one, two = lab.servers[1]["ssh_host"], lab.servers[2]["ssh_host"]
+        lab.servers[1]["ssh_host"], lab.servers[2]["ssh_host"] = two, one
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        before = _hosts_state(lab)
+        _rotate()
+        texts = lab.texts()
+        assert "Rotate refused" in texts and texts.count("a different machine") >= 2, texts
+        assert lab.remote_actions() == 0 and _hosts_state(lab) == before
+        lab.before = None
+
+
+class TestARecoveryJudgesTheRecordGroup:
+    """Q201 (AQ2): a damaged-CA recovery judges the record GROUP by `host_material`'s rule - the live certificate when it loads, the `.prev` one when stale-marked or when the live one is absent or
+    unreadable, never `.staged` - and REFUSES a group that has files and no certificate to compare. A record with no files at all keeps the recovery's override, by design."""
+
+    STATES = ["live", "prev-only", "prev-stale", "prev-earlier-ca", "prev-unreadable", "lone-key", "lone-marker"]
+    MOVES = ["ssh-third", "ssh-parked", "url-other"]
+
+    @staticmethod
+    def _state(lab, name):
+        crt, key = kea_tls.server_copy_path(2, "dhcp4"), kea_tls.server_key_path(2, "dhcp4")
+        if name == "live":
+            return
+        if name == "prev-earlier-ca":
+            # a pair signed by a Jen CA that is neither the live one nor the previous one (the shape of "two rotations ago"), without rotating the Lab's world
+            staged = kea_tls.stage_rotation()
+            try:
+                files = kea_tls.issue_server_cert(
+                    lab.servers[2], "dhcp4", "10.0.0.6", ca=(staged["ca_cert"], staged["ca_key"]), commit=False
+                )
+            finally:
+                kea_tls.discard_rotation(staged)
+            os.unlink(crt)
+            os.unlink(key)
+            pathlib.Path(crt + ".prev").write_text(files["server.crt"], encoding="ascii")
+            pathlib.Path(key + ".prev").write_text(files["server.key"], encoding="ascii")
+        elif name in ("prev-only", "prev-stale", "prev-unreadable"):
+            os.replace(crt, crt + ".prev")
+            os.replace(key, key + ".prev")
+            if name == "prev-stale":
+                kea_tls.mark_stale(2, "dhcp4")
+            if name == "prev-unreadable":
+                pathlib.Path(crt + ".prev").write_text("not a certificate", encoding="ascii")
+        elif name == "lone-key":
+            os.unlink(crt)
+        elif name == "lone-marker":
+            os.unlink(crt)
+            os.unlink(key)
+            pathlib.Path(crt + ".stale").write_bytes(b"")
+
+    @staticmethod
+    def _move(lab, name):
+        if name == "ssh-third":
+            lab.servers[2]["ssh_host"] = "10.0.0.77"
+        elif name == "ssh-parked":
+            lab.add_server(3, "parked", "10.0.0.8", "http://10.0.0.8:8004", jen_issued=True)
+            lab.servers[2]["ssh_host"] = "10.0.0.8"
+        else:
+            lab.urls[2] = "https://10.0.0.5:8004"
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+
+    @pytest.mark.parametrize("move", MOVES)
+    @pytest.mark.parametrize("state", STATES)
+    def test_the_recovery_refuses_every_group_that_is_not_proved_to_belong_to_the_configured_host(
+        self, lab, state, move
+    ):
+        self._state(lab, state)
+        self._move(lab, move)
+        os.unlink(kea_tls.ca_paths()[1])  # the CA is damaged: a recovery
+        before = _hosts_state(lab)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert "Rotate refused" in texts and "Kea CA rotated" not in texts, (state, move, texts)
+        assert lab.remote_actions() == 0, "refused before any install or restart"
+        assert _hosts_state(lab) == before, "every machine's files are byte-equal"
+        lab.before = None
+
+    def test_a_recovery_does_not_accept_host_B_because_the_live_crt_is_missing(self, lab):
+        """THE critical assertion (the reviewer's): if the surviving certificate belongs to host A and Jen is configured to modify host B, a recovery does not accept B because the live `.crt` is missing."""
+        crt, key = kea_tls.server_copy_path(2, "dhcp4"), kea_tls.server_key_path(2, "dhcp4")
+        os.replace(crt, crt + ".prev")
+        os.replace(key, key + ".prev")  # the surviving certificate belongs to host A (10.0.0.6)
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.servers[2]["ssh_host"] = "10.0.0.77"  # Jen is configured to modify host B
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        before = _hosts_state(lab)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Rotate refused" in lab.texts() and "a different machine" in lab.texts(), lab.texts()
+        assert lab.remote_actions() == 0 and _hosts_state(lab) == before
+        assert os.path.lexists(crt + ".prev") and os.path.lexists(key + ".prev"), "every file is preserved on a refusal"
+        lab.before = None
+
+    def test_a_record_with_no_files_at_all_keeps_the_recovery_override_by_design(self, lab):
+        crt, key = kea_tls.server_copy_path(2, "dhcp4"), kea_tls.server_key_path(2, "dhcp4")
+        os.unlink(crt)
+        os.unlink(key)
+        os.unlink(kea_tls.ca_paths()[1])
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        lab.before = None
+
+    def test_the_ordinary_sentence_names_the_moved_host_for_a_prev_only_group(self, lab):
+        crt, key = kea_tls.server_copy_path(2, "dhcp4"), kea_tls.server_key_path(2, "dhcp4")
+        os.replace(crt, crt + ".prev")
+        os.replace(key, key + ".prev")
+        state, why = kea_tls.record_state(
+            2, "dhcp4", server={**lab.servers[2], "ssh_host": "10.0.0.77"}, url=lab.urls[2]
+        )
+        assert state == "refuse" and "SSH host is now 10.0.0.77" in why, (state, why)
+        os.replace(crt + ".prev", crt)
+        os.replace(key + ".prev", key)  # (the world back as it was)
+        lab.before = None
+
+
+class TestRotationBookkeepingIsDurable:
+    """Q201 (AQ3): a rotation's bookkeeping is written BEFORE the first remote change (a `rotation-pending` note per record it does not rotate), read back, finished from Jen's files after the commit, and a
+    note that could not be finished stays pending and is said - never lost."""
+
+    @staticmethod
+    def _ghost(lab, sid=79, files="pair"):
+        ghost = {"id": sid, "name": "ghost", "ssh_host": f"10.0.0.{sid}"}
+        lab.urls[sid] = f"http://10.0.0.{sid}:8004"
+        lab.servers[sid] = ghost
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        if files == "pair":
+            kea_tls.issue_server_cert(ghost, "dhcp4", f"10.0.0.{sid}")
+        elif files == "key":
+            _write_record(sid, ["key"])
+        return ghost
+
+    @staticmethod
+    def _failing(monkeypatch, *categories):
+        real = kea_changeset.record_attention
+
+        def wrapper(sid, svc, op, category, *a, **k):
+            return False if category in categories else real(sid, svc, op, category, *a, **k)
+
+        monkeypatch.setattr(kea_changeset, "record_attention", wrapper)
+        return real
+
+    @staticmethod
+    def _pending(lab):
+        return [i for i in lab.incidents if i[2] == "rotation-pending"]
+
+    def test_all_writes_succeed(self, lab):
+        self._ghost(lab)
+        lab.before = None
+        _rotate()
+        assert "Kea CA rotated" in lab.texts() and (79, "dhcp4", "tls-superseded") in lab.incidents
+        assert self._pending(lab) == []
+
+    def test_the_store_unavailable_before_the_rotation_refuses_it_before_staging(self, lab, monkeypatch):
+        self._ghost(lab)
+        self._failing(monkeypatch, "rotation-pending")
+        ca = _ca_bytes()
+        lab.before = None
+        _rotate()
+        texts = lab.texts()
+        assert "Rotate refused" in texts and "does not start" in texts, texts
+        assert lab.remote_actions() == 0 and _ca_bytes() == ca
+        assert any("not stored: rotation-pending" in str(a) for a in lab.audits), lab.audits
+
+    def test_the_store_failing_after_the_installs_before_the_commit_rolls_back_and_clears_the_notes(
+        self, lab, monkeypatch
+    ):
+        self._ghost(lab)
+        monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+        lab.before = None
+        _rotate()
+        assert "Kea CA rotated" not in lab.texts()
+        assert self._pending(lab) == [], lab.incidents
+
+    def test_the_store_failing_after_the_commit_leaves_the_note_pending_says_so_and_health_reconciles(
+        self, lab, monkeypatch
+    ):
+        self._ghost(lab)
+        real = self._failing(monkeypatch, "tls-superseded")
+        lab.before = None
+        _rotate()
+        texts = lab.texts()
+        assert "Kea CA rotated" in texts and "could not be updated" in texts and "Health will reconcile it" in texts, (
+            texts
+        )
+        assert (79, "dhcp4", "rotation-pending") in lab.incidents and (
+            79,
+            "dhcp4",
+            "tls-superseded",
+        ) not in lab.incidents
+        assert any("rotation-pending left for ghost kea-dhcp4" in str(a) for a in lab.audits), lab.audits
+        monkeypatch.setattr(kea_changeset, "record_attention", real)  # the store answers again ...
+        row = health._kea_tls_expiry({})  # ... and Health finishes the note from the files
+        assert (79, "dhcp4", "tls-superseded") in lab.incidents and self._pending(lab) == [], lab.incidents
+        assert row.status in ("warn", "fail")
+
+    def test_the_next_rotate_reconciles_a_pending_note_before_it_writes_new_ones(self, lab, monkeypatch):
+        self._ghost(lab)
+        real = self._failing(monkeypatch, "tls-superseded")
+        lab.before = None
+        _rotate()
+        assert self._pending(lab)
+        monkeypatch.setattr(kea_changeset, "record_attention", real)
+        _rotate()
+        assert (79, "dhcp4", "tls-superseded") in lab.incidents and self._pending(lab) == [], lab.incidents
+
+    def test_a_failed_remote_unknown_for_an_orphan_is_left_pending(self, lab, monkeypatch):
+        self._ghost(lab, files="key")
+        real = self._failing(monkeypatch, "remote-unknown")
+        lab.before = None
+        _rotate()
+        assert (79, "dhcp4", "rotation-pending") in lab.incidents and "could not be updated" in lab.texts()
+        monkeypatch.setattr(kea_changeset, "record_attention", real)
+        kea_changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+        assert (79, "dhcp4", "remote-unknown") in lab.incidents and self._pending(lab) == []
+
+    def test_a_failed_superseded_after_a_forgotten_record_is_left_pending(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        _forget({"include_parked": "1"})
+        assert (2, "dhcp4", "record-forgotten") in lab.incidents
+        real = self._failing(monkeypatch, "tls-superseded")
+        _rotate()
+        assert (2, "dhcp4", "rotation-pending") in lab.incidents, lab.incidents
+        monkeypatch.setattr(kea_changeset, "record_attention", real)
+        kea_changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+        assert (2, "dhcp4", "tls-superseded") in lab.incidents and self._pending(lab) == []
+
+    def test_the_pending_note_survives_a_restart(self, lab, monkeypatch):
+        self._ghost(lab)
+        self._failing(monkeypatch, "tls-superseded")
+        lab.before = None
+        _rotate()
+        assert (79, "dhcp4", "rotation-pending") in [
+            (i["server_id"], i["service"], i["category"]) for i in kea_changeset.recovery_incidents()
+        ], "a new app on the same store reads the same incident"
+
+    def test_an_unrelated_setup_does_not_clear_a_pending_note_and_a_verified_one_on_the_same_server_does(
+        self, lab, monkeypatch
+    ):
+        self._ghost(lab)
+        self._failing(monkeypatch, "tls-superseded")
+        lab.before = None
+        _rotate()
+        kea_changeset.resolve_attention(2, "dhcp4")  # ANOTHER server's verified setup
+        assert (79, "dhcp4", "rotation-pending") in lab.incidents
+        kea_changeset.resolve_attention(79, "dhcp4")  # THE SAME server's: the dependency is gone
+        assert self._pending(lab) == []
+
+    def test_every_incident_result_the_route_reads_is_audited_when_false(self, lab, monkeypatch):
+        self._ghost(lab)
+        self._failing(monkeypatch, "tls-superseded", "rotation-pending")
+        lab.before = None
+        _rotate()
+        assert any("DIRECT_SOCKET_INCIDENT" in str(a) or "not stored" in str(a) for a in lab.audits), lab.audits
+
+
+class TestTheGroupVerdictIsOneJudgment:
+    """Q201 (AQ6 f): a parked LIVE pair and an orphan are judged by the same function; a malformed certificate is `remote-unknown` in both; the stale marker is consulted before `.prev` is preferred; a pair
+    from the PREPARED CA is never an earlier CA's."""
+
+    @staticmethod
+    def _ghost(lab, sid=79):
+        ghost = {"id": sid, "name": "ghost", "ssh_host": f"10.0.0.{sid}"}
+        lab.urls[sid] = f"http://10.0.0.{sid}:8004"
+        lab.servers[sid] = ghost
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        return ghost
+
+    def test_a_malformed_certificate_is_unknown_for_a_live_pair_and_for_an_orphan(self, lab):
+        self._ghost(lab)
+        _write_record(79, ["crt", "key"])  # placeholder bytes: a live pair that does not load
+        assert kea_tls.group_verdict(79, "dhcp4") == "unknown"
+        _rotate()
+        assert (79, "dhcp4", "remote-unknown") in lab.incidents, lab.incidents
+        lab.before = None
+
+    def test_the_stale_marker_is_consulted_before_prev_is_preferred(self, lab):
+        ghost = self._ghost(lab)
+        kea_tls.issue_server_cert(ghost, "dhcp4", "10.0.0.79")
+        _give_prev(79)
+        crt = kea_tls.server_copy_path(79, "dhcp4")
+        pathlib.Path(crt + ".prev").write_text("not a certificate", encoding="ascii")
+        assert kea_tls.group_verdict(79, "dhcp4") == "current", "not stale: the LIVE certificate represents the host"
+        kea_tls.mark_stale(79, "dhcp4")
+        assert kea_tls.group_verdict(79, "dhcp4") == "unknown", "stale: the host holds .prev, which does not load"
+        lab.before = None
+
+    def test_a_pair_from_the_prepared_ca_is_never_an_earlier_cas(self, lab):
+        ghost = self._ghost(lab)
+        staged = kea_tls.stage_rotation()
+        try:
+            kea_tls.issue_server_cert(ghost, "dhcp4", "10.0.0.79", ca=(staged["ca_cert"], staged["ca_key"]))
+            assert kea_tls.group_verdict(79, "dhcp4") == "current"
+        finally:
+            kea_tls.discard_rotation(staged)
+        lab.before = None
+
+
+class TestTheHealthAndTheFlashesTellTheStateTheyAreIn:
+    """Q201 (AQ6 g, h)."""
+
+    def test_a_forget_that_did_not_finish_on_a_record_that_is_live_again_does_not_say_press_forget(
+        self, lab, monkeypatch
+    ):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        crt = kea_tls.server_copy_path(2, "dhcp4")
+        real = os.unlink
+
+        def failing(path, *a, **k):
+            if str(path) == crt:
+                raise PermissionError(13, "denied")
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(os, "unlink", failing)
+        _forget({"include_parked": "1"})
+        monkeypatch.setattr(os, "unlink", real)
+        assert "press Forget stale records again" in health._kea_tls_expiry({}).detail
+        lab.urls[2] = "https://10.0.0.6:8004"  # the server is an https endpoint again
+        detail = health._kea_tls_expiry({}).detail
+        assert "the record is live again" in detail and "press Forget stale records again" not in detail, detail
+        lab.before = None
+
+    def test_a_refused_forget_does_not_also_say_tick_the_box(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        monkeypatch.setattr(kea_changeset, "record_attention", lambda *a, **k: False)
+        _forget({"include_parked": "1"})
+        texts = lab.texts()
+        assert "The record was kept" in texts and "tick the box beside Forget stale records" not in texts, texts
+
+    def test_a_fact_stored_but_not_readable_says_so(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        monkeypatch.setattr(kea_changeset, "recovery_incidents", lambda strict=False: [])
+        _forget({"include_parked": "1"})
+        assert "stored but could not be read back" in lab.texts(), lab.texts()
+
+
+class TestAScopedAddressIsRefused:
+    """Q201 (AQ5): a spelling a validator accepts is a spelling a certificate can carry. DER has no interface scope, so a scoped IPv6 SSH host is refused (with the reason), and a scope is folded away when
+    two addresses are compared, so a record saved before this release compares as its certificate reads."""
+
+    def test_the_validator_refuses_a_scoped_literal_and_says_why(self):
+        from jen.services import auth
+
+        assert not auth.valid_ssh_target("fe80::1%eth0")
+        assert "interface scope" in auth.ssh_target_problem("fe80::1%eth0")
+        assert auth.valid_ssh_target("fe80::1") and auth.valid_ssh_target("kea-b.lan")
+        assert auth.ssh_target_problem("kea-b.lan") == "" and auth.ssh_target_problem("fe80::1") == ""
+
+    @pytest.mark.parametrize(
+        ("configured", "named", "same"),
+        [
+            ("fe80::1%eth0", "fe80::1", True),
+            ("fe80::1", "fe80::1%eth0", True),
+            ("[fe80::1%eth0]", "fe80::1", True),
+            ("fe80::1", "fe80::1", True),
+            ("::ffff:10.0.0.6", "10.0.0.6", True),
+            ("10.0.0.6", "10.0.0.7", False),
+            ("Kea-B.lan", "kea-b.lan", True),
+            ("kea-b.lan.", "kea-b.lan", False),
+        ],
+    )
+    def test_the_spelling_table_is_judged_by_same_host_and_by_the_matcher_in_one_assertion(
+        self, configured, named, same
+    ):
+        import ssl
+
+        from jen.services.auth import same_host
+
+        assert same_host(configured, named) is same, (configured, named)
+        if not hasattr(
+            ssl, "match_hostname"
+        ):  # (removed in Python 3.12: the matcher half of the table runs where it exists)
+            pytest.skip("ssl.match_hostname is not available on this Python")
+        try:
+            ipaddress_named = ipaddress.ip_address(named)
+            cert = {"subjectAltName": (("IP Address", str(ipaddress_named)),)}
+        except ValueError:
+            cert = {"subjectAltName": (("DNS", named),)}
+        try:
+            ssl.match_hostname(cert, configured.strip("[]"))
+            accepted = True
+        except (ssl.CertificateError, ValueError):
+            accepted = False
+        # Jen stricter than the matcher on an UNCHANGED input fails the test: what the matcher accepts, `same_host` must accept
+        assert not accepted or same_host(configured, named), (configured, named)

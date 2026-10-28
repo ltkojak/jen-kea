@@ -1784,13 +1784,22 @@ class TestTheWorldsOfTheSetupHarness:
 
     @_setup_worlds
     def test_remove_changes_no_identity_file(self, setup_world, tls_world, monkeypatch):
+        """DEVIATION NAMED (Q201 AQ4): this row pinned 'a removal with nothing to remove touches NO file under the SSL directory'. The Q's own item says the opposite for the one set of files that
+        describes a socket that is not there: the `nochange` path discards Jen's local RECORD of that socket (`kea-servers/<n>-<service>.*`) - it proves the socket is gone. Every IDENTITY file (the CA,
+        the client pair, the staged and prepared material) is still untouched, which is what T6 is for."""
         world, kt, matrix = setup_world
+
+        def identity(tree):
+            return {k: v for k, v in tree.items() if not k.replace("\\", "/").startswith("kea-servers")}
+
         before = matrix.worlds.tree(kt.SSL_DIR)
         monkeypatch.setattr(
             type(jconfig.app_config), "mutate", lambda self, fn, reload=True, typed=None: None
         )  # (nothing to remove: the settings are not written - and CI's real config must not be reloaded)
         _post(_inner(infra.remove_direct_socket))
-        assert matrix.worlds.tree(kt.SSL_DIR) == before, "T6: a removal touches no TLS file of Jen's"
+        assert identity(matrix.worlds.tree(kt.SSL_DIR)) == identity(before), (
+            "T6: a removal touches no identity file of Jen's"
+        )
 
 
 # ── Q197: a healthy CA that cannot issue for THIS name is told so; the https setup asks the one-daemon question; a removed socket drops its record ──
@@ -2074,7 +2083,12 @@ class TestTheSecondPassOfQ197:
             kt.issue_server_cert(tls_world["server"], "dhcp4", "kea_host", commit=False)
         assert "Rotate Kea CA" not in kt.name_refusal_remedy(refused.value.names)
 
-    def test_f3_a_twin_whose_endpoint_is_not_https_now_does_not_block_the_setup(self, tls_world, monkeypatch):
+    def test_f3_a_twin_whose_endpoint_is_not_https_now_BLOCKS_the_setup_and_the_rotation_keeps_its_exemption(
+        self, tls_world, monkeypatch
+    ):
+        """DEVIATION NAMED (Q201 AQ4): Q197 pinned the OPPOSITE of this row (a parked twin does not block the setup). The setup is where the daemon's FIXED remote paths are written: a second record
+        pointed at a parked daemon's SSH host would install its pair there and restart that daemon, and no incident would name the parked server. The setup counts a parked twin; the rotation does not
+        (a parked record is not a target)."""
         kt = tls_world["tls"]["tls"]
         kt.ensure_ca()
         stale = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8004"}
@@ -2083,8 +2097,14 @@ class TestTheSecondPassOfQ197:
         monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
         _post(_inner(infra.setup_direct_socket), **self.FORM)
         texts = " ".join(t for _s, t in tls_world["flashes"])
-        assert "one daemon, two records" not in texts, texts
-        assert len(tls_world["tls"]["installed"]) == 1
+        assert "one daemon, two records" in texts and "kea-b already manages" in texts, texts
+        assert len(tls_world["tls"]["installed"]) == 0, "nothing was installed on the daemon"
+        # the rotation's exemption is unchanged: the same two records, asked as the rotation asks, are no second owner
+        assert kt.other_record_on_same_daemon(tls_world["server"], "dhcp4", [tls_world["server"], stale]) == ""
+        twin = kt.other_record_on_same_daemon(
+            tls_world["server"], "dhcp4", [tls_world["server"], stale], for_setup=True
+        )
+        assert twin == "kea-b"
 
 
 class TestQ198TheSetupAndTheFormsAfterTheRecordsChange:
@@ -2592,3 +2612,49 @@ class TestQ199TheForgottenRecordDoesNotTakeTheAnswerWithIt:
         assert "the socket is there but its certificate is from a CA Jen no longer trusts" in texts, texts
         assert "firewall" not in texts and "reachable from here" not in texts, texts
         assert not any(i[2] == "probe-pending" for i in tls_world["incidents"]), tls_world["incidents"]
+
+
+class TestQ201TheSetupAsksAboutItsOwnRecord:
+    """Q201 (AQ4): the setup asks the destination question of ITS OWN existing record before it stages anything, and a removal on a host whose config has no Jen socket still sets the record aside."""
+
+    FORM_A = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+    FORM_B = {"scheme": "https", "address": "10.0.0.5", "port": "8005", "user": "u", "password": "p"}
+
+    def _first_https(self, world, monkeypatch):
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        assert world["tls"]["now"] and world["host"]["Dhcp4"]["control-sockets"][-1]["socket-type"] == "https"
+
+    def test_a_record_installed_on_another_machine_is_refused_before_stage_issued(self, tls_world, monkeypatch):
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        installs = len(tls_world["tls"]["installed"])
+        before = kt.server_copy_path(1, "dhcp4")
+        held = pathlib.Path(before).read_bytes()
+        tls_world["server"]["ssh_host"] = "10.0.0.99"  # the SSH host now names another machine
+        tls_world["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "as the machine it was installed on" in texts and "Remove the direct socket first" in texts, texts
+        assert len(tls_world["tls"]["installed"]) == installs, "nothing was installed anywhere"
+        assert pathlib.Path(before).read_bytes() == held and not os.path.lexists(before + ".prev"), (
+            "a pair for another machine never became .prev"
+        )
+
+    def test_remove_on_a_host_with_no_jen_socket_sets_the_record_aside_and_the_setup_then_proceeds(
+        self, tls_world, monkeypatch
+    ):
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        tls_world["server"]["ssh_host"] = "10.0.0.99"
+        sockets = tls_world["host"]["Dhcp4"]["control-sockets"]
+        sockets[:] = [
+            s for s in sockets if s.get("socket-type") not in ("http", "https")
+        ]  # the config has no Jen socket
+        monkeypatch.setattr(type(jconfig.app_config), "mutate", lambda self_, fn, *a, **k: None)
+        _post(_inner(infra.remove_direct_socket))
+        assert not os.path.lexists(kt.server_copy_path(1, "dhcp4")), "the nochange path discards the local record too"
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        installs = len(tls_world["tls"]["installed"])
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        assert len(tls_world["tls"]["installed"]) == installs + 1, "the setup on the new machine proceeds"

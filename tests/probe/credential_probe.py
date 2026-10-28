@@ -2639,6 +2639,96 @@ def q198_an3_the_first_issuer_directory_name_is_the_one_openssl_compares():
     return out
 
 
+def q201_aq1_a_certificates_names_carry_their_roles_in_their_order():
+    """`record_state` for a record issued with the address 10.0.0.6 and the SSH host kea-b.lan (SANs in that order): (unchanged, the SSH host changed to the previous ADDRESS, the two swapped, the address
+    alone changed). Each role is compared with its own name; a name that matches the OTHER role proves nothing."""
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        base = {"id": 2, "name": "kea-b", "ssh_host": "kea-b.lan"}
+        kea_tls.issue_server_cert(base, "dhcp4", "10.0.0.6")
+        return (
+            kea_tls.record_state(2, "dhcp4", server=base, url="https://10.0.0.6:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server={**base, "ssh_host": "10.0.0.6"}, url="https://10.0.0.6:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server={**base, "ssh_host": "10.0.0.6"}, url="https://kea-b.lan:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server=base, url="https://10.0.0.9:8004")[0],
+        )
+
+
+def q201_aq2_a_recovery_judges_the_record_group():
+    """`record_group_refusal` (what a damaged-CA recovery may not override) for a record issued for 10.0.0.6: (only a `.prev` pair, the SSH host moved; a lone key; no files at all; the live pair, unmoved).
+    A group with files and no certificate is refused; one with no files keeps the override by design."""
+    import os
+    import pathlib
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        base = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"}
+        url = "https://10.0.0.6:8004"
+        kea_tls.issue_server_cert(base, "dhcp4", "10.0.0.6")
+        unmoved = kea_tls.record_group_refusal(2, "dhcp4", base, url, "kea-b kea-dhcp4")
+        crt, key = kea_tls.server_copy_path(2, "dhcp4"), kea_tls.server_key_path(2, "dhcp4")
+        os.replace(crt, crt + ".prev")
+        os.replace(key, key + ".prev")
+        prev_moved = kea_tls.record_group_refusal(2, "dhcp4", {**base, "ssh_host": "10.0.0.77"}, url, "kea-b kea-dhcp4")
+        os.unlink(crt + ".prev")
+        lone_key = kea_tls.record_group_refusal(2, "dhcp4", base, url, "kea-b kea-dhcp4")
+        os.unlink(key + ".prev")
+        pathlib.Path(key).unlink(missing_ok=True)
+        none = kea_tls.record_group_refusal(2, "dhcp4", base, url, "kea-b kea-dhcp4")
+        return (bool(prev_moved), bool(lone_key), bool(none), bool(unmoved))
+
+
+def q201_aq3_a_pending_note_is_reconciled_from_the_files():
+    """`reconcile_rotation_pending` against a store that fails once: (the labels still pending, the categories left after the failure, the categories after the retry). The note is finished from the files
+    - `tls-superseded` for a parked record whose CA has since been replaced - and a store that cannot take it leaves the pending note, never nothing."""
+    from jen.services import kea_changeset
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        ghost = {"id": 79, "name": "ghost", "ssh_host": "10.0.0.79"}
+        kea_tls.issue_server_cert(ghost, "dhcp4", "10.0.0.79")
+        kea_tls.commit_rotation(kea_tls.stage_rotation())  # the CA the record was issued by is now the previous one
+        store = [
+            {
+                "kind": "attention",
+                "category": "rotation-pending",
+                "service": "dhcp4",
+                "server_id": 79,
+                "server_name": "ghost",
+            }
+        ]
+        allow = [False]
+
+        def record(sid, svc, op, category, *a, **k):
+            if not allow[0]:
+                return False
+            store.append(
+                {"kind": "attention", "category": category, "service": svc, "server_id": sid, "server_name": "ghost"}
+            )
+            return True
+
+        def resolve(sid, svc, *, categories=None):
+            store[:] = [
+                i
+                for i in store
+                if not (
+                    i["server_id"] == sid
+                    and i["service"] == svc
+                    and (categories is None or i["category"] in categories)
+                )
+            ]
+            return 1
+
+        stack.enter_context(mock.patch.object(kea_changeset, "recovery_incidents", lambda strict=False: list(store)))
+        stack.enter_context(mock.patch.object(kea_changeset, "record_attention", record))
+        stack.enter_context(mock.patch.object(kea_changeset, "resolve_attention", resolve))
+        still = kea_changeset.reconcile_rotation_pending([ghost])
+        after_failure = sorted(i["category"] for i in store)
+        allow[0] = True
+        kea_changeset.reconcile_rotation_pending([ghost])
+        return (still, after_failure, sorted(i["category"] for i in store))
+
+
 def q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own():
     """`record_state` for a record issued for 10.0.0.6 (SSH host 10.0.0.6, address 10.0.0.6) under server 2: (unchanged, SSH host moved with the URL unchanged, URL moved with the SSH host unchanged,
     both moved). The SSH host moved to another machine is the case Q199 accepted - the helper would have installed on the new machine and restarted its daemon."""
@@ -2674,7 +2764,7 @@ def q200_ap2_a_forget_whose_fact_cannot_be_stored_deletes_nothing():
 
 
 def q200_ap3_an_orphan_is_judged_by_the_certificate_it_holds():
-    """`orphan_verdict` for: a lone key, a `.prev` pair issued by the live CA, the same after the CA is replaced, a `.prev` certificate no Jen CA issued."""
+    """`group_verdict` for: a lone key, a `.prev` pair issued by the live CA, the same after the CA is replaced, a `.prev` certificate no Jen CA issued."""
     import os
     import pathlib
 
@@ -2683,16 +2773,16 @@ def q200_ap3_an_orphan_is_judged_by_the_certificate_it_holds():
         out = []
         os.makedirs(kea_tls._copies_dir(), exist_ok=True)
         pathlib.Path(kea_tls.server_key_path(7, "dhcp4")).write_text("key", encoding="ascii")
-        out.append(kea_tls.orphan_verdict(7, "dhcp4"))
+        out.append(kea_tls.group_verdict(7, "dhcp4"))
         server = {"id": 8, "name": "k", "ssh_host": "10.0.0.8"}
         kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.8")
         for path in (kea_tls.server_copy_path(8, "dhcp4"), kea_tls.server_key_path(8, "dhcp4")):
             os.replace(path, path + ".prev")
-        out.append(kea_tls.orphan_verdict(8, "dhcp4"))
+        out.append(kea_tls.group_verdict(8, "dhcp4"))
         kea_tls.commit_rotation(kea_tls.stage_rotation())
-        out.append(kea_tls.orphan_verdict(8, "dhcp4"))
+        out.append(kea_tls.group_verdict(8, "dhcp4"))
         pathlib.Path(kea_tls.server_copy_path(9, "dhcp4") + ".prev").write_text("not a certificate", encoding="ascii")
-        out.append(kea_tls.orphan_verdict(9, "dhcp4"))
+        out.append(kea_tls.group_verdict(9, "dhcp4"))
         return tuple(out)
 
 
@@ -2842,6 +2932,7 @@ SCENARIOS = {
             "q198_",
             "q199_",
             "q200_",
+            "q201_",
         )
     )
     and callable(fn)
@@ -3086,10 +3177,10 @@ EXPECTED = {
         [("http://proxy.lan:8100", "tu", "TYPED")],
     ),
     "q187_sp4_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed": (
-        [(1, "dhcp4", ("probe-pending", "tls-superseded", "record-forgotten"))],
+        [(1, "dhcp4", ("probe-pending", "tls-superseded", "record-forgotten", "rotation-pending"))],
         True,
         [],
-        [(1, "dhcp6", ("probe-pending", "tls-superseded", "record-forgotten"))],
+        [(1, "dhcp6", ("probe-pending", "tls-superseded", "record-forgotten", "rotation-pending"))],
     ),
     "q187_sp6_describe_socket_prints_one_short_printable_line": (True, False),
     "q187_sp8_a_typed_address_that_is_another_servers_own_is_refused": (
@@ -3199,6 +3290,13 @@ EXPECTED = {
         "aki-all-none": "damaged",
         "issuer-string-type-differs": "ok",
     },
+    "q201_aq1_a_certificates_names_carry_their_roles_in_their_order": ("jen", "refuse", "refuse", "refuse"),
+    "q201_aq2_a_recovery_judges_the_record_group": (True, True, False, False),
+    "q201_aq3_a_pending_note_is_reconciled_from_the_files": (
+        ["ghost kea-dhcp4"],
+        ["rotation-pending"],
+        ["tls-superseded"],
+    ),
     "q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own": ("jen", "refuse", "refuse", "refuse"),
     "q200_ap2_a_forget_whose_fact_cannot_be_stored_deletes_nothing": ([], ["2-dhcp4"], True, ["2-dhcp4"]),
     "q200_ap3_an_orphan_is_judged_by_the_certificate_it_holds": ("unknown", "current", "superseded", "unknown"),

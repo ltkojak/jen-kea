@@ -938,6 +938,28 @@ class TestTheProbeRowsOfQ198:
         }
 
 
+class TestTheProbeRowsOfQ201:
+    """AQ1/AQ2/AQ3: roles by order; a recovery judges the record group; a pending note is reconciled from the files."""
+
+    def test_a_certificates_names_carry_their_roles_in_their_order(self):
+        assert probe.q201_aq1_a_certificates_names_carry_their_roles_in_their_order() == (
+            "jen",
+            "refuse",
+            "refuse",
+            "refuse",
+        )
+
+    def test_a_recovery_judges_the_record_group(self):
+        assert probe.q201_aq2_a_recovery_judges_the_record_group() == (True, True, False, False)
+
+    def test_a_pending_note_is_reconciled_from_the_files(self):
+        assert probe.q201_aq3_a_pending_note_is_reconciled_from_the_files() == (
+            ["ghost kea-dhcp4"],
+            ["rotation-pending"],
+            ["tls-superseded"],
+        )
+
+
 class TestTheProbeRowsOfQ200:
     """AP1/AP2/AP3: the SSH host is the mutation target; a forget whose fact cannot be stored deletes nothing; an orphan is judged by the certificate it holds."""
 
@@ -1023,9 +1045,9 @@ class TestTheSecondPassOfQ187:
             probe.q187_sp4_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed()
         )
         # (Q199 AO1: a removal also ends the two durable facts about the socket it removed - `tls-superseded` and `record-forgotten`)
-        assert done == [(1, "dhcp4", ("probe-pending", "tls-superseded", "record-forgotten"))] and daemon == [
-            (1, "dhcp6", ("probe-pending", "tls-superseded", "record-forgotten"))
-        ]
+        assert done == [
+            (1, "dhcp4", ("probe-pending", "tls-superseded", "record-forgotten", "rotation-pending"))
+        ] and daemon == [(1, "dhcp6", ("probe-pending", "tls-superseded", "record-forgotten", "rotation-pending"))]
         assert nothing_touched and nothing_resolved == [], "a removal that removed nothing proves nothing"
 
     def test_a_singular_entry_with_nothing_to_remove_is_not_said_to_be_rewritten(self):

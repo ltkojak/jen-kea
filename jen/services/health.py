@@ -1228,8 +1228,19 @@ def _kea_tls_expiry(ctx) -> Check:
             "forget them under Settings → Kea, or set the socket up again"
         )
     # Q199 (AO1): a parked daemon a rotation left on a replaced CA, and a record forgotten on the operator's word, are facts Servers shows; the row names them too
-    left_behind = _attention_labels("tls-superseded")
-    forgotten, forget_pending = _forgotten_labels()
+    from jen.services import kea_changeset as _kc
+
+    # Q201 (AQ3): a rotation whose bookkeeping did not finish is reconciled from Jen's files when the store answers, and named while it cannot be
+    try:
+        unfinished = _kc.reconcile_rotation_pending(extensions.KEA_SERVERS)
+    except Exception as e:
+        logger.warning(f"health: could not reconcile the rotation notes ({type(e).__name__})")
+        unfinished = _attention_labels("rotation-pending")
+    left_behind = _attention_labels("tls-superseded")  # (read AFTER the reconciliation: it may have just written one)
+    forgotten, forget_pending, forget_live = _forgotten_labels()
+    if unfinished:
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += f" — a rotation's bookkeeping for {', '.join(unfinished)} is unfinished: Jen could not update its note and keeps it pending (see Servers)"
     if left_behind:
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += (
@@ -1242,6 +1253,12 @@ def _kea_tls_expiry(ctx) -> Check:
         c.detail += (
             f" — a forget of {', '.join(forget_pending)} was started and did not finish: Jen still holds files for it; "
             "press Forget stale records again (with the box) under Settings → Kea"
+        )
+    if forget_live:
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += (
+            f" — a forget of {', '.join(forget_live)} was started and did not finish, and the record is live again (the server is an https endpoint): "
+            "remove the direct socket and set it up again, or acknowledge the note on Servers"
         )
     if forgotten:
         c.status = "fail" if c.status == "fail" else "warn"
@@ -1265,18 +1282,30 @@ def _kea_tls_expiry(ctx) -> Check:
     return c
 
 
-def _forgotten_labels() -> tuple[list[str], list[str]]:
+def _forgotten_labels() -> tuple[list[str], list[str], list[str]]:
     """(forgotten, pending): the `record-forgotten` incidents whose files are gone, and those whose files Jen still holds (Q200, AP2: the fact is written BEFORE the deletion)."""
+    from jen.services import kea as _kea
     from jen.services import kea_changeset, kea_tls
 
-    done, pending = [], []
+    done, pending, live = [], [], []
     for i in kea_changeset.recovery_incidents():
         if i.get("category") != "record-forgotten":
             continue
         label = f"{i.get('server_name') or 'server ' + str(i.get('server_id'))} kea-{i.get('service')}"
         still = any(os.path.lexists(p) for p in kea_tls._record_paths(i.get("server_id"), str(i.get("service") or "")))
-        (pending if still else done).append(label)
-    return sorted(set(done)), sorted(set(pending))
+        if not still:
+            done.append(label)
+            continue
+        # classified by the incident's OWN state (Q201 AQ6 g): files still here and the server dialled over https again is a LIVE record - "press Forget" would never touch it
+        server = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == str(i.get("server_id"))), None)
+        try:
+            https_now = bool(server) and (_kea.configured_url(server, str(i.get("service"))) or "").lower().startswith(
+                "https://"
+            )
+        except Exception:
+            https_now = False
+        (live if https_now else pending).append(label)
+    return sorted(set(done)), sorted(set(pending)), sorted(set(live))
 
 
 def _attention_labels(category: str) -> list[str]:

@@ -827,13 +827,17 @@ the socket under Settings → Kea to drop it.
 an https endpoint when it ran: the daemon keeps the certificate it had, from the CA Jen no longer trusts. Nothing is wrong until it is dialled over https again; then the setup says "the socket is there
 but its certificate is from a CA Jen no longer trusts" - remove the direct socket and set it up again. Removing the socket ends the note.
 
+**"a rotation's bookkeeping for *server* kea-*service* is unfinished"** (Health; "rotation-pending" on Servers) means a CA rotation changed what that server's daemon depends on and Jen could not yet write the final note (the database refused it). The rotation itself finished. Health and the next Rotate finish the note from Jen's files by themselves once the database answers; nothing is for you to do except fix the database if it stays down.
+
+**"Jen holds *files* for *server* kea-*service* but no certificate that says which machine they belong to"** (the refusal of a recovery) means files remain for a record whose certificate is gone, so Jen cannot tell which machine they belong to and will not make the server a rotation target on a guess. Remove the direct socket and set it up again, or restore the previous host.
+
 **"Jen's record for *server* kea-*service* was forgotten on the operator's word"** (Health; "record-forgotten" on Servers) means someone ticked the box on Forget stale records for a parked record. Jen no longer
 watches that certificate's expiry while the daemon may still present it. A later setup of the socket, or its removal, ends the note.
 
 **"Jen holds files but no certificate record for *server* kea-*service*"** is a group of Jen's own record files with no live certificate and key pair (an interrupted cleanup, a partial restore). Forget stale
 records removes it; or set the socket up again. A file in the folder whose name Jen does not write is named and never touched.
 
-**"its certificate was issued for *names*; this record's SSH host is now *host*, a different machine"** or **"... this record's address is now *host*, a different daemon"** (in the refusal of a Rotate, and Health)
+**"its certificate names *name* as the machine it was installed on; this record's SSH host is now *host*, a different machine"** or **"... this record's address is now *host*, a different daemon"** (in the refusal of a Rotate, and Health)
 means the certificate Jen kept does not name the SSH host Jen logs into, or the address it dials, as the server record has them now. Each must be one of the names the certificate was issued for. Jen keeps the record.
 Remove the direct socket and set it up again on the new machine, or restore the previous SSH host or address.
 

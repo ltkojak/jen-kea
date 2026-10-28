@@ -384,6 +384,7 @@ class TestTheWorldsOfTheLab:
 #: the path functions kea_tls reads files through - each is a row above (`ca_*` -> the CA worlds, `client_*` -> the client worlds, `server_*` and the markers -> the copy and aux worlds, `_staged_paths` ->
 #: the `.next` worlds, `_copies_dir` -> the uninitialised-evidence worlds)
 MATRIX_PATH_FUNCS = {
+    "_group_certificate_path",  # Q201 (AQ2): the path of the certificate that represents what the host holds for a record group
     "ca_paths",
     "client_paths",
     "server_copy_path",
@@ -404,10 +405,13 @@ MATRIX_READERS = {
     "load_key": {"open"},
     "cert_expiry": {"load_cert"},
     "issued_by": {"load_cert"},
-    "record_destination_refusal": {
-        "open"
-    },  # Q200 second pass (F1): the recovery entry asks the destination question of the record's certificate before it overrides a state
-    "orphan_verdict": {
+    "_group_certificate": {
+        "lexists",
+        "open",
+    },  # Q201 (AQ2): the certificate that represents what the HOST holds for a record group (host_material's rule)
+    "loaded": {"open"},  # (the nested reader of `_group_certificate`)
+    "_group_certificate_path": {"open"},  # Q201 (AQ2): the path `_group_certificate` read, for `issued_by`
+    "group_verdict": {
         "open",
         "lexists",
     },  # Q200 (AP3): which CA issued the certificate an orphan group still holds - the `.prev` pair first, else a lone certificate
