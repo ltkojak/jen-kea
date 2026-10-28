@@ -316,7 +316,7 @@ drops a parked record unless you tick its box ("no daemon presents these any mor
 and then Servers keeps a note that the record was forgotten on your word; removing
 the socket under Settings → Kea drops it and ends both notes. The certificate Jen
 keeps names the host it was issued for, in two roles: the address the daemon serves (the certificate's first name) and the machine Jen installed it on (its last name). The address Jen dials
-may be any name the certificate carries (a TLS client accepts every name in it, and so does Jen), and the SSH host Jen logs into must be the last - the machine it was installed on - so
+may be any name the certificate carries (Jen compares names the way a TLS client does for the ordinary spellings; an address written as `::ffff:a.b.c.d` or with a trailing dot is where the two can differ), and the SSH host Jen logs into must be the last - the machine it was installed on - so
 changing the SSH host to the daemon's address (the same machine, written differently) is refused like any alias: remove the direct socket and set it up again. A certificate Jen signed that
 carries no DNS or IP name (no subject alternative name, or only an e-mail or URI one, or one that does not parse) proves nothing about which daemon it was installed on and is refused wherever a
 name has to be judged: remove the direct socket and set it up again, or restore the certificate Jen issued. If a server record's SSH host is moved to

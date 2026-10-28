@@ -27,6 +27,8 @@ proves nothing about which daemon it was installed on, so Rotate, the recovery, 
 **The address Jen dials may be any name the certificate carries.** 5.69.1 required it to be the certificate's first name, which refused a record whose address was changed to the machine's DNS name (the
 certificate's second name) although a TLS client accepts it. The address is now judged the way a TLS client judges it; the SSH host Jen logs into must still be the certificate's last name.
 
+**A record dialled at a name is rotated for the certificate's own address.** The daemon binds an address, so a certificate Jen issues carries an IP literal as its bind: a rotation of a record whose address is a name the certificate carries (the machine's DNS name) re-issues for the address the certificate already names, and one whose certificate carries no such address (a record placed by hand with only DNS names) is refused - including in a damaged-CA recovery, which used to issue a DNS-bind certificate for it. Change the address saved for it to the daemon's IP.
+
 **A second record on one daemon refuses a rotation too, parked ones included.** The setup already refused to run while another record shared a daemon (even one that is not dialled over https now); the
 rotation now asks the same question, because its install would overwrite the certificate that record holds. The sentence names the action: remove one of the two records or re-point it at its own host.
 

@@ -627,7 +627,7 @@ S10_ALLOWED = {
         "an entry whose time does not parse is NOT a recognised incident: it is kept and counted as unrecognised, never cleared by a clean run (Q190, AF3)"
     ),
     ("jen/services/kea_changeset.py", "_with_attention", "Exception", "return False"): (
-        "the transaction is reported as NOT done: every caller acts on the False (`record_attention` answers False and the route refuses or audits; a clear leaves the note) - an unreadable note is refused, never read as empty and written over (Q189)"
+        "the transaction is reported as NOT done: `record_attention`, `resolve_attention`, `acknowledge_recovery` and the clears turn it into their own False/0/None, which the rotation and the routes act on (refuse, audit, say so); `record_outcome`'s only caller drops it by design - a rollback note that cannot be stored is logged and the route's own flash is all there is - and an unreadable note is refused, never read as empty and written over (Q189)"
     ),
     ("jen/services/kea_changeset.py", "record_outcome", "Exception", "return False"): (
         "best-effort telemetry: the change set's own result is never changed by it, and False says the outcome was NOT recorded - nothing reads the False as 'nothing to record'"

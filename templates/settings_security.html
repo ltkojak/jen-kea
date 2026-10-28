@@ -231,6 +231,8 @@
         {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono u-11a508">{{ cert_info.issuer }}</div></div>{% endif %}
         {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
     </div>
+    {# Q202 (AR6): removing and uploading Jen's own certificate restart Jen - a superadmin's, so an admin is not offered the forms #}
+    {% if current_user.role == 'superadmin' %}
     <form method="POST" action="/settings/remove-cert" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm u-87c136">{{ icon("trash") }} Remove Certificate</button>
     </form>
@@ -244,6 +246,9 @@
         </div>
         <button type="submit" class="btn btn-primary">{% if ssl_configured %}{{ icon("refresh-cw") }} Replace Certificate{% else %}{{ icon("lock") }} Enable HTTPS{% endif %}</button>
     </form>
+    {% else %}
+    <p class="form-hint">{{ icon("lock") }} Uploading or removing Jen's certificate restarts Jen, so it is a superadmin's (with a recently confirmed password).</p>
+    {% endif %}
     <div class="form-hint u-8a77e5">Ports are set on <a href="/settings/system#sys-ports">System → Ports &amp; threads</a>.</div>
 </div>
 </div>

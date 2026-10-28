@@ -1238,16 +1238,18 @@ def _kea_tls_expiry(ctx) -> Check:
         c.detail += f" — a rotation's bookkeeping for {', '.join(unfinished)} is unfinished: Jen keeps its note pending (see Servers); the next Rotate, or Forget stale records, finishes it from Jen's files"
     if left_behind:
         c.status = "fail" if c.status == "fail" else "warn"
-        twinned = _twinned_labels("tls-superseded")
-        c.detail += (
-            f" — {', '.join(left_behind)} is parked and its daemon still runs a certificate from the CA Jen replaced: when it is dialled over https again, "
-            "remove the direct socket and set it up again (see Servers)"
-        )
-        if twinned:
-            # Q202 (AR4, A-2): the setup is REFUSED while another record manages the same daemon, so the remedy above would meet a refusal; the action the setup accepts is said
+        twinned = set(_twinned_labels("tls-superseded"))
+        plain = [label for label in left_behind if label not in twinned]
+        if plain:
             c.detail += (
-                f"; {', '.join(twinned)} shares its daemon with another record, which the setup refuses - remove one of the two records, "
-                "or re-point it at its own host, first"
+                f" — {', '.join(plain)} is parked and its daemon still runs a certificate from the CA Jen replaced: when it is dialled over https again, "
+                "remove the direct socket and set it up again (see Servers)"
+            )
+        if twinned:
+            # Q202 (AR4, A-2; second pass: ONE remedy, the one that works): the setup is REFUSED while another record manages the same daemon, so "set it up again" would meet a refusal
+            c.detail += (
+                f" — {', '.join(sorted(twinned))} is parked, its daemon still runs a certificate from the CA Jen replaced, and it shares that daemon with another record, which the setup refuses: "
+                "remove one of the two records, or re-point it at its own host, first (see Servers)"
             )
     if forget_pending:
         # Q200 (AP2): the fact was stored first, so a forget that stopped between the write and the deletion (a crash, a file that would not go) is visible: the files are still here

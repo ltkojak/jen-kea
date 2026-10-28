@@ -2012,12 +2012,33 @@ def _saved_ssh_host_for(server_id) -> str:
     return ((server or {}).get("ssh_host") or "").strip()
 
 
+def _ssh_literal_key(host: str):
+    """The identity of an SSH host written as an address or a name, by its LITERAL form - never by the URL-authority parser (`same_host`), which reads `evil@[fe80::1%eth0]` or `[fe80::1%eth0]$(id)` as the
+    host it ends with (Q202 second pass F2). An IPv6 literal: brackets dropped, the address compared as an address (the v4-mapped form is the IPv4 one), the scope kept and case-sensitive (a different interface
+    is a different target); anything else is the lower-cased text, and only an identical name is the same name."""
+    text = (host or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    address, _sep, scope = text.partition("%")
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return ("name", text.lower())
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ("ip", str(ip), scope)
+
+
+def _same_ssh_literal(a: str, b: str) -> bool:
+    return _ssh_literal_key(a) == _ssh_literal_key(b)
+
+
 def _ssh_host_unchanged(submitted: str, server_id) -> bool:
     """Is `submitted` the SSH host already saved for THIS record (Q201 second pass F5, Q202 AR3)? A form that re-submits one UNCHANGED is not asked to re-validate it - a scoped IPv6 host saved before 5.69.1
-    must not lock the operator out of saving anything else. Unchanged is the same text or `same_host` (a bracketed, upper-case or expanded spelling of the address; a CHANGED scope is a changed target and
-    is validated)."""
+    must not lock the operator out of saving anything else. Unchanged is the same text or the same LITERAL (`_ssh_literal_key`: a bracketed, upper-case or expanded spelling of the address; a CHANGED scope is a changed target and
+    is validated; nothing a URL parser would read the host out of)."""
     value, saved = (submitted or "").strip(), _saved_ssh_host_for(server_id)
-    return bool(saved) and (value == saved or __auth.same_host(value, saved))
+    return bool(saved) and (value == saved or _same_ssh_literal(value, saved))
 
 
 def _record_incident(
@@ -3497,7 +3518,12 @@ def rotate_kea_ca():
     try:
         still_pending = __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
     except ValueError:
-        still_pending = ["the notes of this rotation (the incident store could not be read)"]
+        flash(
+            "The CA is rotated; Jen could not read its incident notes afterwards, so the notes of this rotation are not finished - Servers shows them as pending and the next Rotate or Forget stale records finishes them from Jen's files.",
+            "warning",
+        )
+        __user.audit("ROTATE_KEA_CA", "kea_api", "rotated; the incident store could not be read to finish the notes")
+        still_pending = []
     for unfinished in still_pending:
         flash(
             f"The CA is rotated; the note for {unfinished} could not be updated - Servers shows it as pending and the next Rotate or Forget stale records finishes it.",
@@ -4512,9 +4538,26 @@ def save_extra_servers():
     nod2_passes = request.form.getlist("extra_d2_no_pass[]")
     no_passes = request.form.getlist("extra_no_pass[]")
 
-    for row_id, h in zip(ids, ssh_hosts, strict=False):
+    claimed_ids = {
+        i.strip() for i in ids if i.strip()
+    }  # (the ids this form names: a blank row never adopts one of them - the rewrite's own condition)
+    adopted_ids: set = set()
+    for row_id, h, row_url in zip(ids, ssh_hosts, api_urls, strict=False):
         # (Q202 AR3: a row's exemption is its OWN saved host, found by its `extra_id[]` - never position, never another record's host; a new row has none)
         own = row_id.strip() if row_id.strip().isdigit() and row_id.strip() != "1" else ""
+        if not own and not row_id.strip() and h.strip():
+            # (second pass F5: a row posted with a BLANK id whose SSH host and API address are exactly a saved server's IS that server - Q199 AO2 - so it keeps that server's exemption)
+            for saved_server in extensions.KEA_SERVERS:
+                if (
+                    saved_server.get("id") != 1
+                    and str(saved_server.get("id")) not in claimed_ids
+                    and str(saved_server.get("id")) not in adopted_ids
+                    and (saved_server.get("ssh_host") or "").strip() == h.strip()
+                    and __auth.same_endpoint(saved_server.get("api_url") or "", row_url.strip())
+                ):
+                    own = str(saved_server.get("id"))
+                    adopted_ids.add(own)
+                    break
         if h.strip() and not (own and _ssh_host_unchanged(h, own)) and not __auth.valid_ssh_target(h.strip()):
             flash(
                 f"Invalid SSH host: {h.strip()}"

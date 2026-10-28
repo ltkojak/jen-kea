@@ -138,6 +138,8 @@
         HTTPS is not configured. Upload a certificate under <a href="/settings/security#sec-ssl">Access &amp; Security</a>.
         {% endif %}
     </p>
+    {# Q202 (AR6): saving ports and threads restarts Jen - a superadmin's, so an admin is not offered the form #}
+    {% if current_user.role == 'superadmin' %}
     <form method="POST" action="{{ url_for('settings.save_ports') }}" data-confirm="Changing ports or threads will restart Jen. You may need to update bookmarks or firewall rules. Continue?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -166,6 +168,9 @@
         </div>
         <button type="submit" class="btn btn-primary u-8a77e5">Save &amp; Restart</button>
     </form>
+    {% else %}
+    <p class="form-hint">{{ icon("lock") }} Changing the ports or threads restarts Jen, so it is a superadmin's (with a recently confirmed password).</p>
+    {% endif %}
 </div>
 
 <!-- Restart -->

@@ -1070,8 +1070,8 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
         state = record_state(other.get("id"), service, server=other, url=url_for(other, service))[0]
         if state in (*JEN_STATES, "refuse"):
             # (Q198 AN5: a record Jen cannot rotate safely - malformed, a pair that does not match, an earlier CA's - is still files at that daemon's fixed paths; it is a second owner too)
-            if state == "refuse" and record_destination_refusal(other.get("id"), service, other, ""):
-                continue  # (Q202 AR4: ... unless its files name ANOTHER machine - they describe that machine's daemon, not this one's fixed paths, and `record_state` already refuses the record for it)
+            # (Q202 second pass F1: NO exemption for a record whose files name another machine or no machine - a certificate that cannot say which daemon it is for is not evidence that it is not this
+            # one's, and the absence of evidence is never evidence: the record still holds files and still names this SSH host)
             return other.get("name") or f"Kea Server {other.get('id')}"
     return ""
 
@@ -1154,16 +1154,16 @@ def _is_ip_literal(value: str) -> bool:
 
 
 def rotation_bind(server_id, service: str, url: str) -> str:
-    """Q202 (AR9 c): the bind address a rotation or a recovery issues a record's new certificate for. The URL's host when it is an IP literal; when the record is dialled at a NAME (a name the certificate
-    carries is accepted since AR5) the certificate's own bind-role address, which the setup wrote as an IP literal; else the URL's host as it is (`issue_server_cert` then refuses it)."""
+    """Q202 (AR9 c; second pass F3): the bind address a rotation or a recovery issues a record's new certificate for. The DAEMON binds an address, and the certificate Jen issued names it first (the bind
+    role): when the record's certificate carries that address as an IP literal it is the bind, whichever name of the certificate the URL now uses (the machine's DNS name, the SSH-role address, an
+    alias spelling - AR5 accepts any name the certificate carries, and re-issuing for the URL's host would DROP the bind address). Else the URL's host when it is an IP literal; else the URL's host as
+    it is (`issue_server_cert` then refuses it)."""
     from urllib.parse import urlparse
 
     try:
         host = urlparse(url or "").hostname or ""
     except ValueError:
         host = ""
-    if _is_ip_literal(host):
-        return host
     held, _files = _group_certificate(server_id, service)
     if held is not None:
         bind_name, _ssh_name = _certificate_roles(held)
@@ -2241,6 +2241,9 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
                         if recovery
                         else f"{twin} already manages the same daemon: remove one of the two records, or re-point it at its own host (the setup is refused while two records share a daemon), before rotating"
                         if twin
+                        else "before rotating"
+                        if "set it up again"
+                        in why  # (the reason already names the remedy: one sentence, never two - second pass)
                         else "remove the direct socket and set it up again so Jen issues and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
                     )
                 )
