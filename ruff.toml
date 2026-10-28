@@ -21,7 +21,7 @@ line-length = 120
 # add noise for a file nobody should be actively maintaining, and
 # could mask real findings in the active jen/ package underneath that
 # noise.
-exclude = ["legacy"]
+exclude = ["legacy", "pass"]  # pass/: the git-ignored executing-pass workspace (probes, not product code)
 
 # v5.6.0 — the whole codebase was run through `ruff format` +
 # `ruff check --fix` (one mechanical, zero-behavior-change pass), and

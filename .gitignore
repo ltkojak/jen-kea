@@ -26,3 +26,7 @@ artifacts/
 # Q84 system-boundary suite: the harness workdir and its result files (uploaded by CI, never committed)
 system-work/
 system-results/
+
+# The maintainer's pre-reviewer executing-pass workspace (docs/RELEASE_AUDIT.md): the probe lineage,
+# the per-tag pass reports and the review reproductions. Local only, never shipped, never committed.
+pass/

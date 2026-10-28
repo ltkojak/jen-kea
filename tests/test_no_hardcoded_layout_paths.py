@@ -56,7 +56,8 @@ EXEMPT_FILES = {
     "run.py",
 }
 
-_EXCLUDED_DIRS = {".git", ".github", "tests", ".venv", "venv", "node_modules", "legacy"}
+# "pass" is the maintainer's git-ignored executing-pass workspace (probe scripts), never shipped.
+_EXCLUDED_DIRS = {".git", ".github", "tests", ".venv", "venv", "node_modules", "legacy", "pass"}
 
 
 def _shipped_python_files():
