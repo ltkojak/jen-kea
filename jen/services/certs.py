@@ -12,9 +12,13 @@ thin wrapper around `cert_info(installed_cert_path())`.
 import contextlib
 import logging
 import os
+import shutil
 import subprocess
 
 logger = logging.getLogger(__name__)
+
+#: where the `openssl` CLI is looked up (Q202 AR9 l): a fixed list, never the service's PATH (systemd's default puts /usr/local first)
+OPENSSL_PATH = "/usr/bin:/bin"
 
 
 def commit_file_set(members, keep_prev: bool = True) -> None:
@@ -100,9 +104,12 @@ def cert_info(path: str) -> dict:
     `{"error": ...}` when openssl ran but its output didn't parse.
     `days_left` is only present when the notAfter date parsed."""
     info: dict = {}
+    exe = shutil.which("openssl", path=OPENSSL_PATH)
+    if not exe:
+        return info
     try:
-        result = subprocess.run(
-            ["openssl", "x509", "-in", path, "-noout", "-subject", "-enddate", "-issuer"],
+        result = subprocess.run(  # nosec B603 - list args, a binary found on a fixed path
+            [exe, "x509", "-in", path, "-noout", "-subject", "-enddate", "-issuer"],
             capture_output=True,
             text=True,
         )

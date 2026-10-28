@@ -287,6 +287,7 @@ with a different library might not accept them either. Health says when
 | a critical policyMappings extension | the verifier rejects the extension |
 | a tampered self-signature | the CA's own signature is checked; `openssl` does not check a trust anchor's |
 | no Basic Constraints (a root marked only by Key Usage) | Jen needs `ca=True` stated |
+| a server certificate Jen signed with no DNS or IP name in it | `openssl verify -purpose sslserver` accepts a leaf with no subject alternative name (it checks a name only when asked); Jen refuses it as a rotation target, because it proves nothing about which daemon it was installed on |
 
 **A CA that is healthy but cannot issue for one address.** A CA whose name
 constraints do not permit the address or host name of one Kea server is not
@@ -315,8 +316,10 @@ drops a parked record unless you tick its box ("no daemon presents these any mor
 and then Servers keeps a note that the record was forgotten on your word; removing
 the socket under Settings → Kea drops it and ends both notes. The certificate Jen
 keeps names the host it was issued for, in two roles: the address the daemon serves (the certificate's first name) and the machine Jen installed it on (its last name). The address Jen dials
-must be the first and the SSH host Jen logs into must be the last - a name that is only the OTHER role's does not count, so changing the SSH host to the daemon's address
-(the same machine, written differently) is refused like any alias: remove the direct socket and set it up again. If a server record's SSH host is moved to
+may be any name the certificate carries (a TLS client accepts every name in it, and so does Jen), and the SSH host Jen logs into must be the last - the machine it was installed on - so
+changing the SSH host to the daemon's address (the same machine, written differently) is refused like any alias: remove the direct socket and set it up again. A certificate Jen signed that
+carries no DNS or IP name (no subject alternative name, or only an e-mail or URI one, or one that does not parse) proves nothing about which daemon it was installed on and is refused wherever a
+name has to be judged: remove the direct socket and set it up again, or restore the certificate Jen issued. If a server record's SSH host is moved to
 another machine, or its address is pointed at a different daemon, Rotate refuses it (and says so) instead of treating the old
 daemon's certificate as the new one's, and the setup for the new host replaces it.
 Files Jen holds for a server with no certificate record (a key whose certificate is
@@ -329,7 +332,9 @@ does not count it and says "stale record for ...", and a superadmin can press
 host anything and only ever deletes records named like Jen's own. If the
 certificate folder cannot be read, Forget says so and forgets nothing.
 
-Two Kea server records that share one SSH host and service are one daemon:
+Two Kea server records that share one SSH host and service are one daemon - a record that is not
+dialled over https now (parked) counts, exactly as it does for the setup, because the certificate lands
+at that daemon's fixed paths whatever scheme Jen dials it on:
 Rotate refuses them until one record is removed or points at its own host,
 and an https setup on the second record is refused the same way ("kea-b already
 manages kea-dhcp4 on ...: one daemon, two records"). A dhcp4 and a dhcp6 daemon

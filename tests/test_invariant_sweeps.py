@@ -491,6 +491,8 @@ S10_MODULES = (
     "jen/services/investigation_logging.py",
     "jen/config.py",
     "jen/services/kea_host.py",
+    "jen/services/kea_changeset.py",  # Q202 (AR8): the incident store the rotation's bookkeeping rides on
+    "jen/services/kea_tls.py",  # Q202 (AR8): the certificate records a rotation, a recovery and the setup decide on
 )
 
 # (module, function, exception, effect): why the empty value is fail-closed there
@@ -620,6 +622,128 @@ S10_ALLOWED = {
     ),
     ("jen/services/kea_host.py", "helper_call", "ValueError", "pass"): (
         "output that is not JSON falls through to the HelperMissing / HelperError raise below: a garbled answer is never read as success"
+    ),
+    ("jen/services/kea_changeset.py", "_is_timestamp", "ValueError", "return False"): (
+        "an entry whose time does not parse is NOT a recognised incident: it is kept and counted as unrecognised, never cleared by a clean run (Q190, AF3)"
+    ),
+    ("jen/services/kea_changeset.py", "_with_attention", "Exception", "return False"): (
+        "the transaction is reported as NOT done: every caller acts on the False (`record_attention` answers False and the route refuses or audits; a clear leaves the note) - an unreadable note is refused, never read as empty and written over (Q189)"
+    ),
+    ("jen/services/kea_changeset.py", "record_outcome", "Exception", "return False"): (
+        "best-effort telemetry: the change set's own result is never changed by it, and False says the outcome was NOT recorded - nothing reads the False as 'nothing to record'"
+    ),
+    ("jen/services/kea_changeset.py", "record_attention", "Exception", "return False"): (
+        "the incident is reported as NOT stored: the rotation refuses before it stages, the other callers say so in a flash and an audit row (Q187, Q189, Q201 AQ3)"
+    ),
+    ("jen/services/kea_changeset.py", "resolve_attention", "Exception", "return 0"): (
+        "'cleared 0' leaves the incident standing: a failed clear is never read as cleared (the rotation's check reads the store strict and counts an unreadable one as still there)"
+    ),
+    ("jen/services/kea_changeset.py", "acknowledge_recovery", "Exception", "return None"): (
+        "None means the acknowledgement could not be written: the incident is still shown and the route says so"
+    ),
+    ("jen/services/kea_changeset.py", "dismiss_rollback_notes", "Exception", "return False"): (
+        "False means the note was NOT dismissed: it stays on the Servers page"
+    ),
+    ("jen/services/kea_changeset.py", "_listed_count", "Exception", "return 0"): (
+        "a count for the Servers banner's 'an incident Jen cannot read is on record' line only; every writer and Health read the note strictly and refuse text that is not a note (Q189)"
+    ),
+    ("jen/services/kea_changeset.py", "attention", "Exception", "return None"): (
+        "the Servers banner reads it and a banner that cannot be read shows nothing; the safety callers (the rotation's dependencies and reconcile, Forget, Health's note state) read `recovery_incidents(strict=True)` and refuse or say 'unknown' (Q202 AR8)"
+    ),
+    ("jen/services/kea_changeset.py", "clear_attention", "Exception", "return False"): (
+        "False means the note was NOT cleared (an unreadable note is refused, not cleared)"
+    ),
+    ("jen/services/kea_changeset.py", "set_aside_unreadable_note", "MalformedNote", "pass"): (
+        "the one sanctioned reset: reaching it means the stored value IS malformed, which is exactly what the superadmin asked to set aside - the copy and the clear that follow are each checked"
+    ),
+    ("jen/services/kea_tls.py", "cert_expiry", "(OSError, ValueError)", "return None"): (
+        "None is 'no expiry known': Health says the certificate cannot be read; it never shows a date it did not read"
+    ),
+    ("jen/services/kea_tls.py", "issued_by", "Exception", "return False"): (
+        "'not issued by that CA': a certificate that cannot be verified is never called Jen's (a rotation refuses it, a recovery judges its destination, an unverified pair is never installed)"
+    ),
+    ("jen/services/kea_tls.py", "_run_openssl", "OSError", "return None"): (
+        "NO OPINION from an informational CLI second opinion: the library's own verdict stands, and the CLI can only REJECT, never accept (Q196, Q197)"
+    ),
+    ("jen/services/kea_tls.py", "openssl_gate_rejection", "OSError", 'return ""'): (
+        "a gate that can only REJECT: no answer is no rejection, and the library's verdict (which already ran) stands - it never turns a damaged CA into an ok one"
+    ),
+    ("jen/services/kea_tls.py", "openssl_second_opinion", "OSError", 'return ""'): (
+        "informational: the second opinion adds a Health warning when it disagrees; no decision reads its absence"
+    ),
+    (
+        "jen/services/kea_tls.py",
+        "_ca_material_for_opinion",
+        "(OSError, ValueError, TypeError, UnsupportedAlgorithm)",
+        "return None",
+    ): ("no material for the informational second opinion: no opinion, the library's verdict stands"),
+    ("jen/services/kea_tls.py", "_name_types_ok", "(IndexError, ValueError)", "return False"): (
+        "a CA whose names cannot be compared is NOT accepted: it reads as damaged"
+    ),
+    ("jen/services/kea_tls.py", "_same_name", "(IndexError, ValueError)", "return False"): (
+        "two names that cannot be compared are NOT the same name: the CA is judged damaged"
+    ),
+    ("jen/services/kea_tls.py", "_cn", "(OSError, ValueError)", 'return ""'): (
+        "a label for a log line and a sentence; nothing is decided from it"
+    ),
+    ("jen/services/kea_tls.py", "_san_for", "ValueError", "pass"): (
+        "a candidate that is not an IP literal is tried as a DNS name next; a name neither can carry gets no SAN, and `verifier_accepts_name` and the setup's wall refuse it before anything is issued"
+    ),
+    ("jen/services/kea_tls.py", "_san_for", "ValueError", "return None"): (
+        "a name no certificate can carry gets NO SAN: the callers read None as 'not a name' (`verifier_accepts_name` says no; a leaf with no names is refused wherever a role is judged - Q202 AR2)"
+    ),
+    (
+        "jen/services/kea_tls.py",
+        "verifier_accepts_name",
+        "(ValueError, TypeError, UnsupportedAlgorithm)",
+        "return False",
+    ): (
+        "a name the verifier cannot build for is NOT accepted: the setup and the rotation refuse it with the name sentence"
+    ),
+    ("jen/services/kea_tls.py", "_is_ip", "ValueError", "return False"): (
+        "'not an IP literal': the setup's form refuses it and `issue_server_cert` raises (Q202 AR9 c)"
+    ),
+    ("jen/services/kea_tls.py", "_material", "(OSError, ValueError, TypeError, UnsupportedAlgorithm)", "return None"): (
+        "None is 'no payload': a pair that does not load or does not belong together is NEVER put on a host"
+    ),
+    (
+        "jen/services/kea_tls.py",
+        "fingerprint",
+        "(OSError, ValueError, TypeError, UnsupportedAlgorithm)",
+        "return None",
+    ): (
+        "no fingerprint is never 'the same one': callers read None as not identical or unknown (the reconcile then finishes a note from the files, which errs toward attention)"
+    ),
+    ("jen/services/kea_tls.py", "presented_fingerprint", "(OSError, ssl.SSLError, ValueError)", "return None"): (
+        "the listener's certificate could not be read: a setup is NOT reported as completed on it (Q188 AD2)"
+    ),
+    ("jen/services/kea_tls.py", "_open_incident_categories", "Exception", "return None"): (
+        "None is logged and `host_material` answers UNKNOWN: Jen then does not claim to know which pair the host holds (the same fail-closed reading the strict read already gives)"
+    ),
+    (
+        "jen/services/kea_tls.py",
+        "trust_bundle",
+        "(OSError, ValueError, TypeError, UnsupportedAlgorithm)",
+        "return None",
+    ): (
+        "None is 'Jen cannot read the CA bundle': the rotation inventory refuses the endpoints whose CA it cannot tell (Q190 AF1)"
+    ),
+    (
+        "jen/services/kea_tls.py",
+        "_certificate_names",
+        "(x509.ExtensionNotFound, x509.DuplicateExtension, ValueError)",
+        "return []",
+    ): (
+        "a certificate that names nothing proves nothing: every role judgment REFUSES it when there is a name to compare (Q202 AR2)"
+    ),
+    ("jen/services/kea_tls.py", "_known_again", "FileNotFoundError", "pass"): (
+        "the marker being absent is the state the call wants"
+    ),
+    ("jen/services/kea_tls.py", "trust_kind", "(OSError, ValueError, TypeError, UnsupportedAlgorithm)", "pass"): (
+        "a bundle that does not load falls through to 'unreadable', which the rotation inventory refuses"
+    ),
+    ("jen/services/kea_tls.py", "_group_certificate.loaded", "(OSError, ValueError)", "return None"): (
+        "a certificate that does not load is no evidence: `record_group_refusal` refuses a group with files and none, and `record_destination_refusal` leaves that to it (Q201 AQ2)"
     ),
 }
 

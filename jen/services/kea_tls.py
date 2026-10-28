@@ -69,6 +69,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from jen import extensions
 from jen.services.certs import (  # noqa: F401 - `write_atomically` is re-exported: the system scenarios and tests write identity files with it
+    OPENSSL_PATH,
     commit_file_set,
     write_atomically,
 )
@@ -401,7 +402,9 @@ def ca_verifier_rejection(ca_cert, ca_key) -> str:
 def _openssl_exe():
     """The `openssl` CLI on the Jen host, or None - the ONE place it is looked up. The daemon's own TLS library (OpenSSL) is on the box wherever this answers, and a test that must not depend on it
     patches THIS."""
-    return shutil.which("openssl")
+    return shutil.which(
+        "openssl", path=OPENSSL_PATH
+    )  # (Q202 AR9 l: a fixed list - the service's PATH is not where Jen looks for a binary it runs)
 
 
 def _run_openssl(args: list, timeout: float):
@@ -1042,10 +1045,11 @@ def name_refusal_remedy(names, rotating: bool = False, prepared: bool = False) -
     return "change the address Jen dials, or replace the CA with Rotate Kea CA (no acknowledgement is needed - the CA is not damaged)"
 
 
-def other_record_on_same_daemon(server: dict, service: str, servers, url_for=None, for_setup: bool = False) -> str:
+def other_record_on_same_daemon(server: dict, service: str, servers, url_for=None, ignore=()) -> str:
     """Q197 (AM5): the NAME of ANOTHER server record that shares this record's SSH host (`same_host`: exact, no DNS) and already holds a Jen-issued record for `service` - "" when there is none. The rule
     the rotation applies (Q196 AL2: one daemon is one target) asked where the world is MADE: an https setup on a second record for the same daemon would put a certificate on the fixed remote paths
-    that the first record's copy then no longer matches."""
+    that the first record's copy then no longer matches. Q202 (AR4): ONE rule, asked by the setup AND by the rotation, over EVERY other record - a parked one (not dialled over https now) included, because
+    the certificate lands at that daemon's fixed remote paths whatever scheme Jen dials it on. `ignore` is a set of (server id text, service) the caller handles itself (the rotation's two TARGETS)."""
     from jen.services.auth import same_host
 
     if url_for is None:
@@ -1061,13 +1065,13 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
         other_ssh = (other.get("ssh_host") or "").strip()
         if not other_ssh or not (ssh == other_ssh or same_host(ssh, other_ssh)):
             continue
-        if not for_setup and not (url_for(other, service) or "").strip().lower().startswith("https://"):
-            continue  # (Q201 AQ4: the SETUP counts a parked twin - the certificate it installs lands at that daemon's fixed remote paths whatever scheme Jen dials it on; the rotation keeps this exemption) (second pass, F3) a record whose endpoint is not https now is STALE - Rotate ignores it, so it is no second owner of the daemon
-        if record_state(other.get("id"), service, server=other, url=url_for(other, service))[0] in (
-            *JEN_STATES,
-            "refuse",
-        ):
+        if (str(other.get("id")), service) in ignore:
+            continue
+        state = record_state(other.get("id"), service, server=other, url=url_for(other, service))[0]
+        if state in (*JEN_STATES, "refuse"):
             # (Q198 AN5: a record Jen cannot rotate safely - malformed, a pair that does not match, an earlier CA's - is still files at that daemon's fixed paths; it is a second owner too)
+            if state == "refuse" and record_destination_refusal(other.get("id"), service, other, ""):
+                continue  # (Q202 AR4: ... unless its files name ANOTHER machine - they describe that machine's daemon, not this one's fixed paths, and `record_state` already refuses the record for it)
             return other.get("name") or f"Kea Server {other.get('id')}"
     return ""
 
@@ -1144,17 +1148,57 @@ def _is_ip(value: str) -> bool:
         return False
 
 
+def _is_ip_literal(value: str) -> bool:
+    """Q202 (AR9 c): is `value` an IP literal (padding ignored)? The setup's wall and `issue_server_cert` ask it HERE."""
+    return _is_ip((value or "").strip())
+
+
+def rotation_bind(server_id, service: str, url: str) -> str:
+    """Q202 (AR9 c): the bind address a rotation or a recovery issues a record's new certificate for. The URL's host when it is an IP literal; when the record is dialled at a NAME (a name the certificate
+    carries is accepted since AR5) the certificate's own bind-role address, which the setup wrote as an IP literal; else the URL's host as it is (`issue_server_cert` then refuses it)."""
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(url or "").hostname or ""
+    except ValueError:
+        host = ""
+    if _is_ip_literal(host):
+        return host
+    held, _files = _group_certificate(server_id, service)
+    if held is not None:
+        bind_name, _ssh_name = _certificate_roles(held)
+        if bind_name and _is_ip_literal(bind_name):
+            return bind_name
+    return host
+
+
+class BindNotAnAddress(ValueError):
+    """Q202 (AR9 c): the bind address handed to `issue_server_cert` is a NAME. The daemon binds an address, so no certificate Jen issues is for a name as its bind; the setup refuses one in its form, and the
+    rotation and the recovery - which take the bind from the record's URL - say so here (`names` is the name, for the sentence)."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            "the bind address of a server certificate is an IP literal: the daemon binds an address, not a name"
+        )
+        self.names = [name]
+
+
 def issue_server_cert(
     server: dict, service: str, bind_address: str, ca: tuple[str, str] | None = None, commit: bool = True
 ) -> dict:
     """Mint a server cert for `service` on `server`, SAN = the bind
-    address (what Jen dials) plus the SSH host (IP or DNS name — the
-    second name an operator might type as the URL), signed by the live
-    CA (which must exist — call ensure_ca() first) or, for a staged
-    rotation, by `ca = (cert_path, key_path)`. Keeps a copy of the cert
-    under kea-servers/ for Health. Returns exactly the `files` payload
-    the helper's install-tls op takes:
+    address (an IP literal: the daemon binds an address, not a name -
+    Q202 AR9 c, asked HERE because the setup, the rotation and the
+    recovery all pass through) plus the SSH host (IP or DNS name: the
+    machine the pair is installed on, which an operator may also dial -
+    a TLS client accepts any name the certificate carries), signed by
+    the live CA (which must exist — call ensure_ca() first) or, for a
+    staged rotation, by `ca = (cert_path, key_path)`. Keeps a copy of
+    the cert under kea-servers/ for Health. Returns exactly the `files`
+    payload the helper's install-tls op takes:
     {"ca.crt": pem, "server.crt": pem, "server.key": pem} (all str)."""
+    if not _is_ip_literal(bind_address):
+        raise BindNotAnAddress(bind_address)
     ca_cert, ca_key = (load_cert(ca[0]), load_key(ca[1])) if ca else _load_ca()
     key = _new_key()
     sans, seen = [], set()
@@ -1813,6 +1857,8 @@ def names_match(a: str, b: str) -> bool:
     from jen.services.auth import same_host
 
     a, b = _strip_scope(a), _strip_scope(b)
+    if not a or not b:
+        return False  # (Q202 AR9 i: two empty names are no name, never "the same place")
     return a == b or same_host(a, b)
 
 
@@ -1820,26 +1866,53 @@ def _certificate_roles(cert) -> tuple:
     """Q201 (AQ1): `(bind_name, ssh_name)` of a server certificate Jen issued - read from the ORDER of its SANs, which `issue_server_cert` writes as `[bind address, SSH host]` (deduplicated when equal) and
     DER keeps: the FIRST name is the address the daemon serves (the bind role), the LAST is the machine the helper installed it on (the SSH role), one name is both, no SAN is `(None, None)`.
     Never grouped by type: a mixed certificate (an IP first, a DNS name second) is read in the order it was written."""
-    try:
-        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
-        return None, None
-    names = [str(g.value) for g in sans if isinstance(g, x509.DNSName | x509.IPAddress)]
+    names = _certificate_names(cert)
     if not names:
         return None, None
     return names[0], names[-1]
 
 
+def _certificate_names(cert) -> list:
+    """The DNS and IP names a certificate's SAN extension carries, in the order written (empty for no extension, one with no such name, or one that does not parse)."""
+    try:
+        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
+        return []
+    return [str(g.value) for g in sans if isinstance(g, x509.DNSName | x509.IPAddress)]
+
+
+def _names_nothing(cert) -> str:
+    """Q202 (AR2): the sentence for a Jen-signed certificate that names no address and no machine - no SAN extension, a SAN extension with no DNS or IP name (an e-mail or URI name only), or a SAN
+    extension that does not parse. Jen's issuer always writes at least the bind address, so such a record was placed by hand, restored from elsewhere or damaged; it proves nothing about which daemon
+    it was installed on, and a role is never judged "fine" because there is nothing to compare."""
+    try:
+        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        why = (
+            "its subject alternative names hold no DNS or IP name"
+            if len(sans)
+            else "its subject alternative names are empty"
+        )
+    except x509.ExtensionNotFound:
+        why = "it has no subject alternative names"
+    except (x509.DuplicateExtension, ValueError):
+        why = "its subject alternative names do not parse"
+    return (
+        f"its saved certificate names no address and no machine ({why}), so Jen cannot tell which daemon it was installed on - remove the direct socket and set it up again, "
+        "or restore the certificate Jen issued"
+    )
+
+
 def ssh_host_refusal(cert, server) -> str:
     """Q200 (AP1), by role since Q201 (AQ1): "" when the SSH host Jen will LOG INTO (the mutation target: the helper installs the pair there and restarts the daemon) is the name the certificate was
     INSTALLED ON - its SSH-role name, compared with `same_host` (no DNS, a dot is a different name) - else the sentence. A URL match proves nothing about the machine the helper reaches, and neither does
-    the certificate's other name: the bind-role name is compared with the URL, never with the SSH host. No SSH host configured, or a certificate with no SAN, names no destination here."""
+    the certificate's other name: the bind-role name is compared with the URL, never with the SSH host. No SSH host configured names nothing to judge; a certificate that names nothing (Q202 AR2) is
+    refused when there IS a host to judge."""
 
     ssh = ((server or {}).get("ssh_host") or "").strip()
     _bind_name, ssh_name = _certificate_roles(cert)
-    if (
-        not ssh or ssh_name is None or names_match(ssh_name, ssh)
-    ):  # (identical text is one name whether or not `same_host` can parse it)
+    if ssh and ssh_name is None:
+        return _names_nothing(cert)  # (Q202 AR2: the absence of evidence is never evidence)
+    if not ssh or names_match(ssh_name, ssh):  # (identical text is one name whether or not `same_host` can parse it)
         return ""
     return (
         f"its certificate names {ssh_name} as the machine it was installed on; this record's SSH host is now {ssh}, a different machine - remove the direct socket and set it up again on it, "
@@ -1848,8 +1921,10 @@ def ssh_host_refusal(cert, server) -> str:
 
 
 def _group_certificate(server_id, service: str):
-    """Q201 (AQ2): `(certificate | None, [file names present])` - the certificate that represents what the HOST holds for this record GROUP, by the rule `host_material` uses: the live certificate when it
-    loads and no stale marker says otherwise; the `.prev` certificate when the live copy is stale-marked, or when the live copy is absent or unreadable; NEVER `.staged` (a host never accepted it)."""
+    """Q201 (AQ2): `(certificate | None, [file names present])` - the certificate that represents what the HOST holds for this record GROUP: the live certificate when it loads and no stale marker says
+    otherwise; the `.prev` certificate when the live copy is stale-marked, or when the live copy is absent or unreadable; NEVER `.staged` (a host never accepted it). Q202 (AR9 h): it reads the FILES
+    only - `host_material` also honours the `.unknown` marker and the open `remote-unknown` / `tls-not-restored` incidents (and answers "unknown" for a live pair that does not load where this falls
+    back to `.prev`); no verdict of the 20 group shapes the second pass executed moved on that difference, and this is the wider rule (a certificate to compare rather than none)."""
     crt = server_copy_path(server_id, service)
     files = sorted(os.path.basename(p) for p in _record_paths(server_id, service) if os.path.lexists(p))
 
@@ -1918,14 +1993,18 @@ def _destination_refusal(cert, server, url) -> str:
     refusal = ssh_host_refusal(cert, server)
     if refusal:
         return refusal
-    bind_name, _ssh_name = _certificate_roles(cert)
+    bind_name, ssh_name = _certificate_roles(cert)
     try:
         url_host = urlparse(url or "").hostname or ""
     except ValueError:
         url_host = ""
-    if bind_name is not None and url_host and not names_match(bind_name, url_host):
+    if url_host and bind_name is None:
+        return _names_nothing(cert)  # (Q202 AR2)
+    if url_host and not any(names_match(name, url_host) for name in _certificate_names(cert)):
+        # (Q202 AR5: the URL half is judged as the TLS stack judges it - ANY name the certificate carries is a name it answers to; the SSH half above stays all of its own, the LAST name)
+        also = f" (and {ssh_name} as the machine it was installed on)" if ssh_name != bind_name else ""
         return (
-            f"its certificate names {bind_name} as the address it serves; this record's address is now {url_host}, a different daemon - remove the direct socket and set it up again, "
+            f"its certificate names {bind_name} as the address it serves{also}; this record's address is now {url_host}, a different daemon - remove the direct socket and set it up again, "
             "or restore the previous address"
         )
     return ""
@@ -1957,6 +2036,20 @@ def record_group_refusal(server_id, service: str, server, url: str, label: str) 
         return ""
     wall = _destination_refusal(cert, server, url)
     return f"{wall} (a recovery does not rotate it)" if wall else ""
+
+
+def _held_destination_refusal(server_id, service: str, live_cert, server, url: str) -> str:
+    """Q202 (AR9 a): the destination sentence `record_state` asks of a record whose live pair loads - of the certificate that represents what the HOST holds (`_group_certificate`: a stale-marked record is
+    judged on its `.prev` certificate, the rule `record_destination_refusal` and `record_group_refusal` already apply), "" when nothing is configured to compare. A stale-marked record whose `.prev` does
+    not load keeps the live certificate (no better evidence exists)."""
+    if server is None and not url:
+        return ""
+    cert = live_cert
+    if is_stale(server_id, service):
+        held, _files = _group_certificate(server_id, service)
+        if held is not None:
+            cert = held
+    return _destination_refusal(cert, server, url)
 
 
 def record_state(server_id, service: str, recovery: bool = False, server=None, url: str = "") -> tuple[str, str]:
@@ -2013,14 +2106,14 @@ def record_state(server_id, service: str, recovery: bool = False, server=None, u
     if not paired:
         return "refuse", "its certificate and key are not a pair"
     if issued_by(crt, ca_paths()[0]):
-        refusal = _destination_refusal(cert, server, url) if (server is not None or url) else ""
+        refusal = _held_destination_refusal(server_id, service, cert, server, url)
         if refusal:
             return "refuse", refusal
         return ("jen-stale" if is_stale(server_id, service) else "jen"), ""
     if any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
         if recovery:
             # Q200 second pass (F1): a recovery asks the same destination question - the SANs are readable without the CA, and the wall is a fact about the record's host, not about the CA's health
-            refusal = _destination_refusal(cert, server, url) if (server is not None or url) else ""
+            refusal = _held_destination_refusal(server_id, service, cert, server, url)
             if refusal:
                 return "refuse", refusal
             return (
@@ -2085,9 +2178,7 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
                     continue
             if on_jens_own_ca and state in ("none", "refuse"):
                 # Q193 (AI3): Jen verifies this endpoint against its OWN CA - the file being replaced - so it is Jen's, whatever it holds or does not hold for it: the replacement issues it a pair afresh
-                from urllib.parse import urlparse
-
-                targets.append((server, service, urlparse(url).hostname or ""))
+                targets.append((server, service, rotation_bind(sid, service, url)))
                 continue
             if state == "none":
                 # Q190 (AF1): Jen holds no record of this endpoint's certificate. Whose endpoint it is is a fact about CERTIFICATES, decided here - and only here, as the tiebreak - from what Jen is
@@ -2136,18 +2227,20 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
                     external.append(f"{label} ({shown_url(url)}; its CA is not Jen's)")
                     external_endpoints.append((server, service, url))
             elif state in JEN_STATES:
-                from urllib.parse import urlparse
-
-                targets.append((server, service, urlparse(url).hostname or ""))
+                targets.append((server, service, rotation_bind(sid, service, url)))
             elif state == "external":
                 external.append(f"{label} ({shown_url(url)}; its certificate was not issued by Jen)")
                 external_endpoints.append((server, service, url))
             else:
+                # Q202 (AR4, A-2): where another record manages the same daemon the setup would REFUSE the remedy "set it up again"; the sentence names the action the setup accepts
+                twin = "" if recovery else other_record_on_same_daemon(server, service, servers, url_for=url_for)
                 refusals.append(
                     f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({why}); "
                     + (
                         f"{RECOVERY_OWN_CA_FIX}, before rotating"
                         if recovery
+                        else f"{twin} already manages the same daemon: remove one of the two records, or re-point it at its own host (the setup is refused while two records share a daemon), before rotating"
+                        if twin
                         else "remove the direct socket and set it up again so Jen issues and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
                     )
                 )
@@ -2156,10 +2249,19 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
     from jen.services.auth import same_host
 
     owners: dict = {}
+    target_keys = {(str(s.get("id")), svc) for s, svc, _b in targets}
     for server, service, _bind in targets:
         ssh = (server.get("ssh_host") or "").strip()
         if not ssh:
             continue
+        # Q202 (AR4, the second pass's A-1): the rotation asks the SETUP's question - the SAME function - of every target over the records that are not targets (a PARKED twin counts: its files sit at that
+        # daemon's fixed remote paths, which this target's install would overwrite while the rotation reported success). Two targets are the rule below, with its own sentence.
+        twin = other_record_on_same_daemon(server, service, servers, url_for=url_for, ignore=target_keys)
+        if twin:
+            refusals.append(
+                f"{_server_label(server, service)}: {twin} already manages {_DAEMON_LABEL.get(service, 'kea-' + service)} on {ssh}: one daemon, two records - the certificate this rotation installs would "
+                "replace the one that record holds. Remove one record, or re-point it at its own host, before rotating"
+            )
         for other_server, other_ssh in owners.get(service, []):
             if ssh == other_ssh or same_host(
                 ssh, other_ssh

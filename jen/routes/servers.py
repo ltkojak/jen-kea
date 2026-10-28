@@ -310,6 +310,13 @@ def acknowledge_recovery_incident():
     if category is not None and category not in __changeset.ATTENTION_CATEGORIES:
         flash("Unknown incident category.", "error")
         return redirect(url_for("servers.servers"))
+    if category == "rotation-pending":
+        # Q202 (AR7): a `rotation-pending` note is Jen's own bookkeeping of what a rotation owes; acknowledging it would drop the obligation (the `tls-superseded` fact for that daemon would never be written)
+        flash(
+            "A rotation note is Jen's own bookkeeping - it cannot be acknowledged. The next Rotate, or Forget stale records, finishes it from Jen's files.",
+            "info",
+        )
+        return redirect(url_for("servers.servers"))
     if service is not None and service not in ("dhcp4", "dhcp6", "d2"):
         flash("Unknown Kea service.", "error")  # (Q188, AD9) validated before the audit row, like the category
         return redirect(url_for("servers.servers"))

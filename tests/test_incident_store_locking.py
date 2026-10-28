@@ -205,3 +205,38 @@ def test_the_set_aside_keeps_the_text_in_a_row_of_its_own_and_the_note_works_aga
     finally:
         with jen_db() as c, c.cursor() as cur:
             cur.execute("DELETE FROM settings WHERE setting_key LIKE %s", (cs.ATTENTION_KEY + "_set_aside_%",))
+
+
+def _raw_note():
+    with jen_db() as c, c.cursor() as cur:
+        cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s", (cs.ATTENTION_KEY,))
+        row = cur.fetchone()
+    return (row["setting_value"] if isinstance(row, dict) else row[0]) if row else ""
+
+
+def test_a_rotation_pending_note_is_not_refreshed_under_another_ca_fingerprint_on_the_real_table():
+    """Q202 (AR1): the choke point on the REAL settings table. The dedupe key (server, service, category) is where the overwrite happened; a note written under CA A is refused a refresh under CA B, and the
+    stored row is byte-equal before and after, read back from the table. The same fingerprint refreshes. (The module of the pure change-set tests stubs the store; the real transaction is here.)"""
+    assert cs.record_attention(79, "dhcp4", "first", "rotation-pending", server_name="ghost", ca_fingerprint="aa" * 32)
+    before = _raw_note()
+    assert before and "aa" * 32 in before
+    assert (
+        cs.record_attention(79, "dhcp4", "second", "rotation-pending", server_name="ghost", ca_fingerprint="bb" * 32)
+        is False
+    )
+    assert _raw_note() == before, "byte for byte, read from the table"
+    assert (
+        cs.record_attention(79, "dhcp4", "third", "rotation-pending", server_name="ghost", ca_fingerprint="aa" * 32)
+        is True
+    )
+    assert [i["summary"] for i in _stored()] == ["third"]
+
+
+def test_acknowledge_never_clears_a_rotation_pending_note_on_the_real_table():
+    """Q202 (AR7)."""
+    assert cs.record_attention(79, "dhcp4", "op", "rotation-pending", ca_fingerprint="aa" * 32)
+    assert cs.record_attention(80, "dhcp4", "x", "aborted")
+    assert cs.acknowledge_recovery(None, None, None) == 1
+    assert [(i["server_id"], i["category"]) for i in _stored()] == [(79, "rotation-pending")]
+    assert cs.acknowledge_recovery(79, "dhcp4", "rotation-pending") == 0
+    assert [i["category"] for i in _stored()] == ["rotation-pending"]

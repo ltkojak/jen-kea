@@ -1430,11 +1430,11 @@ def _server_by_id(server_id):
 
 
 def _is_ip_literal(value: str) -> bool:
-    try:
-        ipaddress.ip_address((value or "").strip())
-    except ValueError:
-        return False
-    return True
+    from jen.services import kea_tls as __tls
+
+    return __tls._is_ip_literal(
+        value
+    )  # (Q202 AR9 c: the question is asked where the certificate is issued; the setup's wall asks it there too)
 
 
 def _socket_url(scheme: str, address: str, port: int) -> str:
@@ -1939,12 +1939,18 @@ def _tls_unknown_after_failed_install(server: dict, service: str, existing_api) 
 _RECORD_NOT_KEPT = "Jen could not keep a record of this in its recovery notes, so Servers will not show it; Health reports the notes as unknown until they can be read. Act on the lines above."
 
 
-def _has_incident(server_id, service: str, category: str) -> bool:
+def _has_incident(server_id, service: str, category: str, *, unreadable: bool = False) -> bool:
+    """Is there an open incident of this category for this server and service? Ids are compared as text on both sides (Q202 AR9 j: a posted "2" and a stored 2 are one server). The store is read STRICT
+    (Q202 AR8): when it cannot be read the answer is `unreadable` - False for a read-back that must PROVE a note exists, True for a check that must prove one is gone."""
     from jen.services import kea_changeset as __changeset
 
+    try:
+        incidents = __changeset.recovery_incidents(strict=True)
+    except ValueError:
+        return unreadable
     return any(
-        i.get("server_id") == server_id and i.get("service") == service and i.get("category") == category
-        for i in __changeset.recovery_incidents()
+        str(i.get("server_id")) == str(server_id) and i.get("service") == service and i.get("category") == category
+        for i in incidents
     )
 
 
@@ -1964,7 +1970,9 @@ def _rotation_dependencies(inventory, rotated: set) -> list:
     candidates = [tuple(ident.partition("-")[::2]) for ident in inventory.parked]
     from jen.services import kea_changeset as __changeset
 
-    for incident in __changeset.recovery_incidents():
+    for incident in __changeset.recovery_incidents(
+        strict=True
+    ):  # (Q202 AR8: a store that cannot be READ raises ValueError, and `rotate_kea_ca` refuses - it is never "the operator forgot nothing")
         if incident.get("category") == "record-forgotten":
             candidates.append((str(incident.get("server_id")), str(incident.get("service"))))
     for sid_text, svc in candidates:
@@ -1984,7 +1992,7 @@ def _clear_rotation_pending(items) -> None:
     left = []
     for server, svc in items:
         __changeset.resolve_attention(server.get("id"), svc, categories=("rotation-pending",))
-        if _has_incident(server.get("id"), svc, "rotation-pending"):
+        if _has_incident(server.get("id"), svc, "rotation-pending", unreadable=True):
             left.append(f"{server.get('name') or 'Kea Server ' + str(server.get('id'))} kea-{svc}")
     if left:
         flash(
@@ -1994,13 +2002,22 @@ def _clear_rotation_pending(items) -> None:
         __user.audit("ROTATE_KEA_CA", "kea_api", f"rotation-pending not cleared: {', '.join(left)}")
 
 
-def _saved_ssh_hosts() -> set:
-    """The SSH hosts already saved (the primary's and every server's): a form that re-submits one UNCHANGED is not asked to re-validate it (Q201 second pass F5 - a scoped IPv6 host saved before 5.69.1 must
-    not lock the operator out of saving anything else)."""
-    return {
-        (extensions.KEA_SSH_HOST or "").strip(),
-        *((s.get("ssh_host") or "").strip() for s in extensions.KEA_SERVERS),
-    } - {""}
+def _saved_ssh_host_for(server_id) -> str:
+    """The SSH host saved for THIS record: the primary's (`[kea_ssh] host`) for server 1, a configured server's own `ssh_host` by its number, "" for a row that is new (Q202 AR3 - the exemption was a set
+    over every record, so a legacy host could be copied onto another one)."""
+    text = str(server_id).strip()
+    if text == "1":
+        return (extensions.KEA_SSH_HOST or "").strip()
+    server = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == text and s.get("id") != 1), None)
+    return ((server or {}).get("ssh_host") or "").strip()
+
+
+def _ssh_host_unchanged(submitted: str, server_id) -> bool:
+    """Is `submitted` the SSH host already saved for THIS record (Q201 second pass F5, Q202 AR3)? A form that re-submits one UNCHANGED is not asked to re-validate it - a scoped IPv6 host saved before 5.69.1
+    must not lock the operator out of saving anything else. Unchanged is the same text or `same_host` (a bracketed, upper-case or expanded spelling of the address; a CHANGED scope is a changed target and
+    is validated)."""
+    value, saved = (submitted or "").strip(), _saved_ssh_host_for(server_id)
+    return bool(saved) and (value == saved or __auth.same_host(value, saved))
 
 
 def _record_incident(
@@ -2544,7 +2561,7 @@ def setup_direct_socket(server_id, service):
             return back
         if _refused_for_many_sockets(need_read=True):
             return back
-        twin = __tls.other_record_on_same_daemon(server, service, extensions.KEA_SERVERS, for_setup=True)
+        twin = __tls.other_record_on_same_daemon(server, service, extensions.KEA_SERVERS)
         if twin:
             # Q197 (AM5): the rule the rotation applies (one daemon is one target) applied where the world is MADE - before any local or remote change
             flash(
@@ -2981,25 +2998,57 @@ def rotate_kea_ca():
     planned = {(server.get("id"), service) for server, service, _bind in targets}
     # Q201 (AQ3): the rotation's bookkeeping is written BEFORE the first remote change. Every record this rotation does not rotate but whose daemon may depend on the CA it replaces gets a
     # `rotation-pending` note, read back; a note that cannot be stored refuses the rotation before anything is staged (as the storage probe does). Notes a previous run left are reconciled first.
-    __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+    # Q202 (AR1): a note of an EARLIER generation is finished first, and a rotation that cannot finish it does not start (a note is never refreshed or cleared by a later rotation: `record_attention` refuses a
+    # different CA fingerprint, and this refusal is the route's half of the same rule). Q202 (AR8): both reads are strict - a store that cannot be READ is a refusal, never "nothing is pending".
+    try:
+        unfinished_before = __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+        dependencies = [] if unfinished_before else _rotation_dependencies(inventory, planned)
+    except ValueError:
+        __user.audit("ROTATE_KEA_CA", "kea_api", "refused: the incident store could not be read")
+        flash(
+            "Rotate refused — the incident store could not be read, and a rotation whose bookkeeping cannot be recorded does not start. Nothing was changed.",
+            "error",
+        )
+        return back
+    if unfinished_before:
+        __user.audit(
+            "ROTATE_KEA_CA",
+            "kea_api",
+            f"refused: an earlier rotation's note is unfinished for {', '.join(unfinished_before)}",
+        )
+        flash(
+            f"Rotate refused — the bookkeeping of an earlier rotation for {', '.join(unfinished_before)} is not finished: the incident store refused the note that finishes it. Nothing was changed; try again when the store is back, or Forget stale records finishes it.",
+            "error",
+        )
+        return back
     pending_written: list = []
     pending_kept = [False]
-    for dep_server, dep_service in _rotation_dependencies(inventory, planned):
+    for dep_server, dep_service in dependencies:
         dep_label = f"{dep_server.get('name') or 'Kea Server ' + str(dep_server.get('id'))} kea-{dep_service}"
-        if not (
-            _record_incident(
-                dep_server,
-                dep_service,
-                "a CA rotation is changing what this server's daemon depends on",
-                "rotation-pending",
-                ca_fingerprint=__tls.live_ca_fingerprint(),
+        stored = _record_incident(
+            dep_server,
+            dep_service,
+            "a CA rotation is changing what this server's daemon depends on",
+            "rotation-pending",
+            ca_fingerprint=__tls.live_ca_fingerprint(),
+        )
+        readable = stored and _has_incident(dep_server.get("id"), dep_service, "rotation-pending")
+        if not readable:
+            # (Q202 AR9 f: a note that was STORED and cannot be read back is not "could not be written" - the AQ6 h distinction, carried to the rotation)
+            _clear_rotation_pending([*pending_written, *([(dep_server, dep_service)] if stored else [])])
+            __user.audit(
+                "ROTATE_KEA_CA",
+                "kea_api",
+                f"refused: the rotation note for {dep_label} was stored but could not be read back"
+                if stored
+                else f"refused: the rotation note for {dep_label} could not be stored",
             )
-            and _has_incident(dep_server.get("id"), dep_service, "rotation-pending")
-        ):
-            _clear_rotation_pending(pending_written)
-            __user.audit("ROTATE_KEA_CA", "kea_api", f"refused: the rotation note for {dep_label} could not be stored")
             flash(
-                f"Rotate refused — Jen could not write the note that a rotation is changing what {dep_label} depends on (the incident store is unavailable), and a rotation whose bookkeeping cannot be recorded does not start. Nothing was changed.",
+                (
+                    f"Rotate refused — the note that a rotation is changing what {dep_label} depends on was stored but could not be read back (the incident store is not answering), and a rotation whose bookkeeping cannot be recorded does not start. Nothing was changed."
+                    if stored
+                    else f"Rotate refused — Jen could not write the note that a rotation is changing what {dep_label} depends on (the incident store is unavailable), and a rotation whose bookkeeping cannot be recorded does not start. Nothing was changed."
+                ),
                 "error",
             )
             return back
@@ -3091,6 +3140,13 @@ def rotate_kea_ca():
                     failure = (
                         f"{sname} {daemon}: the CA cannot issue its certificate for {', '.join(e.names)} ({e.why}) - "
                         f"{__tls.name_refusal_remedy(e.names, rotating=True, prepared=reused)}; nothing was installed on any host"
+                    )
+                    break
+                except __tls.BindNotAnAddress as e:
+                    # (Q202 AR9 c) the record is dialled at a NAME no certificate of Jen's carries as a bind - the setup requires an IP literal; nothing was installed on any target
+                    failure = (
+                        f"{sname} {daemon}: the CA cannot issue its certificate for {', '.join(e.names)} (it is a name, and a certificate Jen issues is for the address the daemon binds) - "
+                        f"{__tls.name_refusal_remedy(e.names, rotating=True)}; nothing was installed on any host"
                     )
                     break
                 except __tls.CaDamaged as e:
@@ -3438,7 +3494,11 @@ def rotate_kea_ca():
         )
     # Q201 (AQ3): the notes are finished from Jen's files - the same judgment for a parked live pair, an orphan group and a forgotten record (`group_verdict`); one that cannot be finished stays
     # `rotation-pending` and is said, never lost
-    for unfinished in __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS):
+    try:
+        still_pending = __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+    except ValueError:
+        still_pending = ["the notes of this rotation (the incident store could not be read)"]
+    for unfinished in still_pending:
         flash(
             f"The CA is rotated; the note for {unfinished} could not be updated - Servers shows it as pending and the next Rotate or Forget stale records finishes it.",
             "warning",
@@ -3557,7 +3617,13 @@ def forget_stale_kea_records():
         request.form.get("include_parked") == "1"
     )  # the operator's checkbox: "no daemon presents these certificates any more"
     # (Q201 second pass F1: an unfinished rotation note is finished HERE, under the identity lock - never from the read path, where it could erase the notes of a rotation that is running)
-    __changeset_reconcile.reconcile_rotation_pending(extensions.KEA_SERVERS)
+    try:
+        __changeset_reconcile.reconcile_rotation_pending(extensions.KEA_SERVERS)
+    except ValueError:
+        flash(
+            "Jen could not read its incident notes (the database is not answering), so it could not finish the bookkeeping of an earlier rotation; Forget stale records carries on without it.",
+            "warning",
+        )
 
     def _fact_first(ident):
         # Q200 (AP2): the durable fact is stored AND read back before a parked record is deleted; False keeps every file (`forget_report` names it in `no_fact`)
@@ -3591,13 +3657,23 @@ def forget_stale_kea_records():
         return redirect(url_for("settings.settings_kea"))
     forgotten, parked, on_word = report["forgotten"], report["parked"], report["on_word"]
     if report["no_fact"]:
+        refused_unstored = [i for i in report["no_fact"] if i not in unread]
+        refused_unread = [i for i in report["no_fact"] if i in unread]
         __user.audit(
             "FORGET_STALE_KEA_RECORDS",
             "kea_api",
-            f"0 record(s) forgotten on the operator's word: the fact could not be stored for {', '.join(report['no_fact'])}",
+            "0 record(s) forgotten on the operator's word: "
+            + "; ".join(
+                part
+                for part in (
+                    f"the fact could not be stored for {', '.join(refused_unstored)}" if refused_unstored else "",
+                    f"the fact was stored but could not be read back for {', '.join(refused_unread)}"
+                    if refused_unread
+                    else "",
+                )
+                if part
+            ),
         )
-        refused_unstored = [i for i in report["no_fact"] if i not in unread]
-        refused_unread = [i for i in report["no_fact"] if i in unread]
         if refused_unstored:
             flash(
                 f"The record was kept: Jen could not write the fact of its removal (the incident store is unavailable), so it deleted nothing of {', '.join(refused_unstored)}. Try again when the database is back.",
@@ -4151,7 +4227,8 @@ def remove_direct_socket(server_id, service):
                 f"({', '.join(sorted({f[1] for f in dropped_record['failed']}))}) - they may still be on disk; fix the certificate folder's permissions and use Forget stale records.",
                 "error",
             )
-    flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
+    if changed:
+        flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
     if lost:
         flash(
             f"{', '.join(lost)} used the password of the address that just changed and now has none: type its own under Settings → Kea (the daemon on the Kea host may still need one).",
@@ -4341,12 +4418,13 @@ def save_infra_jen_db():
 @login_required
 @_superadmin_required
 @_recent_auth_required(minutes=10)
+@_holding_identity_lock
 def save_infra_ssh():
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
     kea_conf = request.form.get("kea_conf", "").strip()
     dhcp4_log_path = request.form.get("dhcp4_log_path", "").strip()
-    if host and host not in _saved_ssh_hosts() and not __auth.valid_ssh_target(host):
+    if host and not _ssh_host_unchanged(host, 1) and not __auth.valid_ssh_target(host):
         flash(
             "Invalid SSH host — must be a valid hostname or IP address."
             + (f" {__auth.ssh_target_problem(host)}." if __auth.ssh_target_problem(host) else ""),
@@ -4434,8 +4512,10 @@ def save_extra_servers():
     nod2_passes = request.form.getlist("extra_d2_no_pass[]")
     no_passes = request.form.getlist("extra_no_pass[]")
 
-    for h in ssh_hosts:
-        if h.strip() and h.strip() not in _saved_ssh_hosts() and not __auth.valid_ssh_target(h.strip()):
+    for row_id, h in zip(ids, ssh_hosts, strict=False):
+        # (Q202 AR3: a row's exemption is its OWN saved host, found by its `extra_id[]` - never position, never another record's host; a new row has none)
+        own = row_id.strip() if row_id.strip().isdigit() and row_id.strip() != "1" else ""
+        if h.strip() and not (own and _ssh_host_unchanged(h, own)) and not __auth.valid_ssh_target(h.strip()):
             flash(
                 f"Invalid SSH host: {h.strip()}"
                 + (f" - {__auth.ssh_target_problem(h)}" if __auth.ssh_target_problem(h) else ""),
@@ -5076,8 +5156,10 @@ def restart_jen():
 
 @bp.route("/settings/save-ports", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_ports():
+    # Q202 (AR6): ports and threads are the server's infrastructure, and the route ends in `runtime.restart_service()` - every restart of Jen is behind the one gate (superadmin + step-up), like `restart_jen`
     ssl_on = __config.ssl_configured()
     try:
         http_port = int(request.form.get("http_port", str(extensions.HTTP_PORT)))

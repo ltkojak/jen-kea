@@ -2420,8 +2420,17 @@ def q197_am2_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca():
             "10.0.0.5",
             "kea-a.elsewhere.net",
         ),
-        "a host with an underscore": ("jen's own", "kea_host", "10.0.0.5"),
-        "a host with a trailing dot": ("jen's own", "kea-a.", "10.0.0.5"),
+        "a name as the bind (underscore)": (
+            "jen's own",
+            "kea_host",
+            "10.0.0.5",
+        ),  # (Q202 AR9 c: the bind is an IP literal - asked at the choke point)
+        "a name as the bind (trailing dot)": ("jen's own", "kea-a.", "10.0.0.5"),
+        "an underscore as the SSH host": (
+            "jen's own",
+            "10.0.0.5",
+            "kea_host",
+        ),  # (the SSH host is the leaf's second name: the verifier is asked about the first)
         "a damaged CA": ("eku-anyeku", "10.0.0.5", "10.0.0.5"),
         "a name the CA permits": ("name-constraints-permit-own-domain", "10.0.0.5", "kea-a.example.com"),
     }
@@ -2437,6 +2446,8 @@ def q197_am2_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca():
             try:
                 kea_tls.issue_server_cert({"id": 9, "name": "probe", "ssh_host": ssh_host}, "dhcp4", bind, commit=False)
                 out[label] = ("issued", [])
+            except kea_tls.BindNotAnAddress as e:
+                out[label] = ("BindNotAnAddress", e.names)
             except kea_tls.NameRefused as e:
                 out[label] = ("NameRefused", e.names)
             except kea_tls.CaDamaged:
@@ -2743,6 +2754,66 @@ def q201_aq5_a_scope_is_a_different_link_for_a_secret_and_no_scope_for_a_certifi
         )
 
 
+def q202_ar1_a_pending_note_is_refreshed_only_under_its_own_ca_fingerprint():
+    """`record_attention` over an in-memory note: (the first note is stored, a refresh under ANOTHER CA fingerprint is refused, a refresh under the same one is stored). The dedupe key (server, service,
+    category) is where a later rotation overwrote an earlier generation's note (Q202 AR1)."""
+    from jen.models import user as user_mod
+    from jen.services import kea_changeset
+
+    store: list = []
+
+    def with_attention(fn, strict=True):
+        new = fn(list(store))
+        if new is not None:
+            store[:] = new
+        return True
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(kea_changeset, "_with_attention", with_attention))
+        stack.enter_context(mock.patch.object(user_mod, "audit", lambda *a, **k: None))
+        first = kea_changeset.record_attention(79, "dhcp4", "a", "rotation-pending", ca_fingerprint="aa" * 32)
+        other = kea_changeset.record_attention(79, "dhcp4", "b", "rotation-pending", ca_fingerprint="bb" * 32)
+        same = kea_changeset.record_attention(79, "dhcp4", "c", "rotation-pending", ca_fingerprint="aa" * 32)
+        return (first, other, same)
+
+
+def q202_ar2_a_certificate_that_names_nothing_proves_nothing():
+    """`record_state` for a Jen-signed record with NO subject alternative name (the SSH host configured): (the state, whether the sentence says it names nothing, whether the group refusal of a recovery
+    says so). The absence of evidence is never evidence (Q202 AR2)."""
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        ca_cert, ca_key = kea_tls._load_ca()
+        key = kea_tls._new_key()
+        cert = kea_tls._leaf(ca_cert, ca_key, key, "kea-dhcp4 nameless", [], client=False)
+        kea_tls.commit_issued(
+            2,
+            "dhcp4",
+            {
+                "ca.crt": kea_tls._cert_pem(ca_cert).decode(),
+                "server.crt": kea_tls._cert_pem(cert).decode(),
+                "server.key": kea_tls._key_pem(key).decode(),
+            },
+        )
+        base = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"}
+        state, why = kea_tls.record_state(2, "dhcp4", server=base, url="https://10.0.0.6:8004")
+        recovery = kea_tls.record_group_refusal(2, "dhcp4", base, "https://10.0.0.6:8004", "kea-b kea-dhcp4")
+        return (state, "names no address and no machine" in why, "names no address and no machine" in recovery)
+
+
+def q202_ar5_the_url_is_judged_as_the_tls_stack_judges_it():
+    """`record_state` for a record issued for 10.0.0.6 with the SSH host kea-b.lan: (the address changed to the machine's DNS name - a name the certificate carries, so accepted; to a name it does not
+    carry, refused; the SSH host changed to the address, refused). The URL half is any name; the SSH half is the last (Q202 AR5)."""
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        base = {"id": 2, "name": "kea-b", "ssh_host": "kea-b.lan"}
+        kea_tls.issue_server_cert(base, "dhcp4", "10.0.0.6")
+        return (
+            kea_tls.record_state(2, "dhcp4", server=base, url="https://kea-b.lan:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server=base, url="https://kea-c.lan:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server={**base, "ssh_host": "10.0.0.6"}, url="https://10.0.0.6:8004")[0],
+        )
+
+
 def q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own():
     """`record_state` for a record issued for 10.0.0.6 (SSH host 10.0.0.6, address 10.0.0.6) under server 2: (unchanged, SSH host moved with the URL unchanged, URL moved with the SSH host unchanged,
     both moved). The SSH host moved to another machine is the case Q199 accepted - the helper would have installed on the new machine and restarted its daemon."""
@@ -2947,6 +3018,7 @@ SCENARIOS = {
             "q199_",
             "q200_",
             "q201_",
+            "q202_",
         )
     )
     and callable(fn)
@@ -3273,8 +3345,9 @@ EXPECTED = {
     "q197_am2_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca": {
         "ip outside the permitted range": ("NameRefused", ["10.0.0.5"]),
         "ssh host outside the permitted domain": ("NameRefused", ["kea-a.elsewhere.net"]),
-        "a host with an underscore": ("NameRefused", ["kea_host"]),
-        "a host with a trailing dot": ("NameRefused", ["kea-a."]),
+        "a name as the bind (underscore)": ("BindNotAnAddress", ["kea_host"]),
+        "a name as the bind (trailing dot)": ("BindNotAnAddress", ["kea-a."]),
+        "an underscore as the SSH host": ("issued", []),
         "a damaged CA": ("CaDamaged", []),
         "a name the CA permits": ("issued", []),
     },
@@ -3305,6 +3378,9 @@ EXPECTED = {
         "issuer-string-type-differs": "ok",
     },
     "q201_aq1_a_certificates_names_carry_their_roles_in_their_order": ("jen", "refuse", "refuse", "refuse"),
+    "q202_ar1_a_pending_note_is_refreshed_only_under_its_own_ca_fingerprint": (True, False, True),
+    "q202_ar2_a_certificate_that_names_nothing_proves_nothing": ("refuse", True, True),
+    "q202_ar5_the_url_is_judged_as_the_tls_stack_judges_it": ("jen", "refuse", "refuse"),
     "q201_aq2_a_recovery_judges_the_record_group": (True, True, False, False),
     "q201_aq3_a_pending_note_is_reconciled_from_the_files": (
         ["ghost kea-dhcp4"],

@@ -886,8 +886,9 @@ class TestTheProbeRowsOfQ197:
         assert probe.q197_am2_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca() == {
             "ip outside the permitted range": ("NameRefused", ["10.0.0.5"]),
             "ssh host outside the permitted domain": ("NameRefused", ["kea-a.elsewhere.net"]),
-            "a host with an underscore": ("NameRefused", ["kea_host"]),
-            "a host with a trailing dot": ("NameRefused", ["kea-a."]),
+            "a name as the bind (underscore)": ("BindNotAnAddress", ["kea_host"]),
+            "a name as the bind (trailing dot)": ("BindNotAnAddress", ["kea-a."]),
+            "an underscore as the SSH host": ("issued", []),
             "a damaged CA": ("CaDamaged", []),
             "a name the CA permits": ("issued", []),
         }
@@ -965,6 +966,19 @@ class TestTheProbeRowsOfQ201:
             ["rotation-pending"],
             ["tls-superseded"],
         )
+
+
+class TestTheProbeRowsOfQ202:
+    """AR1/AR2/AR5: a pending note belongs to its CA generation; a certificate that names nothing proves nothing; the URL is judged as the TLS stack judges it."""
+
+    def test_a_pending_note_is_refreshed_only_under_its_own_ca_fingerprint(self):
+        assert probe.q202_ar1_a_pending_note_is_refreshed_only_under_its_own_ca_fingerprint() == (True, False, True)
+
+    def test_a_certificate_that_names_nothing_proves_nothing(self):
+        assert probe.q202_ar2_a_certificate_that_names_nothing_proves_nothing() == ("refuse", True, True)
+
+    def test_the_url_is_judged_as_the_tls_stack_judges_it(self):
+        assert probe.q202_ar5_the_url_is_judged_as_the_tls_stack_judges_it() == ("jen", "refuse", "refuse")
 
 
 class TestTheProbeRowsOfQ200:

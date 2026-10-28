@@ -44,7 +44,8 @@
     {# v5.69.0-beta.18 (Q187): a direct-socket recovery Jen could not PROVE - shown until a later operation on this server probes the endpoint, or a superadmin acknowledges it #}
     <strong>A direct-socket recovery on {{ ca.server_name or ("server " ~ ca.server_id) }} is not proved.</strong>
     {{ ca.detail }}
-    {% if current_user.role == 'superadmin' %}
+    {# Q202 (AR7): a rotation note is Jen's own bookkeeping, finished from Jen's files - never acknowledged, so no button #}
+    {% if current_user.role == 'superadmin' and ca.category != 'rotation-pending' %}
     <form method="POST" action="{{ url_for('servers.acknowledge_recovery_incident') }}" class="u-8a77e5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="server_id" value="{{ ca.server_id }}">

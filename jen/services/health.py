@@ -1238,10 +1238,17 @@ def _kea_tls_expiry(ctx) -> Check:
         c.detail += f" — a rotation's bookkeeping for {', '.join(unfinished)} is unfinished: Jen keeps its note pending (see Servers); the next Rotate, or Forget stale records, finishes it from Jen's files"
     if left_behind:
         c.status = "fail" if c.status == "fail" else "warn"
+        twinned = _twinned_labels("tls-superseded")
         c.detail += (
             f" — {', '.join(left_behind)} is parked and its daemon still runs a certificate from the CA Jen replaced: when it is dialled over https again, "
             "remove the direct socket and set it up again (see Servers)"
         )
+        if twinned:
+            # Q202 (AR4, A-2): the setup is REFUSED while another record manages the same daemon, so the remedy above would meet a refusal; the action the setup accepts is said
+            c.detail += (
+                f"; {', '.join(twinned)} shares its daemon with another record, which the setup refuses - remove one of the two records, "
+                "or re-point it at its own host, first"
+            )
     if forget_pending:
         # Q200 (AP2): the fact was stored first, so a forget that stopped between the write and the deletion (a crash, a file that would not go) is visible: the files are still here
         c.status = "fail" if c.status == "fail" else "warn"
@@ -1278,7 +1285,8 @@ def _kea_tls_expiry(ctx) -> Check:
 
 
 def _forgotten_labels() -> tuple[list[str], list[str], list[str]]:
-    """(forgotten, pending): the `record-forgotten` incidents whose files are gone, and those whose files Jen still holds (Q200, AP2: the fact is written BEFORE the deletion)."""
+    """(forgotten, pending, live): the `record-forgotten` incidents whose files are gone, those whose files Jen still holds (Q200, AP2: the fact is written BEFORE the deletion), and those whose files
+    Jen still holds while the server is dialled over https again - a LIVE record (Q201 AQ6 g; Q202 AR9 h: three lists, not two)."""
     from jen.services import kea as _kea
     from jen.services import kea_changeset, kea_tls
 
@@ -1301,6 +1309,22 @@ def _forgotten_labels() -> tuple[list[str], list[str], list[str]]:
             https_now = False
         (live if https_now else pending).append(label)
     return sorted(set(done)), sorted(set(pending)), sorted(set(live))
+
+
+def _twinned_labels(category: str) -> list[str]:
+    """The `<server> kea-<service>` of every unresolved incident of one category whose server shares its daemon with ANOTHER record (Q202 AR4): the setup refuses to run on it while the twin exists."""
+    from jen.services import kea_changeset, kea_tls
+
+    labels = []
+    for i in kea_changeset.recovery_incidents():
+        if i.get("category") != category:
+            continue
+        server = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == str(i.get("server_id"))), None)
+        if server is not None and kea_tls.other_record_on_same_daemon(
+            server, str(i.get("service") or ""), extensions.KEA_SERVERS
+        ):
+            labels.append(f"{i.get('server_name') or 'server ' + str(i.get('server_id'))} kea-{i.get('service')}")
+    return sorted(set(labels))
 
 
 def _attention_labels(category: str) -> list[str]:

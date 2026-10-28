@@ -3179,6 +3179,86 @@ def test_22_p_a_note_the_database_could_not_take_after_the_commit_stays_pending_
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
 
 
+# NOTE (Q202): 22q is defined with 22l-22p, before 22i, for the same reason: it needs a healthy CA and kea-a on its https socket.
+S22Q_SCRIPT = r"""
+import contextlib, hashlib, inspect, os, types
+from unittest import mock
+from jen.routes.settings import infrastructure as infra
+from jen.services import capabilities, kea_host, kea_tls
+
+flashes = []
+ca = kea_tls.ca_paths()[0]
+client = kea_tls.client_paths()
+one = extensions.KEA_SERVERS[0]
+# a SECOND record for the SAME daemon, parked (its address is http: it is not a target): its certificate was issued for the machine kea-a's SSH host names
+twin = {"id": 2, "name": "kea-twin", "ssh_host": one.get("ssh_host") or "kea-a"}
+kea_tls.issue_server_cert(twin, "dhcp4", "__ADDR__")
+urls = {1: "https://__ADDR__:8014", 2: "http://__ADDR__:8014"}
+
+
+def records(sid):
+    out = {}
+    for base in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+        for suffix in ("", ".prev", ".stale"):
+            out[os.path.basename(base) + suffix] = (
+                hashlib.sha256(open(base + suffix, "rb").read()).hexdigest() if os.path.lexists(base + suffix) else None
+            )
+    return out
+
+
+calls = []
+real_helper = kea_host.helper_call
+before = {"records": {sid: records(sid) for sid in (1, 2)}, "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (ca, kea_tls.ca_paths()[1], client[0], client[1])}}
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", [one, twin]))
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""))
+    stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""))
+    stack.enter_context(mock.patch.object(kea_host, "helper_call", lambda *a, **k: calls.append(a[1:3]) or real_helper(*a, **k)))
+    stack.enter_context(mock.patch.object(capabilities, "for_server", lambda sid, *a, **k: types.SimpleNamespace(tls=True)))
+    view()
+after = {"records": {sid: records(sid) for sid in (1, 2)}, "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in before["files"]}}
+emit({
+    "flashes": flashes,
+    "records_unchanged": before["records"] == after["records"],
+    "jen_files_unchanged": before["files"] == after["files"],
+    "helper_calls": len(calls),
+    "staging_left": [f for f in os.listdir(os.path.dirname(ca)) if f.endswith(".next")],
+})
+kea_tls.discard_local_record(2, "dhcp4")
+"""
+
+
+def test_22_q_a_parked_twin_of_the_target_refuses_the_rotation_and_no_daemon_is_touched(stack):
+    """REMOTE-001 section 6c / Q202 (AR4): kea-a is really on an https socket Jen issued the certificate for. A SECOND server record names kea-a's SSH host and is parked (an http address) - the
+    certificate a rotation installs on kea-a's fixed remote paths would replace the one that record holds, and the rotation reported success. Now the rotation asks the setup's own question of every target
+    over the parked records too: REFUSED before staging with the sentence naming both records, the helper is never called, every record is byte-equal, Jen's CA and client pair are unchanged, and both
+    daemons' TLS files and kea-a's daemon config are the baseline. (The stack has one https endpoint, so the twin shares ITS machine; kea-b's folder is asserted untouched as in 22n.)"""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    baseline_b = _s22_kea_b_tls()
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22Q_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    result = emitted(out)
+    assert result is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert "Rotate refused" in texts and "kea-twin already manages kea-dhcp4 on" in texts, texts
+    assert "one daemon, two records" in texts and "Kea CA rotated" not in texts, texts
+    assert result["helper_calls"] == 0, "INVARIANT: the helper is not called before the refusal"
+    assert result["records_unchanged"], "INVARIANT: a refusal changes none of the Jen-side records of any daemon"
+    assert result["jen_files_unchanged"] and result["staging_left"] == [], (
+        "INVARIANT: a refusal changes nothing on the Jen host"
+    )
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    assert _s22_kea_b_tls() == baseline_b, "INVARIANT: kea-b's TLS folder is untouched"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
 def test_22_m_a_daemon_a_rotation_left_behind_is_a_fact_the_setup_names_the_action_and_removal_with_a_setup_recovers(
     stack,
 ):

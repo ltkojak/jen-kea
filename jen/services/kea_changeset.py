@@ -835,7 +835,7 @@ ATTENTION_CATEGORIES = {
     "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
     "tls-superseded": "A server that is not dialled over https now may still run a certificate from a CA Jen has since replaced. When it is dialled over https again, remove its direct socket and set it up again.",
     "record-forgotten": "Jen's record of a certificate was forgotten on the operator's word while the daemon may still present it; its expiry is not watched. A later setup of the socket, or its removal, ends this.",
-    "rotation-pending": "A CA rotation changed what this server's daemon depends on and has not finished recording it. Health and the next Rotate reconcile it from Jen's files.",
+    "rotation-pending": "A CA rotation changed what this server's daemon depends on and has not finished recording it. Health names it; the next Rotate, or Forget stale records, finishes it from Jen's files - it is not acknowledged away.",
 }
 
 
@@ -857,7 +857,7 @@ def record_attention(
     ca_fingerprint: str = "",
 ) -> bool:
     """Record an unproved recovery for the Servers page and Health (Q187, AC3). `category` is one of `ATTENTION_CATEGORIES`; `operation` is a short sentence about what was being done
-    ("setup of the https control socket on 10.0.0.5:8014"), never a socket entry; `detail` is a fixed sentence. The same category for the same server and service refreshes its incident.
+    ("setup of the https control socket on 10.0.0.5:8014"), never a socket entry; `detail` is a fixed sentence. The same category for the same server and service refreshes its incident - except a `rotation-pending` note written under another CA fingerprint (Q202 AR1: refused, False).
     Returns whether it was stored (a locked transaction since Q188) - the caller already told the person in a flash, so a failure here is logged at ERROR, never raised."""
     if category not in ATTENTION_CATEGORIES:
         raise ValueError(f"unknown attention category {category!r}")
@@ -886,21 +886,38 @@ def record_attention(
                 ca_fingerprint  # (Q201 second pass F2: the live CA when a `rotation-pending` note was written)
             )
 
+        other_generation = [False]
+
         def add(incidents):
-            kept = [
-                i
-                for i in incidents
-                if not (
+            kept = []
+            for i in incidents:
+                same = (
                     i.get("kind") == ATTENTION_KIND
                     and i.get("category") == category
                     and i.get("service") == service
                     and _same_server(i, server_id)
                 )
-            ]
+                if (
+                    same
+                    and category == "rotation-pending"
+                    and (i.get("ca_fingerprint") or "") not in ("", ca_fingerprint)
+                ):
+                    # Q202 (AR1): a `rotation-pending` note belongs to the CA generation it was written under; a different generation is a different fact, and the dedupe key (server, service,
+                    # category) is exactly where the overwrite happened. The earlier note stays byte for byte until the files finish it.
+                    other_generation[0] = True
+                    return None
+                if not same:
+                    kept.append(i)
             kept.append(incident)
             return kept
 
-        if not _with_attention(add):
+        stored = _with_attention(add)
+        if other_generation[0]:
+            logger.error(
+                f"kea_changeset: the {category} incident for server {server_id} was not refreshed: an earlier CA generation's note is still open"
+            )
+            return False
+        if not stored:
             logger.error(f"kea_changeset: the {category} incident for server {server_id} could not be stored")
             return False
         _user.audit(
@@ -966,12 +983,15 @@ def recovery_incidents(strict: bool = False) -> list[dict]:
 
 def acknowledge_recovery(server_id=None, service: str | None = None, category: str | None = None) -> int | None:
     """A superadmin's acknowledgement (Q187): clears the recovery incidents matching the filters (None = any) and returns how many. None means the note could not be written - the incidents are
-    still shown, and the caller says so. The old `rolled_back` / `rollback_failed` incidents are not touched."""
+    still shown, and the caller says so. The old `rolled_back` / `rollback_failed` incidents are not touched. Q202 (AR7): nor is a `rotation-pending` note - it is Jen's own bookkeeping of what a rotation owes
+    (the next Rotate or Forget stale records finishes it from Jen's files), and acknowledging it would drop the obligation."""
     cleared = [0]
 
     def matches(i):
         return (
             i.get("kind") == ATTENTION_KIND
+            and i.get("category")
+            != "rotation-pending"  # (Q202 AR7: Jen's own bookkeeping is finished from Jen's files, never acknowledged away)
             and (server_id is None or _same_server(i, server_id))
             and (service is None or i.get("service") == service)
             and (category is None or i.get("category") == category)
@@ -1105,11 +1125,15 @@ def reconcile_rotation_pending(servers) -> list:
     """Q201 (AQ3): finish the bookkeeping of a CA rotation from Jen's FILES. A `rotation-pending` incident (written for every record the rotation does not rotate - a parked daemon, an orphan group, a
     forgotten record - BEFORE the first remote change) is replaced by what the files say now: `tls-superseded` when the record's certificate was issued by a CA that has since been replaced, `remote-unknown`
     when no certificate can say, nothing when the record is the live CA's or an administrator's (a rotation that never committed leaves the files as they were, so its note is simply dropped). Returns the
-    labels whose note could NOT be reconciled (the store failed; the pending incident stays and is retried by the next call - Health's, or the next Rotate's)."""
+    labels whose note could NOT be reconciled (the store failed; the pending incident stays and is retried by the next Rotate or Forget stale records - Q202 AR1: a Rotate that finds one REFUSES before it
+    stages anything). The store is read STRICT (AR8): an unreadable note raises ValueError to the caller, which refuses or says so."""
     from jen.services import kea_tls
 
     still = []
-    for incident in recovery_incidents():
+    incidents = recovery_incidents(
+        strict=True
+    )  # (Q202 AR8: a store that cannot be READ raises ValueError - it is never "nothing is pending"; the callers refuse or say so)
+    for incident in incidents:
         if incident.get("category") != "rotation-pending":
             continue
         sid, service = incident.get("server_id"), str(incident.get("service") or "")
@@ -1117,22 +1141,24 @@ def reconcile_rotation_pending(servers) -> list:
         name = (server or {}).get("name") or incident.get("server_name") or f"Kea Server {sid}"
         label = f"{name} kea-{service}"
         if server is None:
-            resolve_attention(
+            if not resolve_attention(
                 sid, service, categories=("rotation-pending",)
-            )  # the server is gone: nothing depends on it
+            ):  # the server is gone: nothing depends on it
+                still.append(label)
             continue
         then = incident.get("ca_fingerprint") or ""
         now = kea_tls.live_ca_fingerprint()
         if then and now and then == now:
             # the live CA is the one the note was written under: the rotation never committed (it failed, or the process died), so nothing depends on a replaced CA - the note is simply dropped
-            resolve_attention(sid, service, categories=("rotation-pending",))
+            if not resolve_attention(sid, service, categories=("rotation-pending",)):
+                still.append(label)
             continue
         _cert, files = kea_tls._group_certificate(sid, service)
         forgotten = any(
             i.get("category") == "record-forgotten"
             and str(i.get("server_id")) == str(sid)
             and i.get("service") == service
-            for i in recovery_incidents()
+            for i in incidents
         )
         verdict = "superseded" if (not files and forgotten) else kea_tls.group_verdict(sid, service)
         final = {"superseded": "tls-superseded", "unknown": "remote-unknown"}.get(verdict)
@@ -1148,5 +1174,6 @@ def reconcile_rotation_pending(servers) -> list:
             if not record_attention(sid, service, operation, final, server_name=name):
                 still.append(label)
                 continue
-        resolve_attention(sid, service, categories=("rotation-pending",))
+        if not resolve_attention(sid, service, categories=("rotation-pending",)):
+            still.append(label)
     return still

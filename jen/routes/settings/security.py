@@ -19,6 +19,7 @@ import jen.services.runtime as __runtime
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -146,8 +147,10 @@ def _write_atomically(path: str, data: str, mode: int) -> None:
 
 @bp.route("/settings/upload-cert", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def upload_cert():
+    # Q202 (AR6): Jen's own SSL certificate ends in `runtime.restart_service()` - every restart of Jen is behind the one gate (superadmin + step-up), like `restart_jen`
     cert_file = request.files.get("certificate")
     key_file = request.files.get("private_key")
     ca_file = request.files.get("ca_bundle")
@@ -189,8 +192,10 @@ def upload_cert():
 
 @bp.route("/settings/remove-cert", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def remove_cert():
+    # Q202 (AR6): see upload_cert - removing the certificate takes the site back to HTTP and restarts Jen
     for f in [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]:
         if os.path.exists(f):
             os.remove(f)

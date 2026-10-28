@@ -67,6 +67,7 @@ class TestBothRoutesHoldTheLock:
                 "discard_prepared_kea_ca",
                 "forget_stale_kea_records",
                 "save_extra_servers",  # Q199 (AO2): the save drops a removed server's records - serialised with the rotation, the setup and Forget that read them
+                "save_infra_ssh",  # Q202 (AR9 e): the primary's SSH host is server 1's `ssh_host` - the one writer that was outside the lock its five siblings hold
             }
         )
 
@@ -1921,13 +1922,15 @@ class TestQ197TheHostNameTheFormSavesIsTheNameACertificateCanCarry:
         assert auth.dns_name_sentence("https://kea-a:8004", require_port=True) == ""
 
     def test_a_host_the_verifier_cannot_name_is_a_name_refusal_not_a_damaged_ca(self, tls_world):
-        """The bind address of a setup is always an IP literal; the DNS name arrives from a SAVED https address (the rotation dials it by name). The leaf cannot be verified for that name, the CA is healthy,
-        and the class says so - `NameRefused` with the name that failed, the other SAN (the IP) passing."""
+        """The bind address of a setup is always an IP literal; the DNS name arrives from a SAVED https address (the rotation dials it by name). DEVIATION NAMED (Q202 AR9 c): the choke point now asks the
+        IP-literal question itself, so a NAME as the bind is `BindNotAnAddress` (a ValueError) with the name, before any verifier is asked - the CA is healthy, no certificate is issued, and the route turns
+        it into the same 'the CA cannot issue its certificate for ...' sentence with the same remedy (the address). `NameRefused` stays for a name the CA's constraints exclude."""
         kt = tls_world["tls"]["tls"]
         kt.ensure_ca()
-        with pytest.raises(kt.NameRefused) as refused:
+        with pytest.raises(kt.BindNotAnAddress) as refused:
             kt.issue_server_cert(tls_world["server"], "dhcp4", "kea_host", commit=False)
         assert refused.value.names == ["kea_host"], refused.value.names
+        assert isinstance(refused.value, ValueError) and not isinstance(refused.value, kt.NameRefused)
         assert kt.ca_state() == ("ok", "")
 
 
@@ -1995,9 +1998,11 @@ class TestQ197TheSetupAsksTheOneDaemonQuestion:
             "another service is another daemon"
         )
         assert kt.other_record_on_same_daemon({"id": 3, "ssh_host": ""}, "dhcp4", [a, b], url_for=https) == ""
+        # DEVIATION NAMED (Q202 AR4): Q197 (F3) pinned the OPPOSITE of this row (a record whose endpoint is not https now is no second owner), Q201 (AQ4) inverted it for the setup, and Q202 inverts it
+        # for every caller - one function, one signature: the certificate lands at the daemon's fixed remote paths whatever scheme Jen dials it on
         assert (
-            kt.other_record_on_same_daemon(a, "dhcp4", [a, b], url_for=lambda s, svc: "http://10.0.0.5:8004") == ""
-        ), "a record whose endpoint is not https now is stale, not a second owner of the daemon"
+            kt.other_record_on_same_daemon(a, "dhcp4", [a, b], url_for=lambda s, svc: "http://10.0.0.5:8004") == "kea-b"
+        )
         odd = "h​ost"  # a string `same_host` cannot name a place for: the identical string is still one host
         c, d = {"id": 4, "name": "odd-c", "ssh_host": odd}, {"id": 5, "name": "odd-d", "ssh_host": odd}
         kt.issue_server_cert(d, "dhcp4", "10.9.9.9")
@@ -2079,16 +2084,19 @@ class TestTheSecondPassOfQ197:
         kt = tls_world["tls"]["tls"]
         kt.ensure_ca()
         tls_world["server"]["ssh_host"] = "10.0.0.5"
-        with pytest.raises(kt.NameRefused) as refused:
+        with pytest.raises(
+            kt.BindNotAnAddress
+        ) as refused:  # (Q202 AR9 c: a NAME as the bind is refused at the choke point)
             kt.issue_server_cert(tls_world["server"], "dhcp4", "kea_host", commit=False)
         assert "Rotate Kea CA" not in kt.name_refusal_remedy(refused.value.names)
 
-    def test_f3_a_twin_whose_endpoint_is_not_https_now_BLOCKS_the_setup_and_the_rotation_keeps_its_exemption(
+    def test_f3_a_twin_whose_endpoint_is_not_https_now_BLOCKS_the_setup_and_the_rotation_asks_the_same_question(
         self, tls_world, monkeypatch
     ):
         """DEVIATION NAMED (Q201 AQ4): Q197 pinned the OPPOSITE of this row (a parked twin does not block the setup). The setup is where the daemon's FIXED remote paths are written: a second record
-        pointed at a parked daemon's SSH host would install its pair there and restart that daemon, and no incident would name the parked server. The setup counts a parked twin; the rotation does not
-        (a parked record is not a target)."""
+        pointed at a parked daemon's SSH host would install its pair there and restart that daemon, and no incident would name the parked server. DEVIATION NAMED (Q202 AR4): the rotation's half of
+        this row (it kept the exemption: a parked record is not a target) is INVERTED - the rotation's install lands on the same fixed paths, so it asks the setup's own question (one function, one
+        signature) of every target over the parked records too."""
         kt = tls_world["tls"]["tls"]
         kt.ensure_ca()
         stale = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8004"}
@@ -2099,12 +2107,9 @@ class TestTheSecondPassOfQ197:
         texts = " ".join(t for _s, t in tls_world["flashes"])
         assert "one daemon, two records" in texts and "kea-b already manages" in texts, texts
         assert len(tls_world["tls"]["installed"]) == 0, "nothing was installed on the daemon"
-        # the rotation's exemption is unchanged: the same two records, asked as the rotation asks, are no second owner
-        assert kt.other_record_on_same_daemon(tls_world["server"], "dhcp4", [tls_world["server"], stale]) == ""
-        twin = kt.other_record_on_same_daemon(
-            tls_world["server"], "dhcp4", [tls_world["server"], stale], for_setup=True
-        )
-        assert twin == "kea-b"
+        # one question, one signature: the same two records, asked as the rotation asks, name the parked twin too
+        assert kt.other_record_on_same_daemon(tls_world["server"], "dhcp4", [tls_world["server"], stale]) == "kea-b"
+        assert "for_setup" not in inspect.signature(kt.other_record_on_same_daemon).parameters
 
 
 class TestQ198TheSetupAndTheFormsAfterTheRecordsChange:

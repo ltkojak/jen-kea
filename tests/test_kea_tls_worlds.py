@@ -1168,3 +1168,125 @@ class TestEveryValueFamilyIsARow:
     def test_the_release_audit_asks_for_values_not_only_classes(self):
         audit = pathlib.Path("docs/RELEASE_AUDIT.md").read_text(encoding="utf-8")
         assert "enumerate values, not only classes" in audit.lower()
+
+
+class TestTheLeafShapesOfQ202:
+    """Q202 (AR2, AR5; the enumeration rule): a server certificate's SAN extension is built with EVERY shape the library can build, and each is judged - by Jen (`_certificate_roles`, the role refusals) and,
+    where the CLI exists, by `openssl verify -purpose sslserver`. A leaf with no DNS or IP name is accepted by the CLI and REFUSED by Jen (the admin guide's Jen-stricter table, with its reason): it proves
+    nothing about which daemon it was installed on. The URL half is any name the certificate carries, as a TLS client judges it."""
+
+    SHAPES = {
+        "none": (None, None),
+        "dns-only": (["kea-b.lan"], ("kea-b.lan", "kea-b.lan")),
+        "ip-only": (["10.0.0.6"], ("10.0.0.6", "10.0.0.6")),
+        "ip-then-dns": (["10.0.0.6", "kea-b.lan"], ("10.0.0.6", "kea-b.lan")),
+        "dns-then-ip": (["kea-b.lan", "10.0.0.6"], ("kea-b.lan", "10.0.0.6")),
+        "three-names": (["10.0.0.6", "mid.lan", "kea-b.lan"], ("10.0.0.6", "kea-b.lan")),
+        "rfc822-only": ("rfc822", (None, None)),
+        "uri-only": ("uri", (None, None)),
+        "rfc822-then-ip": ("rfc822+ip", ("10.0.0.6", "10.0.0.6")),
+        "malformed": ("malformed", (None, None)),
+    }
+
+    @staticmethod
+    def _cert(shape):
+        from cryptography import x509
+        from cryptography.x509.oid import ExtensionOID
+
+        if shape is None:
+            return kea_tls._leaf(*kea_tls._load_ca(), kea_tls._new_key(), "shape", [], client=False)
+        if isinstance(shape, list):
+            sans = [kea_tls._san_for(n) for n in shape]
+            return kea_tls._leaf(*kea_tls._load_ca(), kea_tls._new_key(), "shape", sans, client=False)
+        ca_cert, ca_key = kea_tls._load_ca()
+        key = kea_tls._new_key()
+        if shape == "rfc822":
+            return kea_tls._leaf(ca_cert, ca_key, key, "shape", [x509.RFC822Name("ops@kea.example")], client=False)
+        if shape == "uri":
+            return kea_tls._leaf(
+                ca_cert, ca_key, key, "shape", [x509.UniformResourceIdentifier("https://kea.example/")], client=False
+            )
+        if shape == "rfc822+ip":
+            return kea_tls._leaf(
+                ca_cert,
+                ca_key,
+                key,
+                "shape",
+                [x509.RFC822Name("ops@kea.example"), kea_tls._san_for("10.0.0.6")],
+                client=False,
+            )
+        from datetime import timedelta
+
+        from cryptography.hazmat.primitives import hashes
+
+        now = kea_tls._now()
+        return (
+            x509.CertificateBuilder()
+            .subject_name(kea_tls._name("shape"))
+            .issuer_name(ca_cert.subject)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - kea_tls._CLOCK_SKEW)
+            .not_valid_after(now + timedelta(days=30))
+            .add_extension(
+                x509.UnrecognizedExtension(ExtensionOID.SUBJECT_ALTERNATIVE_NAME, b"\x30\x03\x01\x01\xff"),
+                critical=False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+
+    @pytest.mark.parametrize("name", list(SHAPES))
+    def test_every_shape_is_read_as_its_roles_and_a_nameless_one_is_refused_where_there_is_a_name_to_judge(
+        self, lab, name
+    ):
+        shape, roles = self.SHAPES[name]
+        cert = self._cert(shape if not isinstance(shape, list) or shape else None)
+        if name == "none":
+            assert kea_tls._certificate_roles(cert) == (None, None)
+        else:
+            assert kea_tls._certificate_roles(cert) == roles, name
+        server = {"id": 2, "name": "standby", "ssh_host": "kea-b.lan"}
+        refusal = kea_tls.ssh_host_refusal(cert, server)
+        if roles == (None, None):
+            assert "names no address and no machine" in refusal, (name, refusal)
+            assert "names no address and no machine" in kea_tls._destination_refusal(
+                cert, {"id": 2, "ssh_host": ""}, "https://10.0.0.6:8004"
+            )
+        assert kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": ""}) == "", "nothing configured: not judged"
+        lab.before = None
+
+    def test_the_cli_accepts_a_leaf_with_no_san_and_jen_refuses_it(self, lab, tmp_path):
+        import subprocess
+
+        exe = shutil.which("openssl")
+        if not exe:
+            pytest.skip("no openssl CLI")
+        cert = self._cert(None)
+        leaf, ca = tmp_path / "leaf.crt", tmp_path / "ca.crt"
+        leaf.write_bytes(kea_tls._cert_pem(cert))
+        ca.write_bytes(pathlib.Path(kea_tls.ca_paths()[0]).read_bytes())
+        done = subprocess.run(
+            [exe, "verify", "-purpose", "sslserver", "-CAfile", str(ca), str(leaf)], capture_output=True, text=True
+        )
+        assert done.returncode == 0 and "OK" in done.stdout, done.stdout + done.stderr
+        assert "names no address and no machine" in kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": "10.0.0.6"})
+        lab.before = None
+
+    @pytest.mark.parametrize(
+        ("names", "ssh_host", "url_host", "accepted"),
+        [
+            (["10.0.0.6", "kea-b.lan"], "kea-b.lan", "10.0.0.6", True),
+            (["10.0.0.6", "kea-b.lan"], "kea-b.lan", "kea-b.lan", True),  # the AR5 row: the machine's DNS name
+            (["10.0.0.6", "kea-b.lan"], "kea-b.lan", "KEA-B.LAN", True),
+            (["10.0.0.6", "kea-b.lan"], "kea-b.lan", "kea-c.lan", False),
+            (["10.0.0.6", "kea-b.lan"], "kea-b.lan", "10.0.0.7", False),
+            (["10.0.0.6", "kea-b.lan"], "10.0.0.6", "10.0.0.6", False),  # the SSH half: the LAST name
+            (["10.0.0.6", "mid.lan", "kea-b.lan"], "kea-b.lan", "mid.lan", True),  # any name, the middle one too
+            (["10.0.0.6"], "10.0.0.6", "[::ffff:10.0.0.6]", True),
+        ],
+    )
+    def test_the_url_half_is_any_name_and_the_ssh_half_is_the_last(self, lab, names, ssh_host, url_host, accepted):
+        cert = self._cert(names)
+        refusal = kea_tls._destination_refusal(cert, {"id": 2, "ssh_host": ssh_host}, f"https://{url_host}:8004")
+        assert (refusal == "") is accepted, (names, ssh_host, url_host, refusal)
+        lab.before = None
