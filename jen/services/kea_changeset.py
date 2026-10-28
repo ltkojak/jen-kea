@@ -846,7 +846,15 @@ def _same_server(incident: dict, server_id) -> bool:
 
 
 def record_attention(
-    server_id, service: str, operation: str, category: str, when=None, *, server_name: str = "", detail: str = ""
+    server_id,
+    service: str,
+    operation: str,
+    category: str,
+    when=None,
+    *,
+    server_name: str = "",
+    detail: str = "",
+    ca_fingerprint: str = "",
 ) -> bool:
     """Record an unproved recovery for the Servers page and Health (Q187, AC3). `category` is one of `ATTENTION_CATEGORIES`; `operation` is a short sentence about what was being done
     ("setup of the https control socket on 10.0.0.5:8014"), never a socket entry; `detail` is a fixed sentence. The same category for the same server and service refreshes its incident.
@@ -873,6 +881,10 @@ def record_attention(
             "needs_hands_ids": [],
             "lines": [],
         }
+        if ca_fingerprint:
+            incident["ca_fingerprint"] = (
+                ca_fingerprint  # (Q201 second pass F2: the live CA when a `rotation-pending` note was written)
+            )
 
         def add(incidents):
             kept = [
@@ -1108,6 +1120,12 @@ def reconcile_rotation_pending(servers) -> list:
             resolve_attention(
                 sid, service, categories=("rotation-pending",)
             )  # the server is gone: nothing depends on it
+            continue
+        then = incident.get("ca_fingerprint") or ""
+        now = kea_tls.live_ca_fingerprint()
+        if then and now and then == now:
+            # the live CA is the one the note was written under: the rotation never committed (it failed, or the process died), so nothing depends on a replaced CA - the note is simply dropped
+            resolve_attention(sid, service, categories=("rotation-pending",))
             continue
         _cert, files = kea_tls._group_certificate(sid, service)
         forgotten = any(

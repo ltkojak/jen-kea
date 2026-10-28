@@ -181,6 +181,7 @@ class Lab:
         ]  # every secret the Lab configured: T4 looks for each one in everything the route printed
         self.flashes, self.audits, self.incidents, self.settings_writes = [], [], [], []
         self.incident_records = []  # the whole record_attention call, for T4
+        self.incident_extra = {}  # (server id, service, category) -> {"server_name", "ca_fingerprint"}: what a `recovery_incidents` row carries beyond the tuple (Q201 second pass)
         self.settings_error = None
         self.ca_a = None  # bytes of the CA Jen trusts before the rotation
         self.caplog = None
@@ -683,6 +684,10 @@ def lab_world(monkeypatch, tmp_path, caplog):
 
     def record_attention(server_id, service, operation, category, when=None, **kw):
         lab.incidents.append((server_id, service, category))
+        lab.incident_extra[(server_id, service, category)] = {
+            "server_name": kw.get("server_name", ""),
+            "ca_fingerprint": kw.get("ca_fingerprint", ""),
+        }
         lab.incident_records.append(
             (server_id, service, operation, category, kw.get("server_name", ""), kw.get("detail", ""))
         )
@@ -691,6 +696,7 @@ def lab_world(monkeypatch, tmp_path, caplog):
     def recovery_incidents(strict=False):
         return [
             {"kind": "attention", "category": c, "status": c, "service": s, "server_id": sid}
+            | lab.incident_extra.get((sid, s, c), {})
             for sid, s, c in lab.incidents
         ]
 
@@ -5853,12 +5859,15 @@ class TestTheSshHostIsTheTarget:
 
     def test_the_rollback_wall_a_pair_for_host_a_never_reaches_install_tls_for_host_b(self, lab, monkeypatch):
         self._configure(lab, 2, ssh_host="10.0.0.77")
+        _give_prev(
+            2
+        )  # (Q201 AQ6 b: with a `.prev` pair the put-back has something to install - without one it answered `none-saved` and proved nothing about the wall)
         calls = []
         monkeypatch.setattr(
             kea_host, "install_tls", lambda server, service, files: calls.append(server["ssh_host"]) or {"ok": True}
         )
         assert infra._reinstall_live_material(lab.servers[2], "dhcp4") == "failed"
-        assert infra._put_tls_back(lab.servers[2], "dhcp4").get("remote") != "restored"
+        assert infra._put_tls_back(lab.servers[2], "dhcp4")["remote"] == "failed"
         assert calls == [], "the saved pair is for 10.0.0.6; the host Jen would log into is 10.0.0.77"
         lab.before = None
 
@@ -6489,9 +6498,7 @@ class TestRotationBookkeepingIsDurable:
         lab.before = None
         _rotate()
         texts = lab.texts()
-        assert "Kea CA rotated" in texts and "could not be updated" in texts and "Health will reconcile it" in texts, (
-            texts
-        )
+        assert "Kea CA rotated" in texts and "could not be updated" in texts and "finishes it" in texts, texts
         assert (79, "dhcp4", "rotation-pending") in lab.incidents and (
             79,
             "dhcp4",
@@ -6499,7 +6506,12 @@ class TestRotationBookkeepingIsDurable:
         ) not in lab.incidents
         assert any("rotation-pending left for ghost kea-dhcp4" in str(a) for a in lab.audits), lab.audits
         monkeypatch.setattr(kea_changeset, "record_attention", real)  # the store answers again ...
-        row = health._kea_tls_expiry({})  # ... and Health finishes the note from the files
+        row = health._kea_tls_expiry({})  # Health only READS: it names the note and writes nothing (second pass F1) ...
+        assert self._pending(lab) and "is unfinished" in row.detail and "kea-dhcp4" in row.detail, row.detail
+        assert (79, "dhcp4", "tls-superseded") not in lab.incidents
+        kea_changeset.reconcile_rotation_pending(
+            extensions.KEA_SERVERS
+        )  # ... the next Rotate / Forget (under the identity lock) finishes it from the files
         assert (79, "dhcp4", "tls-superseded") in lab.incidents and self._pending(lab) == [], lab.incidents
         assert row.status in ("warn", "fail")
 
@@ -6673,9 +6685,7 @@ class TestAScopedAddressIsRefused:
     ):
         import ssl
 
-        from jen.services.auth import same_host
-
-        assert same_host(configured, named) is same, (configured, named)
+        assert kea_tls.names_match(configured, named) is same, (configured, named)
         if not hasattr(
             ssl, "match_hostname"
         ):  # (removed in Python 3.12: the matcher half of the table runs where it exists)
@@ -6691,4 +6701,100 @@ class TestAScopedAddressIsRefused:
         except (ssl.CertificateError, ValueError):
             accepted = False
         # Jen stricter than the matcher on an UNCHANGED input fails the test: what the matcher accepts, `same_host` must accept
-        assert not accepted or same_host(configured, named), (configured, named)
+        assert not accepted or kea_tls.names_match(configured, named), (configured, named)
+
+    def test_the_shared_endpoint_parser_does_not_fold_a_scope(self):
+        """Second pass F4 (CRED-002): the scope fold lives in the certificate-name comparison (`kea_tls.names_match`), NOT in the parser the credential rule shares - a scope names a different link, so two
+        endpoints that differ in it stay different for a password."""
+        from jen.services.auth import same_endpoint, same_host
+
+        assert same_host("fe80::1%eth0", "fe80::1") is False
+        assert same_endpoint("https://[fe80::1%eth0]:8000", "https://[fe80::1%eth1]:8000") is False
+        assert same_endpoint("https://[fe80::1%eth0]:8000", "https://[fe80::1%eth0]:8000") is True
+
+
+class TestTheSecondPassOfQ201:
+    """The pre-release second pass on Q201: F1 (Health, a read path, erased the notes of a rotation that was RUNNING), F2 (a forgotten record was called superseded with no CA replaced), F3 (a refused forget
+    also said there was nothing to forget), F4 (the scope fold weakened the credential comparison), F5 (a scoped SSH host saved before this release locked the forms)."""
+
+    @staticmethod
+    def _pending(lab):
+        return [i for i in lab.incidents if i[2] == "rotation-pending"]
+
+    def test_f1_health_during_a_running_rotation_writes_nothing_and_the_fact_survives(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        _forget_not_needed = None  # (server 2 is parked, with its record: a dependency the rotation owes a note for)
+        seen = {}
+        real = kea_host.install_tls
+
+        def watching(server, service, files):
+            if "during" not in seen:
+                seen["before"] = list(lab.incidents)
+                health._kea_tls_expiry({})  # a viewer's page load in the middle of the rotation
+                seen["during"] = list(lab.incidents)
+            return real(server, service, files)
+
+        monkeypatch.setattr(kea_host, "install_tls", watching)
+        lab.before = None
+        _rotate()
+        assert seen["during"] == seen["before"] and (2, "dhcp4", "rotation-pending") in seen["during"], seen
+        assert "Kea CA rotated" in lab.texts()
+        assert (2, "dhcp4", "tls-superseded") in lab.incidents and self._pending(lab) == [], lab.incidents
+
+    def test_f2_a_forgotten_record_in_a_rotation_that_rolled_back_is_never_called_superseded(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        _forget({"include_parked": "1"})
+        monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+        real_resolve = kea_changeset.resolve_attention
+        monkeypatch.setattr(
+            kea_changeset,
+            "resolve_attention",
+            lambda sid, svc, *, categories=None: (
+                0 if categories == ("rotation-pending",) else real_resolve(sid, svc, categories=categories)
+            ),
+        )
+        _rotate()
+        assert "could not be cleared" in lab.texts(), "the clear in the finally was refused and said so"
+        assert (2, "dhcp4", "rotation-pending") in lab.incidents
+        monkeypatch.setattr(kea_changeset, "resolve_attention", real_resolve)
+        kea_changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+        assert (2, "dhcp4", "tls-superseded") not in lab.incidents, "the CA was never replaced"
+        assert self._pending(lab) == [], "the pending note was dropped: the live CA is the one it was written under"
+
+    def test_f2_a_note_written_under_a_ca_that_has_since_changed_is_finished_from_the_files(self, lab):
+        ghost = {"id": 79, "name": "ghost", "ssh_host": "10.0.0.79"}
+        lab.urls[79] = "http://10.0.0.79:8004"
+        lab.servers[79] = ghost
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        _write_record(79, ["key"])
+        kea_changeset.record_attention(
+            79, "dhcp4", "op", "rotation-pending", server_name="ghost", ca_fingerprint=kea_tls.live_ca_fingerprint()
+        )
+        kea_changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+        assert not any(i[0] == 79 for i in lab.incidents), (
+            "a crash false alarm: the CA is unchanged, the note is dropped"
+        )
+        kea_changeset.record_attention(
+            79, "dhcp4", "op", "rotation-pending", server_name="ghost", ca_fingerprint="00" * 32
+        )
+        kea_changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
+        assert (79, "dhcp4", "remote-unknown") in lab.incidents and self._pending(lab) == []
+        lab.before = None
+
+    def test_f3_a_refused_forget_does_not_also_say_there_were_no_stale_records(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        monkeypatch.setattr(kea_changeset, "record_attention", lambda *a, **k: False)
+        _forget({"include_parked": "1"})
+        assert "The record was kept" in lab.texts() and "There were no stale certificate records" not in lab.texts()
+
+    def test_f5_a_scoped_ssh_host_saved_before_the_release_does_not_lock_the_form(self, lab):
+        from jen.services import auth
+
+        lab.servers[2]["ssh_host"] = "fe80::1%eth0"
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        assert "fe80::1%eth0" in infra._saved_ssh_hosts()
+        assert not auth.valid_ssh_target("fe80::1%eth0") and "interface scope" in auth.ssh_target_problem(
+            "[fe80::1%eth0]"
+        )
+        assert "fe80::9%eth0" not in infra._saved_ssh_hosts(), "a NEW scoped host is still refused"
+        lab.before = None

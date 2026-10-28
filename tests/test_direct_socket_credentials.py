@@ -952,6 +952,13 @@ class TestTheProbeRowsOfQ201:
     def test_a_recovery_judges_the_record_group(self):
         assert probe.q201_aq2_a_recovery_judges_the_record_group() == (True, True, False, False)
 
+    def test_a_scope_is_a_different_link_for_a_secret_and_no_scope_for_a_certificate(self):
+        assert probe.q201_aq5_a_scope_is_a_different_link_for_a_secret_and_no_scope_for_a_certificate() == (
+            False,
+            False,
+            True,
+        )
+
     def test_a_pending_note_is_reconciled_from_the_files(self):
         assert probe.q201_aq3_a_pending_note_is_reconciled_from_the_files() == (
             ["ghost kea-dhcp4"],

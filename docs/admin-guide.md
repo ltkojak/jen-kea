@@ -322,7 +322,7 @@ daemon's certificate as the new one's, and the setup for the new host replaces i
 Files Jen holds for a server with no certificate record (a key whose certificate is
 gone) are shown as such and are forgotten the same way; a file in the folder whose
 name Jen does not write is named and never touched. A save of the additional
-servers that removes a server names the certificate records it dropped. A rotation writes a note on Servers (`rotation-pending`) for every record it does not rotate before it changes anything, and finishes it after the new CA is in place; if the database cannot take the final note the rotation still completes, the note stays pending, and Health finishes it by itself once the database answers. A scoped IPv6 address (`fe80::1%eth0`) is not accepted as an SSH host: a certificate cannot carry an interface scope. A record for a server that is **no longer configured**
+servers that removes a server names the certificate records it dropped. A rotation writes a note on Servers (`rotation-pending`) for every record it does not rotate before it changes anything, and finishes it after the new CA is in place; if the database cannot take the final note the rotation still completes, the note stays pending, and the next Rotate (or Forget stale records) finishes it from Jen's files; Health only names it. A scoped IPv6 address (`fe80::1%eth0`) is not accepted as an SSH host: a certificate cannot carry an interface scope. A record for a server that is **no longer configured**
 is **stale**: nothing can present that certificate, Rotate ignores it, Health
 does not count it and says "stale record for ...", and a superadmin can press
 **Forget stale records** on the Kea CA card; that is a local change that asks no

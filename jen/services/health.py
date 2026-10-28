@@ -1228,19 +1228,14 @@ def _kea_tls_expiry(ctx) -> Check:
             "forget them under Settings → Kea, or set the socket up again"
         )
     # Q199 (AO1): a parked daemon a rotation left on a replaced CA, and a record forgotten on the operator's word, are facts Servers shows; the row names them too
-    from jen.services import kea_changeset as _kc
-
-    # Q201 (AQ3): a rotation whose bookkeeping did not finish is reconciled from Jen's files when the store answers, and named while it cannot be
-    try:
-        unfinished = _kc.reconcile_rotation_pending(extensions.KEA_SERVERS)
-    except Exception as e:
-        logger.warning(f"health: could not reconcile the rotation notes ({type(e).__name__})")
-        unfinished = _attention_labels("rotation-pending")
-    left_behind = _attention_labels("tls-superseded")  # (read AFTER the reconciliation: it may have just written one)
+    # Q201 (AQ3): a rotation whose bookkeeping did not finish is NAMED here. Health only reads (second pass F1: a read path that reconciled erased the notes of a rotation that was RUNNING, and made every
+    # viewer's page load a writer); the note is finished from Jen's files by the next Rotate or Forget stale records, both under the identity lock
+    unfinished = _attention_labels("rotation-pending")
+    left_behind = _attention_labels("tls-superseded")
     forgotten, forget_pending, forget_live = _forgotten_labels()
     if unfinished:
         c.status = "fail" if c.status == "fail" else "warn"
-        c.detail += f" — a rotation's bookkeeping for {', '.join(unfinished)} is unfinished: Jen could not update its note and keeps it pending (see Servers)"
+        c.detail += f" — a rotation's bookkeeping for {', '.join(unfinished)} is unfinished: Jen keeps its note pending (see Servers); the next Rotate, or Forget stale records, finishes it from Jen's files"
     if left_behind:
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += (

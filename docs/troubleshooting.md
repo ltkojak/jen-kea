@@ -827,7 +827,7 @@ the socket under Settings → Kea to drop it.
 an https endpoint when it ran: the daemon keeps the certificate it had, from the CA Jen no longer trusts. Nothing is wrong until it is dialled over https again; then the setup says "the socket is there
 but its certificate is from a CA Jen no longer trusts" - remove the direct socket and set it up again. Removing the socket ends the note.
 
-**"a rotation's bookkeeping for *server* kea-*service* is unfinished"** (Health; "rotation-pending" on Servers) means a CA rotation changed what that server's daemon depends on and Jen could not yet write the final note (the database refused it). The rotation itself finished. Health and the next Rotate finish the note from Jen's files by themselves once the database answers; nothing is for you to do except fix the database if it stays down.
+**"a rotation's bookkeeping for *server* kea-*service* is unfinished"** (Health; "rotation-pending" on Servers) means a CA rotation changed what that server's daemon depends on and Jen could not yet write the final note (the database refused it). The rotation itself finished. Health names it; the next Rotate, or Forget stale records, finishes the note from Jen's files once the database answers. Nothing is for you to do except fix the database if it stays down.
 
 **"Jen holds *files* for *server* kea-*service* but no certificate that says which machine they belong to"** (the refusal of a recovery) means files remain for a record whose certificate is gone, so Jen cannot tell which machine they belong to and will not make the server a rotation target on a guess. Remove the direct socket and set it up again, or restore the previous host.
 

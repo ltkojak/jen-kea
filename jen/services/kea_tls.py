@@ -1786,6 +1786,36 @@ def _server_label(server: dict, service: str) -> str:
 JEN_STATES = ("jen", "jen-stale")
 
 
+def live_ca_fingerprint() -> str:
+    """Q201 second pass (F2): the SHA-256 (hex) of Jen's live CA certificate, "" when it cannot be read - recorded in a `rotation-pending` note so the reconciliation can tell a CA that was REPLACED from
+    one that never was."""
+    return fingerprint(ca_paths()[0]) or ""
+
+
+def _strip_scope(name: str) -> str:
+    """An IPv6 literal without its interface scope (`fe80::1%eth0` -> `fe80::1`; brackets dropped); anything else unchanged. A certificate cannot carry a scope, so a record saved before 5.69.1 with a
+    scoped SSH host is compared as the certificate reads. Q201 second pass (F4): this lives HERE, in the comparison of a certificate's names, and not in the shared endpoint parser the credential rule uses -
+    there a scope names a different link and must keep two endpoints different."""
+    n = (name or "").strip()
+    if "%" in n:
+        core = n.strip("[]").split("%", 1)[0]
+        try:
+            ipaddress.IPv6Address(core)
+            return core
+        except ValueError:
+            return n
+    return n
+
+
+def names_match(a: str, b: str) -> bool:
+    """Do two names a record compares (the configured SSH host or address and a certificate's name) name the same place: identical text, or `same_host` (no DNS, a dot is a different name) after a scope is
+    dropped."""
+    from jen.services.auth import same_host
+
+    a, b = _strip_scope(a), _strip_scope(b)
+    return a == b or same_host(a, b)
+
+
 def _certificate_roles(cert) -> tuple:
     """Q201 (AQ1): `(bind_name, ssh_name)` of a server certificate Jen issued - read from the ORDER of its SANs, which `issue_server_cert` writes as `[bind address, SSH host]` (deduplicated when equal) and
     DER keeps: the FIRST name is the address the daemon serves (the bind role), the LAST is the machine the helper installed it on (the SSH role), one name is both, no SAN is `(None, None)`.
@@ -1804,12 +1834,11 @@ def ssh_host_refusal(cert, server) -> str:
     """Q200 (AP1), by role since Q201 (AQ1): "" when the SSH host Jen will LOG INTO (the mutation target: the helper installs the pair there and restarts the daemon) is the name the certificate was
     INSTALLED ON - its SSH-role name, compared with `same_host` (no DNS, a dot is a different name) - else the sentence. A URL match proves nothing about the machine the helper reaches, and neither does
     the certificate's other name: the bind-role name is compared with the URL, never with the SSH host. No SSH host configured, or a certificate with no SAN, names no destination here."""
-    from jen.services.auth import same_host
 
     ssh = ((server or {}).get("ssh_host") or "").strip()
     _bind_name, ssh_name = _certificate_roles(cert)
     if (
-        not ssh or ssh_name is None or ssh_name == ssh or same_host(ssh_name, ssh)
+        not ssh or ssh_name is None or names_match(ssh_name, ssh)
     ):  # (identical text is one name whether or not `same_host` can parse it)
         return ""
     return (
@@ -1886,8 +1915,6 @@ def _destination_refusal(cert, server, url) -> str:
     the roles are in the certificate's SAN order. A name configured as empty is not judged; a certificate with no SAN names no destination. `same_host` decides what equates two names (no DNS)."""
     from urllib.parse import urlparse
 
-    from jen.services.auth import same_host
-
     refusal = ssh_host_refusal(cert, server)
     if refusal:
         return refusal
@@ -1896,7 +1923,7 @@ def _destination_refusal(cert, server, url) -> str:
         url_host = urlparse(url or "").hostname or ""
     except ValueError:
         url_host = ""
-    if bind_name is not None and url_host and not (bind_name == url_host or same_host(bind_name, url_host)):
+    if bind_name is not None and url_host and not names_match(bind_name, url_host):
         return (
             f"its certificate names {bind_name} as the address it serves; this record's address is now {url_host}, a different daemon - remove the direct socket and set it up again, "
             "or restore the previous address"
@@ -1929,11 +1956,7 @@ def record_group_refusal(server_id, service: str, server, url: str, label: str) 
     if not any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
         return ""
     wall = _destination_refusal(cert, server, url)
-    return (
-        f"{wall}; remove the direct socket and set it up again, or restore the previous host, before rotating"
-        if wall
-        else ""
-    )
+    return f"{wall} (a recovery does not rotate it)" if wall else ""
 
 
 def record_state(server_id, service: str, recovery: bool = False, server=None, url: str = "") -> tuple[str, str]:

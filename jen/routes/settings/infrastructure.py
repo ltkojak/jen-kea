@@ -1978,7 +1978,7 @@ def _rotation_dependencies(inventory, rotated: set) -> list:
 
 
 def _clear_rotation_pending(items) -> None:
-    """Q201 (AQ3): drop the `rotation-pending` notes a rotation wrote when it did not commit; a clear that fails leaves them, and says so (Health and the next Rotate reconcile them from the files)."""
+    """Q201 (AQ3): drop the `rotation-pending` notes a rotation wrote when it did not commit; a clear that fails leaves them, and says so (the next Rotate and Forget stale records reconcile them from the files; Health only names them)."""
     from jen.services import kea_changeset as __changeset
 
     left = []
@@ -1988,13 +1988,24 @@ def _clear_rotation_pending(items) -> None:
             left.append(f"{server.get('name') or 'Kea Server ' + str(server.get('id'))} kea-{svc}")
     if left:
         flash(
-            f"The rotation did not finish, and the note for {', '.join(left)} could not be cleared - Servers shows it as pending and Health will reconcile it from Jen's files.",
+            f"The rotation did not finish, and the note for {', '.join(left)} could not be cleared - Servers shows it as pending and the next Rotate or Forget stale records finishes it from Jen's files.",
             "warning",
         )
         __user.audit("ROTATE_KEA_CA", "kea_api", f"rotation-pending not cleared: {', '.join(left)}")
 
 
-def _record_incident(server: dict, service: str, operation: str, category: str, detail: str = "") -> bool:
+def _saved_ssh_hosts() -> set:
+    """The SSH hosts already saved (the primary's and every server's): a form that re-submits one UNCHANGED is not asked to re-validate it (Q201 second pass F5 - a scoped IPv6 host saved before 5.69.1 must
+    not lock the operator out of saving anything else)."""
+    return {
+        (extensions.KEA_SSH_HOST or "").strip(),
+        *((s.get("ssh_host") or "").strip() for s in extensions.KEA_SERVERS),
+    } - {""}
+
+
+def _record_incident(
+    server: dict, service: str, operation: str, category: str, detail: str = "", ca_fingerprint: str = ""
+) -> bool:
     """Q187 (AC3): an unproved recovery stays in front of the operator (Servers, Health) until a later operation on this server and service probes the endpoint, or a superadmin acknowledges it."""
     from jen.services import kea_changeset as __changeset
 
@@ -2017,6 +2028,7 @@ def _record_incident(server: dict, service: str, operation: str, category: str, 
         category,
         server_name=server.get("name") or f"Kea Server {server.get('id')}",
         detail=detail,
+        ca_fingerprint=ca_fingerprint,
     )
     if not kept:
         # Q189 (AE3/AE6e): the one place that says it, for every caller - the recovery record could not be updated, so the flash and the audit row are all there is
@@ -2980,6 +2992,7 @@ def rotate_kea_ca():
                 dep_service,
                 "a CA rotation is changing what this server's daemon depends on",
                 "rotation-pending",
+                ca_fingerprint=__tls.live_ca_fingerprint(),
             )
             and _has_incident(dep_server.get("id"), dep_service, "rotation-pending")
         ):
@@ -3427,7 +3440,7 @@ def rotate_kea_ca():
     # `rotation-pending` and is said, never lost
     for unfinished in __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS):
         flash(
-            f"The CA is rotated; the note for {unfinished} could not be updated - Servers shows it as pending and Health will reconcile it.",
+            f"The CA is rotated; the note for {unfinished} could not be updated - Servers shows it as pending and the next Rotate or Forget stale records finishes it.",
             "warning",
         )
         __user.audit("ROTATE_KEA_CA", "kea_api", f"rotated; rotation-pending left for {unfinished}")
@@ -3537,11 +3550,14 @@ def forget_stale_kea_records():
     """Q197 (AM4), Q198 (AN2), Q199 (AO1/AO5/AO6) - drop Jen's own copy of every certificate record that records nothing: a server that is not configured, an orphan group of files included. A LOCAL change:
     no host is asked anything. A parked record (a configured server not on https now) is kept unless the operator ticks the box - and then the route records a durable `record-forgotten` fact for
     the daemon that may still present it, and the audit row says "on the operator's word". A record is forgotten only when every file is gone; one that is not is said."""
+    from jen.services import kea_changeset as __changeset_reconcile
     from jen.services import kea_tls as __tls
 
     include_parked = (
         request.form.get("include_parked") == "1"
     )  # the operator's checkbox: "no daemon presents these certificates any more"
+    # (Q201 second pass F1: an unfinished rotation note is finished HERE, under the identity lock - never from the read path, where it could erase the notes of a rotation that is running)
+    __changeset_reconcile.reconcile_rotation_pending(extensions.KEA_SERVERS)
 
     def _fact_first(ident):
         # Q200 (AP2): the durable fact is stored AND read back before a parked record is deleted; False keeps every file (`forget_report` names it in `no_fact`)
@@ -3633,7 +3649,7 @@ def forget_stale_kea_records():
                 "0 record(s) forgotten; NOT fully removed: "
                 + ", ".join(f"{i} ({'/'.join(sorted({f[0] for f in failed}))})" for i, failed in report["incomplete"]),
             )
-        if not parked and not report["skipped"] and not report["incomplete"]:
+        if not report["parked"] and not report["skipped"] and not report["incomplete"]:
             flash("There were no stale certificate records.", "info")
         return redirect(url_for("settings.settings_kea"))
     stale_only = [i for i in forgotten if i not in on_word]
@@ -4330,7 +4346,7 @@ def save_infra_ssh():
     user = request.form.get("user", "").strip()
     kea_conf = request.form.get("kea_conf", "").strip()
     dhcp4_log_path = request.form.get("dhcp4_log_path", "").strip()
-    if host and not __auth.valid_ssh_target(host):
+    if host and host not in _saved_ssh_hosts() and not __auth.valid_ssh_target(host):
         flash(
             "Invalid SSH host — must be a valid hostname or IP address."
             + (f" {__auth.ssh_target_problem(host)}." if __auth.ssh_target_problem(host) else ""),
@@ -4419,7 +4435,7 @@ def save_extra_servers():
     no_passes = request.form.getlist("extra_no_pass[]")
 
     for h in ssh_hosts:
-        if h.strip() and not __auth.valid_ssh_target(h.strip()):
+        if h.strip() and h.strip() not in _saved_ssh_hosts() and not __auth.valid_ssh_target(h.strip()):
             flash(
                 f"Invalid SSH host: {h.strip()}"
                 + (f" - {__auth.ssh_target_problem(h)}" if __auth.ssh_target_problem(h) else ""),

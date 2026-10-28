@@ -2729,6 +2729,20 @@ def q201_aq3_a_pending_note_is_reconciled_from_the_files():
         return (still, after_failure, sorted(i["category"] for i in store))
 
 
+def q201_aq5_a_scope_is_a_different_link_for_a_secret_and_no_scope_for_a_certificate():
+    """(same_host of a scoped and a scope-less IPv6 literal, same_endpoint of two scopes, the certificate-name comparison): the credential rule keeps a scope - it names another LINK, so a password is not
+    sent across it - and only the comparison of a certificate's names (`kea_tls.names_match`) drops one, because a certificate cannot carry it (Q201 second pass F4)."""
+    from jen.services import auth
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        return (
+            auth.same_host("fe80::1%eth0", "fe80::1"),
+            auth.same_endpoint("https://[fe80::1%eth0]:8000", "https://[fe80::1%eth1]:8000"),
+            kea_tls.names_match("fe80::1%eth0", "fe80::1"),
+        )
+
+
 def q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own():
     """`record_state` for a record issued for 10.0.0.6 (SSH host 10.0.0.6, address 10.0.0.6) under server 2: (unchanged, SSH host moved with the URL unchanged, URL moved with the SSH host unchanged,
     both moved). The SSH host moved to another machine is the case Q199 accepted - the helper would have installed on the new machine and restarted its daemon."""
@@ -3297,6 +3311,7 @@ EXPECTED = {
         ["rotation-pending"],
         ["tls-superseded"],
     ),
+    "q201_aq5_a_scope_is_a_different_link_for_a_secret_and_no_scope_for_a_certificate": (False, False, True),
     "q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own": ("jen", "refuse", "refuse", "refuse"),
     "q200_ap2_a_forget_whose_fact_cannot_be_stored_deletes_nothing": ([], ["2-dhcp4"], True, ["2-dhcp4"]),
     "q200_ap3_an_orphan_is_judged_by_the_certificate_it_holds": ("unknown", "current", "superseded", "unknown"),

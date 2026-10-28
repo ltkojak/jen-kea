@@ -3142,15 +3142,17 @@ emit({
 S22P2_SCRIPT = r"""
 from jen.services import health, kea_changeset
 
-row = health._kea_tls_expiry({})  # the store answers again: Health finishes the note from Jen's files
-emit({"categories": sorted(i.get("category") for i in kea_changeset.recovery_incidents() if i.get("server_id") == 1), "health": [row.status, row.detail]})
+row = health._kea_tls_expiry({})  # Health only READS: it names the unfinished note (Q201 second pass F1)
+before = sorted(i.get("category") for i in kea_changeset.recovery_incidents() if i.get("server_id") == 1)
+kea_changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)  # what the next Rotate or Forget stale records does, under the identity lock
+emit({"before": before, "categories": sorted(i.get("category") for i in kea_changeset.recovery_incidents() if i.get("server_id") == 1), "health": [row.status, row.detail]})
 """
 
 
 def test_22_p_a_note_the_database_could_not_take_after_the_commit_stays_pending_and_health_finishes_it(stack):
     """REMOTE-001 section 6a / Q201 (AQ3): kea-a is really on an https socket Jen issued the certificate for, and Jen is in Control Agent mode, so its record is a parked dependency. The rotation writes its
     `rotation-pending` note BEFORE it stages anything; the database is then made to fail for every note written AFTER the CA is promoted. The CA is rotated, the pending note REMAINS (never lost),
-    the page says so; once the store answers, Health finishes the note from the files (`tls-superseded`) and the pending one is gone. A removal then a setup leaves the world healthy for the scenarios after."""
+    the page says so; once the store answers, the next Rotate or Forget finishes the note from the files (`tls-superseded`) and the pending one is gone. A removal then a setup leaves the world healthy for the scenarios after."""
     out, proc = _s22_run("write-ok", scheme="https", port="8014")
     assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     out, proc = st.jen_py(S22P1_SCRIPT, timeout=500)
@@ -3158,11 +3160,14 @@ def test_22_p_a_note_the_database_could_not_take_after_the_commit_stays_pending_
     assert first is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     texts = " ".join(first["flashes"])
     assert first["committed"] and "Kea CA rotated" in texts, texts
-    assert "could not be updated" in texts and "Health will reconcile it" in texts, texts
+    assert "could not be updated" in texts and "finishes it" in texts, texts
     assert first["categories"] == ["rotation-pending"], first["categories"]
     out, proc = st.jen_py(S22P2_SCRIPT, timeout=200)
     second = emitted(out)
     assert second is not None, f"no result from Health:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    assert second["before"] == ["rotation-pending"] and "is unfinished" in second["health"][1], (
+        second
+    )  # Health only READS and names it
     assert second["categories"] == ["tls-superseded"], second
     # remove, then set up again: the same recovery 22m ends with
     out, proc = st.jen_py(S22M3_SCRIPT, timeout=500)
