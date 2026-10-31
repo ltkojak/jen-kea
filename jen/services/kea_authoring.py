@@ -345,14 +345,17 @@ def referenced_tls_paths(cfg, tls: dict) -> list:
     """The `tls_paths` a config needs checked before it is written (Q203 AS2): `[(path, "file"), ...]` for each of Jen's three certificate files (`tls`: what `kea_tls.remote_tls_paths(service)`
     answers) that a control-socket entry anywhere in `cfg` names as its `trust-anchor`, `cert-file` or `key-file` - what the setup passes for the same files. A path outside Jen's own directory is not
     Jen's to check, and a config that names none returns nothing."""
+    import posixpath
+
     by_key = {"trust-anchor": tls["trust_anchor"], "cert-file": tls["cert_file"], "key-file": tls["key_file"]}
     named: set = set()
 
     def walk(node):
         if isinstance(node, dict):
             for k, v in node.items():
-                if k in by_key and v == by_key[k]:
-                    named.add(v)
+                # (second pass G4: the daemon resolves `/etc/kea/tls/dhcp4/../dhcp4//ca.crt` to the same file, so the match is on the normalised path)
+                if k in by_key and isinstance(v, str) and posixpath.normpath(v) == posixpath.normpath(by_key[k]):
+                    named.add(by_key[k])
                 else:
                     walk(v)
         elif isinstance(node, list):

@@ -564,6 +564,9 @@ def author_kea_config_preview(service):
 @bp.route("/settings/infrastructure/author-kea/<service>", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(
+    minutes=10
+)  # Q203 (second pass G1): it overwrites the whole config of every Kea host - the gate every other writer of that file carries
 def author_kea_config_post(service):
     if service not in ("dhcp4", "dhcp6"):
         flash("Invalid service.", "error")
@@ -819,6 +822,7 @@ def test_legacy_grant(server_id):
 @bp.route("/settings/infrastructure/install-kea-helper/<int:server_id>", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(minutes=10)  # Q203 (second pass G1): it installs a root-run file on the Kea host over SSH
 def install_kea_helper(server_id):
     """Deploy or upgrade jen-kea-helper on one server. Below helper v6 this
     still goes through the legacy sudo-python3 path (the one time it's

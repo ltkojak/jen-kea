@@ -1919,3 +1919,24 @@ class TestReferencedTlsPaths:
 
         wrong = {"Dhcp4": {"control-socket": {"trust-anchor": self.TLS["key_file"]}}}
         assert referenced_tls_paths(wrong, self.TLS) == []
+
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            "/etc/kea/tls/dhcp4/../dhcp4/ca.crt",
+            "/etc/kea/tls/dhcp4//ca.crt",
+            "/etc/kea/tls//dhcp4/./ca.crt",
+        ],
+    )
+    def test_a_path_spelled_with_dots_or_double_slashes_is_still_a_reference(self, spelling):
+        """Q203 second pass G4: the daemon resolves these to the same file, so the preflight must ask about it."""
+        from jen.services.kea_authoring import referenced_tls_paths
+
+        cfg = {"Dhcp4": {"control-socket": {"trust-anchor": spelling}}}
+        assert referenced_tls_paths(cfg, self.TLS) == [(self.TLS["trust_anchor"], "file")]
+
+    def test_a_different_file_in_a_look_alike_directory_is_not(self):
+        from jen.services.kea_authoring import referenced_tls_paths
+
+        cfg = {"Dhcp4": {"control-socket": {"trust-anchor": "/etc/kea/tls/dhcp6/ca.crt"}}}
+        assert referenced_tls_paths(cfg, self.TLS) == []

@@ -901,7 +901,7 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
             "tls-superseded",  # Q199 (AO1): a parked daemon left on a replaced CA
             "record-forgotten",  # Q199 (AO1): a record forgotten on the operator's word
             "rotation-pending",  # Q201 (AQ3): a rotation's bookkeeping not yet finished
-            "restore-restart-failed",  # Q203 (AS2): a restored revision whose daemon did not restart
+            "config-restart-failed",  # Q203 (AS2): a restored revision whose daemon did not restart
         }
 
     @pytest.mark.parametrize("category", sorted(cs.ATTENTION_CATEGORIES))

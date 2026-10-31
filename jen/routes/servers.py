@@ -508,7 +508,7 @@ def restart_kea_server(server_id):
         res = __host.service_action(server, "dhcp4", "restart")
         if res["ok"]:
             flash(f"Kea restarted on {server['name']}.", "success")
-            __changeset.resolve_attention(server_id, "dhcp4", categories=("restore-restart-failed",))
+            __changeset.resolve_attention(server_id, "dhcp4", categories=("config-restart-failed",))
             __user.audit("RESTART_KEA", server["name"], "Remote restart via jen-kea-helper")
         else:
             flash(f"Restart failed on {server['name']}: {res['detail']}", "error")
@@ -1070,7 +1070,7 @@ def config_history_restore(server_id, rev_id):
     if restart["ok"]:
         flash(f"Restored revision #{rev_id} to {server['name']} and restarted Kea.", "success")
         # Q203 AS2: a restart that worked ends an earlier restore's unproved restart of THIS daemon
-        __changeset.resolve_attention(server_id, service, categories=("restore-restart-failed",))
+        __changeset.resolve_attention(server_id, service, categories=("config-restart-failed",))
     else:
         # Q203 AS2: the revision is on the host and the daemon did not start on it - it may be stopped, or still running what it had. That is a durable fact (the Servers banner and Health's
         # row read it from Jen's own note), not a flash that is gone with the next page; the next restart that works, or a superadmin's acknowledgement, ends it.
@@ -1078,7 +1078,7 @@ def config_history_restore(server_id, rev_id):
             server_id,
             service,
             f"restore of revision #{rev_id}",
-            "restore-restart-failed",
+            "config-restart-failed",
             server_name=server.get("name", ""),
         )
         flash(

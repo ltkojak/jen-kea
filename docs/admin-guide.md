@@ -264,6 +264,8 @@ family a CA certificate has) no CA remained that Jen's verifier accepts and
 `openssl` rejects once the two shapes above were closed; the `openssl` step is
 there so a version difference cannot make one.
 
+**Who may restore, import, author or replace the SSH key (v5.69.3).** Restoring a revision from Config history, applying an import, authoring a Kea config, installing the Kea host helper and saving the single-sign-on settings are a superadmin's, and each asks for the password to be confirmed within the last ten minutes; replacing Jen's SSH key is a superadmin's too (an admin sees a sentence where the button is). A restore or an import whose restart fails leaves a note on Servers and in Health until a restart of that daemon works.
+
 **Shapes Jen's verifier is stricter about than OpenSSL.** These are shown as
 damaged although `openssl verify` accepts a certificate issued from them. Jen
 stays strict because it has no switch to relax them and because a daemon built

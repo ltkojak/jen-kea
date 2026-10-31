@@ -2404,6 +2404,14 @@ def import_windows_apply(source):
         # missed window: to_kea() skips a scope whose CIDR already
         # exists in Kea before it ever reaches that scope's reservation
         # loop, so a second import would add none of them back.
+        # Q203 (second pass G2): and a durable fact, like a restore's - the plan state above lives in this session's cache, the Servers page and Health read Jen's own note
+        __changeset.record_attention(
+            primary.get("id"),
+            "dhcp4",
+            f"{src['label']} import",
+            "config-restart-failed",
+            server_name=primary.get("name", ""),
+        )
         entry["state"] = "config_applied_restart_failed"
         entry["applied_sha"] = apply_result.get("sha256")
         entry["expires"] = time.time() + _WIN_IMPORT_TTL_SECONDS
@@ -2420,6 +2428,7 @@ def import_windows_apply(source):
         )
         return render_template("import_windows_result.html", report=report, restart_failed=True, src=src)
     report.append("Kea restarted on the primary server.")
+    __changeset.resolve_attention(primary.get("id"), "dhcp4", categories=("config-restart-failed",))
 
     report = _finish_windows_import(token, entry)
     return render_template("import_windows_result.html", report=report, src=src)

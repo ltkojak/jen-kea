@@ -23,9 +23,25 @@ NOT_A_ROUTE = {
 #: REPORTED as a finding (the report to the maintainer), not widened silently.
 REPORTED_ROUTES = {
     ("jen/routes/servers.py", "restart_kea_server"): (
-        "an admin's restart of the Kea daemon on its own saved host: no config is written and no destination is chosen (the host and the unit are the saved ones), so it is an operational action, "
-        "not an identity change; making it a superadmin's would remove a daily admin action. Reported to the maintainer in the Q203 report"
+        "an admin's restart of the Kea daemon on its own saved host: it writes no config (its only write is to clear a `config-restart-failed` note a restart that works has ended) and chooses no "
+        "destination (the host and the unit are the saved ones), so it is an operational action, not an identity change; making it a superadmin's would remove a daily admin action. Reported to the maintainer in the Q203 report"
     ),
+}
+
+#: Q203 second pass G1: writers the direct-call walk cannot see (they reach the Kea host through `apply_change` or an install helper, not a call written in the route) that the registry names as gated.
+NAMED_FORM_WRITERS = (
+    ("jen/routes/settings/authoring.py", "author_kea_config_post"),
+    ("jen/routes/settings/authoring.py", "install_kea_helper"),
+)
+
+#: Two superadmin routes that reach the Kea host and carry NO step-up, pinned by their current decorators so a change is noticed, and REPORTED to the maintainer (second pass finding 1):
+#: `install_kea_binary` is a `jenFetch` JSON route (a step-up redirect would break its page) and `toggle_ipv6` is a setting, not a writer of a destination.
+KNOWN_OPEN = {
+    ("jen/routes/settings/authoring.py", "install_kea_binary"): ["login_required", "_superadmin_required"],
+    (
+        "jen/routes/settings/infrastructure.py",
+        "toggle_ipv6",
+    ): None,  # (decorators checked below: superadmin, no step-up)
 }
 
 WRITE_CALLS = {"apply_config", "restart_service"}
@@ -171,3 +187,33 @@ class TestEveryWriterOfIdentityOrKeaConfigCarriesItsGate:
         by_name = {n.name: w for _p, n, w in _writers()}
         assert "[oidc]" in by_name["save_oidc"]
         assert "the SSH key" in by_name["generate_ssh_key"]
+
+    @staticmethod
+    def _route(rel, name):
+        tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
+        return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
+
+    def test_the_named_form_writers_beyond_the_direct_callers_carry_the_gate(self):
+        for rel, name in NAMED_FORM_WRITERS:
+            decorators = _decorators(self._route(rel, name))
+            assert "login_required" in decorators and "_superadmin_required" in decorators, (name, decorators)
+            assert any(d.startswith("_recent_auth_required") for d in decorators), (name, decorators)
+
+    def test_the_two_known_open_routes_are_pinned_and_reported(self):
+        for (rel, name), expected in KNOWN_OPEN.items():
+            decorators = _decorators(self._route(rel, name))
+            assert [d for d in decorators if not d.startswith("bp.route")][:2] == [
+                "login_required",
+                "_superadmin_required",
+            ], (name, decorators)
+            assert not any(d.startswith("_recent_auth_required") for d in decorators), (
+                f"{name} now asks for a step-up: delete it from KNOWN_OPEN and name it in the registry"
+            )
+            if expected is not None:
+                assert [d for d in decorators if not d.startswith("bp.route")] == expected
+
+    def test_an_import_that_restarts_a_daemon_records_a_failed_restart(self):
+        """Q203 second pass G2, source row: the failed-restart branch of `import_windows_apply` writes the durable note (the DB-backed row is in test_win_dhcp_import_wizard)."""
+        node = self._route("jen/routes/subnets.py", "import_windows_apply")
+        assert "config-restart-failed" in ast.unparse(node) and "record_attention" in _called_names(node)
+        assert "resolve_attention" in _called_names(node)

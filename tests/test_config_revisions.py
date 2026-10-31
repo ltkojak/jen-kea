@@ -412,25 +412,23 @@ class TestTheRestoreRouteIsHeldToItsSiblingsGate:
         mine = [
             i
             for i in kea_changeset.recovery_incidents(strict=True)
-            if i.get("category") == "restore-restart-failed" and str(i.get("server_id")) == str(_HSID)
+            if i.get("category") == "config-restart-failed" and str(i.get("server_id")) == str(_HSID)
         ]
         assert len(mine) == 1 and mine[0]["service"] == "dhcp4" and mine[0]["summary"] == f"restore of revision #{rid}"
         assert "did not restart on it" in mine[0]["detail"]
         # delivered: the Servers banner reads the same note
         banner = kea_changeset.attention()
-        assert any(i.get("category") == "restore-restart-failed" for i in banner["incidents"])
+        assert any(i.get("category") == "config-restart-failed" for i in banner["incidents"])
         # derived: Health's "direct-socket changes are proved" row carries it as a stopped daemon (fail, not warn)
         row = health._direct_socket_recovery({})
-        assert row.status == "fail" and "restore-restart-failed" in row.detail, (row.status, row.detail)
+        assert row.status == "fail" and "config-restart-failed" in row.detail, (row.status, row.detail)
         # a second failed restore refreshes the same incident, it does not stack
         logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
-        assert (
-            len([i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]) == 1
-        )
+        assert len([i for i in kea_changeset.recovery_incidents() if i.get("category") == "config-restart-failed"]) == 1
         # resolved by the next restart of that daemon that works (here: the same restore, the unit starting this time)
         calls_ok = self._stub(monkeypatch, restart_ok=True)
         logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
-        assert not [i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]
+        assert not [i for i in kea_changeset.recovery_incidents() if i.get("category") == "config-restart-failed"]
         assert calls_ok["restart"] == [("dhcp4", "restart")] and calls["restart"]
 
     def test_the_servers_restart_button_that_works_also_ends_it(self, logged_in_client, hist, monkeypatch):
@@ -439,10 +437,10 @@ class TestTheRestoreRouteIsHeldToItsSiblingsGate:
         rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
         self._stub(monkeypatch, restart_ok=False)
         logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
-        assert [i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]
+        assert [i for i in kea_changeset.recovery_incidents() if i.get("category") == "config-restart-failed"]
         self._stub(monkeypatch, restart_ok=True)
         logged_in_client.post(f"/servers/restart/{_HSID}", follow_redirects=True)
-        assert not [i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]
+        assert not [i for i in kea_changeset.recovery_incidents() if i.get("category") == "config-restart-failed"]
 
     def test_a_superadmin_can_acknowledge_it_like_any_other_unproved_recovery(
         self, logged_in_client, hist, monkeypatch
@@ -452,7 +450,7 @@ class TestTheRestoreRouteIsHeldToItsSiblingsGate:
         rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
         self._stub(monkeypatch, restart_ok=False)
         logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
-        assert kea_changeset.acknowledge_recovery(_HSID, "dhcp4", "restore-restart-failed") == 1
+        assert kea_changeset.acknowledge_recovery(_HSID, "dhcp4", "config-restart-failed") == 1
 
     def test_the_restore_passes_the_tls_paths_its_config_references_to_the_test_and_the_apply(
         self, logged_in_client, hist, monkeypatch

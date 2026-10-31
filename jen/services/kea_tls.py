@@ -1885,7 +1885,7 @@ def _certificate_names(cert) -> list:
     names = []
     for g in sans:
         if isinstance(g, x509.DNSName):
-            if str(g.value):
+            if str(g.value).strip(" .*"):  # (second pass G3: a name of only spaces, dots and stars is no name either)
                 names.append(str(g.value))
         elif isinstance(g, x509.IPAddress) and isinstance(g.value, ipaddress.IPv4Address | ipaddress.IPv6Address):
             names.append(str(g.value))

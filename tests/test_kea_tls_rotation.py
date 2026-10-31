@@ -7213,6 +7213,24 @@ class TestACertificateThatNamesNothingProvesNothing:
         """Q203 AS4: `x509.IPAddress` carries networks too; a CIDR is a range, not the address a daemon serves, and read as its text it was the role sentence's 'machine'."""
         self._both_branches_the_setup_check_and_the_put_back(lab, self._ip_network())
 
+    @pytest.mark.parametrize("name", [" ", "*", ".", " . ", "*.", "..."])
+    def test_14_degenerate_dns_names_are_no_name(self, lab, name):
+        """Q203 second pass G3: a DNS name of only spaces, dots and stars is no name, so AR2's sentence (the right remedy) answers, not the role sentence."""
+        from cryptography import x509
+
+        cert = self._arrange_nameless(lab, x509.SubjectAlternativeName([x509.DNSName(name)]))
+        assert kea_tls._certificate_names(cert) == []
+        state, why = kea_tls.record_state(2, "dhcp4", server=lab.servers[2], url=lab.urls[2])
+        assert state == "refuse" and self.NOTHING in why, (state, why)
+        lab.before = None
+
+    def test_14b_a_wildcard_with_a_domain_is_still_a_name(self, lab):
+        from cryptography import x509
+
+        cert = self._arrange_nameless(lab, x509.SubjectAlternativeName([x509.DNSName("*.kea.lan")]))
+        assert kea_tls._certificate_names(cert) == ["*.kea.lan"]
+        lab.before = None
+
     def test_12b_the_names_a_certificate_carries_are_dns_names_and_addresses_only(self, lab):
         import ipaddress
 
@@ -7484,6 +7502,25 @@ class TestAGrandfatheredHostStaysOnItsRecord:
         self._save_extras(**self._rows(first, second))
         assert asked == ["10.0.0.7", "10.0.0.8"], asked
         assert world["calls"] and not self._refused(lab), lab.texts()
+
+        # second pass G5: any one of the twelve lists short refuses the same way, before `mutate`
+        for short in (
+            "extra_name[]",
+            "extra_role[]",
+            "extra_api_user[]",
+            "extra_api_pass[]",
+            "extra_api6_url[]",
+            "extra_api6_user[]",
+            "extra_api6_pass[]",
+            "extra_ssh_user[]",
+            "extra_kea_conf[]",
+        ):
+            world = self._world(lab, monkeypatch, extras={})
+            before_short = world["ini"]
+            body = self._rows(first, second)
+            body[short] = body[short][:1]
+            self._save_extras(**body)
+            assert world["calls"] == [] and world["ini"] == before_short, short
 
         # the short-listed form: one API URL fewer than the SSH hosts
         world = self._world(lab, monkeypatch, extras={})
@@ -8054,7 +8091,7 @@ class TestTheSmallOnesOfQ203:
 
     def test_d_a_defined_category_has_one_and_a_rotation_note_has_none(self):
         assert self._button_for({"category": "aborted"}) is True
-        assert self._button_for({"category": "restore-restart-failed"}) is True
+        assert self._button_for({"category": "config-restart-failed"}) is True
         assert self._button_for({"category": "rotation-pending"}) is False
 
     def test_a_the_group_certificate_docstring_says_what_group_verdict_does(self):
@@ -8072,3 +8109,27 @@ class TestTheSmallOnesOfQ203:
         marker = text.index("/usr/bin:/bin")
         paragraph = text[max(0, marker - 500) : marker + 800]
         assert "second opinion" in paragraph or "no second opinion" in paragraph
+
+    def test_g6_the_restore_note_paragraph_says_the_servers_restart_is_dhcp4_only(self):
+        text = pathlib.Path("docs/troubleshooting.md").read_text(encoding="utf-8")
+        assert "restarts kea-dhcp4 only" in text
+        assert "an import applied from Subnets" in text
+
+    def test_g7_the_admin_guide_names_the_restore_step_up_and_the_superadmin_only_key(self):
+        text = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
+        assert (
+            "replacing Jen's SSH key is a superadmin's too" in text
+            and "Restoring a revision from Config history" in text
+        )
+
+    def test_g_the_kea_3_0_5_paragraph_and_the_switchs_help_sentence_exist(self):
+        """Q203 AS7 (g), first built in the second pass: the crash under DEBUG logging before Kea 3.0.5 (ISC change 2414)."""
+        text = pathlib.Path("docs/troubleshooting.md").read_text(encoding="utf-8")
+        assert "3.0.4 or earlier" in text and "Restart=on-failure" in text and "change 2414" in text
+        page = pathlib.Path("templates/settings_kea.html").read_text(encoding="utf-8")
+        assert "Kea 3.0.4 or earlier, DEBUG logging can crash it (fixed in 3.0.5)" in page
+
+    def test_g_the_category_is_one_sentence_true_of_a_restore_and_an_import(self):
+        sentence = kea_changeset.ATTENTION_CATEGORIES["config-restart-failed"]
+        assert "restored revision, or an import" in sentence
+        assert "restore-restart-failed" not in kea_changeset.ATTENTION_CATEGORIES

@@ -4549,8 +4549,24 @@ def save_extra_servers():
     adopted_ids: set = set()
     # Q203 AS5: validation reaches as far as the writer. The writer's own zip is strict (`_rewrite_extra_servers`), so a form with fewer `extra_api_url[]` than `extra_ssh_host[]` was refused
     # there - but this loop stopped at the shortest list and never asked `valid_ssh_target` of the trailing hosts. Same refusal, asked first: nothing is written and nothing reaches `mutate`.
+    # (second pass G5: all twelve lists the writer zips, so the four validation loops below that walk non-strict are as long as the writer's)
+    form_lists = (
+        ids,
+        names,
+        roles,
+        api_urls,
+        api_users,
+        api_passes,
+        api6_urls,
+        api6_users,
+        api6_passes,
+        ssh_hosts,
+        ssh_users,
+        kea_confs,
+    )
     try:
-        rows_to_validate = list(zip(ids, ssh_hosts, api_urls, strict=True))
+        rows_to_validate = list(zip(*form_lists, strict=True))
+        rows_to_validate = [(r[0], r[9], r[3]) for r in rows_to_validate]  # (id, SSH host, API URL)
     except ValueError:
         logger.error("Mismatched extra-server form field lengths: the SSH host and API URL lists differ")
         flash("Could not save additional servers — form data was inconsistent. Please try again.", "error")

@@ -319,6 +319,34 @@ class TestWinDhcpImportWizard:
         assert 50 in self._written or 52 in self._written
         assert token not in subnets_mod._WIN_IMPORT_PLANS  # now finished and popped
 
+    def test_q203_g2_a_failed_restart_after_the_import_is_a_durable_incident_and_a_restart_that_works_ends_it(
+        self, logged_in_client, monkeypatch, mock_kea
+    ):
+        """Q203 second pass G2: the whole-config write of an import whose restart failed was a flash and an in-session plan state; Servers and Health read Jen's own note."""
+        from jen.services import health, kea_changeset
+
+        kea_changeset.acknowledge_recovery()
+        try:
+            fake = self._wire(monkeypatch)
+            fake.responses["service"] = {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
+            self._upload(logged_in_client)
+            logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+            logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+            mine = [
+                i for i in kea_changeset.recovery_incidents(strict=True) if i.get("category") == "config-restart-failed"
+            ]
+            assert len(mine) == 1 and mine[0]["service"] == "dhcp4" and "import" in mine[0]["summary"], mine
+            row = health._direct_socket_recovery({})
+            assert row.status == "fail" and "config-restart-failed" in row.detail, (row.status, row.detail)
+            # a restart that works (the Servers button) ends it
+            monkeypatch.setattr(
+                "jen.services.kea_host.service_action", lambda srv, svc, act: {"ok": True, "detail": ""}
+            )
+            logged_in_client.post(f"/servers/restart/{mine[0]['server_id']}", follow_redirects=True)
+            assert not [i for i in kea_changeset.recovery_incidents() if i.get("category") == "config-restart-failed"]
+        finally:
+            kea_changeset.acknowledge_recovery()
+
     def test_apply_reservations_right_after_preview_is_refused(self, logged_in_client, monkeypatch, mock_kea):
         """v5.28.1 (Q26, B1) — the retry route only exists for the
         restart-failure state; calling it straight after Preview (before
