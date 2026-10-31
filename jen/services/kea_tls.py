@@ -1925,7 +1925,13 @@ def _certificate_names(cert) -> list:
             value = str(g.value)
             # (Q204 AT5 b, replacing the second pass's G3 character test) a DNS name is kept when the verifier's own parser accepts it - no character set: an empty name, a tab, a NUL, a label over 63
             # characters, spaces at the edge are not names a certificate Jen issues carries; and a wildcard is the one shape Jen never issues, whatever the parser says
-            if value == value.strip() and "*" not in value and verifier_accepts_name(value):
+            # (second pass H7: DNS-typed text that reads as an IP literal is not a name either - the verifier compares a DNS SAN as a DNS name)
+            if (
+                value == value.strip()
+                and "*" not in value
+                and not _is_ip(value.strip("[]").split("%", 1)[0])
+                and verifier_accepts_name(value)
+            ):
                 names.append(value)
         elif isinstance(g, x509.IPAddress) and isinstance(g.value, ipaddress.IPv4Address | ipaddress.IPv6Address):
             names.append(str(g.value))

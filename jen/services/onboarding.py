@@ -171,7 +171,9 @@ def build_ctx(user, is_superadmin: bool) -> dict:
     from jen.services import dbexport, health, mfa
     from jen.services import setup_wizard as __setup_wizard
 
-    checks = {c.id: c for c in health.run_checks({"subnet_filter": user.can_access_subnet})}
+    checks = {
+        c.id: c for c in health.run_checks({"subnet_filter": user.can_access_subnet, "unrestricted": user.all_subnets})
+    }  # (Q204 second pass H2: the rows print the check's detail)
 
     channels = 0
     try:

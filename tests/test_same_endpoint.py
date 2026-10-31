@@ -230,3 +230,17 @@ class TestKeaUrlShape:
         from jen.routes.settings.infrastructure import _is_kea_url_shape
 
         assert _is_kea_url_shape(url) is auth.kea_url_shape_ok(url) is False
+
+    @pytest.mark.parametrize(
+        "url", ["https://dns.example.com/technitium", "http://pi.hole/admin", "http://adguard.local:3000/control"]
+    )
+    def test_the_dns_providers_url_may_carry_a_base_path(self, url):
+        """Q204 second pass H4: `valid_api_url` is shared with the DNS provider's address, which a reverse proxy may serve under a base path; the Kea shape rule is opt-out for it."""
+        assert auth.valid_api_url(url, kea_shape=False) is True
+        assert auth.valid_api_url(url) is False, "a Kea address still refuses the path"
+
+    def test_the_refusal_says_the_shape(self):
+        sentence = auth.url_refusal_sentence("http://kea:8000/kea", require_port=False)
+        assert "scheme://host:port" in sentence and "root" in sentence
+        assert auth.url_refusal_sentence("http://kea:8000") == ""
+        assert auth.url_refusal_sentence("http://u:p@kea:8000/x") == "", "user-info has its own sentence"

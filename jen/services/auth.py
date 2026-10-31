@@ -396,7 +396,7 @@ def kea_url_shape_ok(url) -> bool:
         return False
 
 
-def valid_api_url(url: str, require_port: bool = False, certificate_name: bool = False) -> bool:
+def valid_api_url(url: str, require_port: bool = False, certificate_name: bool = False, kea_shape: bool = True) -> bool:
     """A Kea command-API URL: http(s):// scheme, a hostname or IP, and —
     in direct mode (require_port=True) — an explicit port. A daemon
     control socket is never on 80/443, and `http://kea` (no port) would
@@ -416,7 +416,7 @@ def valid_api_url(url: str, require_port: bool = False, certificate_name: bool =
         return False
     if p.scheme not in ("http", "https") or not p.hostname or not _plain_host(p.hostname):
         return False
-    if not kea_url_shape_ok(value):
+    if kea_shape and not kea_url_shape_ok(value):
         return False  # Q204 (AT8 d): a path, a query or a fragment is not where a Kea daemon listens (user-info is refused below with its own sentence)
     if certificate_name and dns_name_sentence(value, require_port):
         return False  # Q197 (AM2): an https address in direct mode must carry a name the certificate verifier accepts - else no certificate Jen issues could be for it
@@ -470,6 +470,8 @@ def url_refusal_sentence(url: str, require_port: bool = False) -> str:
         )
     if require_port and host and port is None:
         return "In direct mode the API URL must include an explicit port (e.g. http://kea:8004) - a daemon control socket is never on 80/443."
+    if host and not kea_url_shape_ok(value) and "@" not in (parsed.netloc or ""):
+        return "A Kea address is scheme://host:port with nothing after it (no path, query or fragment): the control endpoint is dialled at its root."  # Q204 second pass H6
     return ""
 
 

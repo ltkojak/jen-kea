@@ -38,6 +38,16 @@ SECRET = [
     "api_pass",
     "db_passwd",
     "Password",
+    "secret_key",
+    "private_key",
+    "private-key",
+    "passphrase",
+    "pwd",
+    "apikey",
+    "clientSecret",
+    "apiKey",
+    "Authorization",
+    "credentials",
 ]
 NOT_SECRET = [
     "password-file",
@@ -53,6 +63,7 @@ NOT_SECRET = [
     "mypassword",
     "bypass",
     "tokens-per-second",
+    "keyboard",
     "",
 ]
 
@@ -69,7 +80,10 @@ class TestTheUnionTable:
     def test_hyphen_and_underscore_read_alike_and_the_case_is_ignored(self):
         for key in SECRET:
             assert is_secret_key(key.replace("-", "_")) is is_secret_key(key.replace("_", "-")) is True
-            assert is_secret_key(key.upper()) is True
+            if (
+                key == key.lower() or "-" in key or "_" in key
+            ):  # (camelCase is read at its case boundaries, so an all-upper spelling of it is a different word)
+                assert is_secret_key(key.upper()) is True
 
     def test_a_non_string_key_is_not_a_secret(self):
         assert is_secret_key(None) is False and is_secret_key(7) is False
@@ -183,8 +197,8 @@ class TestEveryMaskerUsesIt:
 
     def test_the_two_maskers_agree_on_every_key_of_the_table(self):
         for key in SECRET + NOT_SECRET:
-            if not key:
-                continue
+            if not key or key != key.lower() and "-" not in key and "_" not in key and not key.istitle():
+                continue  # (an INI parser lower-cases option names, so a camelCase key is a Kea-config key only)
             via_config = kea_authoring.redact_secrets({key: "v"})[key] == "********"
             via_ini = support_bundle.redact_ini_text(f"[s]\n{key} = value\n").count(support_bundle.MASK) == 1
             assert via_config is via_ini is is_secret_key(key), key

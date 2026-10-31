@@ -341,7 +341,9 @@ def dashboard_catalog_data():
         checks = None
         if "readiness" in requested or "ddns_errors" in requested:
             try:
-                checks = __health.run_checks()
+                checks = __health.run_checks(
+                    {"subnet_filter": current_user.can_access_subnet, "unrestricted": current_user.all_subnets}
+                )  # (Q204 second pass H1: the readiness rows are the caller's)
             except Exception as e:
                 logger.warning(f"dashboard catalog-data health run_checks: {e}")
                 checks = None

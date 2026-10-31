@@ -2815,6 +2815,31 @@ def q202_ar5_the_url_is_judged_as_the_tls_stack_judges_it():
         )
 
 
+def q204_h3_an_unchanged_value_never_admits_the_mapped_spelling():
+    """Q204 second pass H3, the exemption used for a purpose its comment does not state: the 'unchanged' tests of the SSH host and the Kea address fold a mapped IPv6 spelling onto the saved IPv4 (the credential
+    rule's fold), so a one-keystroke save walked past the wall that refuses the spelling for a certificate. {(what, submitted): is it 'unchanged'}: only identical text, or a literal that is not the mapped spelling."""
+    from jen.routes.settings import infrastructure as infra
+
+    out = {}
+    with mock.patch.object(infra, "_saved_ssh_host_for", lambda sid: "10.0.0.9"):
+        for value in ("10.0.0.9", " 10.0.0.9 ", "::ffff:10.0.0.9", "[::ffff:10.0.0.9]", "::FFFF:A00:9"):
+            out[("ssh", value)] = infra._ssh_host_unchanged(value, 1)
+    with mock.patch.object(infra, "_saved_ssh_host_for", lambda sid: "::ffff:10.0.0.9"):
+        out[("ssh, saved mapped", "::ffff:10.0.0.9")] = infra._ssh_host_unchanged("::ffff:10.0.0.9", 1)
+        out[("ssh, saved mapped", "10.0.0.9")] = infra._ssh_host_unchanged("10.0.0.9", 1)
+    for value in (
+        "https://10.0.0.9:8004",
+        "https://10.0.0.9:8004/",
+        "https://[::ffff:10.0.0.9]:8004",
+        "https://[::ffff:a00:9]:8004",
+    ):
+        out[("url", value)] = infra._unchanged_url(value, "https://10.0.0.9:8004")
+    out[("url, saved mapped", "https://[::ffff:10.0.0.9]:8004")] = infra._unchanged_url(
+        "https://[::ffff:10.0.0.9]:8004", "https://[::ffff:10.0.0.9]:8004"
+    )
+    return out
+
+
 def q203_as1_an_admins_probe_never_downgrades_the_scheme():
     """`probe_kea` driven as an admin and as a superadmin, configured https and http, against a candidate on the same host over each scheme and on a different host: the list of what was DIALLED
     (nothing is sent anywhere - `_probe_once` is a recorder, and a credential is never printed). A probe is a credential send (Q203 AS1)."""
@@ -3060,6 +3085,7 @@ SCENARIOS = {
             "q201_",
             "q202_",
             "q203_",
+            "q204_",
         )
     )
     and callable(fn)
@@ -3422,6 +3448,20 @@ EXPECTED = {
     "q202_ar1_a_pending_note_is_refreshed_only_under_its_own_ca_fingerprint": (True, False, True),
     "q202_ar2_a_certificate_that_names_nothing_proves_nothing": ("refuse", True, True),
     "q202_ar5_the_url_is_judged_as_the_tls_stack_judges_it": ("jen", "refuse", "refuse"),
+    "q204_h3_an_unchanged_value_never_admits_the_mapped_spelling": {
+        ("ssh", "10.0.0.9"): True,
+        ("ssh", " 10.0.0.9 "): True,
+        ("ssh", "::ffff:10.0.0.9"): False,
+        ("ssh", "[::ffff:10.0.0.9]"): False,
+        ("ssh", "::FFFF:A00:9"): False,
+        ("ssh, saved mapped", "::ffff:10.0.0.9"): True,
+        ("ssh, saved mapped", "10.0.0.9"): True,
+        ("url", "https://10.0.0.9:8004"): True,
+        ("url", "https://10.0.0.9:8004/"): True,
+        ("url", "https://[::ffff:10.0.0.9]:8004"): False,
+        ("url", "https://[::ffff:a00:9]:8004"): False,
+        ("url, saved mapped", "https://[::ffff:10.0.0.9]:8004"): True,
+    },
     "q203_as1_an_admins_probe_never_downgrades_the_scheme": {
         ("admin", "https", "https://kea-a:8004"): True,
         ("admin", "https", "http://kea-a:8004"): False,

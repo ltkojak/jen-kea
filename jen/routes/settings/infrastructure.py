@@ -1704,6 +1704,15 @@ def _unchanged_url(new, saved) -> bool:
     """Is `new` the address already saved (Q197 second pass, F1)? A saved https address whose host a real TLS stack accepts but the certificate verifier's DNS parser does not (an underscore: docker-compose service
     names) works today; the certificate-name rule is for a value being CHANGED, never a reason to refuse an unrelated edit of a form that re-submits the saved one."""
     value, before = (new or "").strip(), (saved or "").strip()
+    if value != before:
+        from urllib.parse import urlparse
+
+        try:
+            host = urlparse(value).hostname or ""
+        except ValueError:
+            host = ""
+        if __auth.is_v4_mapped_literal(host):
+            return False  # Q204 second pass H3: the mapped spelling is a different certificate name, whatever `same_endpoint` (the credential fold) says
     return value == before or __auth.same_endpoint(
         value, before
     )  # (Q198 AN5: case, a trailing slash and padding are one address; a port-only change is a change)
@@ -2049,7 +2058,11 @@ def _ssh_host_unchanged(submitted: str, server_id) -> bool:
     must not lock the operator out of saving anything else. Unchanged is the same text or the same LITERAL (`_ssh_literal_key`: a bracketed, upper-case or expanded spelling of the address; a CHANGED scope is a changed target and
     is validated; nothing a URL parser would read the host out of)."""
     value, saved = (submitted or "").strip(), _saved_ssh_host_for(server_id)
-    return bool(saved) and (value == saved or _same_ssh_literal(value, saved))
+    # Q204 second pass H3: the literal fold (a mapped IPv6 address is the IPv4 it wraps) is the credential rule's; for a certificate name the mapped spelling is a DIFFERENT name, so a mapped
+    # spelling is unchanged only as the identical text - a one-keystroke save must not walk past the wall `valid_ssh_target` puts in front of it
+    return bool(saved) and (
+        value == saved or (_same_ssh_literal(value, saved) and not __auth.is_v4_mapped_literal(value))
+    )
 
 
 def _record_incident(
@@ -5119,7 +5132,9 @@ def save_infra_ddns():
     if dns_provider not in DDNS_PROVIDERS:
         flash("Unknown DNS provider.", "error")
         return redirect(home)
-    if api_url and not __auth.valid_api_url(api_url):
+    if api_url and not __auth.valid_api_url(
+        api_url, kea_shape=False
+    ):  # (Q204 second pass H4: a DNS provider's URL may carry a reverse proxy's base path)
         flash(
             __auth.userinfo_sentence(api_url) or "The DNS provider's API URL must start with http:// or https://.",
             "error",

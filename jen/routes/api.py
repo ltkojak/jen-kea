@@ -972,7 +972,7 @@ def api_v1_health_readiness():
     from jen.services import kea_readiness as _readiness
 
     try:
-        checks = _health.readiness_checks()
+        checks = _health.readiness_checks(unrestricted=_api_key_subnet_ids(key) is None)  # (Q204 second pass H1)
     except Exception as e:
         logger.error(f"api_v1_health_readiness error: {e}")
         return api_error("Internal error. Check server logs for details.", 500)

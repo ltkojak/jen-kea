@@ -7471,6 +7471,33 @@ class TestACertificateNameIsJudgedAsTheVerifierJudgesIt:
         kea_tls.discard_local_record(94, "dhcp4")
         lab.before = None
 
+    def test_an_unchanged_exemption_never_admits_the_mapped_spelling(self):
+        """Q204 second pass H3: the saved value `10.0.0.9` re-submitted as `::ffff:10.0.0.9` is a CHANGE (a different certificate name), so the saver validates it and refuses it."""
+        from tests.probe import credential_probe as probe
+
+        got = probe.q204_h3_an_unchanged_value_never_admits_the_mapped_spelling()
+        assert got[("ssh", "::ffff:10.0.0.9")] is False and got[("url", "https://[::ffff:10.0.0.9]:8004")] is False
+        assert got[("ssh", "10.0.0.9")] is True and got[("url", "https://10.0.0.9:8004/")] is True
+        assert got[("ssh, saved mapped", "::ffff:10.0.0.9")] is True, (
+            "a record saved earlier is not locked out of an unrelated save"
+        )
+
+    def test_dns_typed_text_that_reads_as_an_address_is_no_name(self, lab):
+        from cryptography import x509
+
+        mixed = x509.SubjectAlternativeName(
+            [
+                x509.DNSName("10.0.0.9"),
+                x509.DNSName("[fd00::5]"),
+                x509.DNSName("fe80::1%eth0"),
+                x509.DNSName("kea-b.lan"),
+            ]
+        )
+        cert, _files = _san_certificate(93, mixed)
+        assert kea_tls._certificate_names(cert) == ["kea-b.lan"]
+        kea_tls.discard_local_record(93, "dhcp4")
+        lab.before = None
+
     def test_the_names_nothing_sentence_is_named_for_what_it_does(self):
         """It formats, it does not test: the test is `roles[1] is None` / `ssh_name is None` at its two call sites."""
         assert hasattr(kea_tls, "_names_nothing_sentence") and not hasattr(kea_tls, "_names_nothing")

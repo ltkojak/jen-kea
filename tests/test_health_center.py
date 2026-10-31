@@ -1068,6 +1068,54 @@ class TestTheThreeChecksThatNameSubnetsAreForUnrestrictedAccounts:
         for cid in ("kea_config_drift", "kea_subnets_declared", "config_doctor"):
             assert by_id[cid].status == "skip" and by_id[cid].detail == self.SENTENCE, cid
 
+    def test_the_removed_keys_check_skips_for_a_restricted_ctx_and_names_the_subnet_for_an_unrestricted_one(self):
+        """Q204 second pass H1: `kea32_removed_keys` prints the PATH of a finding - `subnet4[id 2]`, a shared network's name, a class's name - over the whole config."""
+        cfg = {
+            "subnet4": [{"id": 2, "subnet": "10.77.0.0/24", "reservation-mode": "all"}],
+            "shared-networks": [{"name": "ZZ-SECRET-B", "subnet4": []}],
+        }
+        restricted = health._kea32_removed_keys(_ctx(unrestricted=False, dhcp4_config=cfg))
+        assert (restricted.status, restricted.detail) == ("skip", self.SENTENCE)
+        full = health._kea32_removed_keys(_ctx(dhcp4_config=cfg))
+        assert full.status == "warn" and "id 2" in full.detail
+
+    def test_readiness_checks_carries_the_callers_flag(self):
+        cfg = {"subnet4": [{"id": 2, "subnet": "10.77.0.0/24", "reservation-mode": "all"}]}
+        rows = {c.id: c for c in health.readiness_checks(_ctx(dhcp4_config=cfg), unrestricted=False)}
+        assert rows["kea32_removed_keys"].status == "skip" and "id 2" not in rows["kea32_removed_keys"].detail
+        rows = {c.id: c for c in health.readiness_checks(_ctx(dhcp4_config=cfg))}
+        assert "id 2" in rows["kea32_removed_keys"].detail
+
+    def test_every_caller_that_serves_a_user_who_may_be_scoped_passes_the_flag(self):
+        """Q204 second pass H1/H2, a source row over the whole tree: a `run_checks(` / `readiness_checks(` call is either a superadmin's (named) or passes `unrestricted`."""
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        superadmin_or_light = {
+            ("jen/routes/servers.py", "ha_maintenance_begin"),  # @_superadmin_required
+            ("jen/services/support_bundle.py", "_collect_health"),  # the superadmin's bundle
+            (
+                "jen/routes/settings/infrastructure.py",
+                "settings_kea",
+            ),  # readiness_checks(light_ctx): no config, the check skips
+        }
+        offenders = []
+        for path in sorted((root / "jen").rglob("*.py")):
+            rel = path.relative_to(root).as_posix()
+            if rel == "jen/services/health.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]:
+                for call in [c for c in ast.walk(fn) if isinstance(c, ast.Call)]:
+                    name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
+                    if name not in ("run_checks", "readiness_checks"):
+                        continue
+                    if "unrestricted" in ast.unparse(call) or (rel, fn.name) in superadmin_or_light:
+                        continue
+                    offenders.append(f"{rel}:{call.lineno} {fn.name}")
+        assert not offenders, offenders
+
 
 class TestARunnerNeverShowsWhatACheckRaised:
     """Q204 AT2 (M5, LEAK-001): a check that raises became `fail` with `f"check errored: {e}"`, and that detail reaches `@viewer_or_above` JSON - a `pymysql` or `requests` message carries host,

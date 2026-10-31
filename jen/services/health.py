@@ -1836,6 +1836,11 @@ def _kea32_removed_keys(ctx) -> Check:
 
     c = Check("kea32_removed_keys", "No removed config keys", "readiness", fix_url="/subnets/classes")
     c.fix_hint = "Client Classes"
+    if not ctx.get(
+        "unrestricted", True
+    ):  # Q204 second pass H1 (RBAC-005): the path of a finding names a subnet by id, a shared network and a class by name, over the whole config
+        c.status, c.detail = "skip", "fleet-wide summary is for unrestricted accounts"
+        return c
     cfg = ctx.get("dhcp4_config")
     if cfg is None:
         c.status, c.detail = "skip", "config-get unavailable"
@@ -1911,12 +1916,12 @@ def _kea32_d2_socket(ctx) -> Check:
 _READINESS_CHECKS = None  # filled after _CHECKS is defined below
 
 
-def readiness_checks(ctx: dict | None = None) -> list[Check]:
+def readiness_checks(ctx: dict | None = None, unrestricted: bool = True) -> list[Check]:
     """Just the readiness group. With `ctx` given (the Settings → Kea
     page passes what it already fetched: one server status row and no
     config), only those five functions run and NO extra Kea round trip
     is made — checks that need what the ctx lacks `skip`. With no ctx,
-    the shared reads are built as for the full run."""
+    the shared reads are built as for the full run. `unrestricted=False` (Q204 second pass H1) is the caller who may not see every subnet: a check that names subnets skips."""
     if ctx is None:
         ctx = _build_ctx(None)
     else:
@@ -1925,6 +1930,7 @@ def readiness_checks(ctx: dict | None = None) -> list[Check]:
         ctx.setdefault("server_status", [])
         ctx.setdefault("active_server", None)
         ctx.setdefault("dhcp4_config", None)
+    ctx["unrestricted"] = bool(ctx.get("unrestricted", True)) and unrestricted
     out: list[Check] = []
     for fn in _READINESS_CHECKS or []:
         cid = fn.__name__.lstrip("_")
