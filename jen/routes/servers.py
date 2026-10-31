@@ -240,7 +240,9 @@ def servers():
                 s["ha_status"] = None
                 s["ha_config"] = None
         if any(s["ha_status"] for s in statuses):
-            compare_rows = __ha.compare_assigned([s["server"] for s in statuses if s["up"]])
+            compare_rows = __ha.compare_assigned(
+                [s["server"] for s in statuses if s["up"]], subnet_filter=current_user.can_access_subnet
+            )
 
     return render_template(
         "servers.html",
@@ -249,7 +251,7 @@ def servers():
         ha_mode=ha_mode,
         ha_degraded=ha_degraded,
         ha_degraded_reason=ha_degraded_reason,
-        subnet_map=extensions.SUBNET_MAP,
+        subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
         history_allowed=history_allowed,
         history_counts=history_counts,
         ha_actions=__ha.HA_ACTIONS,

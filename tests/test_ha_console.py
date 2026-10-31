@@ -187,6 +187,68 @@ class TestCompareAssigned:
         assert kea_ha.compare_assigned(SERVERS) == []
 
 
+class TestCompareLeasesIsScoped:
+    """Q204 AT1 (a, M1, RBAC-005): the Compare Leases card listed every subnet any server reported, named from the unfiltered `SUBNET_MAP`, to any signed-in account. The rows are the caller's: a row
+    whose subnet the caller may not see is DROPPED - never renamed, never counted into a visible row (a hidden object does not influence a visible answer)."""
+
+    @staticmethod
+    def _wire(monkeypatch, counts):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {1: {"name": "Alpha-A", "cidr": "10.98.1.0/24"}, 2: {"name": "ZZ-SECRET-B", "cidr": "10.77.0.0/24"}},
+        )
+
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            c = counts[server["name"]]
+            return {
+                "result": 0,
+                "arguments": {f"subnet[{sid}].assigned-addresses": [[n, "t"]] for sid, n in c.items()},
+            }
+
+        monkeypatch.setattr(kea_svc, "kea_command", fake)
+
+    def test_a_hidden_subnets_row_is_dropped(self, monkeypatch):
+        self._wire(monkeypatch, {"Primary": {1: 10, 2: 5}, "Standby": {1: 10, 2: 9}})
+        rows = kea_ha.compare_assigned(SERVERS, subnet_filter=lambda sid: sid == 1)
+        assert [r["subnet_id"] for r in rows] == [1]
+        assert "ZZ-SECRET-B" not in str(rows) and "10.77.0." not in str(rows)
+
+    def test_a_hidden_subnets_disagreement_never_flags_a_visible_row(self, monkeypatch):
+        self._wire(monkeypatch, {"Primary": {1: 10, 2: 5}, "Standby": {1: 10, 2: 9}})
+        rows = kea_ha.compare_assigned(SERVERS, subnet_filter=lambda sid: sid == 1)
+        assert rows[0]["mismatch"] is False and rows[0]["counts"] == {"Primary": 10, "Standby": 10}
+
+    def test_a_hidden_subnet_reported_by_one_server_only_is_not_a_visible_zero(self, monkeypatch):
+        self._wire(monkeypatch, {"Primary": {1: 10, 2: 5}, "Standby": {1: 10}})
+        rows = kea_ha.compare_assigned(SERVERS, subnet_filter=lambda sid: sid == 1)
+        assert [r["subnet_id"] for r in rows] == [1]
+
+    def test_an_unrestricted_caller_sees_every_row_by_default_and_by_filter(self, monkeypatch):
+        self._wire(monkeypatch, {"Primary": {1: 10, 2: 5}, "Standby": {1: 10, 2: 9}})
+        for rows in (
+            kea_ha.compare_assigned(SERVERS),
+            kea_ha.compare_assigned(SERVERS, subnet_filter=lambda _sid: True),
+        ):
+            by_id = {r["subnet_id"]: r for r in rows}
+            assert set(by_id) == {1, 2}
+            assert by_id[2]["name"] == "ZZ-SECRET-B" and by_id[2]["mismatch"] is True and by_id[1]["mismatch"] is False
+
+    def test_a_caller_who_may_see_nothing_gets_no_rows(self, monkeypatch):
+        self._wire(monkeypatch, {"Primary": {1: 10, 2: 5}, "Standby": {1: 10, 2: 9}})
+        assert kea_ha.compare_assigned(SERVERS, subnet_filter=lambda _sid: False) == []
+
+    def test_the_route_hands_the_users_own_question_to_the_service(self):
+        """A source row: `servers()` passes `current_user.can_access_subnet`, so a new caller cannot forget the filter."""
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen/routes/servers.py").read_text(encoding="utf-8")
+        assert "compare_assigned(" in src and "subnet_filter=current_user.can_access_subnet" in src
+
+
 # ── Route: POST /servers/ha/<id>/<action> ────────────────────────────────────
 
 

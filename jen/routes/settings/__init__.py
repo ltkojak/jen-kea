@@ -262,7 +262,8 @@ def settings_security():
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
         oidc=oidc_settings,
-        subnet_map=extensions.SUBNET_MAP,
+        # Q204 (RBAC-005, S16): the OIDC mapping preview prints a subnet's name for an id; the page is an admin's, so it is given the subnets this account may see (a superadmin's is all of them)
+        subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
     )
 
 

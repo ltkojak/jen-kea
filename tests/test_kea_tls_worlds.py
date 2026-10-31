@@ -1170,6 +1170,10 @@ class TestEveryValueFamilyIsARow:
         assert "enumerate values, not only classes" in audit.lower()
 
 
+MAPPED = "::ffff:10.0.0.6"
+MAPPED_SAN = str(__import__("ipaddress").ip_address(MAPPED))  # how a SAN prints it on this Python
+
+
 class TestTheLeafShapesOfQ202:
     """Q202 (AR2, AR5; the enumeration rule): a server certificate's SAN extension is built with EVERY shape the library can build, and each is judged - by Jen (`_certificate_roles`, the role refusals) and,
     where the CLI exists, by `openssl verify -purpose sslserver`. A leaf with no DNS or IP name is accepted by the CLI and REFUSED by Jen (the admin guide's Jen-stricter table, with its reason): it proves
@@ -1190,6 +1194,12 @@ class TestTheLeafShapesOfQ202:
         "empty-dns": ("empty-dns", (None, None)),
         "ip-network": ("ip-network", (None, None)),
         "empty-dns-then-ip": ("empty-dns+ip", ("10.0.0.6", "10.0.0.6")),
+        # Q204 AT5: an IPv4-mapped IPv6 SAN is an address like any other when it is READ (a certificate placed by hand, or issued before this release); what changed is that it is no longer the plain address
+        "mapped-ip": ("mapped-ip", (MAPPED_SAN, MAPPED_SAN)),
+        "mapped-then-dns": ("mapped+dns", (MAPPED_SAN, "kea-b.lan")),
+        # and a DNS name the verifier's parser refuses (a wildcard, a tab, a label over 63 characters) is no name (Q204 AT5 b)
+        "wildcard-only": ("wildcard", (None, None)),
+        "tab-then-ip": ("tab+ip", ("10.0.0.6", "10.0.0.6")),
     }
 
     @staticmethod
@@ -1217,6 +1227,29 @@ class TestTheLeafShapesOfQ202:
 
             return kea_tls._leaf(
                 ca_cert, ca_key, key, "shape", [x509.IPAddress(ipaddress.ip_network("10.0.0.0/24"))], client=False
+            )
+        if shape == "mapped-ip":
+            import ipaddress
+
+            return kea_tls._leaf(
+                ca_cert, ca_key, key, "shape", [x509.IPAddress(ipaddress.ip_address(MAPPED))], client=False
+            )
+        if shape == "mapped+dns":
+            import ipaddress
+
+            return kea_tls._leaf(
+                ca_cert,
+                ca_key,
+                key,
+                "shape",
+                [x509.IPAddress(ipaddress.ip_address(MAPPED)), x509.DNSName("kea-b.lan")],
+                client=False,
+            )
+        if shape == "wildcard":
+            return kea_tls._leaf(ca_cert, ca_key, key, "shape", [x509.DNSName("*.kea.lan")], client=False)
+        if shape == "tab+ip":
+            return kea_tls._leaf(
+                ca_cert, ca_key, key, "shape", [x509.DNSName("a\tb"), kea_tls._san_for("10.0.0.6")], client=False
             )
         if shape == "empty-dns+ip":
             return kea_tls._leaf(
@@ -1269,6 +1302,26 @@ class TestTheLeafShapesOfQ202:
                 cert, {"id": 2, "ssh_host": ""}, "https://10.0.0.6:8004"
             )
         assert kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": ""}) == "", "nothing configured: not judged"
+        lab.before = None
+
+    @pytest.mark.parametrize(("url_host", "accepted"), [("10.0.0.6", False), (f"[{MAPPED}]", True)])
+    def test_the_mirror_image_a_certificate_for_the_mapped_spelling(self, lab, url_host, accepted):
+        """Q204 AT5 a: the mapped SAN is accepted for the mapped URL only (built directly: `_san_for` writes no SAN for the spelling any more)."""
+        cert = self._cert("mapped-ip")
+        refusal = kea_tls._destination_refusal(cert, {"id": 2, "ssh_host": MAPPED}, f"https://{url_host}:8004")
+        assert (refusal == "") is accepted, (url_host, refusal)
+        lab.before = None
+
+    def test_a_mapped_san_does_not_authorise_the_plain_address_nor_the_reverse(self, lab):
+        """Q204 AT5 a, on the leaf table: the library's own verifier refuses SAN `::ffff:a00:6` for `10.0.0.6` and Jen's role judgement agrees (no fold)."""
+        cert = self._cert("mapped-ip")
+        assert kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": "10.0.0.6"}), (
+            "the plain host is not the mapped name"
+        )
+        assert kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": MAPPED}) == ""
+        ca_cert, _ca_key = kea_tls._load_ca()
+        assert kea_tls.verify_issued(ca_cert, cert, False, "10.0.0.6"), "the library agrees: no matching subjectAltName"
+        assert kea_tls.verify_issued(ca_cert, cert, False, MAPPED) == ""
         lab.before = None
 
     def test_the_admin_guides_stricter_table_names_the_empty_name_and_the_network_with_its_reason(self):
@@ -1324,7 +1377,9 @@ class TestTheLeafShapesOfQ202:
             (["10.0.0.6", "kea-b.lan"], "kea-b.lan", "10.0.0.7", False),
             (["10.0.0.6", "kea-b.lan"], "10.0.0.6", "10.0.0.6", False),  # the SSH half: the LAST name
             (["10.0.0.6", "mid.lan", "kea-b.lan"], "kea-b.lan", "mid.lan", True),  # any name, the middle one too
-            (["10.0.0.6"], "10.0.0.6", "[::ffff:10.0.0.6]", True),
+            # Q204 AT5 a: this row was `True` (Q202). A TLS client dialling `[::ffff:10.0.0.6]` against a certificate for `10.0.0.6` is refused by openssl and urllib3 - `names_match` no longer folds
+            # the mapped spelling onto the plain one, so the record reads as refused with the destination sentence. Inverted on purpose, and its mirror image is added.
+            (["10.0.0.6"], "10.0.0.6", "[::ffff:10.0.0.6]", False),
         ],
     )
     def test_the_url_half_is_any_name_and_the_ssh_half_is_the_last(self, lab, names, ssh_host, url_host, accepted):

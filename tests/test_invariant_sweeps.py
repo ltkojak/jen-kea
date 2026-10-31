@@ -19,6 +19,8 @@ sweeps re-run, plus the ones the new code needs.
       empty value or passes is on a reviewed list, with the reason it fails CLOSED there (Q166; docs/SAFETY_INVARIANTS.md FAIL-001).
   S11 a route never shows what a broad `except` caught: the name bound by `except Exception as e` in `jen/routes/` is used only to log or to name its class; the reviewed list is
       empty (Q171; docs/SAFETY_INVARIANTS.md LEAK-001).
+  S16 the subnets THEMSELVES are scoped: every read of `SUBNET_MAP` / `SUBNET6_MAP` in `jen/` and `plugins/` is in a function that asks a scoping question, or is on a reviewed list with the
+      reason (Q204; docs/SAFETY_INVARIANTS.md RBAC-005).
 
 The sweep tests were written FIRST (before the fixes) and are un-xfailed as each fix lands; the commit that lands a fix removes its marker.
 """
@@ -506,6 +508,12 @@ S10_ALLOWED = {
     ("jen/services/auth.py", "idna_a_label", "Exception", "return None"): (
         "a name with no A-label (the `idna` package refuses it, or is missing) has NO form `requests` can dial: the callers read None as 'not a name' - `_plain_host` refuses the address, `verifier_accepts_name` says no, `_san_for` puts nothing in the leaf (Q199 AO4)"
     ),
+    ("jen/services/auth.py", "is_v4_mapped_literal", "ValueError", "return False"): (
+        "text that is not an IP address is not a MAPPED one; the caller's own check of the host (`valid_hostname` / `valid_ip`, `verifier_accepts_name`) refuses it as a name, so the answer 'not mapped' never admits it (Q204 AT5)"
+    ),
+    ("jen/services/auth.py", "kea_url_shape_ok", "ValueError", "return False"): (
+        "an address `urlsplit` cannot parse (a bad port, a bracket) is NOT a Kea URL shape: the saver and the probe refuse it - fail closed (Q204 AT8 d)"
+    ),
     ("jen/services/auth.py", "usable_file", "(OSError, ValueError, TypeError)", "return False"): (
         "a path that cannot be examined is NOT a usable file: the caller refuses the CA bundle / client certificate it was asked to trust (Q174)"
     ),
@@ -738,6 +746,9 @@ S10_ALLOWED = {
     ),
     ("jen/services/kea_tls.py", "_known_again", "FileNotFoundError", "pass"): (
         "the marker being absent is the state the call wants"
+    ),
+    ("jen/services/kea_tls.py", "_ip_address_or_none", "ValueError", "return None"): (
+        "a name that is not an IP address is compared as a DNS name (equal A-labels), never as an address, and two names are the same place only when they are identical or equal under that comparison: an unparsable literal matches nothing but itself (Q204 AT5)"
     ),
     ("jen/services/kea_tls.py", "trust_kind", "(OSError, ValueError, TypeError, UnsupportedAlgorithm)", "pass"): (
         "a bundle that does not load falls through to 'unreadable', which the rotation inventory refuses"
@@ -1489,3 +1500,187 @@ class TestS15TheCaIsReadThroughCaState:
             "def ok(path):\n    return load_key(path)\n"
         )
         assert s15_sites(planted) == ["ca_present"]
+
+
+# ── S16: the subnets THEMSELVES are scoped (Q204, RBAC-005) ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+# A subnet's id, name, CIDR and counts are shown to an account only for the subnets it may see. Q156 applied the definition to the About page (`current_user.filter_subnet_map`) and four more readers
+# had not asked it (Compare Leases, three Health checks, the drift route, the metrics token) - Opus's M1-M4. This is the sweep that asks it of EVERY read of the map: every `extensions.SUBNET_MAP` /
+# `SUBNET6_MAP` read (iteration, `.items()`, `.keys()`, `.values()`, `.get`, a subscript, a membership test, a `len`) in a function under `jen/` or `plugins/` is in a function that scopes it - it
+# mentions one of the names below - or the function is on the reviewed list with the reason. The reasons are the 140-use classification of the Q204 report: the accepted SHAPES are
+#   (a) a WRITE route or its helper that looks a subnet up by the id it was given and then asserts access (`assert_subnet_access` / `can_access_subnet` in the same function), the common one;
+#   (b) a route that requires every subnet (`all_subnets`) or is a superadmin's - a whole-config surface (docs/ARCHITECTURE.md §2) - and the helper only such routes call;
+#   (c) a background loop with no principal (alerts, snapshots, the drift alert), whose delivery is the channel's own scope;
+#   (d) the definition (`extensions`, `config.apply`, the `access` helpers) and a lookup by an id the caller already holds.
+S16_SCOPERS = (
+    "filter_subnet_map",
+    "get_accessible_subnet_map",
+    "can_access_subnet",
+    "assert_subnet_access",
+    "assert_subnet6_access",
+    "add_subnet_restriction",
+    "accessible_subnet_ids",
+    "accessible_subnet6_map",
+    "subnet_filter",
+    "all_subnets",
+    "unrestricted",
+    "_api_key_subnet_ids",
+    "_api_scope_allows",
+    "filter_subnet_ids",
+)
+S16_MAPS = ("SUBNET_MAP", "SUBNET6_MAP")
+
+S16_REVIEWED = {
+    ("jen/routes/dashboard.py", "prometheus_metrics"): (
+        "a scrape endpoint has no user: it is authorised by the metrics token or the open flag and emits every subnet by design; who may HOLD the token or set the flag is the scope (Q204 AT1 d: the metrics card and "
+        "`save_metrics_settings` need `all_subnets`), pinned by tests/test_authz_matrix.py::TestTheBranchesRun"
+    ),
+    ("jen/routes/reservations.py", "_address_outside_subnet"): (
+        "a lookup by the subnet id the write route was given; both callers (`add_reservation_post`, `import_reservations`) assert the caller's access to that id first (shape a)"
+    ),
+    ("jen/routes/settings/authoring.py", "_author_kea_subnets_and_db"): (
+        "the starter-config builder of Author Kea Config, a superadmin's whole-config surface (`author_kea_config*` carry `_superadmin_required`, shape b)"
+    ),
+    ("jen/routes/subnets.py", "_finish_windows_import"): (
+        "the last step of the superadmin's import wizard, which writes the whole subnet map it just built (shape b)"
+    ),
+    ("jen/routes/subnets.py", "_class_scope_rows"): (
+        "the 'Applies to' checklist of the class editor, a whole-config surface: its one caller `dhcp_class_edit_page` returns before it unless `_classes_check_access()` (`all_subnets`) holds (shape b)"
+    ),
+    ("jen/routes/subnets.py", "_suggested_subnet_names"): (
+        "the import wizard's name suggestions for the plan being imported, a superadmin's route (shape b)"
+    ),
+    ("jen/routes/users.py", "users"): (
+        "the user administration page lists the subnets an access list can name; `@_superadmin_required` (shape b)"
+    ),
+    (
+        "jen/services/access.py",
+        "paired_v4_id",
+    ): "the definition of the v4/v6 pairing the scoping helpers read (shape d)",
+    ("jen/services/alerts.py", "check_pool_forecast_alerts"): (
+        "the background alert loop: no principal, an alert goes to a channel whose own subnet scope is applied at delivery (shape c)"
+    ),
+    ("jen/services/alerts.py", "take_lease6_snapshot"): "the background snapshot job, no principal (shape c)",
+    ("jen/services/alerts.py", "check_utilization_alerts"): "the background alert loop, no principal (shape c)",
+    ("jen/services/alerts.py", "_end_states_of_departed_subnets"): "the background alert loop, no principal (shape c)",
+    (
+        "jen/services/alerts.py",
+        "_build_daily_summary",
+    ): "the daily summary goes to a channel, whose subnet scope is applied at delivery (shape c)",
+    ("jen/services/alerts.py", "take_lease_snapshot"): "the background snapshot job, no principal (shape c)",
+    ("jen/services/alerts.py", "check_alerts"): "the background alert loop, no principal (shape c)",
+    ("jen/services/config_drift.py", "check_config_drift"): (
+        "one of the four readers Q204 names: reached only through `check_config_drift_route` (needs `all_subnets`), the Health check `_kea_config_drift` (skips for a restricted ctx), the background drift alert "
+        "and the superadmin's support bundle (shape b/c)"
+    ),
+    ("jen/services/health.py", "_subnet_label"): (
+        "a label for a subnet id a capacity check already filtered by `ctx['subnet_filter']` (`pool_exhaustion`, `pool_exhaustion_forecast`) (shape d)"
+    ),
+    ("jen/services/kea6.py", "count_lease6_by_subnet"): (
+        "an aggregate counter whose one caller is the background snapshot job; its `subnet_ids` argument is how a scoped caller would narrow it (shape c)"
+    ),
+    (
+        "jen/services/kea6.py",
+        "count_reservations6_by_subnet",
+    ): "an aggregate counter beside `count_lease6_by_subnet`: the same one caller, the background snapshot job (shape c)",
+    ("jen/services/setup_wizard.py", "discover"): "the first-run setup wizard, a superadmin's (shape b)",
+    ("jen/services/setup_wizard.py", "save_subnets"): "the first-run setup wizard, a superadmin's (shape b)",
+    ("jen/services/setup_wizard.py", "probe_v6"): "the first-run setup wizard, a superadmin's (shape b)",
+    ("jen/services/setup_wizard.py", "enable_v6"): "the first-run setup wizard, a superadmin's (shape b)",
+    (
+        "jen/services/setup_wizard.py",
+        "kea_connected",
+    ): "the first-run setup wizard's progress check, a superadmin's (shape b)",
+    ("jen/services/subnet_context.py", "subnet_context"): (
+        "a lookup by the id the caller holds: the two plugin callers (ipam, network-discovery) reach it through `plugin_helpers.subnet_or_404`, which asserts access (shape d)"
+    ),
+    (
+        "jen/services/support_bundle.py",
+        "_collect_lease_history",
+    ): "the support bundle is a superadmin's download (shape b)",
+}
+
+
+def s16_reads(source, rel="<test>"):
+    """[(module, outermost function, line)] for every READ of SUBNET_MAP / SUBNET6_MAP in `source` that is not in a function mentioning a scoping name."""
+    tree = ast.parse(source)
+    parents = _parents(tree)
+    out = []
+    for node in ast.walk(tree):
+        name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+        if name not in S16_MAPS or isinstance(getattr(node, "ctx", None), ast.Store):
+            continue
+        outer, cur = None, node
+        while cur in parents:
+            cur = parents[cur]
+            if isinstance(cur, ast.FunctionDef | ast.AsyncFunctionDef):
+                outer = cur
+        body = ast.unparse(outer) if outer is not None else ""
+        if any(s in body for s in S16_SCOPERS):
+            continue
+        out.append((rel, outer.name if outer is not None else "<module>", node.lineno))
+    return out
+
+
+def _s16_files():
+    return [p for sub in ("jen", "plugins") for p in sorted((ROOT / sub).rglob("*.py")) if "__pycache__" not in p.parts]
+
+
+class TestS16TheSubnetsThemselvesAreScoped:
+    #: the modules that DEFINE the map or are its single writer: a Store, not a read
+    DEFINITION = ("jen/extensions.py", "jen/config.py")
+
+    def _all(self):
+        found = []
+        for path in _s16_files():
+            rel = path.relative_to(ROOT).as_posix()
+            if rel in self.DEFINITION:
+                continue
+            found += s16_reads(path.read_text(encoding="utf-8"), rel)
+        return found
+
+    def test_every_read_is_scoped_or_reviewed(self):
+        new = [f"{rel}:{line} {fn}" for rel, fn, line in self._all() if (rel, fn) not in S16_REVIEWED]
+        assert not new, (
+            "a read of SUBNET_MAP / SUBNET6_MAP in a function that asks no scoping question (RBAC-005): a subnet's name, CIDR and counts are shown only for the subnets the caller may see. Scope it "
+            "(`current_user.filter_subnet_map`, `can_access_subnet`, `assert_subnet_access`, `add_subnet_restriction`) or add the function to S16_REVIEWED with the reason:\n  "
+            + "\n  ".join(new)
+        )
+
+    def test_the_reviewed_list_names_no_function_that_is_gone_or_now_scoped(self):
+        present = {(rel, fn) for rel, fn, _line in self._all()}
+        stale = sorted(set(S16_REVIEWED) - present)
+        assert not stale, f"S16_REVIEWED names functions that no longer read the map unscoped (remove them): {stale}"
+
+    def test_every_reviewed_function_carries_a_real_reason(self):
+        for key, reason in S16_REVIEWED.items():
+            assert len(reason) > 40 and ("shape" in reason or "scrape" in reason), key
+
+    def test_the_four_readers_Q204_names_are_scoped_or_on_the_list_by_name(self):
+        reviewed_names = {fn for (_rel, fn) in S16_REVIEWED}
+        assert {"check_config_drift", "prometheus_metrics"} <= reviewed_names
+        unscoped = {fn for _rel, fn, _line in self._all()}
+        # `compare_assigned` takes `subnet_filter`; `run_checks` hands the filter to every check and the three that name subnets skip - neither reads the map unscoped
+        assert "compare_assigned" not in unscoped and "_kea_subnets_declared" not in unscoped
+        assert "_kea_config_drift" not in unscoped and "_config_doctor" not in unscoped
+
+    def test_the_sweep_sees_the_reads_it_is_about(self):
+        """The scan is not blind: it finds the iteration, `.items()`, `.get`, subscript and membership shapes in an unscoped function."""
+        for body in (
+            "for k in extensions.SUBNET_MAP: pass",
+            "x = extensions.SUBNET_MAP.items()",
+            "x = extensions.SUBNET_MAP.get(1)",
+            "x = extensions.SUBNET_MAP[1]",
+            "x = 1 in extensions.SUBNET_MAP",
+            "x = len(extensions.SUBNET_MAP)",
+            "x = extensions.SUBNET6_MAP.values()",
+        ):
+            src = f"@bp.route('/x')\n@login_required\ndef planted():\n    {body}\n"
+            assert s16_reads(src, "jen/routes/planted.py") == [("jen/routes/planted.py", "planted", 4)], body
+
+    def test_a_scoped_read_is_not_flagged_and_an_unfiltered_one_planted_in_a_route_is(self):
+        scoped = "@bp.route('/x')\ndef r():\n    m = current_user.filter_subnet_map(extensions.SUBNET_MAP)\n"
+        assert s16_reads(scoped) == []
+        planted = "@bp.route('/x')\n@login_required\ndef r():\n    return jsonify(extensions.SUBNET_MAP)\n"
+        assert [fn for _r, fn, _l in s16_reads(planted)] == ["r"]
+        # and the scan finds it in a file of the real tree's shape: a new unreviewed route is refused by the main test
+        assert ("jen/routes/planted.py", "r") not in S16_REVIEWED

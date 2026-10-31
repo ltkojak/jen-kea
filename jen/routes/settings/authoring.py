@@ -20,6 +20,7 @@ import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
 import jen.services.kea_changeset as __changeset
 import jen.services.kea_host as __host
+import jen.services.kea_tls as __tls
 from jen import extensions
 from jen.config import AppConfig
 from jen.routes.settings import bp
@@ -452,10 +453,11 @@ def _author_kea_config_for(service, server, common, subnets):
         service, ifaces, common["lease_db"], common["control_socket_path"], subnets, api_socket=sock
     )
 
-    tls_paths = []
-    if sock["scheme"] == "https":
-        t = common["tls"]
-        tls_paths = [(t["cert_file"], "file"), (t["key_file"], "file"), (t["trust_anchor"], "dir")]
+    # Q204 AT3: the one definition of which paths a config needs checked is `referenced_tls_paths` - Jen's three files, each a FILE, only when the config names them
+    # (the trust anchor was a "dir" here: the helper checked isdir on Jen's CA file and refused a config a restore of the same text passes). A path that is not Jen's is not Jen's to check.
+    tls_paths = (
+        __authoring.referenced_tls_paths(config, __tls.remote_tls_paths(service)) if sock["scheme"] == "https" else []
+    )
 
     warning = None
     if bind == "0.0.0.0":  # nosec B104 — comparing an operator-chosen value to warn; not a bind Jen performs
@@ -736,6 +738,9 @@ def check_kea_binaries():
 @bp.route("/settings/infrastructure/install-kea-binary/<service>", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(
+    minutes=10, fetch=True
+)  # Q204 AT6: `apt` on every SSH host; the page calls it with jenFetch, so a stale confirmation is a 401 JSON the page follows, not a redirect
 def install_kea_binary(service):
     """
     Installs kea-{dhcp4,dhcp6}-server via apt on every configured

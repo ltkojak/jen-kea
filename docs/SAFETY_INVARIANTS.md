@@ -173,15 +173,18 @@ caller can.
 
 ### RBAC-003 - The settings that decide who the superadmins are, and the restart that applies them, are superadmin and step-up
 **Rule.** Where Jen's own database and Kea's database point, and the restart of Jen, are changed only by a superadmin whose password was confirmed in the last ten minutes: an admin who could
-repoint `[jen_db]` at a database of their own and restart Jen would be whatever role that database says; and who may sign in, and with what role, is the same question (Q203: the `[oidc]` settings - `role_map`, `default_role` which accepts `superadmin`, `auto_create` - are a superadmin's with a recent password, as are the routes that write the Kea host's config file or restart its daemon by a call written in the route, authoring a Kea config, installing the helper, and replacing Jen's only SSH key: one `ast` table over `jen/routes/` asks the direct callers and a named list asks the rest. Two superadmin routes that reach the Kea host carry NO step-up and are pinned and reported, not claimed: `install_kea_binary` (a fetch route) and `toggle_ipv6`). Subnet creation, and the DDNS log and hostname lookup, are for a caller who may see
+repoint `[jen_db]` at a database of their own and restart Jen would be whatever role that database says; and who may sign in, and with what role, is the same question (Q203: the `[oidc]` settings - `role_map`, `default_role` which accepts `superadmin`, `auto_create` - are a superadmin's with a recent password, as are the routes that write the Kea host's config file or restart its daemon by a call written in the route, authoring a Kea config, installing the helper, and replacing Jen's only SSH key: one `ast` walk over `jen/routes/` follows every chain of functions in `jen/` to the five writes (Q204 AT8 a) and a named list asks the rest. Q204: `install_kea_binary` (`apt` on every SSH host; a fetch route, so a stale confirmation is a 401 JSON with `reauth` that `jenFetch` follows - `recent_auth_required(fetch=True)`) and `toggle_ipv6` carry the step-up too, and `KNOWN_OPEN` is empty. The open population is exactly two ADMIN routes, named with their reasons: `restart_kea_server` (the Servers page's operational restart of kea-dhcp4 on its own saved host: it writes no config and chooses no destination - the maintainer's standing decision) and `investigation_logging` (an admin's by Q138/Q167)). Subnet creation, and the DDNS log and hostname lookup, are for a caller who may see
 every subnet (the DDNS Verify tab too: it resolves any name and address through the Jen host). An admin makes the MFA policy stricter and never less strict.
 **Established.** Q171.
-**Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db`, `save_infra_kea6`, `save_oidc`, `generate_ssh_key`, `config_history_restore`, `import_windows_apply`, `author_kea_config_post`, `install_kea_helper` (Q203 AS2) and EVERY route that restarts Jen (Q202 AR6: `restart_jen`, `save_ports`, `upload_cert`, `remove_cert` - the verifier is the `ast` test over every caller of `runtime.restart_service()`); `current_user.all_subnets` in `add_subnet`, `add_subnet_post`,
+**Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db`, `save_infra_kea6`, `save_oidc`, `generate_ssh_key`, `config_history_restore`, `import_windows_apply`, `author_kea_config_post`, `install_kea_helper` (Q203 AS2), `install_kea_binary` and `toggle_ipv6` (Q204 AT6) and EVERY route that restarts Jen (Q202 AR6: `restart_jen`, `save_ports`, `upload_cert`, `remove_cert` - the verifier is the `ast` test over every caller of `runtime.restart_service()`); `current_user.all_subnets` in `add_subnet`, `add_subnet_post`,
 the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_mfa_mode`.
 **Tests.**
 - `tests/test_q171_access.py::TestDatabaseCardsAndRestartAreSuperadminWithStepUp`
 - `tests/test_kea_tls_rotation.py::TestEveryRestartOfJenIsBehindTheOneGate`
 - `tests/test_route_gates.py::TestEveryWriterOfIdentityOrKeaConfigCarriesItsGate`
+- `tests/test_route_gates.py::TestTheWalkIsTransitive`
+- `tests/test_kea_authoring.py::TestTheKeaPackageInstallAsksForARecentPassword`
+- `tests/test_kea6_service_toggle.py::TestTheIpv6ToggleAsksForARecentPassword`
 - `tests/test_config_revisions.py::TestTheRestoreRouteIsHeldToItsSiblingsGate`
 - `tests/test_q174_routes.py::TestOnlyASuperadminReplacesJensSshKey`
 - `tests/test_oidc.py::TestOidcSettingsRoute`
@@ -209,6 +212,21 @@ confirmation made at the start of a request is remembered for its last write (`g
 - `tests/test_kea_connection_forms.py::TestAnAdminsProbeNeverDowngradesTheScheme`
 - `tests/test_same_endpoint.py::TestNoWeakerScheme`
 - `tests/test_credential_destinations.py::TestTheDestinationGuardSeesEveryEndpoint`
+
+### RBAC-005 - The subnets themselves are scoped
+**Rule.** A subnet's id, name, CIDR and counts are shown to an account only for the subnets it may see. RBAC-001 judges the data in a subnet; this judges the subnet: a list of subnets, a row per subnet, a message that
+names one (a drift issue, a doctor finding, an undeclared id) or a scrape that prints every one is a reader of the subnet map, and every reader asks the question (`current_user.filter_subnet_map` / `can_access_subnet`), or is a
+surface that needs every subnet (`all_subnets`: the Doctor, config history, the drift check, the metrics card and its save) or a superadmin's, or is a background job with no principal. A hidden subnet's row is DROPPED, never
+renamed, and never counted into a visible row (Compare Leases). `/metrics` itself is a scrape endpoint authorised by a token and is unchanged: who may HOLD the token or set the open flag is the scope.
+**Established.** Q156 (the About page), Q204 (Compare Leases, three Health checks, the drift route, the metrics settings - Opus's M1-M4 - and the readers the whole-tree sweep found: the OIDC mapping preview on Settings -> Security, the
+D2 tab's reverse-zone hints).
+**Enforced at.** `User.filter_subnet_map` / `can_access_subnet` (`jen/models/user.py`) at each reader: `kea_ha.compare_assigned(servers, subnet_filter=...)`, the `skip` for `not ctx["unrestricted"]` in `health._kea_config_drift`,
+`_kea_subnets_declared` and `_config_doctor`, `current_user.all_subnets` in `check_config_drift_route` and `save_metrics_settings`, and the metrics card's `can_grant_all_subnets`; the whole tree by sweep S16.
+**Tests.**
+- `tests/test_invariant_sweeps.py::TestS16TheSubnetsThemselvesAreScoped`
+- `tests/test_authz_matrix.py::TestTheBranchesRun`
+- `tests/test_ha_console.py::TestCompareLeasesIsScoped`
+- `tests/test_health_center.py::TestTheThreeChecksThatNameSubnetsAreForUnrestrictedAccounts`
 
 ### AUTH-001 - A password change ends every other session of the account
 **Rule.** A session carries a fingerprint of the password hash it was opened under; `load_user` ends the session on its next request when the row's fingerprint is no longer the same, and the session
@@ -330,8 +348,11 @@ fails CLOSED there (a refusal, not a permission). A failed settings read answers
 In `jen/routes/`, the name bound by `except Exception as e` is used only to log or to name its class: the text of a driver, `requests` or SSH error carries URLs with their query strings, account and
 host names and paths. The reviewed list is empty.
 **Established.** Q171 (sweep S11; the older line scanner in `test_no_raw_exception_leaks.py` stays), Q172 (an alert channel's token, webhook URL or password is redacted from `alert_log.error`, the event detail, the log and the test button; a transport error is stored by class).
-**Enforced at.** The route that catches: `logger.exception(...)` and a fixed sentence.
+**Enforced at.** The route that catches: `logger.exception(...)` and a fixed sentence; the two Health runners (`run_checks` and `readiness_checks`, Q204 AT2) log a check's exception through `_log_err` and the row carries `CHECK_ERRORED_DETAIL`; and what a masker hides is decided by ONE definition of a secret key, `jen/services/secret_keys.py::is_secret_key` (Q204 AT4: the config-history diff and download, the authoring preview and the support bundle all ask it).
 **Tests.**
+- `tests/test_health_center.py::TestARunnerNeverShowsWhatACheckRaised`
+- `tests/test_secret_keys.py::TestEveryMaskerUsesIt`
+- `tests/test_secret_keys.py::TestNoSecondKeyListExists`
 - `tests/test_invariant_sweeps.py::TestS11ARouteNeverShowsWhatABroadExceptCaught`
 - `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
 - `tests/test_invariant_sweeps.py::TestS14bAServiceShowsAnAddressByTheHelperToo`

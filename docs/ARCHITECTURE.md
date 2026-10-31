@@ -104,6 +104,10 @@ devices, or anything else tied to a subnet: apply subnet restriction
 there too, even if it feels obviously admin-only. It's the checklist
 item that has actually mattered in practice.
 
+**The subnets themselves are scoped (v5.69.4, Q204, RBAC-005).** A subnet's id, name, CIDR and counts are data too: a list of subnets, a Compare Leases row, a Health message that names one, a drift or Doctor finding, a
+metrics scrape - each is shown only for the subnets the caller may see, through `current_user.filter_subnet_map` / `can_access_subnet`, or it is a WHOLE-CONFIG surface that needs `all_subnets` (the Doctor, config history, the drift
+check, the metrics token and its save) or a superadmin's. A row for a subnet the caller may not see is dropped, never renamed, and never counted into a visible row. Sweep S16 reads every use of the subnet map in the tree.
+
 **IPv6 subnets have no scope of their own: one rule, one place (v5.68.0-beta.8 / Q143).** A user's scope is a list of
 *IPv4* subnet ids, and IPv6 subnet ids are a separate numbering space, so a v6 subnet can only be judged through the v4 subnet
 it is paired with (the third field of a `[subnets6]` line) — never by comparing its own id with that list, which is meaningless

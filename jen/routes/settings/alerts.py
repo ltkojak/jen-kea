@@ -87,7 +87,8 @@ def settings_alerts():
         reserved_lease_mode=reserved_lease_mode,
         subnet_map=accessible_subnet_map,
         can_grant_all_subnets=current_user.all_subnets,
-        metrics_token=cfg.get("server", "metrics_token", fallback="") if cfg else "",
+        # Q204 (RBAC-005): the token is read off this page only by an account that may see every subnet (the template renders the form on the same condition)
+        metrics_token=cfg.get("server", "metrics_token", fallback="") if cfg and current_user.all_subnets else "",
         metrics_open=cfg.getboolean("server", "metrics_open", fallback=False) if cfg else False,
     )
 

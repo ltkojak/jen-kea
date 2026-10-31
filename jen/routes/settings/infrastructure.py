@@ -13,7 +13,7 @@ import subprocess
 import time
 from urllib.parse import urlparse
 
-from flask import flash, jsonify, redirect, render_template, request, url_for
+from flask import abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 import jen.config as __config
@@ -30,6 +30,7 @@ import jen.services.runtime as __runtime
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import diagnostic_surface
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
@@ -441,7 +442,12 @@ def settings_kea():
         https_port=extensions.HTTPS_PORT,
         worker_threads=extensions.WORKER_THREADS,
         ssl_configured=__config.ssl_configured(),
-        metrics_token=extensions.cfg.get("server", "metrics_token", fallback="") if extensions.cfg else "",
+        # Q204 (RBAC-005): the live token is for an account that may see every subnet (no template prints it today; the context does not carry it to a scoped one)
+        metrics_token=(
+            extensions.cfg.get("server", "metrics_token", fallback="")
+            if extensions.cfg and current_user.all_subnets
+            else ""
+        ),
         metrics_open=extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False,
         # v5.66.0-beta.7 (Q109, item b) — the SSH card's own copy box for the by-hand helper
         # install, one source (kea_host._helper_download_command()) with every doc copy and
@@ -1122,14 +1128,9 @@ def _identify_daemon(url, user, pwd, service, verify=None, cert=None):
 def _is_kea_url_shape(url: str) -> bool:
     """`scheme://host:port` and at most a trailing slash: no user-info, path, query or fragment. A candidate URL is probed with Jen's own Kea credentials (v5.69.0-beta.5, Q174),
     so a URL that is anything but where a Kea daemon listens - `http://internal:8080/admin?x=` - is not one to send them to."""
-    from urllib.parse import urlsplit
-
-    try:
-        parts = urlsplit(url)
-        parts.port  # noqa: B018 - raises ValueError for a port that is not a number (`kea:8004;x`)
-        return not (parts.username or parts.password or parts.query or parts.fragment or parts.path not in ("", "/"))
-    except ValueError:
-        return False
+    return __auth.kea_url_shape_ok(
+        url
+    )  # Q204 (AT8 d): the one definition lives in auth, beside the savers that ask it too
 
 
 @bp.route("/settings/infrastructure/probe-kea", methods=["POST"])
@@ -1164,6 +1165,11 @@ def probe_kea():
     attempts = []
 
     service = "dhcp6" if request.form.get("service", "").strip() == "dhcp6" else "dhcp4"
+    if service == "dhcp6" and not __kea6.is_ipv6_enabled():
+        # Q204 (AT8 e): IPv6 is off by default and VERIFIED off - no v6 command fires before the switch is on, a probe of a v6 daemon included
+        return jsonify(
+            {"ok": False, "error": "IPv6 is off - turn it on under Settings → Kea first.", "service": service}
+        ), 400
     raw_id = request.form.get("server_id", "").strip()
     server = None
     if raw_id.isdigit():
@@ -2448,6 +2454,9 @@ def setup_direct_socket(server_id, service):
             f"Use the management IP Jen reaches {name} on.",
             "error",
         )
+        return back
+    if __auth.is_v4_mapped_literal(address):
+        flash(f"{__auth.MAPPED_ADDRESS_SENTENCE} Nothing was changed.", "error")  # Q204 (AT5)
         return back
     if ipaddress.ip_address(address).is_unspecified:
         flash(
@@ -4323,6 +4332,7 @@ def toggle_investigation_logging():
 @bp.route("/settings/infrastructure/toggle-ipv6", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(minutes=10)  # Q204 AT6: it starts or stops the IPv6 daemons over SSH on every host
 def toggle_ipv6():
     """
     v5.0 Phase 1 — the IPv6 enable/disable toggle. Superadmin-gated: unlike
@@ -4388,6 +4398,7 @@ def toggle_ipv6():
 @bp.route("/settings/infrastructure/check-config-drift", methods=["POST"])
 @login_required
 @_admin_required
+@diagnostic_surface(subject="subnet")
 def check_config_drift_route():
     """
     Manual, on-demand check of whether Jen's own subnet map still
@@ -4403,6 +4414,10 @@ def check_config_drift_route():
     """
     from jen.services.config_drift import check_config_drift
 
+    # Q204 (RBAC-005): the answer names subnets by id, name and CIDR over the WHOLE config - a whole-config surface, the Doctor's rule
+    # (docs/ARCHITECTURE.md §2); a hidden subnet's drift is not an oracle (RBAC-002).
+    if not current_user.all_subnets:
+        return jsonify({"ok": False, "error": "Config drift needs access to all subnets."}), 403
     try:
         issues = check_config_drift()
         return jsonify({"ok": True, "issues": issues})
@@ -5301,6 +5316,11 @@ def save_metrics_settings():
     write_values() reloads AppConfig immediately by default — so this
     takes effect on the very next scrape, not after a restart.
     """
+    # Q204 (RBAC-005): /metrics emits every subnet's name, CIDR and counts to whoever holds the token or sees the open flag, so the person who
+    # sets either is an account that may see every subnet.
+    if not current_user.all_subnets:
+        abort(403, description="Metrics settings need access to all subnets.")
+
     metrics_token = request.form.get("metrics_token", "").strip()
     metrics_open = request.form.get("metrics_open", "0") == "1"
 

@@ -254,6 +254,9 @@ class CaDamaged(Exception):
         self.why = why
 
 
+MAPPED_ADDRESS_WHY = "an IPv4-mapped IPv6 address is a different name from the IPv4 address it wraps, so a certificate for it is accepted by no client that dials the other spelling"
+
+
 class NameRefused(Exception):
     """Q197 (AM2): Jen's CA is HEALTHY - the verifier accepts what it issues in general - but it cannot issue a certificate for THIS name (a name constraint that does not permit the address, a host name
     the verifier's DNS parser does not accept). Distinct from `CaDamaged` on purpose: the damaged-CA sentences send the operator to an acknowledgement for a CA that is not damaged. `.why` is the
@@ -946,6 +949,10 @@ def _san_for(value: str):
     value = (value or "").strip()
     if not value:
         return None
+    from jen.services.auth import is_v4_mapped_literal
+
+    if is_v4_mapped_literal(value):
+        return None  # Q204 (AT5): no SAN for a spelling a client that dials the plain address refuses; `issue_server_cert` refuses the name before it gets here
     try:
         return x509.IPAddress(ipaddress.ip_address(value))
     except ValueError:
@@ -1009,7 +1016,11 @@ def verifier_accepts_name(host: str) -> bool:
     if not host:
         return False
     if _is_ip(host.strip("[]")):
-        return True
+        from jen.services.auth import is_v4_mapped_literal
+
+        return not is_v4_mapped_literal(
+            host
+        )  # Q204 (AT5): the mapped spelling is an address the verifier parses, but no certificate for it is accepted by a client dialling the IPv4 address (and the reverse)
     if not host.isascii():
         # (Q198 AN5; Q199 AO4) a name with non-ASCII letters is carried in a certificate as its A-label (punycode, IDNA 2008 as `requests` dials it); the verifier is asked about THAT
         from jen.services.auth import idna_a_label
@@ -1201,6 +1212,12 @@ def issue_server_cert(
     {"ca.crt": pem, "server.crt": pem, "server.key": pem} (all str)."""
     if not _is_ip_literal(bind_address):
         raise BindNotAnAddress(bind_address)
+    from jen.services.auth import is_v4_mapped_literal
+
+    mapped = [str(c).strip() for c in (bind_address, server.get("ssh_host", "")) if is_v4_mapped_literal(c)]
+    if mapped:
+        # Q204 (AT5): the setup, a rotation and a recovery all pass through here; a record saved before this release with a mapped spelling is refused, never silently re-issued
+        raise NameRefused(MAPPED_ADDRESS_WHY, mapped)
     ca_cert, ca_key = (load_cert(ca[0]), load_key(ca[1])) if ca else _load_ca()
     key = _new_key()
     sans, seen = [], set()
@@ -1853,15 +1870,35 @@ def _strip_scope(name: str) -> str:
     return n
 
 
-def names_match(a: str, b: str) -> bool:
-    """Do two names a record compares (the configured SSH host or address and a certificate's name) name the same place: identical text, or `same_host` (no DNS, a dot is a different name) after a scope is
-    dropped."""
-    from jen.services.auth import same_host
+def _ip_address_or_none(name: str):
+    try:
+        return ipaddress.ip_address(name.strip().strip("[]"))
+    except ValueError:
+        return None
 
+
+def _dns_key(name: str) -> str:
+    """A DNS name as a certificate carries and a client compares it: the A-label, lower case. A trailing dot is part of it (`kea-a.` is not `kea-a`)."""
+    name = name.strip()
+    if not name.isascii():
+        from jen.services.auth import idna_a_label
+
+        name = idna_a_label(name) or name
+    return name.lower()
+
+
+def names_match(a: str, b: str) -> bool:
+    """Do two names a record compares (the configured SSH host or address and a certificate's name) name the same place AS A TLS VERIFIER JUDGES A NAME (Q204 AT5): two IP literals are the same address
+    (`[fd00::5]` is `FD00:0:0:0:0:0:0:5`; an interface scope is dropped first - a certificate cannot carry one), two DNS names are the same when their A-labels are equal ignoring case (`kea-a.` is not
+    `kea-a`), and an IPv4-mapped IPv6 address is NOT the IPv4 address it wraps. Never `same_host`: that is the credential rule's "same place for a secret" (Q188 AD9, where the two spellings are one place) and
+    no verifier folds them - SAN `::ffff:a00:9` against the dial host `10.0.0.9` is refused by `openssl -checkip` and urllib3, both directions."""
     a, b = _strip_scope(a), _strip_scope(b)
     if not a or not b:
         return False  # (Q202 AR9 i: two empty names are no name, never "the same place")
-    return a == b or same_host(a, b)
+    ip_a, ip_b = _ip_address_or_none(a), _ip_address_or_none(b)
+    if ip_a is not None or ip_b is not None:
+        return ip_a is not None and ip_b is not None and ip_a == ip_b
+    return a == b or _dns_key(a) == _dns_key(b)
 
 
 def _certificate_roles(cert) -> tuple:
@@ -1885,14 +1922,17 @@ def _certificate_names(cert) -> list:
     names = []
     for g in sans:
         if isinstance(g, x509.DNSName):
-            if str(g.value).strip(" .*"):  # (second pass G3: a name of only spaces, dots and stars is no name either)
-                names.append(str(g.value))
+            value = str(g.value)
+            # (Q204 AT5 b, replacing the second pass's G3 character test) a DNS name is kept when the verifier's own parser accepts it - no character set: an empty name, a tab, a NUL, a label over 63
+            # characters, spaces at the edge are not names a certificate Jen issues carries; and a wildcard is the one shape Jen never issues, whatever the parser says
+            if value == value.strip() and "*" not in value and verifier_accepts_name(value):
+                names.append(value)
         elif isinstance(g, x509.IPAddress) and isinstance(g.value, ipaddress.IPv4Address | ipaddress.IPv6Address):
             names.append(str(g.value))
     return names
 
 
-def _names_nothing(cert) -> str:
+def _names_nothing_sentence(cert) -> str:
     """Q202 (AR2): the sentence for a Jen-signed certificate that names no address and no machine - no SAN extension, a SAN extension with no DNS or IP name (an e-mail or URI name only), or a SAN
     extension that does not parse. Jen's issuer always writes at least the bind address, so such a record was placed by hand, restored from elsewhere or damaged; it proves nothing about which daemon
     it was installed on, and a role is never judged "fine" because there is nothing to compare."""
@@ -1922,7 +1962,7 @@ def ssh_host_refusal(cert, server) -> str:
     ssh = ((server or {}).get("ssh_host") or "").strip()
     _bind_name, ssh_name = _certificate_roles(cert)
     if ssh and ssh_name is None:
-        return _names_nothing(cert)  # (Q202 AR2: the absence of evidence is never evidence)
+        return _names_nothing_sentence(cert)  # (Q202 AR2: the absence of evidence is never evidence)
     if not ssh or names_match(ssh_name, ssh):  # (identical text is one name whether or not `same_host` can parse it)
         return ""
     return (
@@ -2011,7 +2051,7 @@ def _destination_refusal(cert, server, url) -> str:
     except ValueError:
         url_host = ""
     if url_host and bind_name is None:
-        return _names_nothing(cert)  # (Q202 AR2)
+        return _names_nothing_sentence(cert)  # (Q202 AR2)
     if url_host and not any(names_match(name, url_host) for name in _certificate_names(cert)):
         # (Q202 AR5: the URL half is judged as the TLS stack judges it - ANY name the certificate carries is a name it answers to; the SSH half above stays all of its own, the LAST name)
         also = f" (and {ssh_name} as the machine it was installed on)" if ssh_name != bind_name else ""

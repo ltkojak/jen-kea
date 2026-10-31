@@ -156,12 +156,18 @@ def partner_name(cfg: dict) -> str | None:
     return others[0] if len(others) == 1 else None
 
 
-def compare_assigned(servers: list[dict]) -> list[dict]:
+def compare_assigned(servers: list[dict], subnet_filter=lambda _sid: True) -> list[dict]:
     """Side-by-side `assigned-addresses` per subnet, one row per subnet
     id reported by ANY server, counts keyed by server name. `mismatch`
     flags real disagreement between servers — expected to be zero, or a
     small transient difference is normal for a moment under
-    load-balancing, never a hard failure on its own."""
+    load-balancing, never a hard failure on its own.
+
+    Q204 (RBAC-005): a subnet's name and counts are shown only to an
+    account that may see that subnet. `subnet_filter(subnet_id)` is that
+    question (the route passes `current_user.can_access_subnet`); a row it
+    refuses is DROPPED - never renamed, and never a part of a visible
+    row's answer (a hidden object does not influence a visible one)."""
     from jen import extensions
     from jen.services import kea as __kea
 
@@ -181,7 +187,8 @@ def compare_assigned(servers: list[dict]) -> list[dict]:
                 counts[sid] = int(samples[0][0])
             except (TypeError, IndexError, ValueError):
                 counts[sid] = 0
-            subnet_ids.add(sid)
+            if subnet_filter(sid):
+                subnet_ids.add(sid)
         per_server[name] = counts
 
     rows = []

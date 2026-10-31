@@ -151,11 +151,15 @@ def _reauth_return_target() -> str:
     return _same_origin_path(request.referrer) or url_for("mfa_routes.mfa_enroll")
 
 
-def step_up_redirect(minutes: int = 10):
+def step_up_redirect(minutes: int = 10, fetch: bool = False):
     """None when this request may go on - the session confirmed its password within `minutes` (or is not a signed-in session at all: the route's own login logic handles that) -
     else the redirect that sends the person to confirm. A route that must check INSIDE its body (the setup wizard's POST branches: its GET steps need no confirmation) calls this;
     `recent_auth_required` is the same check as a decorator. A pass is remembered on the request (`g.reauth_ok_minutes`), so a guard asked later in the SAME request (the config
-    writer's, RBAC-004) does not ask again after the route has already acted on a Kea host - a second ask after a remote change would leave it half done (Q179, second pass)."""
+    writer's, RBAC-004) does not ask again after the route has already acted on a Kea host - a second ask after a remote change would leave it half done (Q179, second pass).
+
+    `fetch=True` (Q204 AT6) is for a route the page calls with `jenFetch`: a redirect would be followed by the fetch into an HTML page, so the answer is 401 JSON
+    `{"ok": false, "error": ..., "reauth": <the confirmation page>}` and `jenFetch` (templates/base.html) navigates to it once. Either way the work does not start and the body is
+    not replayed after the confirmation - the person clicks again."""
     from flask import g
 
     if not current_user.is_authenticated:
@@ -166,21 +170,29 @@ def step_up_redirect(minutes: int = 10):
     session["reauth_next"] = _reauth_return_target()
     from jen.services import oidc as _oidc
 
-    if _oidc.is_oidc_user(current_user.id):
-        flash("Confirm your identity with your sign-on provider to continue.", "warning")
-        return redirect(url_for("auth.reauth_oidc"))
-    flash("Confirm your password to continue.", "warning")
-    return redirect(url_for("auth.reauth"))
+    oidc_user = _oidc.is_oidc_user(current_user.id)
+    target = url_for("auth.reauth_oidc") if oidc_user else url_for("auth.reauth")
+    message = (
+        "Confirm your identity with your sign-on provider to continue."
+        if oidc_user
+        else "Confirm your password to continue."
+    )
+    flash(message, "warning")  # (a fetch's flash is shown on the confirmation page the answer sends the person to)
+    if fetch:
+        from flask import jsonify
+
+        return jsonify({"ok": False, "error": message, "reauth": target}), 401
+    return redirect(target)
 
 
-def recent_auth_required(minutes: int = 10):
+def recent_auth_required(minutes: int = 10, fetch: bool = False):
     def deco(f):
         @wraps(f)
         def decorated(*args, **kwargs):
             # Not a Flask-Login session yet (forced MFA enrollment) or not
             # logged in at all — the route's own @login_required / pending
             # logic handles that; nothing to step up.
-            stepped = step_up_redirect(minutes)
+            stepped = step_up_redirect(minutes, fetch=fetch)
             if stepped is not None:
                 return stepped
             return f(*args, **kwargs)

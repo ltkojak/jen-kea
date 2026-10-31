@@ -892,20 +892,25 @@ class TestAuthorKeaConfigPreviewRoute:
         self._direct_setup(
             monkeypatch,
             [srv],
-            {"s1": FakeSSHClient([('{"ok": false, "error": "tlsmissing", "path": "/etc/kea/tls/s.key"}', "")])},
+            {
+                "s1": FakeSSHClient(
+                    [('{"ok": false, "error": "tlsmissing", "path": "/etc/kea/tls/dhcp4/server.key"}', "")]
+                )
+            },
         )
+        # Q204 AT3: the preflight checks Jen's own three files (as FILES), so the form names them; a path that is not Jen's is not passed to the helper at all
         data = logged_in_client.post(
             "/settings/infrastructure/author-kea/dhcp4/preview",
             data=self._direct_form(
-                tls_cert_file="/etc/kea/tls/s.crt",
-                tls_key_file="/etc/kea/tls/s.key",
-                tls_trust_anchor="/etc/kea/tls/ca.crt",
+                tls_cert_file="/etc/kea/tls/dhcp4/server.crt",
+                tls_key_file="/etc/kea/tls/dhcp4/server.key",
+                tls_trust_anchor="/etc/kea/tls/dhcp4/ca.crt",
             ),
         ).get_json()
         assert data["servers"][0]["ok"] is False
         assert "TLS file not found" in data["servers"][0]["message"]
         https = next(s for s in data["servers"][0]["config"]["Dhcp4"]["control-sockets"] if s["socket-type"] == "https")
-        assert https["cert-file"] == "/etc/kea/tls/s.crt"
+        assert https["cert-file"] == "/etc/kea/tls/dhcp4/server.crt"
 
     def test_direct_preview_never_leaks_a_password_to_the_browser(self, logged_in_client, monkeypatch):
         srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004", "api_pass": "s3cretsock"}
@@ -1926,6 +1931,8 @@ class TestReferencedTlsPaths:
             "/etc/kea/tls/dhcp4/../dhcp4/ca.crt",
             "/etc/kea/tls/dhcp4//ca.crt",
             "/etc/kea/tls//dhcp4/./ca.crt",
+            "//etc/kea/tls/dhcp4/ca.crt",  # Q204 AT8 c: POSIX keeps exactly two leading slashes in normpath; Linux resolves them to one
+            "///etc/kea/tls/dhcp4/ca.crt",
         ],
     )
     def test_a_path_spelled_with_dots_or_double_slashes_is_still_a_reference(self, spelling):
@@ -1940,3 +1947,199 @@ class TestReferencedTlsPaths:
 
         cfg = {"Dhcp4": {"control-socket": {"trust-anchor": "/etc/kea/tls/dhcp6/ca.crt"}}}
         assert referenced_tls_paths(cfg, self.TLS) == []
+
+
+class TestOneDefinitionOfAConfigsTlsPaths:
+    """Q204 AT3 (M6): authoring declared Kea's trust anchor `(path, "dir")` while the setup and the restore declared the same key `"file"`; the helper checks `isdir` for `"dir"`, so an authored https config
+    whose trust anchor is Jen's CA FILE was refused (`tlsmissing`) while a restore of the same text passed. ONE definition: `referenced_tls_paths(cfg, kea_tls.remote_tls_paths(service))`."""
+
+    @staticmethod
+    def _authored(monkeypatch, tls):
+        from jen.routes.settings import authoring as a
+
+        sock = {"scheme": "https", "port": 8004, "user": "u", "password": "p", "endpoint_host": "10.0.0.5", "tls": tls}
+        monkeypatch.setattr(a, "_direct_control_socket", lambda service, server, form_tls: (dict(sock), None))
+        monkeypatch.setattr(getattr(a, "__caps"), "is_direct", lambda: True)
+        common = {
+            "interfaces": ["eth0"],
+            "interfaces_by_server": {},
+            "control_socket_path": "/run/kea/kea4-ctrl-socket",
+            "bind_addresses": {1: "10.0.0.5"},
+            "tls": tls,
+            "lease_db": {"host": "h", "user": "u", "name": "kea", "password": "p"},
+        }
+        server = {"id": 1, "name": "s1", "ssh_host": "10.0.0.5"}
+        return a._author_kea_config_for("dhcp4", server, common, {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
+
+    def test_authoring_passes_three_file_entries_for_jens_own_files(self, monkeypatch):
+        from jen.services import kea_tls
+
+        jens = kea_tls.remote_tls_paths("dhcp4")
+        config, tls_paths, _warning, err = self._authored(monkeypatch, jens)
+        assert err is None
+        assert tls_paths == [
+            (jens["trust_anchor"], "file"),
+            (jens["cert_file"], "file"),
+            (jens["key_file"], "file"),
+        ]
+        https = next(s for s in config["Dhcp4"]["control-sockets"] if s["socket-type"] == "https")
+        assert https["trust-anchor"] == jens["trust_anchor"]
+
+    def test_a_path_that_is_not_jens_is_not_passed(self, monkeypatch):
+        mine = {
+            "trust_anchor": "/etc/kea/tls/mine/ca.crt",
+            "cert_file": "/etc/kea/tls/mine/server.crt",
+            "key_file": "/etc/kea/tls/mine/server.key",
+            "cert_required": True,
+        }
+        _config, tls_paths, _warning, err = self._authored(monkeypatch, mine)
+        assert err is None and tls_paths == [], "a path that is not Jen's is not Jen's to check"
+
+    def test_an_http_socket_passes_none(self, monkeypatch):
+        from jen.routes.settings import authoring as a
+
+        monkeypatch.setattr(
+            a,
+            "_direct_control_socket",
+            lambda service, server, form_tls: (
+                {
+                    "scheme": "http",
+                    "port": 8004,
+                    "user": "u",
+                    "password": "p",
+                    "endpoint_host": "10.0.0.5",
+                    "tls": None,
+                },
+                None,
+            ),
+        )
+        monkeypatch.setattr(getattr(a, "__caps"), "is_direct", lambda: True)
+        common = {
+            "interfaces": ["eth0"],
+            "interfaces_by_server": {},
+            "control_socket_path": "/run/kea/s",
+            "bind_addresses": {1: "10.0.0.5"},
+            "tls": None,
+            "lease_db": {"host": "h", "user": "u", "name": "kea", "password": "p"},
+        }
+        out = a._author_kea_config_for("dhcp4", {"id": 1, "name": "s1", "ssh_host": "10.0.0.5"}, common, {})
+        assert out[1] == []
+
+    def test_no_tls_paths_literal_in_jen_carries_dir(self):
+        """The helper keeps its `"dir"` kind for a future caller; nothing in `jen/` passes it."""
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted((root / "jen").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Tuple | ast.List) and len(node.elts) == 2:
+                    kind = node.elts[1]
+                    if (
+                        isinstance(kind, ast.Constant)
+                        and kind.value == "dir"
+                        and not isinstance(node.elts[0], ast.Constant)
+                    ):
+                        offenders.append(f"{path.name}:{node.lineno}")
+        assert not offenders, offenders
+
+    def test_the_three_call_sites_are_read_by_one_test(self):
+        """The setup (a literal of three `"file"` entries), the restore and authoring (both `referenced_tls_paths`) - one definition of the kind."""
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        infra = (root / "jen/routes/settings/infrastructure.py").read_text(encoding="utf-8")
+        setup = re.search(
+            r"tls_paths = \[\((remote\[.*?\]), \"file\"\), \((remote\[.*?\]), \"file\"\), \((remote\[.*?\]), \"file\"\)\]",
+            infra,
+        )
+        assert setup, "the setup's literal is three file entries"
+        for rel in ("jen/routes/servers.py", "jen/routes/settings/authoring.py"):
+            assert "referenced_tls_paths(" in (root / rel).read_text(encoding="utf-8"), rel
+
+
+class TestTheKeaPackageInstallAsksForARecentPassword:
+    """Q204 AT6 (the review's item 1): `install_kea_binary` runs `apt` with sudo on every SSH host; it was a superadmin's with no recent-password gate (pinned in KNOWN_OPEN). It is called by `jenFetch`, so
+    a stale confirmation answers 401 JSON carrying `reauth`, never a redirect the fetch would follow into an HTML page."""
+
+    @staticmethod
+    def _stub(monkeypatch):
+        from jen.services import kea_host
+
+        calls = []
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "theelders", "ssh_host": "1.2.3.4"}])
+        monkeypatch.setattr(
+            kea_host,
+            "install_package",
+            lambda server, service: calls.append((server["name"], service)) or {"ok": True, "output": "done"},
+        )
+        return calls
+
+    @staticmethod
+    def _stale(client):
+        from datetime import datetime, timedelta, timezone
+
+        with client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+
+    def test_an_admin_is_refused_and_nothing_is_installed(self, client, db, monkeypatch):
+        from tests.conftest import restricted_client
+
+        calls = self._stub(monkeypatch)
+        c, _uid = restricted_client(client, db, allowed_subnets=None, role="admin", username="q204_install_admin")
+        r = c.post("/settings/infrastructure/install-kea-binary/dhcp4", follow_redirects=False)
+        assert r.status_code in (302, 403)
+        assert calls == []
+
+    def test_a_stale_superadmin_gets_401_json_with_reauth_and_nothing_is_installed(self, logged_in_client, monkeypatch):
+        calls = self._stub(monkeypatch)
+        self._stale(logged_in_client)
+        r = logged_in_client.post(
+            "/settings/infrastructure/install-kea-binary/dhcp4", headers={"Referer": "http://localhost/settings/kea"}
+        )
+        assert r.status_code == 401
+        data = r.get_json()
+        assert data["ok"] is False and "password" in data["error"].lower()
+        assert data["reauth"].endswith("/auth/reauth")
+        assert calls == []
+        with logged_in_client.session_transaction() as sess:
+            assert sess.get("reauth_next") == "/settings/kea"
+
+    def test_a_recent_confirmation_installs_and_the_answer_shape_is_unchanged(self, logged_in_client, monkeypatch):
+        calls = self._stub(monkeypatch)
+        r = logged_in_client.post("/settings/infrastructure/install-kea-binary/dhcp4")
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data == {"ok": True, "servers": [{"name": "theelders", "ok": True, "output": "done"}]}
+        assert calls == [("theelders", "dhcp4")]
+
+    def test_a_partial_failure_is_reported_as_before(self, logged_in_client, monkeypatch):
+        from jen.services import kea_host
+
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "a", "ssh_host": "1.1.1.1"}, {"id": 2, "name": "b", "ssh_host": "2.2.2.2"}],
+        )
+        monkeypatch.setattr(
+            kea_host, "install_package", lambda server, service: {"ok": server["name"] == "a", "output": server["name"]}
+        )
+        data = logged_in_client.post("/settings/infrastructure/install-kea-binary/dhcp6").get_json()
+        assert data["ok"] is False and [s["ok"] for s in data["servers"]] == [True, False]
+
+    def test_jenfetch_follows_a_401_reauth_once_and_in_one_place(self):
+        """A source row: `base.html`'s `jenFetch` navigates to the `reauth` URL of a 401 JSON, once (a flag), and nowhere else in `templates/` does."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        base = (root / "templates/base.html").read_text(encoding="utf-8")
+        assert base.count("d.reauth") >= 1 and base.count("window.location.assign(d.reauth)") == 1
+        assert "reauthing" in base
+        others = [
+            p.name
+            for p in (root / "templates").glob("*.html")
+            if p.name != "base.html" and "window.location.assign(d.reauth)" in p.read_text(encoding="utf-8")
+        ]
+        assert not others, others

@@ -2584,7 +2584,8 @@ def q198_an1_a_refusal_changes_nothing_for_a_target_it_never_touched():
             inspect.unwrap(infra.rotate_kea_ca)()
         after = {sid: snapshot(sid) for sid in (1, 2)}
         return (
-            any("the CA cannot issue its certificate for kea_host" in f for f in flashes),
+            # (Q204 AT5 b: the record's certificate names only 10.0.0.6 now - `kea_host` is no name the verifier's parser accepts - so Rotate is refused by the record check before the name is tried)
+            any("Rotate refused" in f and "kea_host" in f for f in flashes),
             before[1] == after[1],
             before[2] == after[2],
             os.path.exists(kea_tls.server_copy_path(1, "dhcp4") + ".prev"),
@@ -3471,7 +3472,11 @@ EXPECTED = {
         "distinct hosts": (2, 0, False),
         "same host and service": (2, 1, False),
         "same host spelled two ways": (2, 1, True),
-        "a trailing dot is a different name": (2, 0, False),
+        "a trailing dot is a different name": (
+            1,
+            0,
+            False,
+        ),  # Q204 AT5 b: one target (the `kea-a.` record's certificate names only its bind address), still no duplicate
         "dhcp4 and dhcp6 on one host": (2, 0, False),
     },
     "q195_ak1_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_identity": {

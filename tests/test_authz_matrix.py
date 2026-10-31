@@ -24,6 +24,7 @@ import ast
 import glob
 import hashlib
 import json
+import pathlib
 import re
 
 import pytest
@@ -142,7 +143,73 @@ def seeded(db, mock_kea, monkeypatch):
         "dns_reconcile_last",
         json.dumps({"ts": "2026-09-20T00:00:00+00:00", "total": 4242, "verdicts": {"ok": 4200, "wrong-ptr": 42}}),
     )
-    monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+    # Q204 (AT1 i): the branches the matrix could not reach are seeded. `/servers` renders the Compare Leases card only when there is more than one server, one of them reports HA status and
+    # `statistic-get-all` answers; `/health-center/data` names a subnet only when the live config does. A row that passes with its branch never executed proves nothing (Opus's M1: the
+    # `/servers` row was green while the card leaked every subnet's name). Subnet B disagrees between the two servers (5 vs 9), subnet A does not (3 and 3).
+    from jen.services import kea as kea_svc
+
+    two_servers = [
+        {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "role": "primary"},
+        {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6", "role": "standby"},
+    ]
+    monkeypatch.setattr(extensions, "KEA_SERVERS", two_servers)
+    stamp = "2026-10-31 00:00:00.000000"
+
+    def _kea_answer(command, *args, **kw):
+        server = kw.get("server") or {}
+        if command == "statistic-get-all":
+            b_count = 5 if server.get("id") == 1 else 9
+            return {
+                "result": 0,
+                "arguments": {
+                    "subnet[1].assigned-addresses": [[3, stamp]],
+                    "subnet[2].assigned-addresses": [[b_count, stamp]],
+                },
+            }
+        if command == "status-get":
+            return {
+                "result": 0,
+                "arguments": {
+                    "high-availability": [
+                        {
+                            "ha-servers": {
+                                "local": {"role": server.get("role"), "state": "hot-standby", "scopes": []},
+                                "remote": {
+                                    "role": "standby",
+                                    "last-state": "hot-standby",
+                                    "last-scopes": [],
+                                    "in-touch": True,
+                                },
+                            }
+                        }
+                    ]
+                },
+            }
+        if command == "config-get":
+            # Kea's live config: subnet 1 is A's; subnet 7 is NOT in Jen's map and sits in B's address space with a pool outside it - so the drift check names B (Jen's subnet 2 is missing from Kea) and the
+            # doctor names B's CIDR; the declared check prints the ids
+            return {
+                "result": 0,
+                "arguments": {
+                    "Dhcp4": {
+                        "subnet4": [
+                            {"id": 1, "subnet": "10.98.1.0/24", "pools": [{"pool": "10.98.1.10 - 10.98.1.200"}]},
+                            {"id": 7, "subnet": "10.77.0.0/25", "pools": [{"pool": "10.77.0.5 - 10.77.1.9"}]},
+                        ]
+                    }
+                },
+            }
+        return {"result": 0, "text": "mocked", "arguments": {"subnet4": [], "Dhcp4": {}, "hosts": []}}
+
+    monkeypatch.setattr(kea_svc, "kea_command", _kea_answer)
+    monkeypatch.setattr(
+        kea_svc,
+        "get_all_server_status",
+        lambda: [
+            {"server": s, "up": True, "ha_state": "hot-standby", "version": "3.0.5", "role": s["role"]}
+            for s in two_servers
+        ],
+    )
     log = [
         f"2026-09-20 10:00:00.100 INFO  [kea-dhcp4.leases/1] DHCP4_LEASE_ALLOC [hwtype=1 {B_MAC}]: "
         f"lease {B_LEASE_IP} has been allocated for 3600 seconds ({B_HOST})"
@@ -288,6 +355,15 @@ SURFACES = [
         "/health-center/data",
         None,
         {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
+        # Q204 (AT1 c): the drift check names subnets by id, name and CIDR over the WHOLE config - a whole-config surface, the Doctor's rule
+        "config drift check",
+        "POST",
+        "/settings/infrastructure/check-config-drift",
+        None,
+        {"viewer_A": {302, 403}, "admin_A": {403}, "admin_all": {200}, "superadmin": {200}},
         (),
     ),
     (
@@ -585,6 +661,112 @@ class TestFixtureIsReal:
         assert_no_marker(f"<input value='{B_MAC}'>", ignore=(B_MAC,))  # an echoed input is fine
 
 
+class TestTheBranchesRun:
+    """Q204 (AT1 i): the matrix rows above for `/servers`, `/health-center/data` and the drift check pass for a restricted caller only if the BRANCH that names a subnet ran. The unrestricted caller's
+    body carries the marker - so the absence of it from a restricted body is a fact about the filter, not about a branch that never executed (Opus's M1/M2: the `/servers` row was green while the
+    Compare Leases card was never rendered)."""
+
+    @staticmethod
+    def _checks(client):
+        return {c["id"]: c for c in client.get("/health-center/data").get_json()["checks"]}
+
+    def test_the_compare_leases_card_runs_and_names_b_for_an_unrestricted_caller(self, client, db, seeded):
+        _caller(client, db, "admin_all")
+        body = client.get("/servers").data.decode()
+        assert "Compare Leases" in body, "the card did not render: the branch the row exists to test did not run"
+        card = body[body.index("Compare Leases") :]
+        assert B_NAME in card and "Alpha-A" in card
+        assert "mismatch" in card  # B disagrees between the two servers (5 vs 9)
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    def test_a_restricted_caller_sees_the_card_with_their_own_subnet_only(self, client, db, seeded, role):
+        _caller(client, db, role)
+        body = client.get("/servers").data.decode()
+        assert "Compare Leases" in body, "the card is not there: the row would pass with the branch unexecuted"
+        card = body[body.index("Compare Leases") :]
+        assert "Alpha-A" in card
+        assert_no_marker(body)
+        assert "mismatch" not in card, (
+            "B's disagreement flagged A's row (or a row of its own): a hidden object influenced a visible answer"
+        )
+
+    def test_health_names_b_for_an_unrestricted_caller_and_skips_for_a_restricted_one(self, client, db, seeded):
+        _caller(client, db, "admin_all")
+        checks = self._checks(client)
+        blob = json.dumps(checks)
+        assert B_NAME in checks["kea_config_drift"]["detail"], checks["kea_config_drift"]
+        assert "10.77.0." in checks["config_doctor"]["detail"], checks["config_doctor"]
+        assert "7" in checks["kea_subnets_declared"]["detail"]
+        assert B_NAME in blob
+        for role in ("viewer_A", "admin_A"):
+            _caller(client, db, role)
+            restricted = self._checks(client)
+            for cid in ("kea_config_drift", "kea_subnets_declared", "config_doctor"):
+                assert restricted[cid]["status"] == "skip", (role, cid, restricted[cid])
+                assert restricted[cid]["detail"] == "fleet-wide summary is for unrestricted accounts", (role, cid)
+            assert_no_marker(json.dumps(restricted))
+
+    def test_the_drift_check_answers_the_issue_to_an_unrestricted_admin_and_refuses_a_scoped_one(
+        self, client, db, seeded
+    ):
+        _caller(client, db, "admin_all")
+        r = client.post("/settings/infrastructure/check-config-drift")
+        assert r.status_code == 200
+        issues = r.get_json()["issues"]
+        assert any(B_NAME in i["message"] for i in issues), issues
+        _caller(client, db, "admin_A")
+        r = client.post("/settings/infrastructure/check-config-drift")
+        assert r.status_code == 403
+        assert r.get_json()["ok"] is False
+        assert_no_marker(r.data)
+
+    def test_the_metrics_token_is_not_on_a_scoped_admins_page_and_the_save_is_refused(self, client, db, seeded):
+        from jen import config as jen_config
+
+        _caller(client, db, "admin_all")
+        token = "q204-metrics-token-sentinel"
+        r = client.post(
+            "/settings/save-metrics", data={"metrics_token": token, "metrics_open": ""}, follow_redirects=True
+        )
+        assert r.status_code == 200
+        page = client.get("/settings/alerts").data.decode()
+        assert "metrics-token-input" in page and token in page, "the unrestricted admin's card did not render"
+        try:
+            for role in ("admin_A",):
+                _caller(client, db, role)
+                scoped = client.get("/settings/alerts").data.decode()
+                assert "metrics-token-input" not in scoped and token not in scoped
+                before = pathlib.Path(jen_config.app_config.path).read_bytes()
+                r = client.post(
+                    "/settings/save-metrics", data={"metrics_token": "another-token-123", "metrics_open": "1"}
+                )
+                assert r.status_code == 403
+                assert pathlib.Path(jen_config.app_config.path).read_bytes() == before, (
+                    "a refused save changed jen.config"
+                )
+                assert extensions.cfg.get("server", "metrics_token", fallback="") == token
+                assert extensions.cfg.getboolean("server", "metrics_open", fallback=False) is False
+        finally:
+            self._close_the_scrape()
+
+    @staticmethod
+    def _close_the_scrape():
+        """jen.config is a real file that outlives the test: put the metrics settings back to closed."""
+        from jen import config as jen_config
+
+        jen_config.app_config.write_values([("server", "metrics_token", ""), ("server", "metrics_open", "false")])
+
+    def test_the_scrape_itself_is_unchanged(self, client, db, seeded):
+        """`/metrics` has no user: the token (or the flag) decides. Nothing about it moved - who may HOLD the token did."""
+        _caller(client, db, "admin_all")
+        client.post("/settings/save-metrics", data={"metrics_token": "q204-scrape-token-1"})
+        try:
+            r = client.get("/metrics", headers={"Authorization": "Bearer q204-scrape-token-1"})
+            assert r.status_code == 200 and B_NAME in r.get_data(as_text=True)
+        finally:
+            self._close_the_scrape()
+
+
 # ── v5.62.1 (Q81) — SURFACES above and access.DIAGNOSTIC_SURFACES must name
 # the same routes, in both directions, so a new diagnostic route can't ship
 # without a matrix row, and a stale row can't outlive its route. ───────────
@@ -648,7 +830,10 @@ ROUTE_ALLOWLIST = {
     "dashboard.api_top_devices": "top-N aggregate, subnet-filtered — tests/test_dashboard.py",
     "dashboard.api_alert_summary": "aggregate counts, subnet-filtered — tests/test_dashboard.py",
     "dashboard.api_recent_leases": "recent-N aggregate, subnet-filtered — tests/test_dashboard.py",
-    "dashboard.prometheus_metrics": "scrape endpoint, aggregate counts only, no per-client fields",
+    "dashboard.prometheus_metrics": (
+        "a scrape endpoint has no user: it is authorised by the metrics token or the open flag, and it emits EVERY subnet's name, CIDR and counts. Who may hold the token or set the flag is the "
+        "scope (Q204 AT1 d): the metrics card and `save_metrics_settings` are for an account that may see every subnet (tests/test_authz_matrix.py::TestTheBranchesRun)"
+    ),
     # Subnet management — admin-scoped, not a per-client surface.
     "subnets.subnets": "subnet list with aggregate counts — tests/test_subnets.py",
     "subnets.delete_subnet": "write route, admin-only — tests/test_subnets.py",

@@ -915,6 +915,27 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         assert incident["detail"] == cs.ATTENTION_CATEGORIES[category]
         assert "password" not in json.dumps(incident).lower() and "authentication" not in json.dumps(incident)
 
+    @pytest.mark.parametrize(
+        "server_id,stored",
+        [(None, False), ("", False), ("7", True), (7, True), (-1, True)],
+        ids=["None", "empty", "text", "int", "negative"],
+    )
+    def test_the_writer_never_stores_what_the_strict_reader_refuses(self, store, caplog, server_id, stored):
+        """Q204 AT8 b (M11): `record_attention(None, ...)` used to write an incident the strict reader refuses (`MalformedNote`: "kept until a superadmin sets the note aside"). The writer validates the
+        entry with `recognised_incident` and answers False, logging at ERROR, instead."""
+        with caplog.at_level("ERROR", logger=cs.logger.name):
+            assert cs.record_attention(server_id, "dhcp4", "x", "aborted", server_name="kea-a") is stored
+        raw = store.get(cs.ATTENTION_KEY, "")
+        incidents = cs._incidents_of(raw, strict=True)  # never raises, for any of the five
+        assert len(incidents) == (1 if stored else 0)
+        assert cs.note_state() == "ok"
+        if not stored:
+            assert "was not stored" in caplog.text
+
+    def test_a_service_that_is_no_daemon_is_refused_the_same_way(self, store):
+        assert cs.record_attention(1, "kea-dhcp9", "x", "aborted") is False
+        assert cs.note_state() == "ok" and cs.attention() is None
+
     def test_an_unknown_category_is_a_programming_error(self, store):
         with pytest.raises(ValueError):
             cs.record_attention(1, "dhcp4", "x", "made-up")

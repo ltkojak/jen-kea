@@ -55,7 +55,20 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     function stop() { count = Math.max(0, count - 1); var b = bar(); if (count === 0 && b) b.classList.remove('active'); }
     function reset() { count = 0; var b = bar(); if (b) b.classList.remove('active'); }
     window.jenProgress = { start: start, stop: stop, reset: reset };
-    window.jenFetch = function(url, opts) { start(); return fetch(url, opts).finally(stop); };
+    // Q204 (AT6): a route behind a recent-password step-up answers a fetch with 401 JSON carrying `reauth` (a redirect would be followed into an HTML page). ONE place, every fetch route: the page navigates to
+    // the confirmation once; the response is still handed back, so the caller's own error line shows until the page leaves. The request is not replayed afterwards - the person clicks again.
+    var reauthing = false;
+    window.jenFetch = function(url, opts) {
+        start();
+        return fetch(url, opts).then(function(resp) {
+            if (resp.status === 401 && !reauthing) {
+                resp.clone().json().then(function(d) {
+                    if (d && d.reauth && !reauthing) { reauthing = true; window.location.assign(d.reauth); }
+                }).catch(function() { /* not JSON: not ours */ });
+            }
+            return resp;
+        }).finally(stop);
+    };
     document.addEventListener('DOMContentLoaded', function() {
         document.body.addEventListener('htmx:beforeRequest', start);
         // htmx (1.9.x) fires htmx:afterRequest after EVERY terminal path, an error response included, so this one listener is the stop. A second one on

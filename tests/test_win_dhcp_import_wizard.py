@@ -347,6 +347,77 @@ class TestWinDhcpImportWizard:
         finally:
             kea_changeset.acknowledge_recovery()
 
+    NOT_RECORDED = "Jen could not record that the daemon is unproved; check it on the host."
+
+    def _failed_restart_import(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        fake.responses["service"] = {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        return logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+
+    def test_q204_at7_a_store_that_refuses_the_note_is_said_in_the_flash_and_the_report(
+        self, logged_in_client, monkeypatch, mock_kea
+    ):
+        """Q204 AT7 (M15 = the review's item 3): `import_windows_apply` discarded `record_attention`'s answer; its sibling, the restore, appends this sentence when the store refused. Same sentence, in the flash AND the
+        report line; the plan state, the sha, the TTL and the reservation deferral are unchanged."""
+        from jen.routes import subnets as subnets_mod
+        from jen.services import kea_changeset
+
+        kea_changeset.acknowledge_recovery()
+        try:
+            monkeypatch.setattr(kea_changeset, "record_attention", lambda *a, **k: False)
+            r = self._failed_restart_import(logged_in_client, monkeypatch)
+            body = r.get_data(as_text=True)
+            assert body.count(self.NOT_RECORDED) >= 2, "the flash and the report line both say it"
+            assert "Kea did not restart cleanly" in body
+            assert self._reservation_calls == [], "reservations stay deferred"
+            plans = list(subnets_mod._WIN_IMPORT_PLANS.values())
+            assert [p["state"] for p in plans] == ["config_applied_restart_failed"] and plans[0]["applied_sha"]
+        finally:
+            kea_changeset.acknowledge_recovery()
+
+    def test_q204_at7_a_malformed_store_says_the_same_sentence(self, logged_in_client, monkeypatch, mock_kea):
+        from jen.models.user import set_global_setting
+        from jen.services import kea_changeset
+
+        kea_changeset.acknowledge_recovery()
+        try:
+            set_global_setting(kea_changeset.ATTENTION_KEY, '{"incidents": [{}]}')  # a note the strict reader refuses
+            r = self._failed_restart_import(logged_in_client, monkeypatch)
+            assert self.NOT_RECORDED in r.get_data(as_text=True)
+            assert self._reservation_calls == []
+        finally:
+            kea_changeset.acknowledge_recovery()
+
+    def test_q204_at7_a_recorded_note_adds_no_sentence_and_a_second_failure_refreshes_the_one_incident(
+        self, logged_in_client, monkeypatch, mock_kea
+    ):
+        from jen.services import kea_changeset
+
+        kea_changeset.acknowledge_recovery()
+        try:
+            r = self._failed_restart_import(logged_in_client, monkeypatch)
+            assert self.NOT_RECORDED not in r.get_data(as_text=True)
+            mine = [
+                i for i in kea_changeset.recovery_incidents(strict=True) if i.get("category") == "config-restart-failed"
+            ]
+            assert len(mine) == 1
+            # a second failed restart of the same daemon is the same trouble: refreshed, never a duplicate
+            assert kea_changeset.record_attention(
+                mine[0]["server_id"],
+                "dhcp4",
+                mine[0]["summary"],
+                "config-restart-failed",
+                server_name=mine[0]["server_name"],
+            )
+            again = [
+                i for i in kea_changeset.recovery_incidents(strict=True) if i.get("category") == "config-restart-failed"
+            ]
+            assert len(again) == 1
+        finally:
+            kea_changeset.acknowledge_recovery()
+
     def test_apply_reservations_right_after_preview_is_refused(self, logged_in_client, monkeypatch, mock_kea):
         """v5.28.1 (Q26, B1) — the retry route only exists for the
         restart-failure state; calling it straight after Preview (before

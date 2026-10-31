@@ -864,7 +864,9 @@ class TestTheProbeRowsOfQ196:
             "distinct hosts": (2, 0, False),
             "same host and service": (2, 1, False),
             "same host spelled two ways": (2, 1, True),
-            "a trailing dot is a different name": (2, 0, False),
+            # Q204 AT5 b: still NOT a duplicate (0 refusals that say two records both manage a daemon), but only one target now: the record whose SSH host is `kea-a.` carries a SAN the verifier's parser
+            # refuses (a trailing dot), which is no name, so its certificate names only the bind address and the inventory refuses that record on its own account
+            "a trailing dot is a different name": (1, 0, False),
             "dhcp4 and dhcp6 on one host": (2, 0, False),
         }
 

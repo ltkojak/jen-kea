@@ -28,21 +28,19 @@ REPORTED_ROUTES = {
     ),
 }
 
-#: Q203 second pass G1: writers the direct-call walk cannot see (they reach the Kea host through `apply_change` or an install helper, not a call written in the route) that the registry names as gated.
+#: Writers the walks cannot see, named so their gate is pinned (Q203 second pass G1, Q204 AT6): `author_kea_config_post` reaches the Kea host through `apply_change` (the sanctioned path, not followed),
+#: and `install_kea_binary` (`apt` on every SSH host) and `toggle_ipv6` (`set_ipv6_service_state`) reach it through calls that are no sink of the walk. Each carries the superadmin gate and the
+#: step-up; `install_kea_binary` through the FETCH-aware one (its page calls it with `jenFetch`).
 NAMED_FORM_WRITERS = (
     ("jen/routes/settings/authoring.py", "author_kea_config_post"),
     ("jen/routes/settings/authoring.py", "install_kea_helper"),
+    ("jen/routes/settings/authoring.py", "install_kea_binary"),
+    ("jen/routes/settings/infrastructure.py", "toggle_ipv6"),
 )
 
-#: Two superadmin routes that reach the Kea host and carry NO step-up, pinned by their current decorators so a change is noticed, and REPORTED to the maintainer (second pass finding 1):
-#: `install_kea_binary` is a `jenFetch` JSON route (a step-up redirect would break its page) and `toggle_ipv6` is a setting, not a writer of a destination.
-KNOWN_OPEN = {
-    ("jen/routes/settings/authoring.py", "install_kea_binary"): ["login_required", "_superadmin_required"],
-    (
-        "jen/routes/settings/infrastructure.py",
-        "toggle_ipv6",
-    ): None,  # (decorators checked below: superadmin, no step-up)
-}
+#: Q204 AT6: empty. Q203 pinned `install_kea_binary` and `toggle_ipv6` here as superadmin routes with no step-up and reported them; both ask for one now. A route is added here only with its reason
+#: and the registry entry (RBAC-003) that says so.
+KNOWN_OPEN: dict = {}
 
 WRITE_CALLS = {"apply_config", "restart_service"}
 
@@ -199,21 +197,139 @@ class TestEveryWriterOfIdentityOrKeaConfigCarriesItsGate:
             assert "login_required" in decorators and "_superadmin_required" in decorators, (name, decorators)
             assert any(d.startswith("_recent_auth_required") for d in decorators), (name, decorators)
 
-    def test_the_two_known_open_routes_are_pinned_and_reported(self):
-        for (rel, name), expected in KNOWN_OPEN.items():
-            decorators = _decorators(self._route(rel, name))
-            assert [d for d in decorators if not d.startswith("bp.route")][:2] == [
-                "login_required",
-                "_superadmin_required",
-            ], (name, decorators)
-            assert not any(d.startswith("_recent_auth_required") for d in decorators), (
-                f"{name} now asks for a step-up: delete it from KNOWN_OPEN and name it in the registry"
-            )
-            if expected is not None:
-                assert [d for d in decorators if not d.startswith("bp.route")] == expected
+    def test_known_open_is_empty(self):
+        assert KNOWN_OPEN == {}, "a route on KNOWN_OPEN needs its reason in RBAC-003: say so there and here"
+
+    def test_the_fetch_route_asks_for_the_step_up_in_the_fetch_form(self):
+        decorators = _decorators(self._route("jen/routes/settings/authoring.py", "install_kea_binary"))
+        assert "_recent_auth_required(minutes=10, fetch=True)" in decorators, decorators
+        plain = _decorators(self._route("jen/routes/settings/infrastructure.py", "toggle_ipv6"))
+        assert "_recent_auth_required(minutes=10)" in plain, plain
 
     def test_an_import_that_restarts_a_daemon_records_a_failed_restart(self):
         """Q203 second pass G2, source row: the failed-restart branch of `import_windows_apply` writes the durable note (the DB-backed row is in test_win_dhcp_import_wizard)."""
         node = self._route("jen/routes/subnets.py", "import_windows_apply")
         assert "config-restart-failed" in ast.unparse(node) and "record_attention" in _called_names(node)
         assert "resolve_attention" in _called_names(node)
+
+
+# ── Q204 AT8 (a): the walk is TRANSITIVE inside jen/ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# Q203's walk asked for the five writes written IN a route (a direct call). A route that reaches `apply_config`, a restart or the SSH key through a chain of functions in `jen/services/` (the
+# helper that does the work for it) was invisible to it - Opus's pass found the population by building this resolver (`pass/lineage/verify34/v5b_route_gates.py`, the model). A route "reaches" a
+# sink when its body calls one, or calls a function (resolved by name within its own module, or to the one function of that name under `jen/services/`) that does. `apply_change` is the
+# sanctioned path every subnet / option / class / DDNS route uses to write a Kea config (plan, preflight every target, commit, revert) and is not followed: those routes are an admin's
+# by design, and its one writer of the file inside it is the choke point (`kea_host.apply_config`, RBAC-004).
+
+SINK_DEFS = {
+    ("jen/services/kea_host.py", "apply_config"),
+    ("jen/services/kea_host.py", "install_helper"),
+    ("jen/services/runtime.py", "restart_service"),
+}
+SANCTIONED_PATH = {"apply_change"}
+
+#: A route that reaches a sink, is not a superadmin's with a recent confirmation, and is on this list with its reason. The open population is exactly REPORTED_ROUTES + this.
+OPEN_BY_DECISION = {
+    ("jen/routes/servers.py", "investigation_logging"): (
+        "an admin's switch for investigation logging on demand (Q138, Q167): the restart it reaches is the daemon's own logger change, opt-in behind a superadmin's setting, "
+        "restored by the Kea host's timer (INV-007..011) - registered, not a destination or an identity change"
+    ),
+}
+
+
+def _reaching_routes():
+    """{(path, name): (FunctionDef, set of sink labels)} for every ROUTE under jen/routes/ that reaches a sink, directly or through a chain of jen/ functions."""
+    funcs = {}
+    for path in sorted((ROOT / "jen").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            sinks = set()
+            if (rel, node.name) in SINK_DEFS:
+                sinks.add(f"{node.name}()")
+            if _restarts_a_kea_daemon(node):
+                sinks.add("service_action restart")
+            if _replaces_the_ssh_key(node):
+                sinks.add("the SSH key")
+            if rel.startswith("jen/routes/") and _writes_the_oidc_section(node):
+                sinks.add("[oidc]")
+            funcs[(rel, node.name)] = {"node": node, "calls": _called_names(node) - SANCTIONED_PATH, "sinks": sinks}
+    by_name: dict = {}
+    for key in funcs:
+        by_name.setdefault(key[1], []).append(key)
+    sink_names = {name for _rel, name in SINK_DEFS}
+    for _ in range(12):
+        changed = False
+        for key, info in funcs.items():
+            add = set()
+            for called in info["calls"]:
+                for target in by_name.get(called, []):
+                    if target == key:
+                        continue
+                    if called in sink_names and target in SINK_DEFS:
+                        add.add(f"{called}()")
+                    same_module = target[0] == key[0]
+                    unique_service = target[0].startswith("jen/services/") and len(by_name[called]) == 1
+                    if same_module or unique_service:
+                        add |= funcs[target]["sinks"]
+            if add - info["sinks"]:
+                info["sinks"] |= add
+                changed = True
+        if not changed:
+            break
+    return {
+        key: (info["node"], info["sinks"])
+        for key, info in funcs.items()
+        if info["sinks"] and key[0].startswith("jen/routes/") and _is_route(info["node"])
+    }
+
+
+def _asks_for_the_step_up(node) -> bool:
+    """A decorator, or the documented in-body pattern (the setup wizard's POST steps call `step_up_redirect` themselves - RBAC-004)."""
+    return any(d.startswith("_recent_auth_required") for d in _decorators(node)) or "step_up_redirect" in ast.unparse(
+        node
+    )
+
+
+class TestTheWalkIsTransitive:
+    def test_the_resolver_finds_what_the_direct_walk_could_not(self):
+        reached = {name for (_rel, name) in _reaching_routes()}
+        direct = {n.name for _p, n, _w in _writers() if _is_route(n)}
+        # a route that reaches a sink only through a helper in jen/services
+        assert {"install_kea_helper", "setup_helper"} <= reached, sorted(reached)
+        assert {"config_history_restore", "import_windows_apply", "rotate_kea_ca", "save_ports"} <= reached
+        assert reached >= direct, sorted(direct - reached)
+
+    def test_every_route_that_reaches_a_sink_is_a_superadmins_with_a_recent_confirmation_or_is_named(self):
+        named_open = {**REPORTED_ROUTES, **OPEN_BY_DECISION}
+        for (rel, name), (node, sinks) in sorted(_reaching_routes().items()):
+            decorators = _decorators(node)
+            gated = (
+                "login_required" in decorators and "_superadmin_required" in decorators and _asks_for_the_step_up(node)
+            )
+            if (rel, name) in named_open:
+                assert not gated, f"{name} is on a reviewed list and is gated: delete the entry"
+                continue
+            assert gated, (rel, name, sorted(sinks), decorators, "gate it or name it with its reason")
+
+    def test_the_open_population_is_exactly_the_two_named_ones(self):
+        open_now = {
+            key
+            for key, (node, _s) in _reaching_routes().items()
+            if not ("_superadmin_required" in _decorators(node) and _asks_for_the_step_up(node))
+        }
+        assert open_now == set(REPORTED_ROUTES) | set(OPEN_BY_DECISION), sorted(open_now)
+        for key, reason in OPEN_BY_DECISION.items():
+            assert len(reason) > 60, key
+
+    def test_the_sanctioned_path_is_not_followed(self):
+        """`apply_change` is how every subnet / option / class / DDNS route writes a Kea config; if the resolver followed it, ~60 admin routes would become 'open'."""
+        reached = {name for (_rel, name) in _reaching_routes()}
+        assert "edit_subnet" not in reached and "add_subnet" not in reached
+
+    def test_a_synthetic_chain_is_followed_by_the_resolvers_join(self):
+        """Self-test of the names the join works on: a route that calls a helper that calls `restart_service`."""
+        helper = ast.parse("def do_it():\n    restart_service()\n").body[0]
+        route = ast.parse("@bp.route('/x')\n@login_required\ndef r():\n    do_it()\n").body[0]
+        assert "restart_service" in _called_names(helper) and "do_it" in _called_names(route)
+        assert "_superadmin_required" not in _decorators(route)

@@ -224,6 +224,69 @@ class TestToggleIpv6Route:
         assert is_ipv6_enabled() is False
 
 
+class TestTheIpv6ToggleAsksForARecentPassword:
+    """Q204 AT6 (the review's item 2): `toggle_ipv6` starts or stops the IPv6 daemons over SSH on every host (`set_ipv6_service_state`) and was a superadmin's with no recent-password gate. A stale
+    confirmation is sent to confirm and NOTHING reaches a host or the flag; after confirming, the person clicks again (the body is not replayed)."""
+
+    @staticmethod
+    def _stub(monkeypatch):
+        import jen.services.kea6 as kea6_module
+
+        calls = []
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "s1", "ssh_host": "1.2.3.4"}])
+        monkeypatch.setattr(
+            kea6_module,
+            "set_ipv6_service_state",
+            lambda enable: calls.append(enable) or [{"name": "s1", "ok": True, "message": "ok"}],
+        )
+        return calls
+
+    @staticmethod
+    def _flag():
+        from jen.models.user import _invalidate_settings_cache
+        from jen.services.kea6 import is_ipv6_enabled
+
+        _invalidate_settings_cache()
+        return is_ipv6_enabled()
+
+    def test_an_admin_is_refused_with_zero_remote_calls(self, client, db, monkeypatch):
+        from tests.conftest import restricted_client
+
+        calls = self._stub(monkeypatch)
+        c, _uid = restricted_client(client, db, allowed_subnets=None, role="admin", username="q204_toggle_admin")
+        r = c.post("/settings/infrastructure/toggle-ipv6", data={"enable": "true"}, follow_redirects=False)
+        assert r.status_code == 302
+        assert calls == [] and self._flag() is False
+
+    def test_a_stale_superadmin_is_sent_to_confirm_with_zero_remote_calls_and_the_flag_unchanged(
+        self, logged_in_client, monkeypatch
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        calls = self._stub(monkeypatch)
+        with logged_in_client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        r = logged_in_client.post(
+            "/settings/infrastructure/toggle-ipv6",
+            data={"enable": "true"},
+            headers={"Referer": "http://localhost/settings/kea"},
+        )
+        assert r.status_code == 302 and "reauth" in r.headers["Location"]
+        assert calls == [] and self._flag() is False
+        with logged_in_client.session_transaction() as sess:
+            assert sess.get("reauth_next") == "/settings/kea"
+
+    def test_a_recent_confirmation_toggles_as_before(self, logged_in_client, monkeypatch):
+        from jen.models.user import set_global_setting
+
+        calls = self._stub(monkeypatch)
+        logged_in_client.post("/settings/infrastructure/toggle-ipv6", data={"enable": "true"})
+        try:
+            assert calls == [True] and self._flag() is True
+        finally:
+            set_global_setting("ipv6_enabled", "false")
+
+
 class TestIpv6ContextProcessor:
     def test_ipv6_enabled_false_by_default_for_authenticated_user(self, logged_in_client, db):
         from jen.models.user import _invalidate_settings_cache

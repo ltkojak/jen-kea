@@ -272,7 +272,27 @@ class TestProbeServerAndService:
         assert fake.calls[0]["url"] == "http://kea02:9000"
         assert fake.calls[0]["auth"] == ("u2", "p2")
 
-    def test_dhcp6_sends_the_dhcp6_service_and_falls_back_to_8006(self, logged_in_client, db, probe_http):
+    def test_dhcp6_with_ipv6_off_is_400_and_nothing_is_dialled(self, logged_in_client, db, probe_http):
+        """Q204 AT8 e (M17): IPv6 is off by default and VERIFIED off - a v6 command never fires before the switch is on, a probe of a v6 daemon included."""
+        fake = probe_http({})
+        for form in (
+            {"service": "dhcp6"},
+            {"service": "dhcp6", "server_id": "2"},
+            {"service": "dhcp6", "candidate_url": "http://kea02:8006"},
+        ):
+            r = logged_in_client.post("/settings/infrastructure/probe-kea", data=form)
+            assert r.status_code == 400, form
+            assert "IPv6 is off" in r.get_json()["error"]
+        assert fake.calls == [], "nothing was dialled"
+
+    def test_dhcp6_with_ipv6_on_is_probed_as_before(self, logged_in_client, db, probe_http, ipv6_flag_on):
+        fake = probe_http({})
+        data = logged_in_client.post("/settings/infrastructure/probe-kea", data={"service": "dhcp6"}).get_json()
+        assert data["service"] == "dhcp6" and fake.calls
+
+    def test_dhcp6_sends_the_dhcp6_service_and_falls_back_to_8006(
+        self, logged_in_client, db, probe_http, ipv6_flag_on
+    ):  # (Q204 AT8 e: a v6 probe needs the IPv6 switch on)
         fake = probe_http({})  # nothing answers, so both attempts are recorded
         data = logged_in_client.post(
             "/settings/infrastructure/probe-kea", data={"server_id": "2", "service": "dhcp6"}
@@ -282,7 +302,9 @@ class TestProbeServerAndService:
         assert any(c["url"] == "http://kea02:8006" for c in fake.calls)
         assert not any(c["url"].endswith(":8004") for c in fake.calls)
 
-    def test_direct_dhcp6_without_a_v6_url_is_400(self, logged_in_client, db, probe_http, monkeypatch):
+    def test_direct_dhcp6_without_a_v6_url_is_400(
+        self, logged_in_client, db, probe_http, monkeypatch, ipv6_flag_on
+    ):  # (Q204 AT8 e: a v6 probe needs the IPv6 switch on)
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
         # (Q181: in direct mode an endpoint with no IPv6 keys resolves to NO address - the dict says so)
         monkeypatch.setattr(

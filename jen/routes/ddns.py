@@ -623,7 +623,15 @@ def _d2config_tab_context():
         if isinstance(k, dict)
     ]
     reverse_hints = sorted(
-        {s for s in (__d2.suggest_reverse_zone(info.get("cidr", "")) for info in extensions.SUBNET_MAP.values()) if s}
+        # Q204 (RBAC-005, S16): a reverse zone is derived from a subnet's CIDR - only from the subnets this account may see
+        {
+            s
+            for s in (
+                __d2.suggest_reverse_zone(info.get("cidr", ""))
+                for info in current_user.filter_subnet_map(extensions.SUBNET_MAP).values()
+            )
+            if s
+        }
     )
     return {
         "config_unavailable": cfg is None,

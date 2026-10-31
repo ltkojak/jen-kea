@@ -37,6 +37,9 @@ from datetime import datetime, timezone
 
 from jen import extensions
 from jen.services import runtime
+from jen.services.secret_keys import (
+    is_secret_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +53,8 @@ AUDIT_TAIL_ROWS = 500
 ALERT_TAIL_ROWS = 200
 LEASE_HISTORY_DAYS = 7
 
-# INI keys whose VALUE is a secret. A key that names a *path* to a
-# secret (key_path, api_client_key, ssl_key) is kept — the path is
-# diagnostic, the file is never opened.
-_SECRET_KEY_RE = re.compile(
-    r"(^|_)(password|pass|passwd|secret|token|api_key|client_secret|metrics_token)$|_(pass|secret|token)$",
-    re.IGNORECASE,
-)
+# Which INI keys hold a secret is jen.services.secret_keys.is_secret_key - the one definition (Q204 AT4), shared with the Kea-config masker. A key that
+# names a *path* to a secret (key_path, api_client_key, ssl_key) is kept - the path is diagnostic, the file is never opened.
 _PATH_VALUE_RE = re.compile(r"^(/|[A-Za-z]:\\)")
 MASK = "********"
 
@@ -71,10 +69,6 @@ _LOG_SCRUBS = (
 
 
 # ── Pure builders ────────────────────────────────────────────────────────────
-
-
-def is_secret_key(key: str) -> bool:
-    return bool(_SECRET_KEY_RE.search(key or ""))
 
 
 def redact_ini_text(text: str) -> str:

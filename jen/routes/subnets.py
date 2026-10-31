@@ -2405,17 +2405,19 @@ def import_windows_apply(source):
         # exists in Kea before it ever reaches that scope's reservation
         # loop, so a second import would add none of them back.
         # Q203 (second pass G2): and a durable fact, like a restore's - the plan state above lives in this session's cache, the Servers page and Health read Jen's own note
-        __changeset.record_attention(
+        # Q204 AT7: and the answer is read - the restore says so when the store refused ("Jen could not record that the daemon is unproved"), and so does the import, in the flash and in the report
+        stored = __changeset.record_attention(
             primary.get("id"),
             "dhcp4",
             f"{src['label']} import",
             "config-restart-failed",
             server_name=primary.get("name", ""),
         )
+        not_recorded = "" if stored else " Jen could not record that the daemon is unproved; check it on the host."
         entry["state"] = "config_applied_restart_failed"
         entry["applied_sha"] = apply_result.get("sha256")
         entry["expires"] = time.time() + _WIN_IMPORT_TTL_SECONDS
-        report.append(f"Config applied, but Kea did not restart cleanly: {restart['detail']}")
+        report.append(f"Config applied, but Kea did not restart cleanly: {restart['detail']}{not_recorded}")
         report.append(
             f"You have 30 minutes to add the reservations below. Re-importing the {src['file']} after that is "
             "not a recovery path — the subnet's CIDR would already exist in Kea, so its reservations "
@@ -2423,7 +2425,7 @@ def import_windows_apply(source):
         )
         flash(
             "The config was applied but Kea did not restart cleanly. Fix that on the server, then come back "
-            "here to add the reservations within 30 minutes.",
+            "here to add the reservations within 30 minutes." + not_recorded,
             "error",
         )
         return render_template("import_windows_result.html", report=report, restart_failed=True, src=src)

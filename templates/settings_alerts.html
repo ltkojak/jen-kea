@@ -426,7 +426,9 @@ var JEN_CHANNELS = {
     <p class="u-42b3ef">
         The <code class="u-5f0ff9">/metrics</code>
         endpoint requires either a token or explicit open access —
-        {% if metrics_token %}
+        {% if not can_grant_all_subnets %}
+        currently {% if metrics_open %}<strong class="u-52df2b">open</strong>{% else %}<strong class="u-5a4529">protected</strong>{% endif %}.
+        {% elif metrics_token %}
         currently <strong class="u-5a4529">token-protected</strong>.
         {% elif metrics_open %}
         currently <strong class="u-52df2b">open</strong> (no token required).
@@ -435,6 +437,9 @@ var JEN_CHANNELS = {
         {% endif %}
         Takes effect immediately on save, no restart needed.
     </p>
+    {% if not can_grant_all_subnets %}
+    <p class="u-42b3ef">The scrape lists every subnet by name, CIDR and counts, so its token and its open-access switch are for an account that may see every subnet. Yours is limited to some, so they are not shown here.</p>
+    {% else %}
     <form method="POST" action="{{ url_for('settings.save_metrics_settings') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Metrics Token <span class="u-5d8d64">(leave blank for no token)</span></label>
@@ -453,6 +458,7 @@ var JEN_CHANNELS = {
         </div>
         <button type="submit" class="btn btn-primary u-8a77e5">Save Metrics Settings</button>
     </form>
+    {% endif %}
 </div>
 </div>
 {% endblock %}

@@ -886,6 +886,13 @@ def record_attention(
             incident["ca_fingerprint"] = (
                 ca_fingerprint  # (Q201 second pass F2: the live CA when a `rotation-pending` note was written)
             )
+        if not recognised_incident(incident):
+            # Q204 (AT8 b): the writer never stores what the strict reader refuses - an incident with a server id of `None` or "" (or a service that is no daemon) was written and made
+            # every later strict read raise `MalformedNote` ("kept until a superadmin sets the note aside"). Refused here instead, and the caller says so (False).
+            logger.error(
+                f"kea_changeset: the {category} incident was not stored: it would not be an incident Jen can read back (server id {type(server_id).__name__}, service {service!r})"
+            )
+            return False
 
         other_generation = [False]
 

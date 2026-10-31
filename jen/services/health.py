@@ -72,6 +72,10 @@ class Check:
 # ── shared context ─────────────────────────────────────────────────────────
 
 
+# Q204 (LEAK-001): what a viewer reads in place of the exception of a check that raised (both runners, and the drift check's own except, say it)
+CHECK_ERRORED_DETAIL = "check errored — see server logs"
+
+
 def _log_err(check_id: str, exc: Exception) -> None:
     """A check's real error goes to the log; the page shows a generic
     line. The Health Center is viewer-visible — a raw pymysql/requests
@@ -530,13 +534,18 @@ def _problems_sweep(ctx) -> Check:
 
 def _kea_config_drift(ctx) -> Check:
     c = Check("kea_config_drift", "Subnet map matches Kea", "kea", fix_url="/servers")
+    if not ctx.get(
+        "unrestricted", True
+    ):  # Q204 (RBAC-005): the subnets themselves are scoped; this check names them over the whole config
+        c.status, c.detail = "skip", "fleet-wide summary is for unrestricted accounts"
+        return c
     try:
         from jen.services.config_drift import check_config_drift
 
         issues = check_config_drift()
     except Exception as e:
         _log_err("kea_config_drift", e)
-        c.status, c.detail = "fail", "drift check errored — see server logs"
+        c.status, c.detail = "fail", CHECK_ERRORED_DETAIL
         return c
     if not issues:
         c.status, c.detail = "ok", "Jen's subnet map agrees with Kea's live config"
@@ -553,6 +562,11 @@ def _kea_subnets_declared(ctx) -> Check:
     from jen.services.kea_config_view import iter_subnet4
 
     c = Check("kea_subnets_declared", "Every Kea subnet is named", "kea", fix_url="/settings/kea")
+    if not ctx.get(
+        "unrestricted", True
+    ):  # Q204 (RBAC-005): the subnets themselves are scoped; this check names them over the whole config
+        c.status, c.detail = "skip", "fleet-wide summary is for unrestricted accounts"
+        return c
     cfg = ctx["dhcp4_config"]
     if cfg is None:
         c.status, c.detail = "skip", "config-get unavailable"
@@ -616,6 +630,11 @@ def _config_doctor(ctx) -> Check:
     from jen.services import config_doctor
 
     c = Check("config_doctor", "Configuration Doctor", "kea", fix_url="/tools/doctor")
+    if not ctx.get(
+        "unrestricted", True
+    ):  # Q204 (RBAC-005): the subnets themselves are scoped; this check names them over the whole config
+        c.status, c.detail = "skip", "fleet-wide summary is for unrestricted accounts"
+        return c
     cfg = ctx["dhcp4_config"]
     if cfg is None:
         c.status, c.detail = "skip", "config-get unavailable"
@@ -1913,8 +1932,9 @@ def readiness_checks(ctx: dict | None = None) -> list[Check]:
             out.append(fn(ctx))
         except Exception as e:
             title, group = _CHECK_META[cid]
-            logger.warning(f"health check {cid} errored: {e}")
-            out.append(Check(cid, title, group, "fail", f"check errored: {e}"))
+            # Q204 (LEAK-001): the exception goes to the log; the row, which a viewer reads as JSON, carries a fixed sentence
+            _log_err(cid, e)
+            out.append(Check(cid, title, group, "fail", CHECK_ERRORED_DETAIL))
     return out
 
 
@@ -2019,8 +2039,10 @@ def run_checks(ctx: dict | None = None) -> list[Check]:
             c = fn(ctx)
         except Exception as e:
             title, group = _CHECK_META[cid]
-            logger.warning(f"health check {cid} errored: {e}")
-            c = Check(cid, title, group, "fail", f"check errored: {e}")
+            _log_err(
+                cid, e
+            )  # Q204 (LEAK-001): see readiness_checks - the log has the exception, the row has the sentence
+            c = Check(cid, title, group, "fail", CHECK_ERRORED_DETAIL)
         c.elapsed_ms = int((time.monotonic() - t0) * 1000)
         out.append(c)
     return out

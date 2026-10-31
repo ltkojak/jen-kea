@@ -290,7 +290,8 @@ with a different library might not accept them either. Health says when
 | a tampered self-signature | the CA's own signature is checked; `openssl` does not check a trust anchor's |
 | no Basic Constraints (a root marked only by Key Usage) | Jen needs `ca=True` stated |
 | a server certificate Jen signed with no DNS or IP name in it | `openssl verify -purpose sslserver` accepts a leaf with no subject alternative name (it checks a name only when asked); Jen refuses it as a rotation target, because it proves nothing about which daemon it was installed on |
-| a server certificate whose only name is empty, or an IP network | `openssl verify -purpose sslserver` accepts a leaf whose subject alternative name holds an empty DNS name or an IP network (`10.0.0.0/24`); Jen keeps only a non-empty DNS name and an IP address as a name, because a network is a range and not the address a daemon serves, so such a leaf names nothing and is refused with the same sentence as one with no name at all |
+| a server certificate whose only name is empty, or an IP network | `openssl verify -purpose sslserver` accepts a leaf whose subject alternative name holds an empty DNS name or an IP network (`10.0.0.0/24`); Jen keeps only a DNS name the verifier's own parser accepts (an empty name, a tab, a NUL, a wildcard, a label over 63 characters or a space at the edge is none) and an IP address as a name, because a network is a range and not the address a daemon serves, so such a leaf names nothing and is refused with the same sentence as one with no name at all |
+| a server certificate for an IPv4-mapped IPv6 address (`::ffff:10.0.0.9`) | `openssl x509 -checkip` and urllib3 compare a subject alternative name with the dialled address byte for byte, so a certificate for the mapped spelling is accepted by no client that dials `10.0.0.9` (and the reverse). Jen compares certificate names exactly the same way (no fold), refuses the spelling where a certificate would be issued for it (the SSH host and API address savers, the bind address of the https setup), and gives a record saved with one the refusal at the setup and the rotation: use the IPv4 address spelled as itself. For a *password* the two spellings stay one place (the credential rule is unchanged) |
 
 **A CA that is healthy but cannot issue for one address.** A CA whose name
 constraints do not permit the address or host name of one Kea server is not
@@ -1839,6 +1840,8 @@ the easiest way is directly from the UI:
 token (or click Generate for a random one) and save, or check "Allow
 open access" if you're already restricting `/metrics` at the network
 or reverse-proxy level. Takes effect immediately, no restart needed.
+
+The scrape lists every subnet by name, CIDR and counts, so the token, the open-access switch and their Save need an account that may see **every** subnet (v5.69.4): an admin limited to some subnets sees a sentence where the form is, and a save they post is refused. The scrape itself is unchanged - it has no user, and the token decides.
 
 If you'd rather edit `jen.config` directly, the same two options are
 available under `[server]`:

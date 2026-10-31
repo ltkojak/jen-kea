@@ -175,3 +175,58 @@ class TestNoWeakerScheme:
     def test_the_host_and_the_port_are_not_its_question(self):
         assert auth.no_weaker_scheme("https://a:1", "https://b:2") is True
         assert auth.same_host("https://a:1", "https://b:2") is False
+
+
+class TestKeaUrlShape:
+    """Q204 AT8 d (M16): ONE definition of a Kea URL's shape - `scheme://host[:port]` and at most a trailing slash - asked by every saver (`valid_api_url`) and by the probe (`_is_kea_url_shape`
+    is a call to it). The Kea control endpoint is dialled at its root."""
+
+    OK = ["http://kea:8004", "https://10.0.0.5:8000/", "http://[::1]:8004", "https://kea.example", "http://kea:8004/ "]
+    NOT = [
+        "http://u:p@kea:8004",
+        "http://kea:8004/admin",
+        "http://kea:8004/?x=1",
+        "http://kea:8004/#f",
+        "http://kea:8004/a/b",
+        "http://kea:8004;x",
+        "http://kea:8004/;x",
+        "http://kea:abc",
+        "http://[::1",
+    ]
+
+    @pytest.mark.parametrize("url", OK)
+    def test_the_shape_accepts_a_root(self, url):
+        assert auth.kea_url_shape_ok(url) is True
+
+    @pytest.mark.parametrize("url", NOT)
+    def test_the_shape_refuses_user_info_a_path_a_query_a_fragment(self, url):
+        assert auth.kea_url_shape_ok(url) is False
+
+    @pytest.mark.parametrize(
+        "url", ["http://kea:8004/admin", "http://kea:8004/?x=1", "http://kea:8004/#f", "http://kea:8004/a/b"]
+    )
+    def test_the_savers_refuse_what_the_shape_refuses(self, url):
+        assert auth.valid_api_url(url, require_port=True) is False
+        assert auth.valid_api_url(url, require_port=False) is False
+
+    @pytest.mark.parametrize("url", ["http://kea:8004", "https://10.0.0.5:8000/", "http://[::1]:8004"])
+    def test_the_savers_accept_a_trailing_slash_and_the_root(self, url):
+        assert auth.valid_api_url(url, require_port=True) is True
+
+    def test_the_probe_asks_the_same_function(self):
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen/routes/settings/infrastructure.py").read_text(
+            encoding="utf-8"
+        )
+        body = src[src.index("def _is_kea_url_shape") :]
+        body = body[: body.index("\n\n\n")]
+        body = " ".join(body.split())  # (the formatter may wrap the call)
+        assert "kea_url_shape_ok( url )" in body or "kea_url_shape_ok(url)" in body
+        assert "urlsplit" not in body, "the probe carries no copy of the shape"
+
+    @pytest.mark.parametrize("url", NOT[:5])
+    def test_the_probe_helper_agrees_with_the_definition(self, url):
+        from jen.routes.settings.infrastructure import _is_kea_url_shape
+
+        assert _is_kea_url_shape(url) is auth.kea_url_shape_ok(url) is False

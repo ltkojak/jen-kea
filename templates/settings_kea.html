@@ -1111,7 +1111,7 @@ async function installKeaPkg(btn, service) {
         } else {
             statusEl.style.color = 'var(--danger)';
             var msg = (data.servers || []).map(function(s) { return s.name + ': ' + (s.output || 'failed'); }).join(' | ');
-            statusEl.textContent = (msg || 'Install failed.');
+            statusEl.textContent = (msg || data.error || 'Install failed.');
             btn.disabled = false;
         }
     } catch (e) {

@@ -42,6 +42,7 @@ import posixpath
 import shlex
 
 from jen import extensions
+from jen.services.secret_keys import is_secret_key
 
 logger = logging.getLogger(__name__)
 
@@ -234,21 +235,10 @@ def autodetect_addresses(ssh) -> list:
         return []
 
 
-# v5.20.0 (Q15) — widened from the single literal "password" key to also
-# cover HA peers' `basic-auth-password` and a generic `secret` (D2's
-# tsig-keys, Q19), plus anything ending in -password/_password/-secret
-# so a future field doesn't need a code change here to stay masked.
-_SECRET_KEYS = frozenset({"password", "secret", "basic-auth-password"})
-_SECRET_SUFFIXES = ("-password", "_password", "-secret")
-
-
-def _is_secret_key(key: str) -> bool:
-    return key in _SECRET_KEYS or key.endswith(_SECRET_SUFFIXES)
-
-
 def redact_secrets(cfg: dict) -> dict:
     """Deep copy of a Kea config with every dict value whose key looks
-    like a credential (see _is_secret_key) replaced by "********". For
+    like a credential (jen.services.secret_keys.is_secret_key - the one
+    definition, shared with the support bundle, Q204 AT4) replaced by "********". For
     the browser preview and the config-history diff/download: the
     server needs the real lease-database / control-socket / HA-peer
     passwords to run `kea-dhcpX -t` or apply the config, the human
@@ -256,7 +246,7 @@ def redact_secrets(cfg: dict) -> dict:
     control-sockets auth clients, HA peers, and whatever comes next —
     never a key like `password-file`, which names a path, not a value."""
     if isinstance(cfg, dict):
-        return {k: ("********" if _is_secret_key(k) else redact_secrets(v)) for k, v in cfg.items()}
+        return {k: ("********" if is_secret_key(k) else redact_secrets(v)) for k, v in cfg.items()}
     if isinstance(cfg, list):
         return [redact_secrets(v) for v in cfg]
     return cfg
@@ -346,6 +336,11 @@ def referenced_tls_paths(cfg, tls: dict) -> list:
     answers) that a control-socket entry anywhere in `cfg` names as its `trust-anchor`, `cert-file` or `key-file` - what the setup passes for the same files. A path outside Jen's own directory is not
     Jen's to check, and a config that names none returns nothing."""
     import posixpath
+    import re
+
+    def canonical(path):
+        # (Q204 AT8 c) posixpath.normpath keeps exactly two leading slashes (`//etc/kea` is POSIX's own implementation-defined root); Linux resolves `//etc/kea` to `/etc/kea`
+        return re.sub(r"^/{2,}", "/", posixpath.normpath(path))
 
     by_key = {"trust-anchor": tls["trust_anchor"], "cert-file": tls["cert_file"], "key-file": tls["key_file"]}
     named: set = set()
@@ -354,7 +349,7 @@ def referenced_tls_paths(cfg, tls: dict) -> list:
         if isinstance(node, dict):
             for k, v in node.items():
                 # (second pass G4: the daemon resolves `/etc/kea/tls/dhcp4/../dhcp4//ca.crt` to the same file, so the match is on the normalised path)
-                if k in by_key and isinstance(v, str) and posixpath.normpath(v) == posixpath.normpath(by_key[k]):
+                if k in by_key and isinstance(v, str) and canonical(v) == canonical(by_key[k]):
                     named.add(by_key[k])
                 else:
                     walk(v)

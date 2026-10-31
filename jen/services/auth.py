@@ -125,6 +125,27 @@ DDNS_ZONE_NAME_RE = re.compile(r"^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]{1,100}$")
 
 
+MAPPED_ADDRESS_SENTENCE = (
+    "An IPv4-mapped IPv6 address (::ffff:a.b.c.d) is a different name from the IPv4 address it wraps: a certificate for one is accepted by no client that dials the other. "
+    "Use the IPv4 address spelled as itself."
+)
+
+
+def is_v4_mapped_literal(value) -> bool:
+    """Q204 (AT5): is `value` an IPv4-mapped IPv6 literal (`::ffff:10.0.0.9`, brackets and padding ignored)? For a SECRET the two spellings are one place (`same_host`, Q188 AD9, unchanged); for a
+    CERTIFICATE NAME they are two - openssl and urllib3 compare a SAN with the dialled address byte for byte - so the savers that decide what a certificate will be issued for ask this."""
+    import ipaddress
+
+    text = str(value or "").strip().strip("[]")
+    if ":" not in text:
+        return False
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None
+
+
 def valid_ssh_target(value):
     """A hostname or IP, and not something that could be parsed as an ssh flag."""
     value = (value or "").strip()
@@ -132,6 +153,8 @@ def valid_ssh_target(value):
         return False
     if "%" in value:
         return False  # Q201 (AQ5): an interface scope is not part of an address a certificate can carry (`ssh_target_problem` says so)
+    if is_v4_mapped_literal(value):
+        return False  # Q204 (AT5): the certificate Jen issues for this host would name the mapped address (`ssh_target_problem` says so)
     return valid_hostname(value) or valid_ip(value)
 
 
@@ -139,6 +162,8 @@ def ssh_target_problem(value) -> str:
     """Q201 (AQ5): the sentence for a scoped IPv6 literal `valid_ssh_target` refuses ("" for anything else): DER has no scope, so a certificate issued for `fe80::1%eth0` names `fe80::1` and the record
     would never compare equal with the host as written."""
     value = (value or "").strip()
+    if is_v4_mapped_literal(value):
+        return "an IPv4-mapped IPv6 address is a different name from the IPv4 address it wraps (a certificate for one is accepted by no client that dials the other) - use the IPv4 address spelled as itself"
     if "%" in value and valid_ip(value.strip("[]")):
         return "a certificate cannot carry an interface scope - use a name, or keep the host exactly as it is already saved"
     return ""
@@ -357,6 +382,20 @@ def no_weaker_scheme(configured: str, candidate: str) -> bool:
     return pb[0] == "https" or pa[0] == "http"
 
 
+def kea_url_shape_ok(url) -> bool:
+    """Q204 (AT8 d): the ONE definition of a Kea URL's shape - `scheme://host[:port]` and at most a trailing slash: no user-info, no path, no query, no fragment. The Kea control endpoint is dialled
+    at its root, and an address Jen sends the saved credentials to (the probe, CRED-002) is where a Kea daemon listens, not `http://internal:8080/admin?x=`. Asked by `valid_api_url` (every saver) and
+    by the probe, which used to carry its own copy."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or "").strip(_PADDING))
+        parts.port  # noqa: B018 - raises ValueError for a port that is not a number (`kea:8004;x`)
+        return not (parts.username or parts.password or parts.query or parts.fragment or parts.path not in ("", "/"))
+    except ValueError:
+        return False
+
+
 def valid_api_url(url: str, require_port: bool = False, certificate_name: bool = False) -> bool:
     """A Kea command-API URL: http(s):// scheme, a hostname or IP, and —
     in direct mode (require_port=True) — an explicit port. A daemon
@@ -377,6 +416,8 @@ def valid_api_url(url: str, require_port: bool = False, certificate_name: bool =
         return False
     if p.scheme not in ("http", "https") or not p.hostname or not _plain_host(p.hostname):
         return False
+    if not kea_url_shape_ok(value):
+        return False  # Q204 (AT8 d): a path, a query or a fragment is not where a Kea daemon listens (user-info is refused below with its own sentence)
     if certificate_name and dns_name_sentence(value, require_port):
         return False  # Q197 (AM2): an https address in direct mode must carry a name the certificate verifier accepts - else no certificate Jen issues could be for it
     if "@" in p.netloc:
@@ -404,6 +445,8 @@ def dns_name_sentence(url, require_port: bool = False) -> str:
         return ""
     if parsed.scheme != "https" or not host:
         return ""
+    if is_v4_mapped_literal(host):
+        return MAPPED_ADDRESS_SENTENCE  # Q204 (AT5): an address, but not one a certificate Jen issues can carry for a client that dials the plain spelling
     from jen.services import kea_tls
 
     return "" if kea_tls.verifier_accepts_name(host) else DNS_NAME_SENTENCE

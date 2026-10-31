@@ -1006,7 +1006,9 @@ class TestRunChecks:
         checks = health.run_checks(_ctx())
         by_id = {c.id: c for c in checks}
         assert by_id["kea_reachable"].status == "fail"
-        assert "kaboom" in by_id["kea_reachable"].detail
+        # Q204 AT2: the exception is in the log; the row a viewer reads carries the fixed sentence
+        assert "kaboom" not in by_id["kea_reachable"].detail
+        assert by_id["kea_reachable"].detail == health.CHECK_ERRORED_DETAIL
         assert len(checks) == len(health.CHECK_IDS)
 
     def test_every_id_present_and_grouped(self, mock_kea, db):
@@ -1017,6 +1019,95 @@ class TestRunChecks:
     def test_summarize(self):
         checks = [health.Check("a", "A", "jen", "ok"), health.Check("b", "B", "jen", "warn")]
         assert health.summarize(checks) == {"ok": 1, "warn": 1, "fail": 0, "skip": 0}
+
+
+class TestTheThreeChecksThatNameSubnetsAreForUnrestrictedAccounts:
+    """Q204 AT1 (b, M2): `kea_config_drift` (a drift message names a subnet's id, name and CIDR), `kea_subnets_declared` (the undeclared and orphaned id sets) and `config_doctor` (the first finding's
+    title and detail over the WHOLE config) are read by `/health-center/data` for any viewer. Like the Doctor page they `skip` for an account that may not see every subnet; four siblings already did."""
+
+    SENTENCE = "fleet-wide summary is for unrestricted accounts"
+
+    def _restricted(self, **over):
+        return _ctx(unrestricted=False, **over)
+
+    def test_the_drift_check_skips_for_a_restricted_ctx_and_does_not_look(self, monkeypatch):
+        def boom():
+            raise AssertionError("a restricted caller's drift check must not even run the comparison")
+
+        monkeypatch.setattr("jen.services.config_drift.check_config_drift", boom)
+        c = health._kea_config_drift(self._restricted())
+        assert (c.status, c.detail) == ("skip", self.SENTENCE)
+
+    def test_the_drift_check_runs_and_names_the_subnet_for_an_unrestricted_one(self, monkeypatch):
+        monkeypatch.setattr(
+            "jen.services.config_drift.check_config_drift",
+            lambda: [{"message": "Jen has subnet 2 ('Guest', 10.9.0.0/24)"}],
+        )
+        for ctx in (_ctx(), _ctx(unrestricted=True)):
+            c = health._kea_config_drift(ctx)
+            assert c.status == "warn" and "Guest" in c.detail
+
+    def test_the_declared_check_skips_for_a_restricted_ctx(self, monkeypatch):
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN"}, 7: {"name": "Old"}})
+        cfg = {"subnet4": [{"id": 1}, {"id": 9}]}
+        c = health._kea_subnets_declared(self._restricted(dhcp4_config=cfg))
+        assert (c.status, c.detail) == ("skip", self.SENTENCE)
+        assert health._kea_subnets_declared(_ctx(dhcp4_config=cfg)).status == "warn"
+
+    def test_the_doctor_check_skips_for_a_restricted_ctx_even_with_a_finding(self, monkeypatch):
+        monkeypatch.setattr(health, "_doctor_hosts", list)
+        monkeypatch.setattr(health, "_doctor_ha_configs", lambda: None)
+        cfg = {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "pools": [{"pool": "10.0.0.10 - 10.1.0.50"}]}]}
+        c = health._config_doctor(self._restricted(dhcp4_config=cfg))
+        assert (c.status, c.detail) == ("skip", self.SENTENCE)
+        unrestricted = health._config_doctor(_ctx(dhcp4_config=cfg))
+        assert unrestricted.status == "fail" and "10.0.0.0/24" in unrestricted.detail
+
+    def test_the_whole_run_for_a_restricted_ctx_carries_no_subnet_fact_from_those_three(self, mock_kea, db):
+        by_id = {c.id: c for c in health.run_checks(_ctx(unrestricted=False))}
+        for cid in ("kea_config_drift", "kea_subnets_declared", "config_doctor"):
+            assert by_id[cid].status == "skip" and by_id[cid].detail == self.SENTENCE, cid
+
+
+class TestARunnerNeverShowsWhatACheckRaised:
+    """Q204 AT2 (M5, LEAK-001): a check that raises became `fail` with `f"check errored: {e}"`, and that detail reaches `@viewer_or_above` JSON - a `pymysql` or `requests` message carries host,
+    port and path. Both runners put the exception in the log and the fixed sentence on the row."""
+
+    DRIVER = Exception("(2003, \"Can't connect to MySQL server on 'kea-db.internal.example' (timed out)\")")
+
+    def test_run_checks_logs_the_exception_and_shows_the_fixed_sentence(self, monkeypatch, caplog, mock_kea, db):
+        boom = list(health._CHECKS)
+        boom[0] = lambda _ctx: (_ for _ in ()).throw(self.DRIVER)
+        monkeypatch.setattr(health, "_CHECKS", boom)
+        with caplog.at_level("WARNING", logger=health.logger.name):
+            checks = health.run_checks(_ctx())
+        row = {c.id: c for c in checks}[health.CHECK_IDS[0]]
+        assert row.status == "fail"
+        assert row.detail == health.CHECK_ERRORED_DETAIL == "check errored — see server logs"
+        assert "kea-db.internal.example" not in json.dumps(row.as_dict())
+        assert "kea-db.internal.example" in caplog.text, "the Jen log keeps the reason"
+
+    def test_readiness_checks_logs_the_exception_and_shows_the_fixed_sentence(self, monkeypatch, caplog):
+        rid = next(cid for cid, (_title, group) in health._CHECK_META.items() if group == "readiness")
+
+        def explode(_ctx):
+            raise self.DRIVER
+
+        explode.__name__ = "_" + rid
+        monkeypatch.setattr(health, "_READINESS_CHECKS", [explode])
+        with caplog.at_level("WARNING", logger=health.logger.name):
+            out = health.readiness_checks(_ctx())
+        assert [(c.id, c.status, c.detail) for c in out] == [(rid, "fail", health.CHECK_ERRORED_DETAIL)]
+        assert "kea-db.internal.example" not in json.dumps(out[0].as_dict())
+        assert "kea-db.internal.example" in caplog.text
+
+    def test_the_drift_checks_own_except_says_the_same_sentence(self, monkeypatch):
+        def boom():
+            raise self.DRIVER
+
+        monkeypatch.setattr("jen.services.config_drift.check_config_drift", boom)
+        c = health._kea_config_drift(_ctx())
+        assert (c.status, c.detail) == ("fail", health.CHECK_ERRORED_DETAIL)
 
 
 # ── kea.server_clock_offset against a real local server ─────────────────────

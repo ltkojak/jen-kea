@@ -4155,19 +4155,17 @@ class TestTheSecondPassOfQ196:
         assert any("both manage kea-dhcp-ddns on 10.9.9.9" in r for r in inventory.refusals), inventory.refusals
 
     def test_row_8_two_identical_ssh_host_strings_that_cannot_be_parsed_are_still_one_host(self, lab):
-        """Rebuilt (Q201 AQ6 d): the odd host is an ASCII name with a control character, which a certificate CAN carry, so both records have a certificate that NAMES it and the destination check passes
-        on its own merits - the duplicate-daemon rule is asked with nothing in the product patched off."""
+        """Rebuilt again (Q204 AT5 b). Q201 AQ6 d built this with a certificate that NAMED the odd host (an ASCII name with a control character, "which a certificate CAN carry"). A certificate's DNS names
+        are now the verifier's parser's names, and the parser refuses a control character: no certificate Jen reads names such a host, so the rule is asked of the rule itself - two records, identical
+        host strings `same_host` cannot parse, both holding files - with nothing in the product patched off."""
         hosts = "h\x07ost"  # a control character: `same_host` cannot name a place, the string is identical
         a = {"id": 61, "name": "odd-a", "ssh_host": hosts}
         b = {"id": 62, "name": "odd-b", "ssh_host": hosts}
         for server in (a, b):
-            _commit_naming(server["id"], ["10.9.9." + str(server["id"]), hosts])
-        inventory = kea_tls.rotation_inventory(
-            [a, b],
-            url_for=lambda s, svc: f"https://10.9.9.{s['id']}:8004" if svc == "dhcp4" else "",
-            prove_storage=False,
-        )
-        assert any("both manage" in r for r in inventory.refusals), inventory.refusals
+            _commit_naming(server["id"], ["10.9.9." + str(server["id"])])
+        urls = lambda s, svc: f"https://10.9.9.{s['id']}:8004" if svc == "dhcp4" else ""  # noqa: E731
+        assert kea_tls.other_record_on_same_daemon(a, "dhcp4", [a, b], url_for=urls) == "odd-b"
+        assert kea_tls.other_record_on_same_daemon(b, "dhcp4", [a, b], url_for=urls) == "odd-a"
         lab.before = None
 
     def test_the_probe_names_are_capped(self):
@@ -4646,7 +4644,10 @@ class TestTheNameWorldsOfRotate:
         lab.begin()
         _rotate()
         texts = lab.texts()
-        assert "the CA cannot issue its certificate for kea_host" in texts, texts
+        # Q204 AT5 b: this row asserted the NAME refusal ("the CA cannot issue its certificate for kea_host"), reached because the record's certificate was read as NAMING `kea_host`. A certificate's DNS names
+        # are the verifier's parser's names now, and the parser refuses an underscore: the certificate names only 10.0.0.6, the URL's host is not one of its names, and the rotation is refused one step earlier
+        # by the record check - the same outcome (the rotation stops, every host stays on the old CA, no acknowledgement is asked) with the record's own sentence.
+        assert "Rotate refused" in texts and "kea_host" in texts, texts
         assert "Kea CA rotated" not in texts
         assert kea_tls.DAMAGED_CA_ADVICE not in texts and "tick the acknowledgement" not in texts, (
             "a healthy CA is never sent to the damaged-CA acknowledgement"
@@ -4669,8 +4670,8 @@ class TestTheSecondPassOfQ197:
         lab.begin()
         _rotate()
         texts = lab.texts()
-        assert "the CA cannot issue its certificate for kea_host" in texts, texts
-        assert "nothing was installed on any host" in texts and "change the address saved for it" in texts, texts
+        # Q204 AT5 b: see test_a_saved_https_host_the_verifier_cannot_name... - the record check refuses before any certificate is issued
+        assert "Rotate refused" in texts and "kea_host" in texts, texts
         assert "Rotate Kea CA" not in texts.replace("Rotate stopped", ""), (
             "the remedy is the address, not another Rotate"
         )
@@ -4750,7 +4751,10 @@ class TestARefusalChangesNothing:
         lab.urls[2] = "https://kea_host:8004"
         lab.hold_certificate_naming(2, ["kea_host", lab.servers[2]["ssh_host"]])
         extensions.KEA_SERVERS[:] = list(lab.servers.values())
-        return "the CA cannot issue its certificate for kea_host", (1, 2)
+        return "Rotate refused", (
+            1,
+            2,
+        )  # (Q204 AT5 b: the record check refuses before the name is tried; see test_f2_...)
 
     @staticmethod
     def _arrange_ca_damaged(lab, monkeypatch):
@@ -5664,7 +5668,10 @@ class TestARecordCarriesItsDestination:
         assert self._state(lab, url="https://10.0.0.6:9999") == ("jen", "")
 
     def test_an_alias_of_the_same_host_is_jens(self, lab):
-        assert self._state(lab, ssh_host="::ffff:10.0.0.6", url="https://[::ffff:10.0.0.6]:8004")[0] == "jen"
+        """Q204 AT5 a: this row said the mapped spelling is "the same host" for a certificate that names `10.0.0.6` (Q188 AD9's credential fold, used for a certificate name). No verifier folds it:
+        a client dialling `[::ffff:10.0.0.6]` is refused by a certificate for `10.0.0.6`. The record reads as refused. (A spelling that really IS the same name still passes: the next rows.)"""
+        assert self._state(lab, ssh_host="::ffff:10.0.0.6", url="https://[::ffff:10.0.0.6]:8004")[0] == "refuse"
+        assert self._state(lab, ssh_host="10.0.0.6", url="https://[FD00::6]:8004")[0] == "refuse"
 
     def test_a_different_daemon_is_refused_and_says_what_to_do(self, lab):
         state, why = self._state(lab, ssh_host="10.0.0.77", url="https://10.0.0.77:8004")
@@ -5828,10 +5835,13 @@ class TestTheSshHostIsTheTarget:
         assert self._state(lab, name="a better name") == ("jen", "")
 
     def test_a_url_alias_of_the_same_host_is_jens(self, lab):
-        assert self._state(lab, url="https://[::ffff:10.0.0.6]:8004") == ("jen", "")
+        """Q204 AT5 a: inverted (it was `("jen", "")` for the mapped URL spelling) - see test_an_alias_of_the_same_host_is_jens. The case-folded DNS alias is still one name."""
+        assert self._state(lab, url="https://[::ffff:10.0.0.6]:8004")[0] == "refuse"
+        assert self._state(lab, url="https://10.0.0.6:8004") == ("jen", "")
 
     def test_an_ssh_alias_that_same_host_equates_is_jens(self, lab):
-        assert self._state(lab, ssh_host="::ffff:10.0.0.6") == ("jen", "")
+        """Q204 AT5 a: inverted (it was `("jen", "")`): the SSH host `::ffff:10.0.0.6` is not the machine name the certificate carries (`10.0.0.6`) as a verifier reads names."""
+        assert self._state(lab, ssh_host="::ffff:10.0.0.6")[0] == "refuse"
 
     def test_an_alias_same_host_cannot_equate_is_a_refusal_with_the_sentence_by_design(self, lab):
         state, why = self._state(lab, ssh_host="kea-b.lan")
@@ -6321,10 +6331,13 @@ class TestTheRolesOfACertificateAreBoundByOrder:
         lab.before = None
 
     def test_a_one_name_certificate_accepts_that_name_in_both_roles(self, lab):
+        self._arrange(lab, ["10.0.0.6"], "10.0.0.6", "10.0.0.6")
+        assert self._state(lab) == ("jen", "")
+        # Q204 AT5 a: the two rows that followed said a mapped spelling of either role was accepted; neither is (see test_an_alias_of_the_same_host_is_jens)
         self._arrange(lab, ["10.0.0.6"], "::ffff:10.0.0.6", "10.0.0.6")
-        assert self._state(lab) == ("jen", "")
+        assert self._state(lab)[0] == "refuse"
         self._arrange(lab, ["10.0.0.6"], "10.0.0.6", "[::ffff:10.0.0.6]")
-        assert self._state(lab) == ("jen", "")
+        assert self._state(lab)[0] == "refuse"
 
     def test_a_hand_built_certificate_with_the_names_reversed_is_judged_by_its_order(self, lab):
         """Whatever a human thinks the roles are: the first name is the address it serves, the last is the machine it was installed on."""
@@ -6708,7 +6721,12 @@ class TestAScopedAddressIsRefused:
             ("fe80::1", "fe80::1%eth0", True),
             ("[fe80::1%eth0]", "fe80::1", True),
             ("fe80::1", "fe80::1", True),
-            ("::ffff:10.0.0.6", "10.0.0.6", True),
+            (
+                "::ffff:10.0.0.6",
+                "10.0.0.6",
+                False,
+            ),  # Q204 AT5 a: was True (the credential fold); the matcher half below agrees with False
+            ("10.0.0.6", "::ffff:10.0.0.6", False),
             ("10.0.0.6", "10.0.0.7", False),
             ("Kea-B.lan", "kea-b.lan", True),
             ("kea-b.lan.", "kea-b.lan", False),
@@ -7213,7 +7231,23 @@ class TestACertificateThatNamesNothingProvesNothing:
         """Q203 AS4: `x509.IPAddress` carries networks too; a CIDR is a range, not the address a daemon serves, and read as its text it was the role sentence's 'machine'."""
         self._both_branches_the_setup_check_and_the_put_back(lab, self._ip_network())
 
-    @pytest.mark.parametrize("name", [" ", "*", ".", " . ", "*.", "..."])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            " ",
+            "*",
+            ".",
+            " . ",
+            "*.",
+            "...",
+            "a\tb",
+            "a\x00b",
+            "*.kea.lan",
+            "x" * 64 + ".lan",
+            " kea-b.lan",
+            "kea_b.lan",
+        ],
+    )
     def test_14_degenerate_dns_names_are_no_name(self, lab, name):
         """Q203 second pass G3: a DNS name of only spaces, dots and stars is no name, so AR2's sentence (the right remedy) answers, not the role sentence."""
         from cryptography import x509
@@ -7224,11 +7258,26 @@ class TestACertificateThatNamesNothingProvesNothing:
         assert state == "refuse" and self.NOTHING in why, (state, why)
         lab.before = None
 
-    def test_14b_a_wildcard_with_a_domain_is_still_a_name(self, lab):
+    def test_14b_a_wildcard_is_the_one_shape_jen_never_issues(self, lab):
+        """Q204 AT5 b: this row said a wildcard with a domain "is still a name" (Q203). The certificate Jen issues carries a DNS name or an address, never a wildcard, and the verifier's own parser
+        refuses the shape - so a certificate whose only DNS name is `*.kea.lan` names nothing a record can be judged by. Inverted on purpose (the Q202/Q203 rule 'filter by character' became 'filter by the parser')."""
         from cryptography import x509
 
         cert = self._arrange_nameless(lab, x509.SubjectAlternativeName([x509.DNSName("*.kea.lan")]))
-        assert kea_tls._certificate_names(cert) == ["*.kea.lan"]
+        assert kea_tls._certificate_names(cert) == []
+        lab.before = None
+
+    @pytest.mark.parametrize("name", ["a\tb", "a\x00b", "*.kea.lan", "x" * 64 + ".lan", "kea_b.lan"])
+    def test_14c_the_setup_and_the_put_back_read_the_same_parser_rows(self, lab, name):
+        """Q204 AT5 b, the other branch: the setup's own-record check and the put-back (`record_destination_refusal`, `_pair_is_for_another_machine`) read the same names."""
+        from cryptography import x509
+
+        server = {"id": 96, "name": "odd", "ssh_host": "10.0.0.96"}
+        _cert, files = _san_certificate(96, x509.SubjectAlternativeName([x509.DNSName(name)]))
+        _give_prev(96)
+        assert self.NOTHING in kea_tls.record_destination_refusal(96, "dhcp4", server, "")
+        assert infra._pair_is_for_another_machine(files, server) is True
+        kea_tls.discard_local_record(96, "dhcp4")
         lab.before = None
 
     def test_12b_the_names_a_certificate_carries_are_dns_names_and_addresses_only(self, lab):
@@ -7264,6 +7313,173 @@ class TestACertificateThatNamesNothingProvesNothing:
     def test_the_admin_guides_stricter_table_says_it(self):
         text = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
         assert "no DNS or IP name" in text and "openssl verify" in text
+
+
+class TestACertificateNameIsJudgedAsTheVerifierJudgesIt:
+    """Q204 AT5 (M21 P2, M8/M22/M23 P3): `names_match` answered through `auth.same_host`, whose IPv4-mapped fold (Q188 AD9) is the credential rule's "same place for a SECRET" and is NOT the rule
+    any TLS verifier uses for a SAN: SAN `::ffff:a00:9` against the dial host `10.0.0.9` was True for Jen and "does not match" for openssl and urllib3, both directions. And Jen produced that record from
+    a configuration every saver accepted. The comparison is the verifier's (addresses equal, A-labels equal, no fold); the issuance refuses the spelling before a leaf exists."""
+
+    MAPPED, PLAIN = "::ffff:10.0.0.9", "10.0.0.9"
+    MAPPED_SAN = str(ipaddress.ip_address("::ffff:10.0.0.6"))  # how a SAN prints it (`::ffff:a00:6` before Python 3.13)
+    TABLE = [
+        ("::ffff:a00:9", "10.0.0.9", False),
+        ("10.0.0.9", "::ffff:a00:9", False),
+        ("::ffff:10.0.0.9", "10.0.0.9", False),
+        ("::ffff:10.0.0.9", "::ffff:a00:9", True),
+        ("fe80::1%eth0", "fe80::1", True),
+        ("[fd00::5]", "FD00:0:0:0:0:0:0:5", True),
+        ("kea-a", "KEA-A", True),
+        ("kea-a.", "kea-a", False),
+        ("kea-a", "kea-a.", False),
+        ("kea-a", "kea-b", False),
+        ("10.0.0.9", "10.0.0.9", True),
+        ("10.0.0.9", "kea-a", False),
+        ("", "", False),
+        ("kea-a", "", False),
+    ]
+
+    @pytest.mark.parametrize("a,b,expected", TABLE)
+    def test_the_comparison_table(self, a, b, expected):
+        assert kea_tls.names_match(a, b) is expected
+        assert kea_tls.names_match(b, a) is expected, "symmetric"
+
+    def test_names_match_agrees_with_the_librarys_own_verifier_on_real_leaves(self):
+        """The oracle Jen ships (`verify_issued`, the library's chain verifier; `openssl` is not on the dev box): a leaf whose only SAN is the first name, verified for the second as a server name."""
+        from cryptography import x509
+
+        key = kea_tls._new_key()
+        ca = kea_tls._build_ca(key, "q204 oracle")
+
+        def verdict(cert_name, dial):
+            san = (
+                x509.IPAddress(ipaddress.ip_address(cert_name))
+                if kea_tls._is_ip(cert_name)
+                else x509.DNSName(cert_name)
+            )
+            leaf = kea_tls._leaf(ca, key, kea_tls._new_key(), "cn", [san], client=False)
+            return kea_tls.verify_issued(ca, leaf, False, dial) == ""
+
+        for cert_name, dial, expected in [
+            ("::ffff:a00:9", "10.0.0.9", False),
+            ("10.0.0.9", "::ffff:a00:9", False),
+            ("::ffff:10.0.0.9", "::ffff:a00:9", True),
+            ("fd00::5", "FD00:0:0:0:0:0:0:5", True),
+            ("kea-a", "KEA-A", True),
+            ("KEA-A", "kea-a", True),
+            ("kea-a", "kea-a.", False),
+            ("kea-a", "kea-b", False),
+        ]:
+            assert verdict(cert_name, dial) is expected, (cert_name, dial)
+            assert kea_tls.names_match(cert_name, dial) is expected, (cert_name, dial)
+
+    def test_the_verifier_refuses_the_mapped_spelling_and_accepts_the_plain_ones(self):
+        assert kea_tls.verifier_accepts_name(self.MAPPED) is False
+        assert kea_tls.verifier_accepts_name("[::ffff:a00:9]") is False
+        for ok in (self.PLAIN, "fd00::5", "[fd00::5]", "kea-a", "kea-a.example.com"):
+            assert kea_tls.verifier_accepts_name(ok) is True, ok
+
+    def test_every_saver_and_the_san_refuse_the_mapped_spelling_with_the_sentence(self):
+        from jen.services import auth
+
+        assert auth.valid_ssh_target(self.MAPPED) is False
+        assert auth.valid_ssh_target(self.PLAIN) is True and auth.valid_ssh_target("fd00::5") is True
+        assert "IPv4-mapped" in auth.ssh_target_problem(self.MAPPED)
+        url = f"https://[{self.MAPPED}]:8004"
+        assert auth.valid_api_url(url, require_port=True, certificate_name=True) is False
+        assert auth.dns_name_sentence(url, require_port=True) == auth.MAPPED_ADDRESS_SENTENCE
+        # the plain and the plain-IPv6 spellings pass; the same mapped address as an http URL (no certificate) is not a certificate question
+        assert auth.valid_api_url("https://10.0.0.9:8004", require_port=True, certificate_name=True) is True
+        assert auth.valid_api_url("https://[fd00::5]:8004", require_port=True, certificate_name=True) is True
+        assert auth.valid_api_url(f"http://[{self.MAPPED}]:8004", require_port=True, certificate_name=True) is True
+        assert kea_tls._san_for(self.MAPPED) is None
+        assert kea_tls._san_for(self.PLAIN) is not None and kea_tls._san_for("fd00::5") is not None
+        # the credential rule is untouched: for a SECRET the two spellings are one place
+        assert auth.same_host(f"https://[{self.MAPPED}]:8004", f"https://{self.PLAIN}:8004") is True
+
+    def test_the_bind_wall_names_the_mapped_spelling_in_the_setup_route(self):
+        src = pathlib.Path("jen/routes/settings/infrastructure.py").read_text(encoding="utf-8")
+        wall = src[src.index("The bind address must be an IP literal on the Kea host") :]
+        assert "is_v4_mapped_literal(address)" in wall[:900] and "MAPPED_ADDRESS_SENTENCE" in wall[:900]
+
+    def test_issue_server_cert_refuses_a_mapped_bind_or_ssh_host_before_a_leaf_exists(self, lab):
+        for server, bind in (
+            ({"id": 97, "name": "m", "ssh_host": "10.0.0.97"}, self.MAPPED),
+            ({"id": 97, "name": "m", "ssh_host": self.MAPPED}, "10.0.0.9"),
+        ):
+            with pytest.raises(kea_tls.NameRefused) as e:
+                kea_tls.issue_server_cert(server, "dhcp4", bind, commit=False)
+            assert e.value.names == [self.MAPPED] and "different name" in e.value.why
+        remedy = kea_tls.name_refusal_remedy([self.MAPPED])
+        assert "change the address saved for it" in remedy
+        lab.before = None
+
+    def _hold_mapped(self, lab, *, ssh_host, url):
+        from cryptography import x509
+
+        cert, files = _san_certificate(
+            2, x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("::ffff:10.0.0.6"))])
+        )
+        lab.hosts[2]["files"] = lab.hosts[2]["loaded"] = copy.deepcopy(files)
+        lab.servers[2]["ssh_host"] = ssh_host
+        lab.machine_addr[2] = ssh_host
+        lab.urls[2] = url
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        lab.answered_before[2] = lab.answers_jens_live_identity(2)
+        return cert
+
+    def test_a_record_saved_before_this_release_with_the_mapped_ssh_host_and_a_plain_url_is_refused(self, lab):
+        """Opus's `v12_mapped.py` world: the SAN is the mapped spelling and Jen dials the plain one. `record_state` said `jen`; it now reads as refused, and a rotation changes nothing."""
+        self._hold_mapped(lab, ssh_host="::ffff:10.0.0.6", url="https://10.0.0.6:8004")
+        state, _why = kea_tls.record_state(2, "dhcp4", server=lab.servers[2], url=lab.urls[2])
+        assert state == "refuse", state
+        before = _hosts_state(lab)
+        _rotate()
+        assert "Rotate refused" in lab.texts() and lab.remote_actions() == 0 and _hosts_state(lab) == before
+        lab.before = None
+
+    def test_a_record_saved_with_the_mapped_spelling_everywhere_is_refused_at_the_rotation_never_silently_reissued(
+        self, lab
+    ):
+        self._hold_mapped(lab, ssh_host="::ffff:10.0.0.6", url="https://[::ffff:10.0.0.6]:8004")
+        assert kea_tls.rotation_bind(2, "dhcp4", lab.urls[2]) == self.MAPPED_SAN
+        before = _hosts_state(lab)
+        _rotate()
+        texts = lab.texts()
+        assert f"the CA cannot issue its certificate for {self.MAPPED_SAN}" in texts and "different name" in texts, (
+            texts
+        )
+        assert "nothing was installed on any host" in texts and lab.remote_actions() == 0
+        assert _hosts_state(lab) == before, "no file on any host changed"
+        lab.before = None
+
+    def test_the_names_a_certificate_carries_are_the_parsers_names(self, lab):
+        from cryptography import x509
+
+        mixed = x509.SubjectAlternativeName(
+            [
+                x509.DNSName("a\tb"),
+                x509.DNSName("a\x00b"),
+                x509.DNSName("*.kea.lan"),
+                x509.DNSName("x" * 64 + ".lan"),
+                x509.DNSName("kea-b.lan"),
+                x509.IPAddress(ipaddress.ip_address("::ffff:10.0.0.6")),
+            ]
+        )
+        cert, _files = _san_certificate(94, mixed)
+        assert kea_tls._certificate_names(cert) == ["kea-b.lan", self.MAPPED_SAN]
+        kea_tls.discard_local_record(94, "dhcp4")
+        lab.before = None
+
+    def test_the_names_nothing_sentence_is_named_for_what_it_does(self):
+        """It formats, it does not test: the test is `roles[1] is None` / `ssh_name is None` at its two call sites."""
+        assert hasattr(kea_tls, "_names_nothing_sentence") and not hasattr(kea_tls, "_names_nothing")
+        src = pathlib.Path("jen/services/kea_tls.py").read_text(encoding="utf-8")
+        assert src.count("_names_nothing_sentence(") == 3, "the definition and its two call sites"
+
+    def test_the_admin_guides_stricter_table_has_the_row(self):
+        text = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
+        assert "IPv4-mapped" in text and "openssl" in text
 
 
 class TestAGrandfatheredHostStaysOnItsRecord:
