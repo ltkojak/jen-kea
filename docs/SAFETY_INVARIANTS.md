@@ -221,7 +221,7 @@ renamed, and never counted into a visible row (Compare Leases). `/metrics` itsel
 **Established.** Q156 (the About page), Q204 (Compare Leases, three Health checks, the drift route, the metrics settings - Opus's M1-M4 - and the readers the whole-tree sweep found: the OIDC mapping preview on Settings -> Security, the
 D2 tab's reverse-zone hints).
 **Enforced at.** `User.filter_subnet_map` / `can_access_subnet` (`jen/models/user.py`) at each reader: `kea_ha.compare_assigned(servers, subnet_filter=...)`, the `skip` for `not ctx["unrestricted"]` in `health._kea_config_drift`,
-`_kea_subnets_declared` and `_config_doctor`, `current_user.all_subnets` in `check_config_drift_route` and `save_metrics_settings`, and the metrics card's `can_grant_all_subnets`; the whole tree by sweep S16.
+`_kea_subnets_declared` and `_config_doctor`, `current_user.all_subnets` in `check_config_drift_route` and `save_metrics_settings`, the metrics card's `can_grant_all_subnets`, the readiness row `kea32_removed_keys`, and every caller of `run_checks` / `readiness_checks` passing the caller's `unrestricted` (a source test); the whole tree by sweep S16.
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS16TheSubnetsThemselvesAreScoped`
 - `tests/test_authz_matrix.py::TestTheBranchesRun`

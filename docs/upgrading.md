@@ -10,6 +10,20 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## A subnet-restricted account sees only its own subnets; two more routes ask for a recent password; a mapped IPv6 address is not the IPv4 address it wraps
+
+One step (5.69.4). It adds no migration. Two things below can refuse something that used to be accepted, and they are named so a refusal is not a surprise.
+
+**An account that is limited to some subnets no longer reads the others.** The Compare Leases card on Servers lists only the subnets that account may see (a subnet it may not see is left out, and its disagreement between the servers never marks a row it can see). Four Health rows - the subnet map against Kea, the Kea subnets that have no name, the Configuration Doctor and the Kea 3.2 readiness row "No removed config keys" (which also feeds the dashboard's readiness widget, the readiness API and Getting started) - read "fleet-wide summary is for unrestricted accounts" for such an account, as four others already did. The *Check for drift* button, and the Prometheus token and the open-access switch under Settings -> Alerts, need an account that may see every subnet; the scrape itself (`/metrics`) is unchanged. An account with no subnet limit sees everything it saw before.
+
+**Installing the Kea package (Settings -> Kea) and switching IPv6 on or off need a superadmin whose password was confirmed in the last ten minutes.** They were superadmin-only already. When your confirmation is older, the page sends you to confirm and you click the button again (the install button, which runs without leaving the page, takes you to the confirmation page and back).
+
+**A certificate for an IPv4-mapped IPv6 address (`::ffff:10.0.0.9`) is refused where Jen would issue one.** A TLS client that dials `10.0.0.9` does not accept a certificate for the mapped spelling, and the reverse, so the SSH host, the Kea API address and the bind address of the https setup refuse the spelling with a sentence that says to use the IPv4 address. A record saved earlier with one reads as refused at the https setup and at Rotate Kea CA, with the same sentence, and nothing on the host changes. Passwords are not affected: for a password the two spellings are still one place.
+
+**A Kea API address that carries a path, a query or a fragment is refused the next time it is saved.** The Kea control endpoint is dialled at its root. An address saved earlier is not rewritten; it is refused at its next save, with the sentence that names the shape (`scheme://host:port`).
+
+**A failed restart after an import now says when Jen could not keep its note**, as a restore already did. The Probe button answers "IPv6 is off" for a kea-dhcp6 probe while the IPv6 switch is off.
+
 ## An admin's probe cannot downgrade the scheme; restoring, importing, authoring and the SSO settings ask for a recent password; the SSH key is a superadmin's
 
 One step (5.69.3). It adds no migration and needs no action beyond what you may notice below.
