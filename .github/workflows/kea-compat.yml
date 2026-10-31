@@ -40,11 +40,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - kea: 3.0.3
+          - kea: 3.0.5
             dev: false
-          - kea: 3.2.0
+          - kea: 3.2.1
             dev: false
-          - kea: 3.3.1
+          - kea: 3.3.3
             dev: true
 
     env:
