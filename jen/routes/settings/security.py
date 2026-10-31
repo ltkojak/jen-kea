@@ -211,6 +211,9 @@ def remove_cert():
 @bp.route("/settings/save-oidc", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(
+    minutes=10
+)  # Q203 AS2: who may sign in, and with what role (`role_map`, `default_role`, `auto_create`), is what RBAC-003 calls deciding who the superadmins are
 def save_oidc():
     """v5.25.0 (Q21) — [oidc] single sign-on. Superadmin only: this
     controls who can log in and with what role, a step above the rest

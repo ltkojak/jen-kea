@@ -740,6 +740,35 @@ class TestOidcSettingsRoute:
         base.update(fields)
         return client.post(self._SAVE_URL, data=base, follow_redirects=True)
 
+    def test_q203_an_admin_is_refused_and_the_config_is_byte_equal(self, client, db, isolated_oidc_settings_config):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, None, role="admin", username="q203_oidc_admin")
+        before = isolated_oidc_settings_config.read_bytes()
+        r = self._post(c, enabled="1", default_role="superadmin", auto_create="1")
+        assert b"SuperAdmin access required" in r.data
+        assert isolated_oidc_settings_config.read_bytes() == before
+
+    def test_q203_a_superadmin_without_a_recent_confirmation_is_sent_to_confirm_and_nothing_is_written(
+        self, logged_in_client, isolated_oidc_settings_config
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        with logged_in_client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        before = isolated_oidc_settings_config.read_bytes()
+        r = logged_in_client.post(
+            self._SAVE_URL,
+            data={
+                "enabled": "1",
+                "issuer": "https://idp.example.com",
+                "client_id": "jen",
+                "default_role": "superadmin",
+            },
+        )
+        assert r.status_code == 302 and "reauth" in r.headers["Location"]
+        assert isolated_oidc_settings_config.read_bytes() == before
+
     def test_save_persists_to_disk(self, logged_in_client, isolated_oidc_settings_config):
         r = self._post(logged_in_client, enabled="1", client_secret="s3cret", auto_create="1", local_login="1")
         assert r.status_code == 200

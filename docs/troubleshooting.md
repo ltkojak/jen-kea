@@ -812,6 +812,10 @@ Usage that is `anyExtendedKeyUsage` alone, and a self-issued CA whose Authority 
 than its own. Restore the CA files from a backup, or replace the CA with **Rotate Kea CA** and tick the
 acknowledgement (a server that fails part-way cannot be put back on a damaged CA).
 
+**Where Jen looks for `openssl`.** Jen runs the `openssl` command only from the fixed list `/usr/bin:/bin`, not from the PATH the service happens to run with. On a host where it is installed
+somewhere else (for example `/usr/local/bin/openssl` only), Jen finds none and judges the CA by its own verifier alone: there is no second opinion. Health does not print a line for the missing
+command - it prints the second opinion only when there is one, so the absence of the line is how you tell. Install the distribution's `openssl` package, or link it into `/usr/bin`, to get it.
+
 **"Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for *name*"** means the CA is fine: its
 name constraints do not permit that address or host name (or the host name is one a certificate cannot carry, such
 as one with an underscore or a trailing dot). Nothing was changed on the host and no acknowledgement is needed:
@@ -844,6 +848,8 @@ Remove the direct socket and set it up again on the new machine, or restore the 
 **"its saved certificate names no address and no machine"** means the certificate Jen signed for this server has no DNS or IP name Jen can read (no subject alternative name, an e-mail or URI one only, or one that does not parse), so it proves nothing about which daemon it was installed on. Remove the direct socket and set it up again, or restore the certificate Jen issued. Nothing is changed on any host.
 
 **"*other* already manages kea-*service* on *host*: one daemon, two records"** in a Rotate refusal means a second server record - one that is not dialled over https now included - shares this record's SSH host and service: the certificate a rotation installs would replace the one that record holds. Remove one of the two records, or re-point it at its own host (the setup refuses to run while two records share a daemon, so "set it up again" is not the remedy here).
+
+**"A direct-socket recovery on *server* is not proved" with "A restored config revision is on the Kea host, but the daemon did not restart on it"** (v5.69.3) means a **Restore** from Config history wrote the revision to the host and the restart that follows it failed - the daemon may be stopped, or still running the config it had before. Jen keeps the note on Servers and in Health (as a stopped daemon) until a restart of that daemon works: restore again, or use **Restart Kea** on Servers once the config is right; a superadmin can also acknowledge it after checking the daemon on the host. Restoring a revision needs a superadmin whose password was confirmed in the last ten minutes, like downloading it unmasked.
 
 **"the bookkeeping of an earlier rotation for *server* kea-*service* is not finished"** (a Rotate refusal) means a note an earlier rotation left on Servers could not be finished because the incident store refused the write. Nothing was changed. Try again when the database answers, or press **Forget stale records**, which finishes it from Jen's files. A rotation note is Jen's own bookkeeping: it has no Acknowledge button.
 

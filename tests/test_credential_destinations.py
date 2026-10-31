@@ -692,6 +692,143 @@ class TestTheDestinationGuardSeesEveryEndpoint:
             ctx.pop()
         assert cfgpath.read_bytes() == before
 
+    TLS_CHANGES = [
+        ("api_ca", "/etc/jen/ssl/other-ca.crt"),
+        ("api_tls_verify", "false"),
+        ("api_client_cert", "/etc/jen/ssl/other-client.pem"),
+        ("api_client_key", "/etc/jen/ssl/other-client.key"),
+    ]
+
+    @staticmethod
+    def _signed_in(role, minutes_ago=0):
+        from datetime import datetime, timedelta, timezone
+
+        from flask import session
+
+        ctx = TestTheDestinationGuardSeesEveryEndpoint._as(role)
+        session["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+        return ctx
+
+    @pytest.mark.parametrize(("key", "value"), TLS_CHANGES, ids=[k for k, _v in TLS_CHANGES])
+    def test_q203_as6_an_admins_write_of_a_tls_key_is_refused_byte_identical(self, cfgpath, key, value):
+        before = cfgpath.read_bytes()
+        ctx = self._signed_in("admin")
+        try:
+            with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
+                app_config.write_values([("kea", key, value)])
+        finally:
+            ctx.pop()
+        assert cfgpath.read_bytes() == before
+
+    @pytest.mark.parametrize(("key", "value"), TLS_CHANGES, ids=[k for k, _v in TLS_CHANGES])
+    def test_q203_as6_a_superadmin_with_a_recent_confirmation_may_write_it(self, cfgpath, key, value):
+        ctx = self._signed_in("superadmin", minutes_ago=1)
+        try:
+            app_config.write_values([("kea", key, value)])
+        finally:
+            ctx.pop()
+        assert _parse(cfgpath.read_text(encoding="utf-8")).get("kea", key) == value
+
+    @pytest.mark.parametrize(("key", "value"), TLS_CHANGES, ids=[k for k, _v in TLS_CHANGES])
+    def test_q203_as6_a_superadmin_with_a_stale_confirmation_is_asked_to_confirm(self, cfgpath, key, value):
+        before = cfgpath.read_bytes()
+        ctx = self._signed_in("superadmin", minutes_ago=30)
+        try:
+            with pytest.raises(ConfigChangeRefused, match="Confirm your password"):
+                app_config.write_values([("kea", key, value)])
+        finally:
+            ctx.pop()
+        assert cfgpath.read_bytes() == before
+
+    def test_q203_as6_the_view_carries_each_key_and_reads_the_boolean_as_apply_does(self):
+        from jen import config
+
+        view = config.destination_view(
+            _parse(BASE.replace("[kea]\n", "[kea]\napi_ca = /x/ca.crt\napi_tls_verify = 1\n", 1))
+        )
+        assert view["tls:api_ca"] == "/x/ca.crt" and view["tls:api_tls_verify"] == "True"
+        assert view["tls:api_client_cert"] == "" and view["tls:api_client_key"] == ""
+        same = config.destination_view(
+            _parse(BASE.replace("[kea]\n", "[kea]\napi_ca = /x/ca.crt\napi_tls_verify = true\n", 1))
+        )
+        assert view == same, "true and 1 are one value: rewriting the spelling is not a change of destination"
+        assert {f"tls:{k}" for k in config.TLS_KEYS} <= set(view)
+        assert not any(k.startswith("tls:") for k in config.identity_view(_parse(BASE))), (
+            "the investigation guard keeps its four keys"
+        )
+
+    def test_q203_as6_an_unchanged_value_written_again_is_not_a_change_for_any_role(self, cfgpath):
+        """The rotation's own `api_ca` rewrite writes Jen's own paths over Jen's own paths: nothing changes, so the guard is not asked (the route is a superadmin's with a step-up anyway)."""
+        ctx = self._signed_in("admin")
+        try:
+            app_config.write_values([("kea", "api_tls_verify", "true")])
+            app_config.write_values([("kea", "api_ca", "")])
+        finally:
+            ctx.pop()
+
+    def test_q203_as6_every_route_that_writes_a_tls_key_is_a_superadmins_with_a_step_up(self):
+        """The finding-detector the Q asks for: adding the keys to the view must not put a route in front of the guard outside a step-up - and none is. A route that names a TLS key AND writes the config
+        is a superadmin's, and either carries the step-up decorator or asks `step_up_redirect` itself (the setup wizard's POST branch). `settings_kea` names the keys to READ them; `_direct_socket_edit`
+        is not a route (its routes are superadmin + step-up, tests/test_direct_socket_lock.py)."""
+        import ast
+        import pathlib
+
+        from jen import config
+
+        keys = set(config.TLS_KEYS)
+        writers = {"write_value", "write_values", "mutate"}
+        found = {}
+        for path in sorted(pathlib.Path("jen/routes").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                decorators = [ast.unparse(d) for d in node.decorator_list]
+                if not any(d.startswith("bp.route") for d in decorators):
+                    continue
+                names = {s.value for s in ast.walk(node) if isinstance(s, ast.Constant) and s.value in keys}
+                calls = {
+                    c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, "id", "")
+                    for c in ast.walk(node)
+                    if isinstance(c, ast.Call)
+                }
+                if names and calls & writers:
+                    found[node.name] = (decorators, calls)
+        # (`setup_connect` names the keys and hands them to `setup_wizard.save_connection` - the writer is a service, the route asks the step-up first)
+        assert set(found) == {"save_infra_kea", "rotate_kea_ca"} | ({"setup_connect"} & set(found)), sorted(found)
+        for name, (decorators, calls) in found.items():
+            assert "_superadmin_required" in decorators, name
+            assert any(d.startswith("_recent_auth_required") for d in decorators) or "_step_up_redirect" in calls, name
+        setup_source = pathlib.Path("jen/routes/setup.py").read_text(encoding="utf-8")
+        connect = next(
+            n for n in ast.walk(ast.parse(setup_source)) if isinstance(n, ast.FunctionDef) and n.name == "setup_connect"
+        )
+        body = ast.unparse(connect)
+        assert "_superadmin_required" in [ast.unparse(d) for d in connect.decorator_list]
+        assert body.index("_step_up_redirect(10)") < body.index("save_connection"), (
+            "the step-up is asked before the writer"
+        )
+
+    def test_q203_as6_the_labs_write_values_is_the_guards_answer_for_the_rotations_own_rewrite(self, cfgpath):
+        """Opus H4: the rotation Lab replaces `write_values` with a stub that never meets the guard. The real writer, asked the rotation's own four items by a superadmin who confirmed, accepts them; the
+        same items from an admin are refused - so the Lab's stub is not hiding a refusal the rotation would meet."""
+        items = [
+            ("kea", "api_ca", "/etc/jen/ssl/jen-ca.crt"),
+            ("kea", "api_client_cert", "/etc/jen/ssl/jen-kea-client.pem"),
+            ("kea", "api_client_key", "/etc/jen/ssl/jen-kea-client.key"),
+            ("kea", "api_tls_verify", "true"),
+        ]
+        ctx = self._signed_in("superadmin", minutes_ago=1)
+        try:
+            app_config.write_values(items)
+        finally:
+            ctx.pop()
+        ctx = self._signed_in("admin")
+        try:
+            with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
+                app_config.write_values([("kea", "api_ca", "/etc/jen/ssl/else.crt")])
+        finally:
+            ctx.pop()
+
     def test_the_destination_view_names_every_endpoint_and_the_identity_view_does_not(self):
         from jen import config
 

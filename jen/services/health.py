@@ -673,6 +673,7 @@ def _direct_socket_recovery(ctx) -> Check:
     stopped = {
         "remote-unknown",
         "restart-failed",
+        "restore-restart-failed",
         "tls-not-restored",
         "aborted",
         "restored-endpoint-unreachable",

@@ -2814,6 +2814,45 @@ def q202_ar5_the_url_is_judged_as_the_tls_stack_judges_it():
         )
 
 
+def q203_as1_an_admins_probe_never_downgrades_the_scheme():
+    """`probe_kea` driven as an admin and as a superadmin, configured https and http, against a candidate on the same host over each scheme and on a different host: the list of what was DIALLED
+    (nothing is sent anywhere - `_probe_once` is a recorder, and a credential is never printed). A probe is a credential send (Q203 AS1)."""
+    import inspect
+    import types
+
+    from flask import Flask
+
+    from jen.routes.settings import infrastructure as infra
+
+    out = {}
+    for role in ("admin", "superadmin"):
+        for configured in ("https://kea-a:8000", "http://kea-a:8000"):
+            for candidate in ("https://kea-a:8004", "http://kea-a:8004", "https://other:8004", "http://other:8004"):
+                dialled = []
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(
+                        mock.patch.object(extensions, "KEA_SERVERS", [{"id": 1, "name": "k", "api_url": configured}])
+                    )
+                    stack.enter_context(mock.patch.object(extensions, "KEA_CONNECTION_MODE", "ca"))
+                    stack.enter_context(
+                        mock.patch.object(infra, "current_user", types.SimpleNamespace(role=role, username="u"))
+                    )
+                    stack.enter_context(
+                        mock.patch.object(
+                            infra, "_probe_once", lambda url, *a, _d=dialled, **k: (_d.append(url) or "", "no")
+                        )
+                    )
+                    stack.enter_context(
+                        mock.patch.object(infra.__kea, "_endpoint_for", lambda s, svc, _c=configured: (_c, "u", "pw"))
+                    )
+                    app = Flask(__name__)
+                    app.secret_key = "probe"
+                    with app.test_request_context(method="POST", data={"candidate_url": candidate}):
+                        inspect.unwrap(infra.probe_kea)()
+                out[(role, configured[:5], candidate)] = bool(dialled)
+    return out
+
+
 def q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own():
     """`record_state` for a record issued for 10.0.0.6 (SSH host 10.0.0.6, address 10.0.0.6) under server 2: (unchanged, SSH host moved with the URL unchanged, URL moved with the SSH host unchanged,
     both moved). The SSH host moved to another machine is the case Q199 accepted - the helper would have installed on the new machine and restarted its daemon."""
@@ -3019,6 +3058,7 @@ SCENARIOS = {
             "q200_",
             "q201_",
             "q202_",
+            "q203_",
         )
     )
     and callable(fn)
@@ -3381,6 +3421,24 @@ EXPECTED = {
     "q202_ar1_a_pending_note_is_refreshed_only_under_its_own_ca_fingerprint": (True, False, True),
     "q202_ar2_a_certificate_that_names_nothing_proves_nothing": ("refuse", True, True),
     "q202_ar5_the_url_is_judged_as_the_tls_stack_judges_it": ("jen", "refuse", "refuse"),
+    "q203_as1_an_admins_probe_never_downgrades_the_scheme": {
+        ("admin", "https", "https://kea-a:8004"): True,
+        ("admin", "https", "http://kea-a:8004"): False,
+        ("admin", "https", "https://other:8004"): False,
+        ("admin", "https", "http://other:8004"): False,
+        ("admin", "http:", "https://kea-a:8004"): True,
+        ("admin", "http:", "http://kea-a:8004"): True,
+        ("admin", "http:", "https://other:8004"): False,
+        ("admin", "http:", "http://other:8004"): False,
+        ("superadmin", "https", "https://kea-a:8004"): True,
+        ("superadmin", "https", "http://kea-a:8004"): True,
+        ("superadmin", "https", "https://other:8004"): True,
+        ("superadmin", "https", "http://other:8004"): True,
+        ("superadmin", "http:", "https://kea-a:8004"): True,
+        ("superadmin", "http:", "http://kea-a:8004"): True,
+        ("superadmin", "http:", "https://other:8004"): True,
+        ("superadmin", "http:", "http://other:8004"): True,
+    },
     "q201_aq2_a_recovery_judges_the_record_group": (True, True, False, False),
     "q201_aq3_a_pending_note_is_reconciled_from_the_files": (
         ["ghost kea-dhcp4"],

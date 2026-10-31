@@ -1046,7 +1046,7 @@ def name_refusal_remedy(names, rotating: bool = False, prepared: bool = False) -
 
 
 def other_record_on_same_daemon(server: dict, service: str, servers, url_for=None, ignore=()) -> str:
-    """Q197 (AM5): the NAME of ANOTHER server record that shares this record's SSH host (`same_host`: exact, no DNS) and already holds a Jen-issued record for `service` - "" when there is none. The rule
+    """Q197 (AM5): the NAME of ANOTHER server record that shares this record's SSH host (`same_host`: exact, no DNS) and already holds a record for `service` - files at the paths, whoever issued the pair (Q203 AS3) - "" when there is none. The rule
     the rotation applies (Q196 AL2: one daemon is one target) asked where the world is MADE: an https setup on a second record for the same daemon would put a certificate on the fixed remote paths
     that the first record's copy then no longer matches. Q202 (AR4): ONE rule, asked by the setup AND by the rotation, over EVERY other record - a parked one (not dialled over https now) included, because
     the certificate lands at that daemon's fixed remote paths whatever scheme Jen dials it on. `ignore` is a set of (server id text, service) the caller handles itself (the rotation's two TARGETS)."""
@@ -1068,7 +1068,9 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
         if (str(other.get("id")), service) in ignore:
             continue
         state = record_state(other.get("id"), service, server=other, url=url_for(other, service))[0]
-        if state in (*JEN_STATES, "refuse"):
+        if state != "none":
+            # (Q203 AS3: EVERY state but "none" - the name `record_state` answers when there is nothing at the paths. An `external` record (a pair an administrator's CA issued) holds files at the daemon's
+            # fixed remote paths too, and the rotation's install would overwrite what its endpoint is dialled on; the setup would otherwise ALLOW the second record.)
             # (Q198 AN5: a record Jen cannot rotate safely - malformed, a pair that does not match, an earlier CA's - is still files at that daemon's fixed paths; it is a second owner too)
             # (Q202 second pass F1: NO exemption for a record whose files name another machine or no machine - a certificate that cannot say which daemon it is for is not evidence that it is not this
             # one's, and the absence of evidence is never evidence: the record still holds files and still names this SSH host)
@@ -1873,12 +1875,21 @@ def _certificate_roles(cert) -> tuple:
 
 
 def _certificate_names(cert) -> list:
-    """The DNS and IP names a certificate's SAN extension carries, in the order written (empty for no extension, one with no such name, or one that does not parse)."""
+    """The DNS names and IP ADDRESSES a certificate's SAN extension carries, in the order written (empty for no extension, one with no such name, or one that does not parse). Q203 (AS4): an empty
+    DNS name is no name and an IP network (`x509.IPAddress` carries networks too) is a range, not an address - neither is kept, so a certificate whose only SAN is one reads as naming nothing
+    (AR2's sentence), not as roles `("", "")` or a CIDR text (the role sentence, whose remedy is the wrong one)."""
     try:
         sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
     except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
         return []
-    return [str(g.value) for g in sans if isinstance(g, x509.DNSName | x509.IPAddress)]
+    names = []
+    for g in sans:
+        if isinstance(g, x509.DNSName):
+            if str(g.value):
+                names.append(str(g.value))
+        elif isinstance(g, x509.IPAddress) and isinstance(g.value, ipaddress.IPv4Address | ipaddress.IPv6Address):
+            names.append(str(g.value))
+    return names
 
 
 def _names_nothing(cert) -> str:
@@ -1924,7 +1935,8 @@ def _group_certificate(server_id, service: str):
     """Q201 (AQ2): `(certificate | None, [file names present])` - the certificate that represents what the HOST holds for this record GROUP: the live certificate when it loads and no stale marker says
     otherwise; the `.prev` certificate when the live copy is stale-marked, or when the live copy is absent or unreadable; NEVER `.staged` (a host never accepted it). Q202 (AR9 h): it reads the FILES
     only - `host_material` also honours the `.unknown` marker and the open `remote-unknown` / `tls-not-restored` incidents (and answers "unknown" for a live pair that does not load where this falls
-    back to `.prev`); no verdict of the 20 group shapes the second pass executed moved on that difference, and this is the wider rule (a certificate to compare rather than none)."""
+    back to `.prev`). Q203 (AS7 a): `group_verdict` DOES move on that difference, on five of the 20 shapes (`current` / `external` where `host_material` answers `unknown`), and no RECORDED outcome moves
+    with it; this is the wider rule (a certificate to compare rather than none)."""
     crt = server_copy_path(server_id, service)
     files = sorted(os.path.basename(p) for p in _record_paths(server_id, service) if os.path.lexists(p))
 

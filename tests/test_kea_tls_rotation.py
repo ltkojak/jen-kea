@@ -7176,6 +7176,61 @@ class TestACertificateThatNamesNothingProvesNothing:
         assert all(not h["installs"] and h["restarts"] == 0 for h in lab.machines().values())
         lab.before = None
 
+    @staticmethod
+    def _empty_dns():
+        from cryptography import x509
+
+        return x509.SubjectAlternativeName([x509.DNSName("")])
+
+    @staticmethod
+    def _ip_network():
+        import ipaddress
+
+        from cryptography import x509
+
+        return x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_network("10.0.0.0/24"))])
+
+    def _both_branches_the_setup_check_and_the_put_back(self, lab, extension):
+        cert = self._arrange_nameless(lab, extension)
+        assert kea_tls._certificate_names(cert) == [] and kea_tls._certificate_roles(cert) == (None, None)
+        state, why = kea_tls.record_state(2, "dhcp4", server=lab.servers[2], url=lab.urls[2])
+        assert state == "refuse" and self.NOTHING in why, (state, why)
+        assert "as the machine it was installed on" not in why and "as the address it serves" not in why, why
+        assert "set it up again, or restore the certificate Jen issued" in why
+        state_r, why_r = kea_tls.record_state(2, "dhcp4", recovery=True, server=lab.servers[2], url=lab.urls[2])
+        assert state_r == "refuse" and self.NOTHING in why_r, (state_r, why_r)
+        assert self.NOTHING in kea_tls.record_destination_refusal(2, "dhcp4", lab.servers[2], lab.urls[2])
+        files = lab.hosts[2]["files"]
+        assert infra._pair_is_for_another_machine(files, lab.servers[2]) is True
+        lab.before = None
+
+    def test_12_an_empty_dns_name_is_no_name(self, lab):
+        """Q203 AS4 (the pass's N3): `_certificate_names` kept `str(g.value)` for every DNSName, so a certificate whose only SAN is an EMPTY DNS name read as roles `("", "")` and was refused by the ROLE sentence
+        (whose remedy, 'set it up again on it', is the wrong one). One layer down from AR9 i: an empty name is no name, so both record_state branches, the setup's check and the put-back say AR2's sentence."""
+        self._both_branches_the_setup_check_and_the_put_back(lab, self._empty_dns())
+
+    def test_13_an_ip_network_is_no_name(self, lab):
+        """Q203 AS4: `x509.IPAddress` carries networks too; a CIDR is a range, not the address a daemon serves, and read as its text it was the role sentence's 'machine'."""
+        self._both_branches_the_setup_check_and_the_put_back(lab, self._ip_network())
+
+    def test_12b_the_names_a_certificate_carries_are_dns_names_and_addresses_only(self, lab):
+        import ipaddress
+
+        from cryptography import x509
+
+        mixed = x509.SubjectAlternativeName(
+            [
+                x509.DNSName(""),
+                x509.IPAddress(ipaddress.ip_network("10.9.0.0/16")),
+                x509.IPAddress(ipaddress.ip_address("10.0.0.6")),
+                x509.DNSName("kea-b.lan"),
+            ]
+        )
+        cert = self._arrange_nameless(lab, mixed)
+        assert kea_tls._certificate_names(cert) == ["10.0.0.6", "kea-b.lan"]
+        assert kea_tls._certificate_roles(cert) == ("10.0.0.6", "kea-b.lan")
+        lab.before = None
+
     def test_the_setup_and_the_put_back_refuse_a_nameless_pair(self, lab):
         server = {"id": 95, "name": "nameless", "ssh_host": "10.0.0.95"}
         _cert, files = _san_certificate(95, None)
@@ -7413,6 +7468,36 @@ class TestAGrandfatheredHostStaysOnItsRecord:
         self._save_extras(**self._rows(kept, twin))
         assert self._refused(lab) and world["calls"] == [], lab.texts()
 
+    def test_every_posted_ssh_host_is_validated(self, lab, monkeypatch):
+        """Q203 AS5 (the pass's N18): the validation loop walked `zip(ids, ssh_hosts, api_urls, strict=False)`, so a form with fewer `extra_api_url[]` than `extra_ssh_host[]` never asked `valid_ssh_target`
+        of the trailing hosts (contained by the writer's strict zip - dead validation, not a hole). A well-formed form asks it of EVERY posted host; a short-listed form is refused with the
+        inconsistency sentence before `mutate`, and `jen.config` is byte-equal."""
+        world = self._world(lab, monkeypatch, extras={})
+        auth_module = infra.__dict__["__auth"]
+        asked = []
+        real = auth_module.valid_ssh_target
+        monkeypatch.setattr(
+            auth_module, "valid_ssh_target", lambda host, *a, **k: asked.append(host) or real(host, *a, **k)
+        )
+        first, second = self._row(0, "10.0.0.7", "new-a"), self._row(0, "10.0.0.8", "new-b")
+        second["api_url"] = "https://10.0.1.10:8004"
+        self._save_extras(**self._rows(first, second))
+        assert asked == ["10.0.0.7", "10.0.0.8"], asked
+        assert world["calls"] and not self._refused(lab), lab.texts()
+
+        # the short-listed form: one API URL fewer than the SSH hosts
+        world = self._world(lab, monkeypatch, extras={})
+        before = world["ini"]
+        asked.clear()
+        body = self._rows(first, second)
+        body["extra_api_url[]"] = body["extra_api_url[]"][:1]
+        self._save_extras(**body)
+        assert "form data was inconsistent" in lab.texts(), lab.texts()
+        assert world["calls"] == [] and world["ini"] == before, (
+            "nothing reached `mutate`; the configuration is byte-equal"
+        )
+        assert asked == [], "the refusal comes before any validation of a list that is not all there"
+
     def test_the_every_ssh_host_writer_holds_the_identity_lock(self):
         """Q202 AR9 e: the primary's `save_infra_ssh` was the one `ssh_host` writer outside the lock its five siblings hold."""
         for name in (
@@ -7493,6 +7578,39 @@ class TestOneDaemonIsOneTargetParkedIncluded:
         _rotate()
         assert "Rotate refused" in lab.texts() and "twin already manages" in lab.texts(), lab.texts()
         assert lab.remote_actions() == 0
+        lab.before = None
+
+    def test_q203_as3_an_external_twin_refuses_the_setup_and_the_rotation(self, lab):
+        """Q203 AS3 (the pass's N2; Opus's `w3b_external_twin.py` world): a second record of the same daemon whose pair an administrator's CA issued (`external`) holds files at the fixed remote paths
+        too. `other_record_on_same_daemon` counted only `jen`, `jen-stale` and `refuse`, so the rotation installed over what that record's endpoint is dialled on and the setup would have ALLOWED the
+        second record. Every state but `none` counts."""
+        twin = self._twin(lab)  # server 3, parked (http), on the same SSH host as server 1
+        kea_tls.commit_issued(3, "dhcp4", _external_files("10.0.0.5"))
+        assert kea_tls.record_state(3, "dhcp4", server=twin, url=lab.urls[3])[0] == "external"
+        assert (
+            kea_tls.other_record_on_same_daemon(lab.servers[1], "dhcp4", extensions.KEA_SERVERS) == "twin"
+        )  # the setup's own question
+        assert kea_tls.other_record_on_same_daemon(twin, "dhcp4", extensions.KEA_SERVERS) == "kea-a"
+        before, records, ca = _hosts_state(lab), {1: _records(1), 3: _records(3)}, _ca_bytes()
+        _rotate()
+        assert "Rotate refused" in lab.texts() and "twin already manages kea-dhcp4 on 10.0.0.5" in lab.texts(), (
+            lab.texts()
+        )
+        assert lab.remote_actions() == 0 and _hosts_state(lab) == before and _ca_bytes() == ca
+        assert {1: _records(1), 3: _records(3)} == records, "both records byte-equal"
+        lab.before = None
+
+    def test_q203_as3_a_record_with_no_files_is_still_not_a_twin(self, lab):
+        self._twin(lab)  # parked, but Jen holds nothing at all for it
+        kea_tls.discard_local_record(3, "dhcp4")
+        lab.hosts[3]["files"] = lab.hosts[3]["loaded"] = (
+            None  # (and its host holds nothing: there is no daemon to keep answering)
+        )
+        lab.answered_before[3] = lab.answers_jens_live_identity(3)
+        assert kea_tls.record_state(3, "dhcp4", server=lab.servers[3], url=lab.urls[3])[0] == "none"
+        assert kea_tls.other_record_on_same_daemon(lab.servers[1], "dhcp4", extensions.KEA_SERVERS) == ""
+        _rotate()
+        assert "already manages" not in lab.texts(), lab.texts()
         lab.before = None
 
     def test_one_signature_and_the_rotation_and_the_setup_call_the_same_function(self):
@@ -7712,8 +7830,11 @@ class TestAPendingNoteIsNotAcknowledgeable:
         import jinja2
 
         source = pathlib.Path("templates/servers.html").read_text(encoding="utf-8")
-        assert "ca.category != 'rotation-pending'" in source
-        marker = source.index("{% if current_user.role == 'superadmin' and ca.category != 'rotation-pending' %}")
+        condition = "{% if current_user.role == 'superadmin' and ca.category is defined and ca.category != 'rotation-pending' %}"
+        assert (
+            condition in source
+        )  # (Q203 AS7 d: `Undefined != 'rotation-pending'` is true - an incident with no category rendered the button)
+        marker = source.index(condition)
         assert "acknowledge_recovery_incident" in source[marker : marker + 300]
         assert jinja2.Environment().parse(source) is not None
 
@@ -7898,8 +8019,56 @@ class TestTheSmallOnesOfQ202:
 
         assert certs.OPENSSL_PATH == "/usr/bin:/bin" and kea_tls.OPENSSL_PATH == certs.OPENSSL_PATH
         asked = []
-        monkeypatch.setattr(certs.shutil, "which", lambda name, path=None: asked.append(path))
+        # Q203 AS7 c (the pass's N13): execute BOTH lookups. The first draft patched `certs.shutil.which` and compared the two constants; a lookup that ignored its constant would have passed.
+        monkeypatch.setattr(certs.shutil, "which", lambda name, path=None: asked.append((name, path)))
         assert certs.cert_info("/nonexistent.pem") == {}
-        assert asked == ["/usr/bin:/bin"]
+        assert kea_tls._openssl_exe() is None
+        assert asked == [("openssl", "/usr/bin:/bin"), ("openssl", "/usr/bin:/bin")], asked
         service = pathlib.Path("jen.service.template").read_text(encoding="utf-8")
         assert "openssl" not in service
+
+
+class TestTheSmallOnesOfQ203:
+    """Q203 (AS7, each with its test where one applies): (a) the `_group_certificate` docstring says what is true, (b) the CHANGELOG full stop, (c) the openssl lookups are executed (in
+    `TestTheSmallOnesOfQ202::test_l_...`), (d) the Acknowledge button is rendered only for a defined category, (e) troubleshooting names the fixed `openssl` list, (f) the S10 count."""
+
+    @staticmethod
+    def _button_for(category_context):
+        import jinja2
+
+        source = pathlib.Path("templates/servers.html").read_text(encoding="utf-8")
+        start = source.index("{% if current_user.role == 'superadmin' and ca.category is defined")
+        end = source.index("{% endif %}", start) + len("{% endif %}")
+        # the real condition and its block, rendered with a stand-in for `url_for` and `csrf_token`
+        env = jinja2.Environment()
+        template = env.from_string(source[start:end])
+        return "Acknowledge" in template.render(
+            current_user=type("U", (), {"role": "superadmin"})(),
+            ca=category_context,
+            url_for=lambda *a, **k: "/x",
+            csrf_token=lambda: "t",
+        )
+
+    def test_d_an_incident_with_no_category_has_no_acknowledge_button(self):
+        assert self._button_for({}) is False
+
+    def test_d_a_defined_category_has_one_and_a_rotation_note_has_none(self):
+        assert self._button_for({"category": "aborted"}) is True
+        assert self._button_for({"category": "restore-restart-failed"}) is True
+        assert self._button_for({"category": "rotation-pending"}) is False
+
+    def test_a_the_group_certificate_docstring_says_what_group_verdict_does(self):
+        doc = kea_tls._group_certificate.__doc__
+        assert "no verdict of the 20 group shapes" not in doc
+        assert "`group_verdict` DOES move" in doc and "five of the 20 shapes" in doc and "no RECORDED outcome" in doc
+
+    def test_b_the_changelog_sentence_has_its_full_stop(self):
+        text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+        assert "All four now do, The forms" not in text and "All four now do. The forms" in text
+
+    def test_e_troubleshooting_names_the_fixed_openssl_list_and_what_health_says(self):
+        text = pathlib.Path("docs/troubleshooting.md").read_text(encoding="utf-8")
+        assert "/usr/bin:/bin" in text and "openssl" in text
+        marker = text.index("/usr/bin:/bin")
+        paragraph = text[max(0, marker - 500) : marker + 800]
+        assert "second opinion" in paragraph or "no second opinion" in paragraph

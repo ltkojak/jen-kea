@@ -334,3 +334,150 @@ class TestHistoryRestoreRoute:
         r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
         assert r.status_code == 200
         assert calls["apply"][0]["expect_sha256"] == "live-sha-on-host"
+
+
+class TestTheRestoreRouteIsHeldToItsSiblingsGate:
+    """Q203 AS2 (the pass's N4/N5/N6): the restore wrote a stored revision into the daemon's file behind a superadmin and NO step-up while its sibling, the unmasked download of the same revision, asks for
+    one; a failed restart was a flash and nothing else; and it passed no `tls_paths`, so the material-before-reference preflight never ran on a restore."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_incidents(self):
+        from jen.services import kea_changeset
+
+        kea_changeset.acknowledge_recovery(_HSID)
+        yield
+        kea_changeset.acknowledge_recovery(_HSID)
+
+    @staticmethod
+    def _stub(monkeypatch, restart_ok=True):
+        calls = {"test": [], "apply": [], "restart": []}
+        monkeypatch.setattr(
+            "jen.services.kea_host.test_config",
+            lambda srv, svc, cfg, *a, **k: (calls["test"].append(k), {"ok": True})[1],
+        )
+        monkeypatch.setattr(
+            "jen.services.kea_host.apply_config",
+            lambda srv, svc, cfg, **k: (calls["apply"].append(k), {"ok": True, "code": "ok", "via": "helper"})[1],
+        )
+        monkeypatch.setattr(
+            "jen.services.kea_host.service_action",
+            lambda srv, svc, act: (
+                calls["restart"].append((svc, act)),
+                {"ok": restart_ok, "detail": "" if restart_ok else "unit kea-dhcp4-server failed to start"},
+            )[1],
+        )
+        return calls
+
+    @staticmethod
+    def _stale(client):
+        from datetime import datetime, timedelta, timezone
+
+        with client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+
+    def test_an_admin_is_refused_and_nothing_reaches_the_host(self, client, db, hist, monkeypatch):
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
+        calls = self._stub(monkeypatch)
+        c, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="q203_restore_admin")
+        r = c.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert b"superadmin" in r.data.lower()
+        assert calls == {"test": [], "apply": [], "restart": []}
+
+    def test_a_superadmin_without_a_recent_confirmation_is_sent_to_confirm_and_nothing_reaches_the_host(
+        self, logged_in_client, hist, monkeypatch
+    ):
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
+        calls = self._stub(monkeypatch)
+        self._stale(logged_in_client)
+        r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore")
+        assert r.status_code == 302 and "reauth" in r.headers["Location"]
+        assert calls == {"test": [], "apply": [], "restart": []}
+
+    def test_a_superadmin_with_a_recent_confirmation_restores(self, logged_in_client, hist, monkeypatch):
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
+        calls = self._stub(monkeypatch)
+        r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert b"Restored revision" in r.data and calls["restart"] == [("dhcp4", "restart")]
+
+    def test_a_failed_restart_is_a_durable_incident_the_banner_and_health_carry_and_a_working_restart_ends_it(
+        self, logged_in_client, hist, monkeypatch
+    ):
+        from jen.services import health, kea_changeset
+
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
+        calls = self._stub(monkeypatch, restart_ok=False)
+        r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert b"restart Kea manually" in r.data
+        # persisted: the unresolved note is in the settings table, not only in the flash
+        mine = [
+            i
+            for i in kea_changeset.recovery_incidents(strict=True)
+            if i.get("category") == "restore-restart-failed" and str(i.get("server_id")) == str(_HSID)
+        ]
+        assert len(mine) == 1 and mine[0]["service"] == "dhcp4" and mine[0]["summary"] == f"restore of revision #{rid}"
+        assert "did not restart on it" in mine[0]["detail"]
+        # delivered: the Servers banner reads the same note
+        banner = kea_changeset.attention()
+        assert any(i.get("category") == "restore-restart-failed" for i in banner["incidents"])
+        # derived: Health's "direct-socket changes are proved" row carries it as a stopped daemon (fail, not warn)
+        row = health._direct_socket_recovery({})
+        assert row.status == "fail" and "restore-restart-failed" in row.detail, (row.status, row.detail)
+        # a second failed restore refreshes the same incident, it does not stack
+        logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert (
+            len([i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]) == 1
+        )
+        # resolved by the next restart of that daemon that works (here: the same restore, the unit starting this time)
+        calls_ok = self._stub(monkeypatch, restart_ok=True)
+        logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert not [i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]
+        assert calls_ok["restart"] == [("dhcp4", "restart")] and calls["restart"]
+
+    def test_the_servers_restart_button_that_works_also_ends_it(self, logged_in_client, hist, monkeypatch):
+        from jen.services import kea_changeset
+
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
+        self._stub(monkeypatch, restart_ok=False)
+        logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert [i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]
+        self._stub(monkeypatch, restart_ok=True)
+        logged_in_client.post(f"/servers/restart/{_HSID}", follow_redirects=True)
+        assert not [i for i in kea_changeset.recovery_incidents() if i.get("category") == "restore-restart-failed"]
+
+    def test_a_superadmin_can_acknowledge_it_like_any_other_unproved_recovery(
+        self, logged_in_client, hist, monkeypatch
+    ):
+        from jen.services import kea_changeset
+
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
+        self._stub(monkeypatch, restart_ok=False)
+        logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert kea_changeset.acknowledge_recovery(_HSID, "dhcp4", "restore-restart-failed") == 1
+
+    def test_the_restore_passes_the_tls_paths_its_config_references_to_the_test_and_the_apply(
+        self, logged_in_client, hist, monkeypatch
+    ):
+        from jen.services import kea_tls
+
+        remote = kea_tls.remote_tls_paths("dhcp4")
+        cfg = {
+            "Dhcp4": {
+                "control-socket": {
+                    "socket-type": "https",
+                    "trust-anchor": remote["trust_anchor"],
+                    "cert-file": remote["cert_file"],
+                    "key-file": remote["key_file"],
+                }
+            }
+        }
+        rid = rev.record(_HSID, "dhcp4", cfg, "s1", "rev with https", hash_kind="raw")
+        calls = self._stub(monkeypatch)
+        logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        wanted = [(remote["trust_anchor"], "file"), (remote["cert_file"], "file"), (remote["key_file"], "file")]
+        assert calls["test"][0]["tls_paths"] == wanted and calls["apply"][0]["tls_paths"] == wanted
+
+    def test_a_config_that_references_none_passes_none(self, logged_in_client, hist, monkeypatch):
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "plain", hash_kind="raw")
+        calls = self._stub(monkeypatch)
+        logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert calls["test"][0]["tls_paths"] == [] and calls["apply"][0]["tls_paths"] == []

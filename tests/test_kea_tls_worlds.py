@@ -1186,6 +1186,10 @@ class TestTheLeafShapesOfQ202:
         "uri-only": ("uri", (None, None)),
         "rfc822-then-ip": ("rfc822+ip", ("10.0.0.6", "10.0.0.6")),
         "malformed": ("malformed", (None, None)),
+        # Q203 AS4: an empty DNS name is no name, and an IP NETWORK is a range, not an address - both read as naming nothing
+        "empty-dns": ("empty-dns", (None, None)),
+        "ip-network": ("ip-network", (None, None)),
+        "empty-dns-then-ip": ("empty-dns+ip", ("10.0.0.6", "10.0.0.6")),
     }
 
     @staticmethod
@@ -1205,6 +1209,18 @@ class TestTheLeafShapesOfQ202:
         if shape == "uri":
             return kea_tls._leaf(
                 ca_cert, ca_key, key, "shape", [x509.UniformResourceIdentifier("https://kea.example/")], client=False
+            )
+        if shape == "empty-dns":
+            return kea_tls._leaf(ca_cert, ca_key, key, "shape", [x509.DNSName("")], client=False)
+        if shape == "ip-network":
+            import ipaddress
+
+            return kea_tls._leaf(
+                ca_cert, ca_key, key, "shape", [x509.IPAddress(ipaddress.ip_network("10.0.0.0/24"))], client=False
+            )
+        if shape == "empty-dns+ip":
+            return kea_tls._leaf(
+                ca_cert, ca_key, key, "shape", [x509.DNSName(""), kea_tls._san_for("10.0.0.6")], client=False
             )
         if shape == "rfc822+ip":
             return kea_tls._leaf(
@@ -1253,6 +1269,32 @@ class TestTheLeafShapesOfQ202:
                 cert, {"id": 2, "ssh_host": ""}, "https://10.0.0.6:8004"
             )
         assert kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": ""}) == "", "nothing configured: not judged"
+        lab.before = None
+
+    def test_the_admin_guides_stricter_table_names_the_empty_name_and_the_network_with_its_reason(self):
+        """Q203 AS4: the Jen-stricter table (docs/admin-guide.md) gains the row - and the CLI side of it is asserted below for both shapes (it accepts a leaf whose only name is empty or a network)."""
+        text = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
+        row = next(
+            (ln for ln in text.splitlines() if ln.startswith("| a server certificate whose only name is empty")), ""
+        )
+        assert row and "IP network" in row and "openssl verify -purpose sslserver" in row and "range" in row, row
+
+    @pytest.mark.parametrize("shape", ["empty-dns", "ip-network"])
+    def test_the_cli_accepts_the_empty_name_and_the_network_and_jen_refuses_them(self, lab, tmp_path, shape):
+        import subprocess
+
+        exe = shutil.which("openssl")
+        if not exe:
+            pytest.skip("no openssl CLI")
+        cert = self._cert(shape)
+        leaf, ca = tmp_path / "leaf.crt", tmp_path / "ca.crt"
+        leaf.write_bytes(kea_tls._cert_pem(cert))
+        ca.write_bytes(pathlib.Path(kea_tls.ca_paths()[0]).read_bytes())
+        done = subprocess.run(
+            [exe, "verify", "-purpose", "sslserver", "-CAfile", str(ca), str(leaf)], capture_output=True, text=True
+        )
+        assert done.returncode == 0 and "OK" in done.stdout, done.stdout + done.stderr
+        assert "names no address and no machine" in kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": "10.0.0.6"})
         lab.before = None
 
     def test_the_cli_accepts_a_leaf_with_no_san_and_jen_refuses_it(self, lab, tmp_path):

@@ -490,6 +490,86 @@ class TestEveryIdentityRouteIsASuperadminsForm:
         assert seen == ["https://new-host:8004"]
 
 
+class TestAnAdminsProbeNeverDowngradesTheScheme:
+    """Q203 AS1 (CRED-002, RBAC-004): a probe is a credential send, so an admin's candidate is the same host over NO WEAKER scheme (`auth.no_weaker_scheme`) - with the endpoint
+    configured https, `http://kea-a:<any port>` would have carried the saved Kea API credential in clear text. A superadmin's deliberate http test stays allowed."""
+
+    CONFIGURED_HTTPS = "https://kea-a:8000"
+    CONFIGURED_HTTP = "http://kea-a:8000"
+
+    def _probe(self, monkeypatch, client, configured, candidate):
+        from jen.routes.settings import infrastructure as infra
+
+        seen = []
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "Test Kea", "api_url": configured, "api_user": "u", "api_pass": "p"}],
+        )
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        monkeypatch.setattr(
+            infra,
+            "_probe_once",
+            lambda url, user, pwd, omit_service, service="dhcp4", **k: (seen.append(url) or "3.0.0", None),
+        )
+        r = client.post("/settings/infrastructure/probe-kea", data={"candidate_url": candidate})
+        return r, seen
+
+    def _admin(self, client, db):
+        from tests.conftest import restricted_client
+
+        return restricted_client(client, db, None, role="admin", username="q203_as1_admin")[0]
+
+    def test_1_https_configured_an_admins_http_candidate_on_the_same_host_is_refused_and_nothing_is_dialled(
+        self, client, db, monkeypatch
+    ):
+        admin = self._admin(client, db)
+        for port in ("8004", "8000", "9999", "80"):
+            r, seen = self._probe(monkeypatch, admin, self.CONFIGURED_HTTPS, f"http://kea-a:{port}")
+            assert r.status_code == 403, port
+            assert seen == [], port
+            error = r.get_json()["error"]
+            assert "different host" in error and "over http where Jen reaches this host over https" in error
+
+    def test_2_https_configured_an_admins_https_candidate_on_another_port_is_probed(self, client, db, monkeypatch):
+        r, seen = self._probe(monkeypatch, self._admin(client, db), self.CONFIGURED_HTTPS, "https://kea-a:8004")
+        assert r.status_code == 200 and seen == ["https://kea-a:8004"]
+
+    def test_3_http_configured_an_admins_https_candidate_is_probed(self, client, db, monkeypatch):
+        r, seen = self._probe(monkeypatch, self._admin(client, db), self.CONFIGURED_HTTP, "https://kea-a:8004")
+        assert r.status_code == 200 and seen == ["https://kea-a:8004"]
+
+    def test_4_http_configured_an_admins_http_candidate_is_probed(self, client, db, monkeypatch):
+        r, seen = self._probe(monkeypatch, self._admin(client, db), self.CONFIGURED_HTTP, "http://kea-a:8004")
+        assert r.status_code == 200 and seen == ["http://kea-a:8004"]
+
+    def test_5_a_superadmin_may_test_http_against_an_https_endpoint_deliberately(
+        self, logged_in_client, db, monkeypatch
+    ):
+        r, seen = self._probe(monkeypatch, logged_in_client, self.CONFIGURED_HTTPS, "http://kea-a:8004")
+        assert r.status_code == 200 and seen == ["http://kea-a:8004"]
+
+    def test_6_an_upper_cased_scheme_reads_as_the_scheme_it_is(self, client, db, monkeypatch):
+        admin = self._admin(client, db)
+        r, seen = self._probe(monkeypatch, admin, self.CONFIGURED_HTTPS, "HTTPS://kea-a:8004")
+        assert r.status_code == 200 and seen == ["HTTPS://kea-a:8004"]
+        r, seen = self._probe(monkeypatch, admin, self.CONFIGURED_HTTPS, "HTTP://kea-a:8004")
+        assert r.status_code == 403 and seen == []
+
+    def test_7_a_different_host_over_https_is_refused_as_before(self, client, db, monkeypatch):
+        r, seen = self._probe(
+            monkeypatch, self._admin(client, db), self.CONFIGURED_HTTPS, "https://attacker.example:8004"
+        )
+        assert r.status_code == 403 and seen == []
+
+    def test_the_docstring_says_what_is_true(self):
+        from jen.routes.settings import infrastructure as infra
+
+        doc = infra.probe_kea.__doc__
+        assert "never downgrades" in doc and "no_weaker_scheme" in doc
+        assert "The scheme is never downgraded." not in doc
+
+
 class TestOneAnswerForASecret:
     """Q179, T2: the Inherit box and the password box of Kea6 and D2 are one question."""
 

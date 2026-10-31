@@ -344,6 +344,19 @@ def same_host(a: str, b: str) -> bool:
     return pa is not None and pb is not None and pa[1] == pb[1]
 
 
+def no_weaker_scheme(configured: str, candidate: str) -> bool:
+    """Is `candidate` reached over no weaker a scheme than `configured` (CRED-002, Q203 AS1): True when the candidate is https, or the configured address is http already -
+    so a secret Jen sends to the one never travels in clear where it travelled encrypted. The scheme is read as `_endpoint_parts` reads it (lower-cased); a blank, an
+    unparsable or a scheme-less side is False, because there is no scheme to compare. This is half of the question "may an admin make Jen send the saved credential here":
+    `same_host` answers the other half, and neither is enough alone."""
+    pa, pb = _endpoint_parts(configured), _endpoint_parts(candidate)
+    if pa is None or pb is None:
+        return False
+    if pa[0] not in ("http", "https") or pb[0] not in ("http", "https"):
+        return False
+    return pb[0] == "https" or pa[0] == "http"
+
+
 def valid_api_url(url: str, require_port: bool = False, certificate_name: bool = False) -> bool:
     """A Kea command-API URL: http(s):// scheme, a hostname or IP, and —
     in direct mode (require_port=True) — an explicit port. A daemon

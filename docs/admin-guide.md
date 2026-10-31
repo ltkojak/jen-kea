@@ -288,6 +288,7 @@ with a different library might not accept them either. Health says when
 | a tampered self-signature | the CA's own signature is checked; `openssl` does not check a trust anchor's |
 | no Basic Constraints (a root marked only by Key Usage) | Jen needs `ca=True` stated |
 | a server certificate Jen signed with no DNS or IP name in it | `openssl verify -purpose sslserver` accepts a leaf with no subject alternative name (it checks a name only when asked); Jen refuses it as a rotation target, because it proves nothing about which daemon it was installed on |
+| a server certificate whose only name is empty, or an IP network | `openssl verify -purpose sslserver` accepts a leaf whose subject alternative name holds an empty DNS name or an IP network (`10.0.0.0/24`); Jen keeps only a non-empty DNS name and an IP address as a name, because a network is a range and not the address a daemon serves, so such a leaf names nothing and is refused with the same sentence as one with no name at all |
 
 **A CA that is healthy but cannot issue for one address.** A CA whose name
 constraints do not permit the address or host name of one Kea server is not
@@ -318,7 +319,7 @@ the socket under Settings → Kea drops it and ends both notes. The certificate 
 keeps names the host it was issued for, in two roles: the address the daemon serves (the certificate's first name) and the machine Jen installed it on (its last name). The address Jen dials
 may be any name the certificate carries (Jen compares names the way a TLS client does for the ordinary spellings; an address written as `::ffff:a.b.c.d` or with a trailing dot is where the two can differ), and the SSH host Jen logs into must be the last - the machine it was installed on - so
 changing the SSH host to the daemon's address (the same machine, written differently) is refused like any alias: remove the direct socket and set it up again. A certificate Jen signed that
-carries no DNS or IP name (no subject alternative name, or only an e-mail or URI one, or one that does not parse) proves nothing about which daemon it was installed on and is refused wherever a
+carries no DNS or IP name (no subject alternative name, or only an e-mail or URI one, an empty one or an IP network, or one that does not parse) proves nothing about which daemon it was installed on and is refused wherever a
 name has to be judged: remove the direct socket and set it up again, or restore the certificate Jen issued. If a server record's SSH host is moved to
 another machine, or its address is pointed at a different daemon, Rotate refuses it (and says so) instead of treating the old
 daemon's certificate as the new one's, and the setup for the new host replaces it.

@@ -1148,7 +1148,9 @@ def probe_kea():
     v5.10.2 — with a `candidate_url` form field, probes ONLY that URL
     (direct-style, no service field, no :8004 auto-fallback) so an admin
     whose direct socket doesn't share the CA's scheme/host can test it
-    before committing. The scheme is never downgraded.
+    before committing. The :8004 auto-fallback never downgrades the scheme; an admin's
+    candidate is the same host over no weaker scheme (`auth.no_weaker_scheme`, Q203),
+    and a superadmin may type any address.
 
     v5.10.3 — `server_id` and `service` pick WHICH endpoint to probe. The
     URL and credentials come from _endpoint_for(server, service), i.e.
@@ -1187,11 +1189,14 @@ def probe_kea():
             ), 400
         # RBAC-004 / CRED-002 (Q179): the probe sends the saved Kea credentials to the address it is given. An admin may test another daemon of the host Jen already
         # reaches; sending them to a different host is a superadmin's deliberate test of an address they typed.
-        if current_user.role != "superadmin" and not __auth.same_host(configured_url, candidate):
+        # Q203 AS1: and over no weaker a scheme - `auth.no_weaker_scheme` is the one definition (a probe is a credential send; CRED-002 compares scheme, host and port).
+        if current_user.role != "superadmin" and not (
+            __auth.same_host(configured_url, candidate) and __auth.no_weaker_scheme(configured_url, candidate)
+        ):
             return jsonify(
                 {
                     "ok": False,
-                    "error": "Only a superadmin probes an address on a different host from the one Jen reaches - the probe sends the saved Kea credentials to it.",
+                    "error": "Only a superadmin probes an address on a different host, or over http where Jen reaches this host over https - the probe sends the saved Kea credentials to it.",
                 }
             ), 403
         version_text, err = _probe_once(candidate, user, pwd, omit_service=True, service=service)
@@ -4542,7 +4547,15 @@ def save_extra_servers():
         i.strip() for i in ids if i.strip()
     }  # (the ids this form names: a blank row never adopts one of them - the rewrite's own condition)
     adopted_ids: set = set()
-    for row_id, h, row_url in zip(ids, ssh_hosts, api_urls, strict=False):
+    # Q203 AS5: validation reaches as far as the writer. The writer's own zip is strict (`_rewrite_extra_servers`), so a form with fewer `extra_api_url[]` than `extra_ssh_host[]` was refused
+    # there - but this loop stopped at the shortest list and never asked `valid_ssh_target` of the trailing hosts. Same refusal, asked first: nothing is written and nothing reaches `mutate`.
+    try:
+        rows_to_validate = list(zip(ids, ssh_hosts, api_urls, strict=True))
+    except ValueError:
+        logger.error("Mismatched extra-server form field lengths: the SSH host and API URL lists differ")
+        flash("Could not save additional servers — form data was inconsistent. Please try again.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    for row_id, h, row_url in rows_to_validate:
         # (Q202 AR3: a row's exemption is its OWN saved host, found by its `extra_id[]` - never position, never another record's host; a new row has none)
         own = row_id.strip() if row_id.strip().isdigit() and row_id.strip() != "1" else ""
         if not own and not row_id.strip() and h.strip():
@@ -5303,7 +5316,7 @@ def save_metrics_settings():
 
 @bp.route("/settings/generate-ssh-key", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required  # Q203 AS2: the same admin may not change `ssh_host`, so the only SSH key Jen has is the superadmin's too (a role asymmetry closed; the old key is kept as .prev)
 @_recent_auth_required()  # replacing Jen's only SSH key cuts off every Kea host that trusts the old one: a recent password confirmation, like the other key-changing routes (Q174)
 def generate_ssh_key():
     # v5.67.0 (Q115) — the setup wizard's helper step offers key generation

@@ -341,6 +341,28 @@ def build_control_socket(scheme: str, address: str, port, user: str, password: s
     return entry
 
 
+def referenced_tls_paths(cfg, tls: dict) -> list:
+    """The `tls_paths` a config needs checked before it is written (Q203 AS2): `[(path, "file"), ...]` for each of Jen's three certificate files (`tls`: what `kea_tls.remote_tls_paths(service)`
+    answers) that a control-socket entry anywhere in `cfg` names as its `trust-anchor`, `cert-file` or `key-file` - what the setup passes for the same files. A path outside Jen's own directory is not
+    Jen's to check, and a config that names none returns nothing."""
+    by_key = {"trust-anchor": tls["trust_anchor"], "cert-file": tls["cert_file"], "key-file": tls["key_file"]}
+    named: set = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in by_key and v == by_key[k]:
+                    named.add(v)
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(cfg)
+    return [(p, "file") for p in by_key.values() if p in named]
+
+
 def build_new_kea_config(
     service: str,
     interfaces: list,

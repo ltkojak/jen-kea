@@ -32,6 +32,7 @@ from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access, can_access_subnet6, paired_v4_id
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import assert_subnet_access as _assert_subnet_access
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.leases_sql import ACTIVE_LEASE4
 
@@ -2330,6 +2331,9 @@ def _finish_windows_import(token, entry):
 @bp.route("/subnets/import-isc/apply", methods=["POST"], defaults={"source": "isc"})
 @login_required
 @_superadmin_required
+@_recent_auth_required(
+    minutes=10
+)  # Q203 AS2: it writes the daemon's whole config file and restarts it - the gate every other writer of that file carries
 def import_windows_apply(source):
     token, entry = _get_import_plan()
     src = _import_src(entry, source)

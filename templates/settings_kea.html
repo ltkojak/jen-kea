@@ -306,9 +306,13 @@
         <div class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;word-break:break-all;border:1px solid var(--border);">{{ ssh_pub_key }}</div>
     </div>
     {% endif %}
+    {% if current_user.role != 'superadmin' %}
+    <p class="form-hint">Only a superadmin generates or replaces Jen's SSH key.</p>
+    {% else %}
     <form method="POST" action="/settings/generate-ssh-key" class="u-56f435" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">{% if ssh_configured %}{{ icon("refresh-cw") }} Regenerate SSH Key{% else %}{{ icon("key-round") }} Generate SSH Key{% endif %}</button>
     </form>
+    {% endif %}
 
     {% set ssh_servers = kea_servers | selectattr('ssh_host') | list %}
     {% if ssh_servers %}

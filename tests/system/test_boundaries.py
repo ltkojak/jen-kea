@@ -3259,6 +3259,243 @@ def test_22_q_a_parked_twin_of_the_target_refuses_the_rotation_and_no_daemon_is_
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
 
 
+# NOTE (Q203): 22r and 22s are defined with 22l-22q, before 22i, for the same reason: they need a healthy CA and kea-a on its https socket.
+S22R_COMMON = r"""
+import base64, contextlib, hashlib, inspect, os, socket, ssl, tempfile
+from unittest import mock
+import jen.config as jconfig
+from jen.models import user as user_mod
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_changeset, kea_host, kea_tls
+
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+client = kea_tls.client_paths()
+
+
+def handshake(cafile):
+    # an INDEPENDENT handshake: Python's own ssl against the daemon's socket with Jen's client pair - not Jen's Kea client, not the classifier's word
+    context = ssl.create_default_context(cafile=cafile)
+    context.load_cert_chain(client[0], client[1])
+    try:
+        with socket.create_connection(("__ADDR__", 8014), timeout=15) as raw, context.wrap_socket(raw, server_hostname="__ADDR__"):
+            return True
+    except (ssl.SSLError, OSError):
+        return False
+
+
+def notes():
+    return sorted((str(i.get("server_id")), i.get("service"), i.get("category"), i.get("ca_fingerprint", "")) for i in kea_changeset.recovery_incidents(strict=True))
+
+
+def rotate(flashes, helper_calls, down=False):
+    view = inspect.unwrap(infra.rotate_kea_ca)
+    real_helper = kea_host.helper_call
+    real_get = user_mod.get_global_setting
+
+    def unreadable(key, default="", strict=False):
+        if strict:
+            raise RuntimeError("the settings table cannot be read (the fault)")
+        return real_get(key, default)
+
+    with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+        stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", ca))  # (the https setup's Jen-side write is a stand-in, as in 22e and 22g)
+        stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+        stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+        stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+        stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: None))
+        stack.enter_context(mock.patch.object(kea_host, "helper_call", lambda *a, **k: helper_calls.append(a[1:3]) or real_helper(*a, **k)))
+        if down:
+            stack.enter_context(mock.patch.object(user_mod, "get_global_setting", unreadable))
+        view()
+"""
+
+S22R1_SCRIPT = (
+    S22R_COMMON
+    + r"""
+flashes, helper_calls = [], []
+ca_a = open(ca, "rb").read()
+fingerprint = kea_tls.live_ca_fingerprint()
+# a note of an earlier rotation's, written under the live CA (CA-A) and left unresolved: the rotation that wrote it did not finish
+stored = kea_changeset.record_attention(1, "dhcp4", "an earlier rotation's bookkeeping", "rotation-pending", server_name="kea-a", ca_fingerprint=fingerprint)
+before = {"notes": notes(), "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (ca, kea_tls.ca_paths()[1], client[0], client[1])}}
+rotate(flashes, helper_calls, down=True)  # the store is made unreadable for this request
+after = {"notes": notes(), "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in before["files"]}}
+emit({
+    "stored": stored,
+    "flashes": flashes,
+    "helper_calls": len(helper_calls),
+    "notes_before": before["notes"],
+    "notes_after": after["notes"],
+    "jen_files_unchanged": before["files"] == after["files"],
+    "staging_left": [f for f in os.listdir(os.path.dirname(ca)) if f.endswith(".next")],
+    "answers_on_ca_a": handshake(ca),
+    "ca_a": base64.b64encode(ca_a).decode(),
+    "fingerprint": fingerprint,
+})
+"""
+)
+
+S22R2_SCRIPT = (
+    S22R_COMMON
+    + r"""
+flashes, helper_calls = [], []
+ca_a = base64.b64decode("__CAA__")
+caa_file = os.path.join(tempfile.mkdtemp(prefix="caa-"), "ca-a.crt")
+open(caa_file, "wb").write(ca_a)
+survived = notes()  # after the restart of Jen: the settings table is the store
+rotate(flashes, helper_calls)  # the store is back
+emit({
+    "survived": survived,
+    "flashes": flashes,
+    "notes_after": notes(),
+    "helper_calls": len(helper_calls),
+    "ca_changed": open(ca, "rb").read() != ca_a,
+    "answers_on_ca_b": handshake(ca),
+    "answers_on_ca_a": handshake(caa_file),
+    "local_issued_by_live_ca": kea_tls.issued_by(kea_tls.server_copy_path(1, "dhcp4"), ca),
+})
+"""
+)
+
+
+def test_22_r_a_second_rotation_over_an_unresolved_note_with_the_store_down_refuses_and_the_note_survives_a_restart_of_jen(
+    stack,
+):
+    """REMOTE-001 section 6a / Q202 (AR1, AR8) / Q203 (AS8): kea-a is really on an https socket Jen issued the certificate for. A `rotation-pending` note written under CA-A is left unresolved. The store (the
+    `settings` table) is then made unreadable for one rotation request: the rotation is REFUSED before it stages anything - the helper is never called, Jen's CA and client pair are byte-equal, kea-a's
+    TLS files and daemon config and kea-b's TLS folder are the baseline, and kea-a still answers on CA-A to an independent handshake. `docker restart jen`: the note is still there. With the store back,
+    the next Rotate reconciles the note from Jen's files (the live CA is the one it was written under, so it is simply dropped) and the rotation proceeds: kea-a answers on CA-B and no longer on CA-A,
+    both by an independent handshake. Stand-ins: no systemd (the helper restarts the daemon by its own means); the store fault is a patch of the strict read in Jen's process for the one request, the
+    kind 22p uses; the stack has ONE https endpoint, so the second daemon (kea-b) is asserted untouched as in 22n, not rotated."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    baseline_b = _s22_kea_b_tls()
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22R1_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    first = emitted(out)
+    assert first is not None, f"no result from the refused rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(first["flashes"])
+    assert first["stored"] is True and len(first["notes_before"]) == 1, first
+    assert "Rotate refused" in texts and "could not be read" in texts and "Kea CA rotated" not in texts, texts
+    assert first["helper_calls"] == 0, "INVARIANT: the helper is not called before the refusal"
+    assert first["jen_files_unchanged"] and first["staging_left"] == [], (
+        "INVARIANT: a refusal changes nothing on the Jen host"
+    )
+    assert first["notes_after"] == first["notes_before"], "INVARIANT: the note is byte for byte what it was"
+    assert first["answers_on_ca_a"] is True, "INVARIANT: kea-a still answers on CA-A (an independent handshake)"
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    assert _s22_kea_b_tls() == baseline_b, "INVARIANT: kea-b's TLS folder is untouched"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+    st.run(["docker", "restart", st.JEN])
+    st.wait_jen_healthy(timeout=180)
+
+    out, proc = st.jen_py(S22R2_SCRIPT.replace("__ADDR__", ip).replace("__CAA__", first["ca_a"]), timeout=500)
+    second = emitted(out)
+    assert second is not None, (
+        f"no result from the rotation after the restart:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    )
+    assert second["survived"] == first["notes_before"], "INVARIANT: the note survived the restart of Jen"
+    texts = " ".join(second["flashes"])
+    assert "Kea CA rotated" in texts and "Rotate refused" not in texts, texts
+    assert second["notes_after"] == [], "the next Rotate's reconcile finished the note and the rotation left none"
+    assert second["ca_changed"] and second["helper_calls"] > 0
+    assert second["answers_on_ca_b"] is True, "INVARIANT: kea-a answers on CA-B (an independent handshake)"
+    assert second["answers_on_ca_a"] is False, "INVARIANT: and no longer on CA-A"
+    assert second["local_issued_by_live_ca"], "INVARIANT: Jen's copy of the pair was issued by the CA Jen now trusts"
+    host = _s22_host_state()
+    assert host["server.crt"] != baseline["server.crt"] and host["server.crt"], "kea-a's certificate was replaced"
+    assert _s22_kea_b_tls() == baseline_b, "INVARIANT: kea-b's TLS folder is still untouched"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+S22S_SCRIPT = r"""
+import base64, contextlib, hashlib, inspect, os
+from unittest import mock
+import jen.config as jconfig
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_host, kea_tls
+
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+client = kea_tls.client_paths()
+crt, key = kea_tls.server_copy_path(1, "dhcp4"), kea_tls.server_key_path(1, "dhcp4")
+saved = {p: open(p, "rb").read() for p in (crt, key)}
+# a hand-placed Jen-signed certificate that names NOTHING (no subject alternative name) in kea-a's local record - made by the library, signed by the live CA, a real pair
+ca_cert, ca_key = kea_tls._load_ca()
+new_key = kea_tls._new_key()
+nameless = kea_tls._leaf(ca_cert, ca_key, new_key, "kea-dhcp4 nameless", [], client=False)
+kea_tls.commit_issued(1, "dhcp4", {"ca.crt": kea_tls._cert_pem(ca_cert).decode(), "server.crt": kea_tls._cert_pem(nameless).decode(), "server.key": kea_tls._key_pem(new_key).decode()})
+flashes, helper_calls = [], []
+state = kea_tls.record_state(1, "dhcp4", server=extensions.KEA_SERVERS[0], url=url)
+before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (ca, kea_tls.ca_paths()[1], client[0], client[1])}
+real_helper = kea_host.helper_call
+view = inspect.unwrap(infra.rotate_kea_ca)
+try:
+    with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+        stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", ca))
+        stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+        stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+        stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+        stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: None))
+        stack.enter_context(mock.patch.object(kea_host, "helper_call", lambda *a, **k: helper_calls.append(a[1:3]) or real_helper(*a, **k)))
+        view()
+    after = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in before}
+    version, _err = infra._probe_after_restart(url, "sysuser", "syspass-123", "dhcp4", verify=ca, cert=client)
+    result = {
+        "state": list(state),
+        "flashes": flashes,
+        "helper_calls": len(helper_calls),
+        "jen_files_unchanged": before == after,
+        "staging_left": [f for f in os.listdir(os.path.dirname(ca)) if f.endswith(".next")],
+        "answers": bool(version),
+    }
+finally:
+    for path, data in saved.items():  # the scenario's own record goes away: the scenarios after it start from the record the setup wrote
+        with open(path, "wb") as f:
+            f.write(data)
+emit(dict(result, restored_state=list(kea_tls.record_state(1, "dhcp4", server=extensions.KEA_SERVERS[0], url=url))))
+"""
+
+
+def test_22_s_a_hand_placed_certificate_that_names_nothing_refuses_the_rotation_before_the_daemon_is_touched(stack):
+    """REMOTE-001 section 6b / Q202 (AR2) / Q203 (AS8): kea-a is really on an https socket Jen issued the certificate for. A Jen-signed certificate with NO subject alternative name is placed (the library
+    builds it, the live CA signs it, a real pair) as kea-a's record. Rotate is REFUSED before it stages or installs anything, with AR2's sentence (it names no address and no machine), the helper is never
+    called, Jen's CA and client pair are byte-equal, and kea-a's TLS files and daemon config are the baseline and it still answers. The record is put back afterwards."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    baseline_b = _s22_kea_b_tls()
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22S_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    result = emitted(out)
+    assert result is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert result["state"][0] == "refuse" and "names no address and no machine" in result["state"][1], result["state"]
+    assert "Rotate refused" in texts and "names no address and no machine" in texts and "Kea CA rotated" not in texts, (
+        texts
+    )
+    assert result["helper_calls"] == 0, "INVARIANT: the helper is not called before the refusal"
+    assert result["jen_files_unchanged"] and result["staging_left"] == [], (
+        "INVARIANT: a refusal changes nothing on the Jen host"
+    )
+    assert result["answers"] is True, "INVARIANT: kea-a still answers Jen over its https socket"
+    assert result["restored_state"][0] == "jen", result["restored_state"]
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    assert _s22_kea_b_tls() == baseline_b, "INVARIANT: kea-b's TLS folder is untouched"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
 def test_22_m_a_daemon_a_rotation_left_behind_is_a_fact_the_setup_names_the_action_and_removal_with_a_setup_recovers(
     stack,
 ):

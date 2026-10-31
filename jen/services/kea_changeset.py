@@ -835,6 +835,7 @@ ATTENTION_CATEGORIES = {
     "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
     "tls-superseded": "A server that is not dialled over https now may still run a certificate from a CA Jen has since replaced. When it is dialled over https again, remove its direct socket and set it up again.",
     "record-forgotten": "Jen's record of a certificate was forgotten on the operator's word while the daemon may still present it; its expiry is not watched. A later setup of the socket, or its removal, ends this.",
+    "restore-restart-failed": "A restored config revision is on the Kea host, but the daemon did not restart on it, so it may be stopped or still running the config it had before. A restart that works ends this.",
     "rotation-pending": "A CA rotation changed what this server's daemon depends on and has not finished recording it. Health names it; the next Rotate, or Forget stale records, finishes it from Jen's files - it is not acknowledged away.",
 }
 

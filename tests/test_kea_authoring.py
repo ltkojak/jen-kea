@@ -1874,3 +1874,48 @@ class TestBuildControlSocket:
 
         assert DIRECT_SOCKET_DEFAULT_PORTS == {"dhcp4": 8004, "dhcp6": 8006, "d2": 53001}
         assert 8000 not in DIRECT_SOCKET_DEFAULT_PORTS.values()  # the Control Agent's port, never a daemon default
+
+
+class TestReferencedTlsPaths:
+    """Q203 AS2 (c): the `tls_paths` a config needs checked before it is written - the three files of Jen's own that a control-socket entry names, found anywhere in the config."""
+
+    TLS = {
+        "trust_anchor": "/etc/kea/tls/dhcp4/ca.crt",
+        "cert_file": "/etc/kea/tls/dhcp4/server.crt",
+        "key_file": "/etc/kea/tls/dhcp4/server.key",
+    }
+
+    def test_a_config_naming_all_three_returns_them_in_a_fixed_order(self):
+        from jen.services.kea_authoring import referenced_tls_paths
+
+        cfg = {
+            "Dhcp4": {
+                "control-sockets": [
+                    {"socket-type": "http", "socket-port": 8004},
+                    {
+                        "socket-type": "https",
+                        "key-file": self.TLS["key_file"],
+                        "cert-file": self.TLS["cert_file"],
+                        "trust-anchor": self.TLS["trust_anchor"],
+                    },
+                ]
+            }
+        }
+        assert referenced_tls_paths(cfg, self.TLS) == [
+            (self.TLS["trust_anchor"], "file"),
+            (self.TLS["cert_file"], "file"),
+            (self.TLS["key_file"], "file"),
+        ]
+
+    def test_a_config_naming_none_or_another_path_returns_nothing(self):
+        from jen.services.kea_authoring import referenced_tls_paths
+
+        assert referenced_tls_paths({"Dhcp4": {"subnet4": []}}, self.TLS) == []
+        other = {"Dhcp4": {"control-socket": {"cert-file": "/etc/ssl/mine.crt", "key-file": "/etc/ssl/mine.key"}}}
+        assert referenced_tls_paths(other, self.TLS) == [], "a path that is not Jen's is not Jen's to check"
+
+    def test_a_path_under_the_wrong_key_is_not_a_reference(self):
+        from jen.services.kea_authoring import referenced_tls_paths
+
+        wrong = {"Dhcp4": {"control-socket": {"trust-anchor": self.TLS["key_file"]}}}
+        assert referenced_tls_paths(wrong, self.TLS) == []

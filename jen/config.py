@@ -404,13 +404,36 @@ def _connection_mode(parser) -> str:
     return mode if mode in ("ca", "direct") else "ca"
 
 
+#: Q203 (AS6): the four `[kea]` settings that decide who may RECEIVE Jen's credentials over https - whom its client trusts (`api_ca`, `api_tls_verify`) and which client identity it presents
+#: (`api_client_cert`, `api_client_key`). There is one set for every endpoint; no per-server, Kea6 or D2 twin of them exists.
+TLS_KEYS = ("api_ca", "api_tls_verify", "api_client_cert", "api_client_key")
+
+
+def _tls_value(parser, key: str) -> str:
+    """One TLS setting as the view compares it: stripped text, and `api_tls_verify` as the boolean `apply()` reads (default on), so `true` and `1` are one value."""
+    if not parser.has_section("kea"):
+        return "True" if key == "api_tls_verify" else ""
+    if key == "api_tls_verify":
+        try:
+            return str(parser.getboolean("kea", key, fallback=True, raw=True))
+        except ValueError:
+            return (
+                parser.get("kea", key, fallback="", raw=True).strip().lower()
+            )  # (an unreadable value is its own text, so changing it is a change)
+    return parser.get("kea", key, fallback="", raw=True).strip()
+
+
 def destination_view(parser) -> dict:
     """{what: where} for every place a write could send a credential (v5.69.0-beta.11, Q180, U5): `identity_view`'s four identity keys per server and the mode, PLUS the url of every
     endpoint `credentials.resolve` names ("dest:kea6", "dest:server_2_v6", "dest:kea_db" as host:port ...) - so a write of `[kea6] api_url`, `[d2] api_url`, a database host or an
-    additional server's IPv6 or D2 address is seen by the guard that decides WHO may repoint Jen, not only a write of the four keys."""
+    additional server's IPv6 or D2 address is seen by the guard that decides WHO may repoint Jen, not only a write of the four keys. Q203 (AS6): and the four TLS settings (`TLS_KEYS`, as
+    "tls:api_ca" ...) - whom Jen trusts decides who may receive what it sends, and every writer of them was a superadmin's with a recent password by convention, which is the state this
+    choke point exists to end."""
     view = dict(identity_view(parser))
     for name, endpoint in _credentials.resolve(parser).items():
         view[f"dest:{name}"] = endpoint.url
+    for key in TLS_KEYS:
+        view[f"tls:{key}"] = _tls_value(parser, key)
     return view
 
 

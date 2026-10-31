@@ -140,3 +140,38 @@ class TestAUrlTheTwoParsersReadDifferentlyNamesNoPlace:
         )
         e = cred.resolve(p)["kea6"]
         assert (e.password, e.withheld) == ("", "kea")
+
+
+class TestNoWeakerScheme:
+    """Q203 AS1: the ONE definition of "no weaker scheme" - the candidate is https, or the configured address is http already. Lower-cased as the URL parser reads it; a blank, unparsable
+    or scheme-less side is False (there is no scheme to compare)."""
+
+    @pytest.mark.parametrize(
+        "configured,candidate,expect",
+        [
+            ("https://a:8000", "https://a:8004", True),
+            ("https://a:8000", "http://a:8004", False),
+            ("http://a:8000", "https://a:8004", True),
+            ("http://a:8000", "http://a:8004", True),
+            ("HTTPS://a:8000", "HTTP://a:8004", False),
+            ("https://a:8000", "HTTPS://a:8004", True),
+            ("HTTP://a:8000", "http://a:8004", True),
+            ("", "https://a:8004", False),
+            ("https://a:8000", "", False),
+            ("  ", "  ", False),
+            (None, "https://a", False),
+            ("https://a:8000", None, False),
+            ("https://a:notaport", "https://a:8004", False),
+            ("https://a:8000", "http://a:notaport", False),
+            ("a:8000", "https://a:8004", False),
+            ("https://a:8000", "a:8004", False),
+            ("ftp://a:8000", "https://a:8004", False),
+            ("https://a:8000", "ftp://a:8004", False),
+        ],
+    )
+    def test_the_table(self, configured, candidate, expect):
+        assert auth.no_weaker_scheme(configured, candidate) is expect
+
+    def test_the_host_and_the_port_are_not_its_question(self):
+        assert auth.no_weaker_scheme("https://a:1", "https://b:2") is True
+        assert auth.same_host("https://a:1", "https://b:2") is False

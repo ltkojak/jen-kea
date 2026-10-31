@@ -21,6 +21,7 @@ import jen.services.kea_authoring as __authoring
 import jen.services.kea_changeset as __changeset
 import jen.services.kea_ha as __ha
 import jen.services.kea_host as __host
+import jen.services.kea_tls as __tls
 import jen.services.packet_health as __packet_health
 from jen import extensions
 from jen.services import config_revisions as __rev
@@ -507,6 +508,7 @@ def restart_kea_server(server_id):
         res = __host.service_action(server, "dhcp4", "restart")
         if res["ok"]:
             flash(f"Kea restarted on {server['name']}.", "success")
+            __changeset.resolve_attention(server_id, "dhcp4", categories=("restore-restart-failed",))
             __user.audit("RESTART_KEA", server["name"], "Remote restart via jen-kea-helper")
         else:
             flash(f"Restart failed on {server['name']}: {res['detail']}", "error")
@@ -995,6 +997,9 @@ def config_history_download_raw(server_id, rev_id):
 @bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/restore", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(
+    minutes=10
+)  # Q203 AS2: the unmasked download of the same revision asks for it; the write of that revision into the daemon's file asks no less
 def config_history_restore(server_id, rev_id):
     server, deny = _history_gate(server_id)
     if deny:
@@ -1014,7 +1019,10 @@ def config_history_restore(server_id, rev_id):
         flash("This revision's stored config is not valid JSON — cannot restore.", "error")
         return back
 
-    test = __host.test_config(server, service, cfg)
+    # Q203 AS2: the material-before-reference preflight every other writer of a control socket runs - a revision that names Jen's certificate files is refused while they are absent,
+    # and not restarted into a config the daemon cannot load.
+    tls_paths = __authoring.referenced_tls_paths(cfg, __tls.remote_tls_paths(service))
+    test = __host.test_config(server, service, cfg, tls_paths=tls_paths)
     if not test["ok"]:
         flash(
             f"Restore aborted — {server['name']} rejected revision #{rev_id}: {test.get('detail') or 'unknown error'}",
@@ -1045,6 +1053,7 @@ def config_history_restore(server_id, rev_id):
         expect_sha256=expect,
         summary=f"restore of #{rev_id}",
         source="restore",
+        tls_paths=tls_paths,
     )
     if res.get("code") == "conflict":
         flash(
@@ -1060,9 +1069,21 @@ def config_history_restore(server_id, rev_id):
     restart = __host.service_action(server, service, "restart")
     if restart["ok"]:
         flash(f"Restored revision #{rev_id} to {server['name']} and restarted Kea.", "success")
+        # Q203 AS2: a restart that worked ends an earlier restore's unproved restart of THIS daemon
+        __changeset.resolve_attention(server_id, service, categories=("restore-restart-failed",))
     else:
+        # Q203 AS2: the revision is on the host and the daemon did not start on it - it may be stopped, or still running what it had. That is a durable fact (the Servers banner and Health's
+        # row read it from Jen's own note), not a flash that is gone with the next page; the next restart that works, or a superadmin's acknowledgement, ends it.
+        stored = __changeset.record_attention(
+            server_id,
+            service,
+            f"restore of revision #{rev_id}",
+            "restore-restart-failed",
+            server_name=server.get("name", ""),
+        )
         flash(
-            f"Restored revision #{rev_id} to {server['name']} — restart Kea manually ({restart.get('detail') or ''}).",
+            f"Restored revision #{rev_id} to {server['name']} — restart Kea manually ({restart.get('detail') or ''})."
+            + ("" if stored else " Jen could not record that the daemon is unproved; check it on the host."),
             "warning",
         )
     __user.audit("RESTORE_KEA_CONFIG", server["name"], f"service={service} revision={rev_id}")

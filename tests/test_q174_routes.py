@@ -300,6 +300,39 @@ class TestRegeneratingTheSshKey:
         assert "chown" not in " ".join(map(str, seen["cmd"]))
 
 
+class TestOnlyASuperadminReplacesJensSshKey:
+    """Q203 AS2 d: the same admin may not change `ssh_host`, so the only SSH key Jen has is the superadmin's too (a role asymmetry closed; the old key is kept as .prev)."""
+
+    def test_an_admin_is_refused_and_the_key_is_not_touched(self, client, db, monkeypatch, tmp_path):
+        import subprocess
+
+        key = tmp_path / "id_rsa"
+        key.write_text("old-private")
+        monkeypatch.setattr(extensions, "SSH_KEY_PATH", str(key))
+        ran = []
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: ran.append(a))
+        c, _ = restricted_client(client, db, None, role="admin", username="q203_key_admin")
+        r = c.post("/settings/generate-ssh-key", data={}, follow_redirects=True)
+        assert b"SuperAdmin access required" in r.data
+        assert ran == [] and key.read_text() == "old-private"
+
+    def test_an_admin_sees_a_sentence_and_no_button(self, client, db):
+        c, _ = restricted_client(client, db, None, role="admin", username="q203_key_admin_page")
+        body = c.get("/settings/kea").get_data(as_text=True)
+        assert 'action="/settings/generate-ssh-key"' not in body
+        assert "Only a superadmin generates or replaces Jen&#39;s SSH key." in body or (
+            "Only a superadmin generates or replaces Jen's SSH key." in body
+        )
+
+    def test_a_superadmin_sees_the_button(self, logged_in_client):
+        assert 'action="/settings/generate-ssh-key"' in logged_in_client.get("/settings/kea").get_data(as_text=True)
+
+    def test_a_superadmin_without_a_recent_confirmation_is_sent_to_confirm(self, logged_in_client):
+        _stale(logged_in_client)
+        r = logged_in_client.post("/settings/generate-ssh-key", data={})
+        assert r.status_code in (301, 302) and "reauth" in r.headers["Location"]
+
+
 class TestSecondPassFixes:
     @pytest.mark.parametrize("bad", ["/%09/evil.example", "/%0a/x", "/%0d%0aSet-Cookie:x=y", "/ok%00"])
     def test_a_control_character_in_next_is_ignored_not_a_500(self, client, bad):
