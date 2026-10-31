@@ -160,9 +160,10 @@ class TestTwoColumnSettings:
             '<a href="/settings/system#sys-ports">System → Ports &amp; threads</a>.</div>\n</div>\n</div>\n{% endblock %}'
         ),
         "settings_system.html": '<button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>\n    </form>\n</div>\n</div>\n\n<script',
+        # (Q204 AT1 d: the metrics form is rendered only for an account that may see every subnet, so the card's `</form>` is followed by its `{% endif %}` - like settings_kea's)
         "settings_alerts.html": (
             '<button type="submit" class="btn btn-primary u-8a77e5">Save Metrics Settings</button>\n'
-            "    </form>\n</div>\n</div>\n{% endblock %}"
+            "    </form>\n    {% endif %}\n</div>\n</div>\n{% endblock %}"
         ),
         "settings_appearance.html": "    </details>\n</div>\n</div>\n{% endblock %}",
     }

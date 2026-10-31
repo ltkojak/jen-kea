@@ -730,12 +730,13 @@ class TestTheBranchesRun:
         )
         assert r.status_code == 200
         page = client.get("/settings/alerts").data.decode()
-        assert "metrics-token-input" in page and token in page, "the unrestricted admin's card did not render"
+        assert 'id="metrics-token-input"' in page and token in page, "the unrestricted admin's card did not render"
         try:
             for role in ("admin_A",):
                 _caller(client, db, role)
                 scoped = client.get("/settings/alerts").data.decode()
-                assert "metrics-token-input" not in scoped and token not in scoped
+                # (the id also appears in the page's script, which looks the input up by it: the INPUT is what must be absent)
+                assert 'id="metrics-token-input"' not in scoped and token not in scoped
                 before = pathlib.Path(jen_config.app_config.path).read_bytes()
                 r = client.post(
                     "/settings/save-metrics", data={"metrics_token": "another-token-123", "metrics_open": "1"}
@@ -756,10 +757,16 @@ class TestTheBranchesRun:
 
         jen_config.app_config.write_values([("server", "metrics_token", ""), ("server", "metrics_open", "false")])
 
-    def test_the_scrape_itself_is_unchanged(self, client, db, seeded):
+    def test_the_scrape_itself_is_unchanged(self, client, db, seeded, monkeypatch):
         """`/metrics` has no user: the token (or the flag) decides. Nothing about it moved - who may HOLD the token did."""
         _caller(client, db, "admin_all")
         client.post("/settings/save-metrics", data={"metrics_token": "q204-scrape-token-1"})
+        # (a config write re-derives every global from the file - `AppConfig.apply` - including the subnet map the autouse fixture patched; patch it again)
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {1: {"name": "Alpha-A", "cidr": "10.98.1.0/24"}, 2: {"name": B_NAME, "cidr": "10.77.0.0/24"}},
+        )
         try:
             r = client.get("/metrics", headers={"Authorization": "Bearer q204-scrape-token-1"})
             assert r.status_code == 200 and B_NAME in r.get_data(as_text=True)

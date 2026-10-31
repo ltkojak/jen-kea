@@ -372,8 +372,10 @@ class TestWinDhcpImportWizard:
             assert body.count(self.NOT_RECORDED) >= 2, "the flash and the report line both say it"
             assert "Kea did not restart cleanly" in body
             assert self._reservation_calls == [], "reservations stay deferred"
-            plans = list(subnets_mod._WIN_IMPORT_PLANS.values())
-            assert [p["state"] for p in plans] == ["config_applied_restart_failed"] and plans[0]["applied_sha"]
+            plan = list(subnets_mod._WIN_IMPORT_PLANS.values())[
+                -1
+            ]  # (the registry is module-level and outlives the test: this import is the newest)
+            assert plan["state"] == "config_applied_restart_failed" and plan["applied_sha"]
         finally:
             kea_changeset.acknowledge_recovery()
 

@@ -2851,8 +2851,9 @@ def test_22_l_a_rotation_refused_by_a_name_on_the_second_daemon_leaves_the_first
     result = emitted(out)
     assert result is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     texts = " ".join(result["flashes"])
-    assert "the CA cannot issue its certificate for kea_two" in texts and "Kea CA rotated" not in texts, texts
-    assert "nothing was installed on any host" in texts, texts
+    # Q204 AT5 b: a certificate's DNS names are the verifier's parser's names, and the parser refuses the underscore, so the second daemon's record names only its bind address and Rotate is refused by
+    # the record check ("Jen has no complete record ... before rotating") one step before the name would have been tried - the same outcome, with the record's own sentence
+    assert "Rotate refused" in texts and "kea_two" in texts and "Kea CA rotated" not in texts, texts
     assert result["records_unchanged"], "INVARIANT: a refusal changes none of the Jen-side records of any daemon"
     assert result["prev_left"] == [1, 2] and result["stale_marker_left"] is True, result
     assert result["jen_files_unchanged"] and result["staging_left"] == [], (
