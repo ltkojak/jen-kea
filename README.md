@@ -178,7 +178,7 @@ tested here, it isn't claimed.
 
 | | Tested |
 |---|---|
-| **Kea** | 3.0.3 (LTS) and 3.2.0 (stable) — real `kea-dhcp4` images, weekly; 3.3.1 (dev, informational only) |
+| **Kea** | 3.0.5 (LTS) and 3.2.1 (stable) — real `kea-dhcp4` images, weekly; 3.3.3 (dev, informational only) |
 | **Operating system** | Ubuntu 22.04, Ubuntu 24.04 |
 | **Database** | MariaDB 10.11, MariaDB 11.4, MySQL 8.0 |
 | **Python** | 3.10, 3.12 |

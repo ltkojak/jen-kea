@@ -3,7 +3,7 @@
 # (there is no systemd in a container). The helper itself is NOT baked in:
 # the harness installs it through Jen's own install_helper path, the one an
 # operator's "Install helper" button uses.
-ARG KEA_IMAGE=docker.cloudsmith.io/isc/docker/kea-dhcp4:3.0.3
+ARG KEA_IMAGE=docker.cloudsmith.io/isc/docker/kea-dhcp4:3.0.5
 FROM ${KEA_IMAGE}
 
 USER root
