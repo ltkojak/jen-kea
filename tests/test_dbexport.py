@@ -643,7 +643,7 @@ class TestAScheduleMustBackUpSomething:
         monkeypatch.setattr(
             _dbexport, "get_schedule", lambda: {"enabled": enabled, "include_jen": jen, "include_kea": kea}
         )
-        user = SimpleNamespace(id=1, can_access_subnet=lambda s: True)
+        user = SimpleNamespace(id=1, can_access_subnet=lambda s: True, all_subnets=True)
         ctx = onboarding.build_ctx(user, True)
         assert ctx["backup_schedule_enabled"] is counts
         row = next(r for r in onboarding.checklist(ctx)["rows"] if "backup" in r["title"].lower())
@@ -658,5 +658,5 @@ class TestAScheduleMustBackUpSomething:
         monkeypatch.setattr(health, "run_checks", lambda ctx: [])
         monkeypatch.setattr(_dbexport, "backup_count", lambda: 0)
         monkeypatch.setattr(_dbexport, "get_schedule", dict)
-        ctx = onboarding.build_ctx(SimpleNamespace(id=1, can_access_subnet=lambda s: True), True)
+        ctx = onboarding.build_ctx(SimpleNamespace(id=1, can_access_subnet=lambda s: True, all_subnets=True), True)
         assert ctx["backup_schedule_enabled"] is False

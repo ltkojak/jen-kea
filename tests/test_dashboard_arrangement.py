@@ -159,7 +159,7 @@ class TestCatalogDataRoute:
 
         calls = []
 
-        def counted():
+        def counted(ctx=None):  # (Q204: the route hands the caller's subnet filter and flag)
             calls.append(1)
             return []
 
@@ -172,7 +172,7 @@ class TestCatalogDataRoute:
     def test_run_checks_never_runs_when_neither_widget_is_requested(self, logged_in_client, db, mock_kea, monkeypatch):
         from jen.services import health
 
-        def boom():
+        def boom(ctx=None):
             raise AssertionError("run_checks should not have been called")
 
         monkeypatch.setattr(health, "run_checks", boom)
@@ -184,7 +184,7 @@ class TestCatalogDataRoute:
     ):
         from jen.services import health
 
-        def boom():
+        def boom(ctx=None):
             raise RuntimeError("kea down")
 
         monkeypatch.setattr(health, "run_checks", boom)
@@ -212,7 +212,9 @@ class TestCatalogDataRoute:
         from jen.services.health import Check
 
         monkeypatch.setattr(
-            health, "run_checks", lambda: [Check("d2_errors", "D2 errors", "ddns", "skip", detail, fix_url="/ddns")]
+            health,
+            "run_checks",
+            lambda ctx=None: [Check("d2_errors", "D2 errors", "ddns", "skip", detail, fix_url="/ddns")],
         )
         r = logged_in_client.get("/api/dashboard/catalog-data?widgets=ddns_errors")
         assert r.status_code == 200
