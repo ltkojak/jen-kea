@@ -10,6 +10,23 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## An admin's probe cannot downgrade the scheme; restoring, importing, authoring and the SSO settings ask for a recent password; the SSH key is a superadmin's
+
+One step (5.69.3). It adds no migration and needs no action beyond what you may notice below.
+
+**An admin's probe of a candidate address must be the same host over no weaker scheme.** On Settings -> Kea, *Probe* with a candidate address sends the saved Kea credentials to it. Since 5.69.0 an admin could
+post `http://` for an endpoint Jen reaches over `https://` on the same host, and the credential went in clear text. An admin is now refused ("Only a superadmin probes an address on a different host, or over
+http where Jen reaches this host over https"); a superadmin can still test any address, over http included.
+
+**Restoring a revision from Config history, applying an import, authoring a Kea config, installing the Kea host helper and saving the single-sign-on settings now need a superadmin whose password was confirmed in
+the last ten minutes.** They were a superadmin's already; Jen sends you to the confirmation page when yours is older. **Replacing Jen's SSH key is a superadmin's**: an admin sees a sentence where the button was.
+
+**A restore or an import whose restart fails leaves a note.** Servers and Health say the daemon may be stopped or running its old config until a restart of that daemon works (restore again, or *Restart Kea* on Servers
+for kea-dhcp4), or a superadmin acknowledges it.
+
+**A certificate that names nothing includes an empty name or an IP network, and a second record counts whoever issued its pair.** A server certificate whose only name is empty, or a network, is refused as one with no
+name; a second record of the same daemon whose pair an administrator's CA issued now refuses a rotation and the setup, like one Jen issued.
+
 ## A rotation's earlier notes finish first; a certificate that names nothing is refused; saving ports or Jen's certificate needs a superadmin
 
 One step (5.69.2). It adds no migration and needs no action beyond what you may notice below.
