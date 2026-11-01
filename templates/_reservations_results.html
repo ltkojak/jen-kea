@@ -1,3 +1,5 @@
+{# Q206 (AV4): the count lives in the swap, so a filter change updates it #}
+<p class="results-summary" id="reservations-summary">{{ total|plural('reservation') }}{% if subnet_filter_name %} in {{ subnet_filter_name }}{% endif %}</p>
 <form id="bulk-form" method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="action-bar bulk-bar" id="reservations-bulk-bar">
@@ -27,8 +29,17 @@
     {% else %}
     {% from '_empty.html' import empty_state %}
     <tr id="no-reservations"><td colspan="{{ 9 if current_user.role in ('superadmin','admin') else 8 }}" data-m="full">
+        {# Q206 (AV6): with a filter in force the empty row names it and offers the way out; with none, the sentence stays what it always was #}
+        {% if search or subnet_filter_name or status_filter != 'all' %}
+        {% set what = 'No reservations'
+            ~ (' in ' ~ subnet_filter_name if subnet_filter_name else '')
+            ~ (' match “' ~ search ~ '”' if search else '')
+            ~ (' that are ' ~ status_filter if status_filter != 'all' else '') %}
+        {{ empty_state(icon('search'), what, [('Clear filters', '/reservations?per_page=' ~ (per_page|urlencode) ~ '&sort=' ~ (sort|urlencode) ~ '&dir=' ~ (direction|urlencode))]) }}
+        {% else %}
         {% set res_buttons = [((icon('plus') ~ ' Add reservation'), '/reservations/add')] if current_user.role in ('superadmin','admin') else [] %}
         {{ empty_state(icon('pin'), 'No reservations. Convert a lease or add one.', res_buttons) }}
+        {% endif %}
     </td></tr>
     {% endfor %}
     </tbody>

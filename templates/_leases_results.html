@@ -1,3 +1,10 @@
+{# Q206 (AV4): the count lives in the swap, so a filter change updates it. On the live list it also says what the SAME filtered set holds that a reader acts on: how many expire within the hour,
+   and how many carry a reservation (of the rows on this page - a lease's MAC is checked against the reservations once, for the page shown) #}
+{# the history lists every lease row Kea still holds - the live ones too (tests/test_active_lease.py pins it) - so it does not call them all expired #}
+<p class="results-summary" id="leases-summary">{{ total|plural('lease' if show_expired else 'active lease') }}{% if subnet_filter_name %} in {{ subnet_filter_name }}{% endif %}
+    {%- if show_expired %} · the history, expired ones included{% endif %}
+    {%- if not show_expired and expiring_soon %} · {{ expiring_soon }} {{ 'expires' if expiring_soon == 1 else 'expire' }} within the hour{% endif %}
+    {%- if not show_expired and reserved_count %} · {{ reserved_count }} reserved{% if pages > 1 %} on this page{% endif %}{% endif %}</p>
 {% if not show_expired and current_user.role in ('superadmin','admin') %}
 <form id="bulk-form" method="POST" action="/leases/bulk-release">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

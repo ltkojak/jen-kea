@@ -22,7 +22,7 @@ function updateCount() {
 }
 function confirmBulkRelease() {
     const n = document.querySelectorAll('.row-checkbox:not(:disabled):checked').length;
-    if (n === 0) { alert('No leases selected.'); return false; }
+    if (n === 0) { jenToast('No leases selected.', 'info'); return false; }
     jenConfirm(`Release ${n} ${n === 1 ? 'lease' : 'leases'}? Each device will need to renew to get a new IP.`, function() {
         document.getElementById('bulk-form').submit();
     });
@@ -43,7 +43,7 @@ document.addEventListener('change', function(e) {
 {% from '_sort_controls.html' import sort_controls %}
 <div class="page-header">
     <h1>{{ icon("list", "ico-lg") }} Leases</h1>
-    <p>{{ total|plural('lease') }} found</p>
+    <p>Every address Kea has handed out, and when each one runs out</p>
 </div>
 
 {% from '_ip_version_control.html' import ip_version_control with context %}
@@ -139,17 +139,26 @@ function loadSavedFilter(sel) {
     if (sel.value) window.location.href = '/leases?' + sel.value;
 }
 function saveCurrentFilter() {
-    var name = prompt('Name this filter:');
-    if (!name) return;
-    var params = window.location.search.replace('?','');
-    jenFetch('/saved-searches/save', {
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': {{ csrf_token()|tojson }}},
-        body:'name='+encodeURIComponent(name)+'&page=leases&params='+encodeURIComponent(params)
-    }).then(r => r.json()).then(function(d) {
-        if (d.ok) { alert('Filter saved!'); location.reload(); }
-        else alert('Error: ' + d.error);
-    });
+    // Q206 (AV1): the name comes from jenPrompt, the answer is a toast and the new option - no reload, so the page the person is on stays as it is
+    jenPrompt('Name this filter:', function(name) {
+        var params = window.location.search.replace('?','');
+        jenFetch('/saved-searches/save', {
+            method:'POST',
+            headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': {{ csrf_token()|tojson }}},
+            body:'name='+encodeURIComponent(name)+'&page=leases&params='+encodeURIComponent(params)
+        }).then(r => r.json()).then(function(d) {
+            if (d.ok) {
+                var sel = document.getElementById('saved-filter-select');
+                var opt = document.createElement('option');
+                opt.value = params; opt.textContent = name;
+                sel.insertBefore(opt, sel.options[1] || null);   // newest first, as the list loads them
+                opt.selected = true;
+                jenToast('Filter saved: ' + name, 'success');
+            } else {
+                jenToast('Error: ' + d.error, 'error');
+            }
+        }).catch(function() { jenToast('Could not save the filter.', 'error'); });
+    }, '', 'Save');
 }
 document.getElementById('save-filter-btn').addEventListener('click', saveCurrentFilter);
 document.getElementById('saved-filter-select').addEventListener('change', function() { loadSavedFilter(this); });

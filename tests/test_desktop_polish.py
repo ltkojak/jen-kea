@@ -99,8 +99,15 @@ class TestAccessibilityCss:
 
     def test_flash_messages_carry_role_and_aria_live(self):
         html = _render(flashes=[("success", "Saved."), ("error", "Nope.")])
-        assert '<div class="alert alert-success" role="status" aria-live="polite">Saved.</div>' in html
-        assert '<div class="alert alert-error" role="alert">Nope.</div>' in html
+        # Q206 (AV2): each flash also carries a close button and its message sits in `.alert-text`; the roles are what they were
+        assert re.search(
+            r'<div class="alert alert-success alert-flash" role="status" aria-live="polite"[^>]*><span class="alert-text">Saved\.</span><button type="button" class="alert-close" aria-label="Dismiss">',
+            html,
+        )
+        assert re.search(
+            r'<div class="alert alert-error alert-flash" role="alert"><span class="alert-text">Nope\.</span><button type="button" class="alert-close" aria-label="Dismiss">',
+            html,
+        )
 
 
 class TestProgressBarMarkup:

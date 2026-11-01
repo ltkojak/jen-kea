@@ -142,7 +142,11 @@ class TestLeaseRow:
             '<span class="desk-only" title="in 3 d">2026-09-21 10:00 UTC</span><span class="phone-only">in 3 d</span>'
             in html
         )
-        assert 'action-menu-item disabled mono">aa:bb:cc:dd:ee:ff<' in html
+        # Q206 (AV3): the menu's MAC line is a copy control now - the same text, inside the button
+        assert re.search(
+            r'action-menu-item disabled mono"><button type="button" class="copy mono" data-copy="aa:bb:cc:dd:ee:ff"[^>]*>aa:bb:cc:dd:ee:ff</button>',
+            html,
+        )
 
     def test_a_viewer_gets_no_checkbox_or_kebab(self):
         cells = _cells(_render("_lease_rows.html", leases=[_lease()], current_user=User("viewer")))[0]
@@ -151,6 +155,23 @@ class TestLeaseRow:
     def test_the_empty_state_row_spans_the_line(self):
         cells = _cells(_render("_lease_rows.html", leases=[]))[0]
         assert cells[0][0] == "full"
+
+    def test_the_filtered_empty_state_row_spans_the_line_too(self):
+        # Q206 (AV6): the row that names the filter is the same one cell, full width
+        rows = _cells(
+            _render(
+                "_lease_rows.html",
+                leases=[],
+                search="printer",
+                minutes="",
+                subnet_filter_name="IoT",
+                per_page="all",
+                sort="expires",
+                direction="desc",
+            )
+        )
+        assert len(rows) == 1 and len(rows[0]) == 1 and rows[0][0][0] == "full"
+        assert "No active leases match “printer” in IoT" in rows[0][0][1]
 
 
 def _res(**kw):
@@ -372,3 +393,151 @@ class TestPages:
 
     def test_relfmt_filter_is_registered(self, app):
         assert "relfmt" in app.jinja_env.filters
+
+
+class TestFilteredEmptyStates:
+    """Q206 (AV6): with a filter in force an empty list names it and offers ONE way out; with none, the sentence each page always had is untouched."""
+
+    @staticmethod
+    def _escaping_render(name, **ctx):
+        env = _env()
+        env.autoescape = True
+        base = {"current_user": User(), "show_expired": False, "ipv6_enabled": False, "subnet6_map": {}}
+        base.update(ctx)
+        return env.get_template(name).render(**base)
+
+    LEASES = {
+        "leases": [],
+        "search": "",
+        "minutes": "",
+        "subnet_filter_name": "",
+        "per_page": "all",
+        "sort": "expires",
+        "direction": "desc",
+    }
+    DEVICES = {
+        "devices": [],
+        "v6_duid_only": [],
+        "stale_days": 30,
+        "show_stale": False,
+        "search": "",
+        "type_filter": "",
+        "subnet_filter_name": "",
+        "per_page": "all",
+        "sort": "last_seen",
+        "direction": "desc",
+        "device_type_display": {"printer": ("Printer", "#888888")},
+    }
+    RESERVATIONS = {
+        "hosts": [],
+        "pages": 1,
+        "page": 1,
+        "total": 0,
+        "search": "",
+        "subnet_filter": "all",
+        "subnet_filter_name": "",
+        "status_filter": "all",
+        "per_page": "all",
+        "sort": "ip",
+        "direction": "asc",
+    }
+
+    def _lease(self, **kw):
+        return self._escaping_render("_lease_rows.html", **{**self.LEASES, **kw})
+
+    def _device(self, **kw):
+        return self._escaping_render("_device_rows.html", **{**self.DEVICES, **kw})
+
+    def _reservation(self, **kw):
+        return self._escaping_render("_reservations_results.html", **{**self.RESERVATIONS, **kw})
+
+    # ── no filter in force: today's sentence and today's buttons ──
+    def test_leases_with_no_filter_keep_their_sentence_and_the_health_button(self):
+        html = self._lease()
+        assert "No active leases yet" in html and "Kea hands out leases as clients ask" in html
+        assert 'href="/health-center"' in html and "Clear filters" not in html
+
+    def test_devices_with_no_filter_keep_their_sentence(self):
+        html = self._device()
+        assert "Devices appear as leases are seen; the inventory fills itself." in html
+        assert "Clear filters" not in html
+
+    def test_reservations_with_no_filter_keep_their_sentence_and_the_add_button(self):
+        html = self._reservation()
+        assert "No reservations. Convert a lease or add one." in html
+        assert 'href="/reservations/add"' in html and "Clear filters" not in html
+
+    # ── a filter in force: named, and one way out ──
+    def test_leases_name_the_search_and_the_subnet(self):
+        html = self._lease(search="printer", subnet_filter_name="IoT")
+        assert "No active leases match “printer” in IoT" in html
+        assert html.count("Clear filters") == 1
+        assert "No active leases yet" not in html and "Kea hands out leases" not in html
+        assert 'href="/health-center"' not in html
+
+    def test_leases_name_the_time_window(self):
+        assert "from the last 6 hours" in self._lease(minutes="360")
+        assert "from the last hour" in self._lease(minutes="60")
+        assert "from the last 45 minutes" in self._lease(minutes="45")
+
+    def test_leases_in_history_say_expired(self):
+        html = self._lease(search="printer", show_expired=True)
+        assert "No expired leases match “printer”" in html
+
+    def test_a_time_window_that_is_not_a_number_is_no_filter(self):
+        html = self._lease(minutes="abc")
+        assert "No active leases yet" in html and "Clear filters" not in html
+
+    def test_the_clear_filters_href_drops_every_filter_and_keeps_page_size_and_sort(self):
+        html = self._lease(
+            search="printer", minutes="60", subnet_filter_name="IoT", per_page="100", sort="ip", direction="asc"
+        )
+        assert 'href="/leases?per_page=100&amp;sort=ip&amp;dir=asc"' in html
+        assert "search=" not in html.split("Clear filters")[0].rsplit("href=", 1)[1]
+
+    def test_the_clear_filters_href_stays_in_the_history_view(self):
+        html = self._lease(search="x", show_expired=True)
+        assert 'href="/leases?per_page=all&amp;sort=expires&amp;dir=desc&amp;expired=1"' in html
+
+    def test_the_search_is_escaped(self):
+        html = self._lease(search="<b>")
+        assert "match “&lt;b&gt;”" in html and "<b>" not in html
+
+    def test_devices_name_every_filter_in_force(self):
+        html = self._device(search="printer", type_filter="printer", subnet_filter_name="IoT")
+        assert "No devices match “printer” of type Printer in IoT" in html
+        assert (
+            html.count("Clear filters") == 1 and 'href="/devices?per_page=all&amp;sort=last_seen&amp;dir=desc"' in html
+        )
+        assert "the inventory fills itself" not in html
+
+    def test_devices_stale_only_names_the_window(self):
+        html = self._device(show_stale=True)
+        assert "No stale devices (none inactive for 30+ days)" in html and html.count("Clear filters") == 1
+
+    def test_devices_escape_the_search(self):
+        html = self._device(search="<b>")
+        assert "match “&lt;b&gt;”" in html and "<b>" not in html
+
+    def test_reservations_name_the_subnet_and_the_search(self):
+        html = self._reservation(search="printer", subnet_filter="1", subnet_filter_name="IoT")
+        assert "No reservations in IoT match “printer”" in html
+        assert html.count("Clear filters") == 1 and 'href="/reservations?per_page=all&amp;sort=ip&amp;dir=asc"' in html
+        assert "Convert a lease or add one" not in html and "Add reservation" not in html
+
+    def test_reservations_name_the_status(self):
+        assert "No reservations that are inactive" in self._reservation(status_filter="inactive")
+
+    def test_reservations_escape_the_search(self):
+        html = self._reservation(search="<b>")
+        assert "match “&lt;b&gt;”" in html and "<b>" not in html
+
+    # ── the phone shape ──
+    def test_the_row_that_names_the_filter_is_one_full_width_cell_on_each_page(self):
+        for html in (
+            self._lease(search="x"),
+            self._device(search="x"),
+            self._reservation(search="x"),
+        ):
+            rows = [r for r in _cells(html) if r]
+            assert any(len(r) == 1 and r[0][0] == "full" for r in rows), rows

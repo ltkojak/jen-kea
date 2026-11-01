@@ -1107,3 +1107,79 @@ class TestBulkReservationActions:
         assert 'id="bulk-form"' in body
         assert 'id="selectAll"' in body
         assert f'name="host_ids[]" value="{host_id}"' in body
+
+
+def _res_summary(body):
+    """The text of the results-summary line, whitespace folded (None when the response has none)."""
+    import re
+
+    m = re.search(r'<p class="results-summary"[^>]*>(.*?)</p>', body, re.S)
+    return " ".join(re.sub(r"<[^>]+>", "", m.group(1)).split()) if m else None
+
+
+@pytest.fixture
+def q206_reservations(db):
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM lease4")
+        cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        for ip, mac, host in (("10.99.0.51", "AABBCC000051", "alpha-res"), ("10.99.0.52", "AABBCC000052", "beta-res")):
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX(%s), 0, 1, INET_ATON(%s), %s)",
+                (mac, ip, host),
+            )
+    db.commit()
+    yield
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+    db.commit()
+
+
+class TestReservationsSummary:
+    """Q206 (AV4): the count lives in the swapped results, and the hand-written plural is gone."""
+
+    HX = {"HX-Request": "true"}
+
+    def test_a_filter_change_returns_the_partial_with_the_new_total(self, logged_in_client, q206_reservations):
+        assert _res_summary(logged_in_client.get("/reservations").data.decode()) == "2 reservations"
+        one = logged_in_client.get("/reservations?search=alpha", headers=self.HX).data.decode()
+        assert "<html" not in one and _res_summary(one) == "1 reservation"
+
+    def test_the_summary_is_inside_the_results(self, logged_in_client, q206_reservations):
+        body = logged_in_client.get("/reservations").data.decode()
+        assert body.index('<div id="reservations-results">') < body.index('id="reservations-summary"')
+
+    def test_the_subnet_is_named_when_it_is_the_filter(self, logged_in_client, q206_reservations):
+        text = _res_summary(logged_in_client.get("/reservations?subnet=1", headers=self.HX).data.decode())
+        assert text == "2 reservations in Test Network"
+
+
+class TestReservationsFilteredEmptyState:
+    """Q206 (AV6)."""
+
+    def test_a_search_that_matched_nothing_names_it_and_offers_clear_filters(self, logged_in_client, q206_reservations):
+        body = logged_in_client.get("/reservations?search=nothing-matches-this&per_page=100").data.decode()
+        assert "No reservations match “nothing-matches-this”" in body
+        assert body.count("Clear filters") == 1
+        assert 'href="/reservations?per_page=100&amp;sort=ip&amp;dir=asc"' in body
+        assert "Convert a lease or add one" not in body
+
+    def test_a_subnet_and_a_search_are_both_named(self, logged_in_client, q206_reservations):
+        body = logged_in_client.get("/reservations?subnet=1&search=nothing-matches-this").data.decode()
+        assert "No reservations in Test Network match “nothing-matches-this”" in body
+
+    def test_a_status_filter_alone_is_named(self, logged_in_client, q206_reservations):
+        body = logged_in_client.get("/reservations?status=active").data.decode()
+        assert "No reservations that are active" in body and "Clear filters" in body
+
+    def test_a_search_is_sanitised_before_it_is_named(self, logged_in_client, q206_reservations):
+        body = logged_in_client.get("/reservations?search=<zzq>").data.decode()
+        assert "match “zzq”" in body and "<zzq>" not in body.split('id="reservations-results"', 1)[1]
+
+
+class TestReservationCopyControls:
+    """Q206 (AV3): the IP and the MAC of a reservation row are copy controls."""
+
+    def test_the_ip_and_the_mac_are_copy_controls(self, logged_in_client, q206_reservations):
+        body = logged_in_client.get("/reservations").data.decode()
+        assert 'data-copy="10.99.0.51"' in body and 'data-copy="AA:BB:CC:00:00:51"' in body

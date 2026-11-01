@@ -21,7 +21,7 @@ function saveTone(choice) {
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-        if (!data.ok) { alert('Could not save the colour: ' + data.error); return; }
+        if (!data.ok) { jenToast('Could not save the colour: ' + data.error, 'error'); return; }
         document.querySelectorAll('[data-tone-badge="' + id + '"]').forEach(function(el) {
             el.className = el.className.replace(/badge-tone-\w+/, 'badge-tone-' + data.tone);
         });
@@ -79,7 +79,7 @@ function saveNote(id) {
                 : '<span class="u-ae0c30">No notes — click to add</span>';
             cancelNote(id);
         } else {
-            alert('Error saving note: ' + data.error);
+            jenToast('Error saving note: ' + data.error, 'error');
         }
     });
 }

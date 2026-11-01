@@ -68,6 +68,7 @@
         </div>
     </div>
 
+    <div class="field-note" id="step1-note" role="alert" hidden></div>
     <button class="btn btn-primary u-1b0f49" id="step1-next-btn">Next →</button>
 </div>
 
@@ -154,7 +155,9 @@ function selectDB(w) {
 }
 
 function showStep(n) {
-    if (n===2 && !_which) { alert('Please select a database first.'); return; }
+    var note = document.getElementById('step1-note');
+    note.hidden = true;
+    if (n===2 && !_which) { note.textContent = 'Please select a database first.'; note.hidden = false; return; }
     [1,2,3].forEach(function(i) {
         document.getElementById('step'+i).style.display = i===n ? '' : 'none';
     });
@@ -186,8 +189,8 @@ function testConn() {
     var user = document.getElementById('t-user').value.trim();
     var pw   = document.getElementById('t-pass').value;
     var db   = document.getElementById('t-db').value.trim();
-    if (!host || !user || !db) { alert('Fill in host, user, and database name.'); return; }
     var el = document.getElementById('conn-result');
+    if (!host || !user || !db) { el.textContent = 'Fill in host, user, and database name.'; el.style.color = 'var(--danger)'; return; }
     el.textContent = 'Testing…'; el.style.color = 'var(--text-muted)';
     var fd = new FormData();
     fd.append('host',host); fd.append('port',port); fd.append('user',user);

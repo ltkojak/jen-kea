@@ -27,7 +27,11 @@
 {% block scripts %}
 function copyAll() {
     const codes = {{ codes | tojson }};
-    navigator.clipboard.writeText(codes.join('\n')).then(() => alert('Codes copied to clipboard'));
+    // Q206: the shared copier (base.html) - it also works on a plain-http origin, and the answer is a toast
+    jenCopyText(codes.join('\n')).then(function(ok) {
+        if (ok) jenToast('Codes copied to clipboard', 'success');
+        else jenToast('Could not copy - select the codes and copy them by hand.', 'warning');
+    });
 }
 function printCodes() { window.print(); }
 document.getElementById('copy-codes-btn').addEventListener('click', copyAll);

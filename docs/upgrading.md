@@ -10,6 +10,18 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## Notices instead of pop-up boxes, a copy click on every MAC and IP, a summary that follows the filter, and a page size that is remembered
+
+One step (5.70.0-beta.2). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step.
+
+**The browser's own pop-up boxes are gone.** A short answer is a small notice in the corner of the window; naming a saved filter is Jen's own dialog and the new filter appears in the list at once, without the page reloading. A note about a field is printed beside it. The messages at the top of a page can be closed, and a success fades after six seconds.
+
+**A MAC or an IP on Leases, Devices, Reservations, the dashboard's recent leases and Search is a button that copies it.** It works over plain http as well as https. The IP address on a Leases row no longer links to a search for itself.
+
+**Leases, Devices and Reservations show a summary line that follows the filter.** On Leases it also says how many of the listed leases expire within the hour and how many carry a reservation. A search that matches nothing names the search and offers Clear filters.
+
+**Rows per page is remembered in the browser** (a small cookie named `jen_view`): pick 100 on Leases once and it stays 100 there, on that browser, until you pick another. Devices and Reservations keep their own.
+
 ## Badge colours, times in your own zone, and a quieter Leases and Subnets page
 
 One step (5.70.0-beta.1). It adds one migration (37, a nullable column on `subnet_notes`, applied automatically and safe to run twice) and changes nothing about how Jen talks to Kea. Nothing needs a manual step.

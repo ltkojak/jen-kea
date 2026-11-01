@@ -1142,3 +1142,66 @@ class TestPluginsCanJoinTheInvariant:
             assert [e for e, _m, _r in access.DIAGNOSTIC_SURFACES] == ["pluginish.lookup"]
         finally:
             access.DIAGNOSTIC_SURFACES[:] = saved
+
+
+class TestTheListSummariesAndEmptyStatesNameNoHiddenSubnet:
+    """Q206 (AV4, AV6): the summary line and the filtered empty state NAME a subnet - the filter's own. A caller scoped to A never sees B's name, count or link in either, a B id typed into the URL
+    is answered exactly as an id that does not exist, and the unrestricted caller's body DOES carry B's name, so the absence from the restricted body is a fact about the filter and not about a
+    branch that never ran (the lesson of Opus's M1)."""
+
+    PAGES = ("/leases", "/devices", "/reservations")
+    HX = {"HX-Request": "true"}
+    NOTHING = "zzz-no-match"
+
+    @staticmethod
+    def _summary(body):
+        m = re.search(r'<p class="results-summary"[^>]*>(.*?)</p>', body, re.S)
+        assert m, "the response has no summary line: the branch under test did not run"
+        return " ".join(re.sub(r"<[^>]+>", "", m.group(1)).split())
+
+    @pytest.mark.parametrize("page", PAGES)
+    def test_an_unrestricted_caller_gets_b_named_in_the_summary(self, client, db, seeded, page):
+        _caller(client, db, "admin_all")
+        assert B_NAME in self._summary(client.get(f"{page}?subnet=2", headers=self.HX).data.decode())
+
+    @pytest.mark.parametrize("page", PAGES)
+    def test_an_unrestricted_caller_gets_b_named_in_the_empty_state(self, client, db, seeded, page):
+        _caller(client, db, "admin_all")
+        body = client.get(f"{page}?subnet=2&search={self.NOTHING}").data.decode()
+        assert f"in {B_NAME}" in body and "Clear filters" in body
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    @pytest.mark.parametrize("page", PAGES)
+    def test_a_hidden_subnet_in_the_url_names_nothing_and_is_answered_like_a_missing_one(
+        self, client, db, seeded, role, page
+    ):
+        _caller(client, db, role)
+        for url in (f"{page}?subnet=2", f"{page}?subnet=2&search={self.NOTHING}"):
+            assert_no_marker(client.get(url).data.decode())
+            assert_no_marker(client.get(url, headers=self.HX).data.decode())
+        hidden = client.get(f"{page}?subnet=2", headers=self.HX).data.decode()
+        missing = client.get(f"{page}?subnet=999", headers=self.HX).data.decode()
+        assert self._summary(hidden) == self._summary(missing)
+        hidden_empty = client.get(f"{page}?subnet=2&search={self.NOTHING}", headers=self.HX).data.decode()
+        missing_empty = client.get(f"{page}?subnet=999&search={self.NOTHING}", headers=self.HX).data.decode()
+        assert hidden_empty == missing_empty
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    @pytest.mark.parametrize("page", PAGES)
+    def test_a_scoped_caller_gets_their_own_subnet_named_and_only_that(self, client, db, seeded, role, page):
+        _caller(client, db, role)
+        summary = self._summary(client.get(f"{page}?subnet=1", headers=self.HX).data.decode())
+        assert "Alpha-A" in summary
+        empty = client.get(f"{page}?subnet=1&search={self.NOTHING}").data.decode()
+        assert "in Alpha-A" in empty and "Clear filters" in empty
+        assert_no_marker(empty, ignore=())
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    @pytest.mark.parametrize("page", PAGES)
+    def test_the_totals_in_the_summary_are_the_callers_own(self, client, db, seeded, role, page):
+        _caller(client, db, role)
+        scoped = self._summary(client.get(page, headers=self.HX).data.decode())
+        _caller(client, db, "admin_all")
+        everything = self._summary(client.get(page, headers=self.HX).data.decode())
+        count = lambda s: int(re.match(r"(\d+)", s).group(1))  # noqa: E731
+        assert count(scoped) < count(everything), (scoped, everything)

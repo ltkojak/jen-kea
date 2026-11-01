@@ -3,20 +3,21 @@
 {# Partial template — rendered for both initial page load and HTMX swaps #}
 {# Used by: reservations.html (full page) and reservations.reservation_row (HTMX) #}
 {% from '_device_badge.html' import device_badge %}
+{% from '_copy.html' import copy_cell %}
 {% from '_investigate.html' import investigate_link %}
 {% from '_icons.html' import icon_edit, icon_trash, icon_dots %}
 <tr id="reservation-{{ h.host_id }}">
     <td>
         <input type="checkbox" class="row-checkbox" name="host_ids[]" value="{{ h.host_id }}">
     </td>
-    <td class="mono" data-m="secondary">{{ h.ip }}</td>
+    <td class="mono" data-m="secondary">{{ copy_cell(h.ip) }}</td>
     <td class="nw-d" data-m="primary">
         {{ hostname_or_none(h.hostname) }}
         {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
         {# the action menu (which carries Investigate) is an admin's; everyone else gets the link beside the name #}
         {% if current_user.role not in ('superadmin','admin') %}{{ investigate_link(h.mac, "icon") }}{% endif %}
     </td>
-    <td class="mono hide-mobile" data-m="hide">{{ h.mac }}</td>
+    <td class="mono hide-mobile" data-m="hide">{{ copy_cell(h.mac) }}</td>
     <td data-m="secondary">{{ subnet_badge(h.subnet_id, h.subnet_name, link=True) }}</td>
     <td data-m="secondary">
         {% if h.is_conflict %}
@@ -41,7 +42,7 @@
             <input type="checkbox" id="am-res-{{ h.host_id }}" class="action-menu-toggle">
             <label for="am-res-{{ h.host_id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
-                <div class="action-menu-item disabled mono">{{ h.mac }}</div>
+                <div class="action-menu-item disabled mono">{{ copy_cell(h.mac) }}</div>
                 {{ investigate_link(h.mac) }}
                 <a href="/reservations/edit/{{ h.host_id }}" class="action-menu-item">{{ icon_edit() }}Edit reservation</a>
                 <a href="/tools/explain?mac={{ h.mac }}&subnet={{ h.subnet_id }}&hostname={{ h.hostname|urlencode }}" class="action-menu-item">{{ icon("compass") }} Why this address?</a>

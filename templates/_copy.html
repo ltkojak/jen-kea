@@ -1,0 +1,6 @@
+{# templates/_copy.html - Q206 (AV3). A MAC or an IP printed as text on a list is a copy control: a <button> (so the keyboard reaches it) styled as text. ONE delegated click
+   listener in base.html does the copying (navigator.clipboard where the page is a secure context, a selection and execCommand('copy') where it is not - Jen is served over plain
+   http on many home LANs), then a toast and a 1.2 s `copied` class. An empty value prints nothing, so a caller can write `{{ copy_cell(x) or '—' }}`. No inline JS. #}
+{% macro copy_cell(value, label=None) -%}
+{%- if value -%}<button type="button" class="copy mono" data-copy="{{ value }}" title="Copy {{ label or value }}">{{ value }}</button>{%- endif -%}
+{%- endmacro %}

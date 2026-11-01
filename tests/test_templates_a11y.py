@@ -30,7 +30,7 @@ class TestBoundedAccessibility:
 
     def test_the_confirm_overlay_and_the_shortcuts_modal_are_dialogs(self):
         text = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
-        for id_ in ("kb-modal", "jen-confirm-overlay"):
+        for id_ in ("kb-modal", "jen-confirm-overlay", "jen-prompt-overlay"):
             tag = re.search(rf'<div[^>]*id="{id_}"[^>]*>', text).group(0)
             assert 'role="dialog"' in tag and 'aria-modal="true"' in tag, id_
 

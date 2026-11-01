@@ -3,6 +3,7 @@
 {% from '_investigate.html' import investigate_link %}
 {% from '_icons.html' import icon_trash, icon_pin, icon_dots %}
 {% from '_empty.html' import empty_state %}
+{% from '_copy.html' import copy_cell %}
 {% for l in leases %}
 <tr>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
@@ -14,14 +15,15 @@
         {% endif %}
     </td>
     {% endif %}
-    <td class="mono" data-m="secondary"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
+    {# Q206 (AV7): the IP used to link to a search for itself, on the page it was printed on; it is a copy control now, and the row's way on is Investigate and the action menu #}
+    <td class="mono" data-m="secondary">{{ copy_cell(l.ip) }}</td>
     <td class="nw-d" data-m="primary">
         {% if l.hostname | hostname %}{{ l.hostname | hostname }}{% else %}<span class="muted">no hostname</span>{% endif %}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
         {# the action menu (which carries Investigate) is an admin's, and only on a live list: everyone else gets the link beside the name (Q134's rule: every row that names a client) #}
         {% if show_expired or current_user.role not in ('superadmin','admin') %}{{ investigate_link(l.mac, "icon") }}{% endif %}
     </td>
-    <td class="mono hide-mobile" data-m="hide">{{ l.mac }}</td>
+    <td class="mono hide-mobile" data-m="hide">{{ copy_cell(l.mac) }}</td>
     <td data-m="secondary">{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
     <td class="mono muted hide-mobile" data-m="hide">{{ l.obtained|utcfmt }}</td>
     <td class="mono muted hide-tablet" data-m="secondary"><span class="desk-only" title="{{ l.expire|reltext }}">{{ l.expire|utcfmt }}</span><span class="phone-only">{{ l.expire|relfmt }}</span></td>
@@ -31,7 +33,7 @@
             <input type="checkbox" id="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-toggle">
             <label for="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
-                <div class="action-menu-item disabled mono">{{ l.mac }}</div>
+                <div class="action-menu-item disabled mono">{{ copy_cell(l.mac) }}</div>
                 {{ investigate_link(l.mac) }}
                 {% if l.has_reservation %}
                 <a href="/reservations?search={{ l.mac }}" class="action-menu-item">{{ icon_pin() }}View reservation</a>
@@ -66,6 +68,17 @@
 </tr>
 {% else %}
 <tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}" data-m="full">
+    {# Q206 (AV6): with a filter in force the empty row names it and offers the way out; with none, the sentence stays what it always was #}
+    {% set minutes_now = minutes|default('')|int(0) %}
+    {% if search or minutes_now > 0 or subnet_filter_name %}
+    {% set minute_words = {'5': '5 minutes', '15': '15 minutes', '30': '30 minutes', '60': 'hour', '360': '6 hours', '1440': '24 hours'} %}
+    {% set what = 'No ' ~ ('expired' if show_expired else 'active') ~ ' leases'
+        ~ (' match “' ~ search ~ '”' if search else '')
+        ~ (' in ' ~ subnet_filter_name if subnet_filter_name else '')
+        ~ (' from the last ' ~ (minute_words.get(minutes) or (minutes_now ~ ' minutes')) if minutes_now > 0 else '') %}
+    {{ empty_state(icon('search'), what, [('Clear filters', '/leases?per_page=' ~ (per_page|urlencode) ~ '&sort=' ~ (sort|urlencode) ~ '&dir=' ~ (direction|urlencode) ~ ('&expired=1' if show_expired else ''))]) }}
+    {% else %}
     {{ empty_state(icon('inbox'), 'No active leases yet — Kea hands out leases as clients ask; check Health if you expected some.', [((icon('stethoscope') ~ ' Health'), '/health-center')]) }}
+    {% endif %}
 </td></tr>
 {% endfor %}

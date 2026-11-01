@@ -18,8 +18,10 @@
     <button id="copy-new-key-btn" class="btn btn-sm btn-secondary">{{ icon("copy") }} Copy to Clipboard</button>
     <script nonce="{{ csp_nonce }}">
     document.getElementById('copy-new-key-btn').addEventListener('click', function() {
-        navigator.clipboard.writeText(document.getElementById('newKeyVal').textContent);
-        this.textContent = '✓ Copied!';
+        var btn = this;
+        jenCopyText(document.getElementById('newKeyVal').textContent).then(function(ok) {
+            btn.textContent = ok ? '✓ Copied!' : 'Select the key and copy it by hand';
+        });
     });
     </script>
     <span style="font-size:12px;margin-left:12px;color:var(--text-muted);">Key name: {{ session.pop('new_api_key_name', '') }}</span>

@@ -438,6 +438,39 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .alert-error, .alert-danger { background: color-mix(in srgb, var(--danger) 18%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
         .alert-info { background: color-mix(in srgb, var(--primary) 18%, transparent); border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent); color: var(--primary); }
         .alert-warning { background: color-mix(in srgb, var(--warning) 18%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+        /* v5.70.0-beta.2 (Q206, AV1/AV2): a flash can be dismissed; a toast is the same alert made small and fixed. Both leave through `.leaving`; with prefers-reduced-motion the script removes them at once. */
+        .alert-flash { display: flex; align-items: flex-start; gap: 12px; }
+        .alert-flash .alert-text, .toast .alert-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+        .alert-close { background: none; border: 0; padding: 0 2px; margin: 0; font: inherit; font-size: 18px; line-height: 1; color: inherit; cursor: pointer; opacity: .7; }
+        .alert-close:hover, .alert-close:focus-visible { opacity: 1; }
+        .toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 10000; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+        .toast-region { display: flex; flex-direction: column; gap: 8px; }
+        .toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 8px 12px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+        .toast.alert-success { background: color-mix(in srgb, var(--success) 18%, var(--surface)); }
+        .toast.alert-error, .toast.alert-danger { background: color-mix(in srgb, var(--danger) 18%, var(--surface)); }
+        .toast.alert-info { background: color-mix(in srgb, var(--primary) 18%, var(--surface)); }
+        .toast.alert-warning { background: color-mix(in srgb, var(--warning) 18%, var(--surface)); }
+        @media (prefers-reduced-motion: no-preference) {
+            .alert-flash, .toast { transition: opacity .3s; }
+            .toast { animation: toast-in .2s ease-out; }
+            @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+        }
+        .alert.leaving { opacity: 0; }
+        /* the prompt dialog shares jenConfirm's rules (focus in, Tab cycles, Escape cancels, focus back); a class, not inline styles, so `hidden` really hides it */
+        .jen-dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9999; display: flex; align-items: center; justify-content: center; }
+        .jen-dialog-overlay[hidden] { display: none; }
+        .jen-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; max-width: 400px; width: 90%; box-shadow: 0 16px 48px rgba(0,0,0,.5); }
+        .jen-dialog label { display: block; font-size: 14px; margin-bottom: 10px; line-height: 1.5; }
+        .jen-dialog input[type=text] { width: 100%; margin-bottom: 20px; }
+        .jen-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
+        .field-note { color: var(--danger); font-size: 12px; margin-top: 6px; }
+        .field-note[hidden] { display: none; }
+        /* a MAC or an IP printed on a list is a copy control: a button styled as text (templates/_copy.html) */
+        .copy { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; text-align: inherit; cursor: copy; border-radius: 3px; }
+        .copy:hover { text-decoration: underline dotted; }
+        .copy.copied { color: var(--success); }
+        .copy-sink { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+        .results-summary { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); }
 
         /* Utilization bar */
         .util-bar { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
@@ -643,6 +676,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .nav .theme-toggle, .nav-kb, .gs-pill { display: none !important; }
             .tabbar { display: flex; }
             body.has-tabbar { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
+            .toast-stack { left: 12px; right: 12px; width: auto; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px); }
 
             /* Layout */
             .container { padding: 10px 12px; }
@@ -991,10 +1025,13 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% for category, message in messages %}
+    {# Q206 (AV2): each flash has a close button (one delegated listener below), and a success or an info leaves by itself after 6 s - an error, a danger or a warning stays until it is closed #}
     {% if category in ('error', 'danger') %}
-    <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
+    <div class="alert alert-{{ category }} alert-flash" role="alert"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+    {% elif category in ('success', 'info') %}
+    <div class="alert alert-{{ category }} alert-flash" role="status" aria-live="polite" data-autofade="6000"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
     {% else %}
-    <div class="alert alert-{{ category }}" role="status" aria-live="polite">{{ message }}</div>
+    <div class="alert alert-{{ category }} alert-flash" role="status" aria-live="polite"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
     {% endif %}
     {% endfor %}
     {% endif %}
@@ -1792,6 +1829,20 @@ function sortTable(table, col, th) {
         </div>
     </div>
 </div>
+<div id="jen-prompt-overlay" class="jen-dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="jen-prompt-label" hidden>
+    <div class="jen-dialog">
+        <label id="jen-prompt-label" for="jen-prompt-input"></label>
+        <input type="text" id="jen-prompt-input" maxlength="100" autocomplete="off">
+        <div class="jen-dialog-actions">
+            <button type="button" id="jen-prompt-cancel" class="btn btn-secondary">Cancel</button>
+            <button type="button" id="jen-prompt-ok" class="btn btn-primary">OK</button>
+        </div>
+    </div>
+</div>
+<div class="toast-stack">
+    <div id="jen-toasts" class="toast-region" role="status" aria-live="polite"></div>
+    <div id="jen-toasts-alert" class="toast-region" role="alert"></div>
+</div>
 <script nonce="{{ csp_nonce }}">
 (function() {
     var overlay = null;
@@ -1829,6 +1880,144 @@ function sortTable(table, col, th) {
         document.addEventListener('keydown', onKey);
         cancelBtn.focus();
     };
+
+    // v5.70.0-beta.2 (Q206, AV1) - the browser's own alert() and prompt() are retired for these two, beside jenConfirm and in its style.
+    // jenToast(message, kind): kind is success | error | info | warning. A toast is an alert made small; success and info leave by themselves after 5 s (the timer waits while the pointer
+    // or the keyboard focus is on it), error and warning stay until closed, and the two live in different regions so a screen reader hears the second pair at once (role="alert").
+    // The same autoLeave() and leave() carry the flashed messages (AV2), so the pause-on-hover and the reduced-motion rule are written once.
+    function reducedMotion() { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+    function leave(el) {
+        if (!el || !el.parentNode || el._jenLeaving) return;
+        el._jenLeaving = true;
+        if (reducedMotion()) { el.remove(); return; }
+        el.classList.add('leaving');
+        setTimeout(function() { if (el.parentNode) el.remove(); }, 320);
+    }
+    function autoLeave(el, ms) {
+        var timer = null, deadline = 0, left = ms;
+        function arm() { if (el._jenLeaving) return; deadline = Date.now() + left; timer = setTimeout(function() { timer = null; leave(el); }, left); }
+        function pause() { if (timer === null) return; clearTimeout(timer); timer = null; left = Math.max(1000, deadline - Date.now()); }
+        el.addEventListener('mouseenter', pause);
+        el.addEventListener('focusin', pause);
+        el.addEventListener('mouseleave', function() { if (timer === null && !el.matches(':focus-within')) arm(); });
+        el.addEventListener('focusout', function() { if (timer === null && !el.matches(':hover')) arm(); });
+        arm();
+    }
+    var TOAST_KINDS = { success: true, error: true, info: true, warning: true };
+    window.jenToast = function(message, kind) {
+        kind = TOAST_KINDS[kind] ? kind : 'info';
+        var urgent = kind === 'error' || kind === 'warning';
+        var region = document.getElementById(urgent ? 'jen-toasts-alert' : 'jen-toasts');
+        if (!region) return null;
+        var el = document.createElement('div');
+        el.className = 'alert alert-' + kind + ' toast';
+        var text = document.createElement('span');
+        text.className = 'alert-text';
+        text.textContent = String(message);
+        var close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'alert-close';
+        close.setAttribute('aria-label', 'Dismiss');
+        close.textContent = '\u00d7';
+        el.appendChild(text);
+        el.appendChild(close);
+        region.appendChild(el);
+        while (region.children.length > 4) region.firstChild.remove();
+        if (!urgent) autoLeave(el, 5000);
+        return el;
+    };
+
+    // jenPrompt(message, onValue, defaultValue, confirmLabel): one labelled text field (maxlength 100, the saved-search route's own cap). Focus goes to the field, Enter confirms, Escape
+    // cancels, an empty value cancels, Tab cycles field / Cancel / OK, and focus returns to whatever opened it. onValue gets the trimmed text.
+    window.jenPrompt = function(message, onValue, defaultValue, confirmLabel) {
+        var el = document.getElementById('jen-prompt-overlay');
+        var field = document.getElementById('jen-prompt-input');
+        var okBtn = document.getElementById('jen-prompt-ok');
+        var cancelBtn = document.getElementById('jen-prompt-cancel');
+        var opener = document.activeElement;
+        document.getElementById('jen-prompt-label').textContent = message;
+        field.value = defaultValue || '';
+        okBtn.textContent = confirmLabel || 'OK';
+        el.hidden = false;
+        function cleanup() {
+            el.hidden = true;
+            okBtn.onclick = null;
+            cancelBtn.onclick = null;
+            el.onclick = null;
+            document.removeEventListener('keydown', onKey, true);
+            if (opener && opener.focus) opener.focus();
+        }
+        function submit() {
+            var value = field.value.trim();
+            cleanup();
+            if (value) onValue(value);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
+            if (e.key === 'Enter' && document.activeElement === field) { e.preventDefault(); e.stopPropagation(); submit(); return; }
+            if (e.key !== 'Tab') return;
+            e.preventDefault();
+            var order = [field, cancelBtn, okBtn];
+            var i = order.indexOf(document.activeElement);
+            i = e.shiftKey ? (i <= 0 ? order.length - 1 : i - 1) : (i + 1) % order.length;
+            order[i].focus();
+        }
+        okBtn.onclick = submit;
+        cancelBtn.onclick = cleanup;
+        el.onclick = function(e) { if (e.target === el) cleanup(); };
+        document.addEventListener('keydown', onKey, true);
+        field.focus();
+        field.select();
+    };
+
+    // v5.70.0-beta.2 (Q206, AV2) - a flashed message: ONE delegated click listener closes any alert's own close button (flash or toast), and a success or an info flash fades after 6 s.
+    document.addEventListener('click', function(e) {
+        var close = e.target.closest('.alert-close');
+        if (close) leave(close.closest('.alert'));
+    });
+    document.querySelectorAll('.alert-flash[data-autofade]').forEach(function(el) {
+        autoLeave(el, parseInt(el.getAttribute('data-autofade'), 10) || 6000);
+    });
+
+    // v5.70.0-beta.2 (Q206, AV3) - copy. jenCopyText(text) resolves true/false: navigator.clipboard where the page is a secure context, else the selection and execCommand('copy') (Jen is served
+    // over plain http on many home LANs, where navigator.clipboard does not exist). The ONE delegated listener below serves every [data-copy] control (templates/_copy.html), swapped rows included.
+    function legacyCopy(text) {
+        var sink = document.createElement('textarea');
+        sink.className = 'copy-sink';
+        sink.value = text;
+        sink.setAttribute('readonly', '');
+        sink.setAttribute('aria-hidden', 'true');
+        sink.tabIndex = -1;
+        var keep = document.activeElement;
+        document.body.appendChild(sink);
+        sink.focus();
+        sink.select();
+        try { sink.setSelectionRange(0, text.length); } catch (err) { /* a browser without it: select() above is enough */ }
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+        sink.remove();
+        if (keep && keep.focus) keep.focus();
+        return ok;
+    }
+    window.jenCopyText = function(text) {
+        text = String(text);
+        if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).then(function() { return true; }, function() { return legacyCopy(text); });
+        }
+        return Promise.resolve(legacyCopy(text));
+    };
+    document.addEventListener('click', function(e) {
+        var control = e.target.closest('[data-copy]');
+        if (!control) return;
+        e.preventDefault();
+        var value = control.getAttribute('data-copy');
+        window.jenCopyText(value).then(function(ok) {
+            if (!ok) { window.jenToast('Could not copy ' + value + ' - select it and copy it by hand', 'warning'); return; }
+            window.jenToast('Copied ' + value, 'success');
+            control.classList.add('copied');
+            setTimeout(function() { control.classList.remove('copied'); }, 1200);
+        });
+    });
 
     // v5.56.4 (Q72b) — full-page form submissions (a plain GET/POST form, not
     // one HTMX is driving) get the same feedback HTMX requests already get

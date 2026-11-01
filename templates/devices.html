@@ -4,7 +4,7 @@
 {% from '_sort_controls.html' import sort_controls %}
 <div class="page-header">
     <h1>{{ icon("monitor-smartphone", "ico-lg") }} Device Inventory</h1>
-    <p>All MAC addresses seen on your network — {{ total }} device{{ 's' if total != 1 else '' }} total</p>
+    <p>All MAC addresses seen on your network</p>
 </div>
 
 {% from '_ip_version_control.html' import ip_version_control with context %}
@@ -293,7 +293,7 @@ function saveDevice() {
             // Reload to show updated badge
             location.reload();
         } else {
-            alert('Error saving: ' + data.error);
+            jenToast('Error saving: ' + data.error, 'error');
         }
     });
 }
@@ -351,7 +351,7 @@ function updateCount() {
 }
 function confirmBulkDelete() {
     const n = document.querySelectorAll('.row-checkbox:checked').length;
-    if (n === 0) { alert('No devices selected.'); return false; }
+    if (n === 0) { jenToast('No devices selected.', 'info'); return false; }
     jenConfirm(`Remove ${n} ${n === 1 ? 'device' : 'devices'} from inventory? This cannot be undone.`, function() {
         document.getElementById('bulk-form').submit();
     });

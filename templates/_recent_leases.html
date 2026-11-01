@@ -2,6 +2,7 @@
 {% from '_subnet_badge.html' import subnet_badge %}
 {% from '_device_badge.html' import device_badge %}
 {% from '_investigate.html' import investigate_link %}
+{% from '_copy.html' import copy_cell %}
 {% if recent %}
 <div class="table-wrap">
 <table class="sortable">
@@ -15,12 +16,12 @@
     <tbody>
     {% for l in recent %}
     <tr>
-        <td class="mono">{{ l.ip }}</td>
+        <td class="mono">{{ copy_cell(l.ip) }}</td>
         <td class="u-86abda">
             {{ hostname_or_none(l.hostname) }}
             {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
         </td>
-        <td class="mono">{{ l.mac }} {{ investigate_link(l.mac, "icon") }}</td>
+        <td class="mono">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
         <td>{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
         <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
     </tr>

@@ -1,3 +1,5 @@
+{# Q206 (AV4): the count lives in the swap, so a filter change updates it #}
+<p class="results-summary" id="devices-summary">{{ total|plural('device') }}{% if subnet_filter_name %} in {{ subnet_filter_name }}{% endif %}{% if show_stale %} not seen for {{ stale_days }}+ days{% endif %}</p>
 {% if current_user.role in ('superadmin','admin') %}
 <form id="bulk-form" method="POST" action="/devices/bulk-delete">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

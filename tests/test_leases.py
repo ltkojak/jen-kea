@@ -532,8 +532,10 @@ class TestTheLeaseListQ205:
         assert "plain-host" in page and "reserved-host" in page
 
     def test_au10_the_count_agrees(self, logged_in_client, q205_rows):
-        assert "3 leases found" in self._page(logged_in_client)
-        assert "1 lease found" in self._page(logged_in_client, "/leases?search=plain-host")
+        # Q206 (AV4): the count moved from the page header into the swapped results, where it says what the list holds ("3 active leases", not "3 leases found")
+        assert "3 active leases" in self._page(logged_in_client)
+        one = self._page(logged_in_client, "/leases?search=plain-host")
+        assert "1 active lease" in one and "1 active leases" not in one
 
     def test_au3_the_expiry_is_a_time_element_with_the_relative_form_as_its_title(self, logged_in_client, q205_rows):
         page = self._page(logged_in_client)
@@ -542,3 +544,163 @@ class TestTheLeaseListQ205:
         )
         assert page.count('data-jen-time="rel"') >= 3, "the phone column keeps its relative form"
         assert re.search(r">20\d\d-\d\d-\d\d \d\d:\d\d UTC</time>", page), "the server-rendered text is still UTC"
+
+
+@pytest.fixture
+def q206_rows(db):
+    """Subnet 1: two leases that expire in 30 minutes, one in 3 hours that carries a reservation, and one that expired an hour ago."""
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+        cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier) IN ('AABBCC000013')")
+        for ip, mac, host, expire in (
+            ("10.99.0.31", "AABBCC000011", "soon-a", "DATE_ADD(NOW(), INTERVAL 30 MINUTE)"),
+            ("10.99.0.32", "AABBCC000012", "soon-b", "DATE_ADD(NOW(), INTERVAL 30 MINUTE)"),
+            ("10.99.0.33", "AABBCC000013", "later-c", "DATE_ADD(NOW(), INTERVAL 3 HOUR)"),
+            ("10.99.0.34", "AABBCC000014", "gone-d", "DATE_SUB(NOW(), INTERVAL 1 HOUR)"),
+        ):
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state, hostname) "
+                f"VALUES (INET_ATON(%s), UNHEX(%s), 3600, {expire}, 1, 0, %s)",
+                (ip, mac, host),
+            )
+        cur.execute(
+            "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) VALUES (UNHEX('AABBCC000013'), 0, 1, INET_ATON('10.99.0.33'), 'later-c')"
+        )
+    db.commit()
+    yield
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+        cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier) IN ('AABBCC000013')")
+    db.commit()
+
+
+def _summary(body):
+    """The text of the results-summary line, whitespace folded (None when the response has none)."""
+    m = re.search(r'<p class="results-summary"[^>]*>(.*?)</p>', body, re.S)
+    return " ".join(re.sub(r"<[^>]+>", "", m.group(1)).split()) if m else None
+
+
+class TestResultsSummary:
+    """Q206 (AV4): the summary line lives INSIDE the swapped results, so a filter change updates it, and on the live list it says what expires soon and what is reserved."""
+
+    HX = {"HX-Request": "true"}
+
+    def test_a_filter_change_returns_the_partial_with_the_new_total(self, logged_in_client, q206_rows):
+        full = logged_in_client.get("/leases").data.decode()
+        assert _summary(full).startswith("3 active leases")
+        # the swap for a changed search carries ITS OWN total - the old shape (the count in the page shell, outside the swap) is pinned as the regression
+        partial = logged_in_client.get("/leases?search=soon", headers=self.HX).data.decode()
+        assert "<html" not in partial and _summary(partial).startswith("2 active leases")
+        one = logged_in_client.get("/leases?search=later", headers=self.HX).data.decode()
+        assert _summary(one).startswith("1 active lease ")
+
+    def test_the_summary_is_inside_the_results_not_the_page_header(self, logged_in_client, q206_rows):
+        full = logged_in_client.get("/leases").data.decode()
+        assert full.index('<div id="leases-results">') < full.index('id="leases-summary"')
+        header = full[
+            full.index('<div class="page-header">') : full.index("</div>", full.index('<div class="page-header">'))
+        ]
+        assert "found" not in header and not re.search(r"\d+ (active )?leases?", header)
+
+    def test_two_leases_expiring_within_the_hour_are_counted(self, logged_in_client, q206_rows):
+        text = _summary(logged_in_client.get("/leases", headers=self.HX).data.decode())
+        assert "2 expire within the hour" in text
+
+    def test_one_lease_expiring_within_the_hour_is_singular(self, logged_in_client, q206_rows):
+        text = _summary(logged_in_client.get("/leases?search=soon-a", headers=self.HX).data.decode())
+        assert "1 expires within the hour" in text
+
+    def test_none_expiring_within_the_hour_means_no_clause(self, logged_in_client, q206_rows):
+        text = _summary(logged_in_client.get("/leases?search=later", headers=self.HX).data.decode())
+        assert "within the hour" not in text and text.startswith("1 active lease")
+
+    def test_the_hour_is_counted_over_the_same_filter(self, logged_in_client, q206_rows):
+        # the same where: a search that excludes both soon-leases also excludes them from the count
+        text = _summary(logged_in_client.get("/leases?search=soon-b", headers=self.HX).data.decode())
+        assert "1 expires within the hour" in text
+
+    def test_a_reserved_lease_is_counted(self, logged_in_client, q206_rows):
+        assert "1 reserved" in _summary(logged_in_client.get("/leases", headers=self.HX).data.decode())
+
+    def test_no_reserved_lease_means_no_clause(self, logged_in_client, q206_rows):
+        assert "reserved" not in _summary(logged_in_client.get("/leases?search=soon", headers=self.HX).data.decode())
+
+    def test_a_paged_list_says_the_reserved_count_is_for_the_page(self, logged_in_client, q206_rows):
+        # the reserved set is read for the rows shown, so a paged list says so rather than imply the whole filtered set (the route honours any whole number of rows, the select offers four)
+        text = _summary(logged_in_client.get("/leases?per_page=2", headers=self.HX).data.decode())
+        assert text.startswith("3 active leases") and "1 reserved on this page" in text
+        one_page = _summary(logged_in_client.get("/leases?per_page=50", headers=self.HX).data.decode())
+        assert "1 reserved" in one_page and "on this page" not in one_page
+
+    def test_the_subnet_is_named_by_the_filter_that_names_it(self, logged_in_client, q206_rows):
+        text = _summary(logged_in_client.get("/leases?subnet=1", headers=self.HX).data.decode())
+        assert text.startswith("3 active leases in Test Network")
+
+    def test_the_history_does_not_call_every_lease_expired(self, logged_in_client, q206_rows):
+        # the history lists every lease row Kea still holds, live ones included (tests/test_active_lease.py::test_01b), so "N expired leases" would be false
+        text = _summary(logged_in_client.get("/leases?expired=1", headers=self.HX).data.decode())
+        assert text.startswith("4 leases") and "the history" in text
+        assert "within the hour" not in text and "reserved" not in text and "active" not in text
+
+    def test_a_subnet_that_does_not_exist_names_nothing(self, logged_in_client, q206_rows):
+        text = _summary(logged_in_client.get("/leases?subnet=999", headers=self.HX).data.decode())
+        assert " in " not in text.split("·")[0]
+
+    def test_the_restricted_summary_counts_only_what_the_caller_may_see(self, client, db, q206_rows):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=[1], role="viewer", username="summary_viewer")
+        text = _summary(client.get("/leases", headers=self.HX).data.decode())
+        assert text.startswith("3 active leases")
+
+
+class TestFilteredEmptyState:
+    """Q206 (AV6): a search that matched nothing says so, names the search, and offers one way out; an empty list with no filter is the sentence it always was."""
+
+    def test_no_filter_and_no_rows_keep_the_old_sentence(self, logged_in_client, mock_kea_db):
+        body = logged_in_client.get("/leases").data.decode()
+        assert "No active leases yet" in body and 'href="/health-center"' in body
+        assert "Clear filters" not in body
+
+    def test_a_search_that_matched_nothing_names_the_search_and_offers_clear_filters(self, logged_in_client, q206_rows):
+        body = logged_in_client.get("/leases?search=nothing-matches-this&per_page=100").data.decode()
+        assert "No active leases match “nothing-matches-this”" in body
+        assert body.count("Clear filters") == 1
+        assert 'href="/leases?per_page=100&amp;sort=expires&amp;dir=desc"' in body
+        # rule 7: the absences are asserted only on the filtered shape
+        assert "No active leases yet" not in body and "Kea hands out leases" not in body
+
+    def test_the_swap_names_it_too(self, logged_in_client, q206_rows):
+        body = logged_in_client.get("/leases?search=nothing-matches-this", headers={"HX-Request": "true"}).data.decode()
+        assert "No active leases match “nothing-matches-this”" in body and "Clear filters" in body
+
+    def test_a_subnet_filter_alone_is_named(self, logged_in_client, db, q206_rows):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+        db.commit()
+        body = logged_in_client.get("/leases?subnet=1").data.decode()
+        assert "No active leases in Test Network" in body and "Clear filters" in body
+
+    def test_a_search_is_sanitised_before_it_is_named(self, logged_in_client, q206_rows):
+        body = logged_in_client.get("/leases?search=<zzq>").data.decode()
+        assert "match “zzq”" in body and "<zzq>" not in body.split('id="leases-results"', 1)[1]
+
+
+class TestTheIpIsNoLongerALinkToItself:
+    """Q206 (AV7): the IP cell used to link to a search for its own address on the page it is printed on; it is a copy control now, and the row's way on is Investigate and the action menu."""
+
+    def test_no_self_link_and_the_ip_is_a_copy_control(self, logged_in_client, q206_rows):
+        body = logged_in_client.get("/leases").data.decode()
+        assert 'href="/leases?search=' not in body
+        assert re.search(
+            r'<button type="button" class="copy mono" data-copy="10\.99\.0\.31" title="Copy 10\.99\.0\.31">10\.99\.0\.31</button>',
+            body,
+        )
+
+    def test_the_mac_is_a_copy_control_in_the_cell_and_in_the_action_menu(self, logged_in_client, q206_rows):
+        body = logged_in_client.get("/leases").data.decode()
+        assert body.count('data-copy="AA:BB:CC:00:00:11"') == 2  # the MAC cell and the action menu's line
+
+    def test_the_row_still_carries_investigate(self, logged_in_client, q206_rows):
+        body = logged_in_client.get("/leases").data.decode()
+        assert body.count('href="/client?q=') >= 3, "every row names a client, and every such row carries Investigate"

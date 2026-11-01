@@ -3,6 +3,7 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
 {% from '_investigate.html' import investigate_link %}
 {% from '_empty.html' import empty_state %}
+{% from '_copy.html' import copy_cell %}
 {% set colspan = (12 if current_user.role in ('superadmin','admin') else 11) + (1 if ipv6_enabled and subnet6_map else 0) %}
 {% for d in devices %}
 <tr id="dev-row-{{ d.id }}">
@@ -11,10 +12,10 @@
         <input type="checkbox" class="row-checkbox" name="device_ids[]" value="{{ d.id }}">
     </td>
     {% endif %}
-    <td class="mono hide-mobile" data-m="hide">{{ d.mac }}</td>
+    <td class="mono hide-mobile" data-m="hide">{{ copy_cell(d.mac) }}</td>
     <td data-m="primary"><span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span></td>
     <td class="hide-tablet" data-m="{{ 'secondary' if d.owner else 'hide' }}"><span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span></td>
-    <td class="mono" data-m="secondary">{{ d.last_ip or '—' }}</td>
+    <td class="mono" data-m="secondary">{{ copy_cell(d.last_ip) or '—' }}</td>
     {% if ipv6_enabled and subnet6_map %}
     <td class="mono xs hide-mobile" data-m="hide">
         {% if d.v6_addresses %}
@@ -49,7 +50,7 @@
             <input type="checkbox" id="am-dev-{{ d.id }}" class="action-menu-toggle">
             <label for="am-dev-{{ d.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
-                <div class="action-menu-item disabled mono">{{ d.mac }}</div>
+                <div class="action-menu-item disabled mono">{{ copy_cell(d.mac) }}</div>
                 {% if current_user.role in ('superadmin','admin') %}
                 <button type="button" class="action-menu-item edit-btn"
                     data-id="{{ d.id }}" data-mac="{{ d.mac }}"
@@ -96,10 +97,15 @@
 {% else %}
 {% if not v6_duid_only %}
 <tr><td colspan="{{ colspan }}" data-m="full">
-    {% if show_stale %}
-    <div class="empty-note">No stale devices found (none inactive for {{ stale_days }}+ days).</div>
-    {% elif search %}
-    <div class="empty-note">No devices matching "{{ search }}".</div>
+    {# Q206 (AV6): with a filter in force the empty row names it and offers the way out; with none, the sentence stays what it always was #}
+    {% if search or show_stale or type_filter or subnet_filter_name %}
+    {% set type_name = (device_type_display.get(type_filter) or [type_filter])[0] if type_filter else '' %}
+    {% set what = 'No ' ~ ('stale ' if show_stale else '') ~ 'devices'
+        ~ (' match “' ~ search ~ '”' if search else '')
+        ~ (' of type ' ~ type_name if type_filter else '')
+        ~ (' in ' ~ subnet_filter_name if subnet_filter_name else '')
+        ~ (' (none inactive for ' ~ stale_days ~ '+ days)' if show_stale else '') %}
+    {{ empty_state(icon('search'), what, [('Clear filters', '/devices?per_page=' ~ (per_page|urlencode) ~ '&sort=' ~ (sort|urlencode) ~ '&dir=' ~ (direction|urlencode))]) }}
     {% else %}
     {{ empty_state(icon('smartphone'), 'Devices appear as leases are seen; the inventory fills itself.', [((icon('list') ~ ' Leases'), '/leases')]) }}
     {% endif %}

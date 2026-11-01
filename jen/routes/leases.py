@@ -7,7 +7,7 @@ Lease management routes.
 import ipaddress
 import logging
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, make_response, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 import jen.models.db as __db
@@ -16,6 +16,7 @@ import jen.services.auth as __auth
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.view_prefs as __view_prefs
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
@@ -57,8 +58,8 @@ def leases():
         "expires": "l.expire",
     }
     sort_col = sort_map.get(sort, "l.expire")
-    # Pagination — default is "all" (no limit). User can opt-in to per-page.
-    per_page_param = request.args.get("per_page", "all")
+    # Pagination — default is "all" (no limit). User can opt-in to per-page, and the choice is remembered per browser (Q206, AV5: view_prefs, the `jen_view` cookie).
+    per_page_param, remembered = __view_prefs.resolve("leases", request.args, request.cookies)
     try:
         per_page = int(per_page_param) if per_page_param != "all" else None
     except ValueError:
@@ -82,6 +83,8 @@ def leases():
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     leases_list = []
     total = 0
+    expiring_soon = 0
+    reserved_macs = set()
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
@@ -111,6 +114,13 @@ def leases():
                 where_str = " AND ".join(where) if where else "1=1"
                 cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str}", params)
                 total = cur.fetchone()["cnt"]
+                if not show_expired and total:
+                    # Q206 (AV4): the summary line says how many of THIS filtered set expire within the hour - the same `where`, one more condition, one clock (every connection runs in UTC)
+                    cur.execute(
+                        f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str} AND l.expire <= NOW() + INTERVAL 1 HOUR",
+                        params,
+                    )
+                    expiring_soon = cur.fetchone()["cnt"]
                 if per_page:
                     offset = (page - 1) * per_page
                     limit_clause = f"LIMIT {per_page} OFFSET {offset}"
@@ -140,7 +150,6 @@ def leases():
                         }
                     )
             # Build set of MACs that have reservations — single query, O(1) lookup per lease
-            reserved_macs = set()
             if leases_list:
                 mac_hexes = [row["mac"].replace(":", "") for row in leases_list if row.get("mac")]
                 if mac_hexes:
@@ -177,6 +186,11 @@ def leases():
         "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
         "view_mode": "v4",
         "subnet6_map": accessible_subnet6_map(),
+        # Q206 (AV4): what the summary line inside the results partial says. The subnet's name is the FILTER's own - `subnet_filter` was reset to "all" above for a subnet the caller may
+        # not see, so a hidden subnet's name never reaches the page.
+        "subnet_filter_name": __view_prefs.subnet_filter_name(subnet_filter, accessible_subnet_map),
+        "expiring_soon": expiring_soon,
+        "reserved_count": len(reserved_macs),
     }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the
@@ -189,8 +203,11 @@ def leases():
         # after changing a filter would "revert" it. Rendering the whole
         # results partial (headers + rows + pagination) keeps everything
         # in sync with the live filter state on every htmx update.
-        return render_template("_leases_results.html", **template_vars), 200
-    return render_template("leases.html", **template_vars)
+        # Q206 (AV4): the summary line is part of that partial now, for the same reason.
+        return __view_prefs.remember(
+            make_response(render_template("_leases_results.html", **template_vars), 200), request, remembered
+        )
+    return __view_prefs.remember(make_response(render_template("leases.html", **template_vars)), request, remembered)
 
 
 def _leases_v6():

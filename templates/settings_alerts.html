@@ -511,7 +511,7 @@ function showAddChannel() {
 
 function editChannelFromBtn(id) {
     const ch = JEN_CHANNELS[id];
-    if (!ch) { alert('Channel not found'); return; }
+    if (!ch) { jenToast('Channel not found', 'error'); return; }
     editChannel(ch.id, ch.channel_type, ch.channel_name, ch.enabled, ch.config, ch.alert_types, ch.subnet_scope);
 }
 

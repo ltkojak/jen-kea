@@ -838,6 +838,25 @@ On **Subnets**, an admin clicks a subnet's name badge to choose its colour from 
 colour is kept by subnet, beside the subnet's note, in Jen's own database - it is not an edit of Kea's config and restarts nothing. A subnet with no choice is blue, as every subnet was before.
 Wherever a subnet badge is shown (Leases, Devices, Reservations, the dashboard, Search) it is a link to that page filtered to the subnet.
 
+### Messages, copying and the page size (v5.70.0-beta.2)
+
+Jen no longer opens the browser's own pop-up boxes. A short answer ("Filter saved", "Codes copied", "Could not save the colour") appears as a small notice in the bottom-right corner of the
+window (above the tab bar on a phone): a success or an info notice leaves after five seconds, and waits while the pointer is on it; an error or a warning stays until you close it. A question
+that needs a typed answer - naming a saved filter - is Jen's own dialog: Enter confirms, Escape cancels, an empty name cancels. A note about a field (a picture over 200 KB, a missing
+database choice) is printed beside the field. The messages at the top of a page have a close button too, and a success or an info message there fades after six seconds; an error stays.
+
+On Leases, Devices, Reservations and Search, a MAC address or an IP address is a button: click it to copy it. Where the page is served over plain http, which many home LANs do, the browser
+refuses its clipboard interface, so Jen selects the text and uses the older copy command instead; the notice says what was copied. On a phone, tapping an IP address copies it, and tapping
+the rest of the row opens the row's actions as before.
+
+The list pages show one summary line above the table, inside the part that changes when you filter, so it always matches what is listed: "212 active leases in IoT - 9 expire within the hour - 14
+reserved" on Leases. The reserved count is for the rows on the page shown when the list is paged. A search that matches nothing says so, names what you searched for, and offers **Clear
+filters**, which drops every filter and keeps your rows-per-page and sort order.
+
+The rows-per-page choice on Leases, Devices and Reservations is remembered in the browser, one value per page, in a small cookie named `jen_view` (it holds nothing but those choices, is not a
+secret, and is sent only to Jen). Show all, 50, 100 and 250 are the only values it accepts; anything else in it is ignored and rewritten. The history and stale-only views are not remembered:
+they open as ordinary lists the next time.
+
 ### Install default
 
 Go to **Settings → Appearance → Theme** (superadmin only) to set which theme a viewer gets before they've picked one for themselves. Changing it doesn't affect anyone who has already made their own choice.

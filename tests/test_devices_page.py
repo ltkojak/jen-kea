@@ -257,3 +257,98 @@ class TestTheReservationLookupIsOneQuery:
         assert resp.status_code == 200
         assert resp.data.count(b"Reservation exists") == 2
         assert len([q for q in seen if "FROM hosts WHERE HEX(dhcp_identifier)" in q]) == 1
+
+
+def _summary(body):
+    """The text of the results-summary line, whitespace folded (None when the response has none)."""
+    import re
+
+    m = re.search(r'<p class="results-summary"[^>]*>(.*?)</p>', body, re.S)
+    return " ".join(re.sub(r"<[^>]+>", "", m.group(1)).split()) if m else None
+
+
+class TestDevicesSummary:
+    """Q206 (AV4): the count lives in the swapped results and uses the shared plural."""
+
+    HX = {"HX-Request": "true"}
+
+    def _two_devices(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices")
+        db.commit()
+        _insert_device(db, mac_hex="aabbccddee41", last_ip="10.10.10.41", subnet_id=1)
+        _insert_device(db, mac_hex="aabbccddee42", last_ip="10.10.10.42", subnet_id=1)
+        db.commit()
+
+    def test_a_filter_change_returns_the_partial_with_the_new_total(self, logged_in_client, db):
+        self._two_devices(db)
+        assert _summary(logged_in_client.get("/devices").data.decode()) == "2 devices"
+        one = logged_in_client.get("/devices?search=ee41", headers=self.HX).data.decode()
+        assert "<html" not in one and _summary(one) == "1 device"
+
+    def test_the_header_no_longer_carries_a_number_and_the_summary_is_inside_the_results(self, logged_in_client, db):
+        self._two_devices(db)
+        body = logged_in_client.get("/devices").data.decode()
+        assert "device total" not in body and "devices total" not in body
+        assert body.index('<div id="devices-results">') < body.index('id="devices-summary"')
+
+    def test_the_subnet_is_named_when_it_is_the_filter(self, logged_in_client, db):
+        self._two_devices(db)
+        assert (
+            _summary(logged_in_client.get("/devices?subnet=1", headers=self.HX).data.decode())
+            == "2 devices in Test Network"
+        )
+
+    def test_stale_only_says_the_window(self, logged_in_client, db):
+        self._two_devices(db)
+        text = _summary(logged_in_client.get("/devices?stale=1", headers=self.HX).data.decode())
+        assert text.startswith("0 devices") and "not seen for" in text
+
+    def test_no_hand_plural_is_left_in_the_list_pages(self):
+        import pathlib
+
+        for name in (
+            "devices.html",
+            "leases.html",
+            "reservations.html",
+            "search_results.html",
+            "_devices_results.html",
+            "_leases_results.html",
+            "_reservations_results.html",
+            "_lease_rows.html",
+            "_device_rows.html",
+            "_reservation_row.html",
+            "_devices6_results.html",
+            "_leases6_results.html",
+            "_reservations6_results.html",
+        ):
+            text = pathlib.Path("templates", name).read_text(encoding="utf-8")
+            assert "'s' if" not in text and "(s)" not in text, name
+
+
+class TestDevicesFilteredEmptyState:
+    """Q206 (AV6)."""
+
+    def test_a_search_that_matched_nothing_names_it_and_offers_clear_filters(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices")
+        db.commit()
+        body = logged_in_client.get("/devices?search=nothing-matches-this&per_page=100").data.decode()
+        assert "No devices match “nothing-matches-this”" in body
+        assert body.count("Clear filters") == 1
+        assert 'href="/devices?per_page=100&amp;sort=last_seen&amp;dir=desc"' in body
+        assert "the inventory fills itself" not in body
+
+    def test_a_search_is_sanitised_before_it_is_named(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices")
+        db.commit()
+        body = logged_in_client.get("/devices?search=<zzq>").data.decode()
+        assert "match “zzq”" in body and "<zzq>" not in body.split('id="devices-results"', 1)[1]
+
+    def test_a_type_filter_is_named(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices")
+        db.commit()
+        body = logged_in_client.get("/devices?type=printer").data.decode()
+        assert "No devices of type Printer" in body

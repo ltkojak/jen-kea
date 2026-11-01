@@ -1,4 +1,6 @@
 {% from '_hostname.html' import hostname_or_none %}
+{# Q206 (AV4): the count lives in the swap, so a filter change updates it #}
+<p class="results-summary">{{ total|plural('lease') }}</p>
 <div class="card u-41d7d7">
 <div class="table-wrap">
 <table class="sortable rowlist">

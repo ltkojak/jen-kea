@@ -131,6 +131,7 @@
             <div class="form-group wd-hidden" id="wd-tcp-ports-group">
                 <label>Port(s)</label>
                 <input type="text" id="wd-tcp-ports" placeholder="80,443" autocomplete="off">
+                <div class="field-note" id="wd-port-note" role="alert" hidden></div>
             </div>
         </div>
         <div class="form-row">
@@ -204,7 +205,9 @@ document.getElementById('wd-add-form').addEventListener('submit', function(e) {
     var probeSelect = document.getElementById('wd-probe-select');
     if (probeSelect.value === 'tcp') {
         var ports = document.getElementById('wd-tcp-ports').value.trim();
-        if (!ports) { e.preventDefault(); alert('Enter at least one port.'); return; }
+        var portNote = document.getElementById('wd-port-note');
+        portNote.hidden = !!ports;
+        if (!ports) { e.preventDefault(); portNote.textContent = 'Enter at least one port.'; return; }
         var hidden = document.createElement('input');
         hidden.type = 'hidden';
         hidden.name = 'probe';

@@ -15,6 +15,7 @@ from flask import (
     Response,
     abort,
     flash,
+    make_response,
     redirect,
     render_template,
     request,
@@ -30,6 +31,7 @@ import jen.services.events as __events
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.view_prefs as __view_prefs
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
@@ -93,8 +95,8 @@ def reservations():
         "subnet": "h.dhcp4_subnet_id",
     }
     sort_col = sort_map.get(sort, "h.ipv4_address")
-    # Pagination — default is "all". User can opt-in via per_page param.
-    per_page_param = request.args.get("per_page", "all")
+    # Pagination — default is "all". User can opt-in via per_page param, and the choice is remembered per browser (Q206, AV5: view_prefs, the `jen_view` cookie).
+    per_page_param, remembered = __view_prefs.resolve("reservations", request.args, request.cookies)
     try:
         per_page = int(per_page_param) if per_page_param != "all" else None
     except ValueError:
@@ -242,6 +244,8 @@ def reservations():
         "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
         "view_mode": "v4",
         "subnet6_map": accessible_subnet6_map(),
+        # Q206 (AV4, AV6): the subnet's name is the filter's own, looked up in the caller's OWN map (view_prefs.subnet_filter_name)
+        "subnet_filter_name": __view_prefs.subnet_filter_name(subnet_filter, accessible_subnet_map),
     }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously hand-built just the <tr> rows HTML,
@@ -250,8 +254,13 @@ def reservations():
         # values from the last full page load — same class of bug fixed
         # in leases.py. Rendering the whole results partial keeps
         # everything in sync with the live filter state.
-        return render_template("_reservations_results.html", **template_vars), 200
-    return render_template("reservations.html", **template_vars)
+        # Q206 (AV4): the summary line is part of that partial now, for the same reason.
+        return __view_prefs.remember(
+            make_response(render_template("_reservations_results.html", **template_vars), 200), request, remembered
+        )
+    return __view_prefs.remember(
+        make_response(render_template("reservations.html", **template_vars)), request, remembered
+    )
 
 
 def _reservations_v6():
