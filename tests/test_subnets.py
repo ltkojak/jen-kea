@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 
@@ -1088,11 +1090,12 @@ class TestTheCardShowsUsage:
             set_global_setting("alert_threshold_pct", "5")  # 3 of 41 = 7% is past 5
             _invalidate_settings_cache()
             page = logged_in_client.get("/subnets").data.decode()
-            assert "usage-warn" in page and "var(--warning)" in page
+            # (Q205: the meter is a <progress> whose colour is its level class's rule in base.html - the old inline `background:var(--warning)` is gone with the inline style)
+            assert 'class="pool-use usage-bar usage-warn"' in page
             set_global_setting("alert_threshold_pct", "80")
             _invalidate_settings_cache()
             page = logged_in_client.get("/subnets").data.decode()
-            assert "usage-ok" in page and "usage-warn" not in page
+            assert 'class="pool-use usage-bar usage-ok"' in page and 'class="pool-use usage-bar usage-warn"' not in page
             with db.cursor() as cur:  # fill the pool: 41 addresses in .10-.50
                 cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
                 for n in range(10, 51):
@@ -1103,7 +1106,7 @@ class TestTheCardShowsUsage:
                     )
             db.commit()
             page = logged_in_client.get("/subnets").data.decode()
-            assert "usage-full" in page and "41 of 41 (100%)" in page and "var(--danger)" in page
+            assert 'class="pool-use usage-bar usage-full"' in page and "41 of 41 (100%)" in page
         finally:
             set_global_setting("alert_threshold_pct", "80")
             _invalidate_settings_cache()
@@ -1136,7 +1139,7 @@ class TestTheCardShowsUsage:
         restricted_client(client, db, allowed_subnets=[1], role="admin", username="usage_scoped")
         page = client.get("/subnets").data.decode()
         assert "Active: 5" in page and "ZZ-HIDDEN-NET" not in page and "10.77.0." not in page
-        assert page.count('class="subnet-usage"') == 1
+        assert len(re.findall(r'class="subnet-usage[" ]', page)) == 1
 
 
 class TestTheCardLosesItsDeleteAndGainsItsOptions:
