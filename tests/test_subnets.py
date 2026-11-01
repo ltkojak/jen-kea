@@ -1144,7 +1144,12 @@ class TestTheCardLosesItsDeleteAndGainsItsOptions:
         from jen import extensions
 
         _wire_q205(monkeypatch)
-        monkeypatch.setattr("os.path.exists", lambda p: True)  # ssh_ready: the key file exists
+        import os
+
+        real_exists = os.path.exists
+        monkeypatch.setattr(
+            "os.path.exists", lambda p: True if p == extensions.SSH_KEY_PATH else real_exists(p)
+        )  # ssh_ready: the key file exists
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
         card = logged_in_client.get("/subnets").data.decode()
         assert "/subnets/delete/" not in card and "Delete subnet" not in card

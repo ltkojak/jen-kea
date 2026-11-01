@@ -9,6 +9,7 @@ faked the way tests/test_win_dhcp_import_wizard.py does.
 """
 
 import io
+import re
 
 from tests.conftest import restricted_client as _restricted_client
 
@@ -113,7 +114,9 @@ class TestIscDhcpImportWizard:
         body = r2.data.decode()
         assert r2.status_code == 200
         assert "Office LAN" in body and "Students" in body and "192.168.99.0/24" in body
-        assert "warning(s) from the dhcpd.conf" in body and "line 22" in body and "include" in body
+        assert (
+            re.search(r"\d+ warnings? from the dhcpd.conf", body) and "line 22" in body and "include" in body
+        )  # (Q205, AU10: the count agrees with its noun)
         assert "<th>Subnet</th>" in body and "Shared network" in body and "CAMPUS" in body
         assert "dhcpd.leases" not in body.split("Review Import", 1)[1].split("<form", 1)[0]
         assert 'name="classes"' in body and "the_boss_laptop" in body

@@ -2039,6 +2039,46 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
       "test_id": "B608",
       "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "30     if iso is None:\n31         return Markup(escape(text))\n32     extra = f' data-jen-fmt=\"{escape(fmt)}\"' if fmt else \"\"\n",
+      "col_offset": 15,
+      "end_col_offset": 35,
+      "filename": "jen/services/timefmt.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 79,
+        "link": "https://cwe.mitre.org/data/definitions/79.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Potential XSS with ``markupsafe.Markup`` detected. Do not use ``Markup`` on untrusted data.",
+      "line_number": 31,
+      "line_range": [
+        31
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b704_markupsafe_markup_xss.html",
+      "test_id": "B704",
+      "test_name": "markupsafe_markup_xss"
+    },
+    {
+      "code": "32     extra = f' data-jen-fmt=\"{escape(fmt)}\"' if fmt else \"\"\n33     return Markup(f'<time datetime=\"{iso}\" data-jen-time=\"{escape(kind)}\"{extra}>{escape(text)}</time>')\n34 \n",
+      "col_offset": 11,
+      "end_col_offset": 104,
+      "filename": "jen/services/timefmt.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 79,
+        "link": "https://cwe.mitre.org/data/definitions/79.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Potential XSS with ``markupsafe.Markup`` detected. Do not use ``Markup`` on untrusted data.",
+      "line_number": 33,
+      "line_range": [
+        33
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b704_markupsafe_markup_xss.html",
+      "test_id": "B704",
+      "test_name": "markupsafe_markup_xss"
     }
   ]
 }

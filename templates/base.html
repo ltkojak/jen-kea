@@ -385,8 +385,26 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         /* Badges */
         .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
         /* v5.70.0-beta.1 (Q205, AU1) - a subnet's badge tone is chosen per subnet from seven and nothing is derived from its name. blue and green are, byte for byte, the declarations the old
-           by-name rules for the maintainer's own production and iot subnets carried (tests/test_subnet_badges.py pins the text); the other five are siblings by the same color-mix
+           by-name rules for the maintainer's own production and iot subnets carried (tests/test_subnet_badges.py pins the text); the remaining five are siblings by the same color-mix
            recipe. yellow and purple are fixed hues mixed 50% toward --text so they read on a light and on a dark preset alike (the test measures every preset: 3:1 or better). */
+        /* v5.70.0-beta.1 (Q205) - the picker on a Subnets card, the pool meter and the v6 pill: classes, not inline styles (tests/test_ui_ratchet.py). A `hidden` menu stays hidden because
+           the display rule below is not applied to it. */
+        .tone-picker { position: relative; display: inline-block; }
+        .tone-btn, .tone-choice { cursor: pointer; font: inherit; font-size: 11px; font-weight: 600; }
+        .tone-btn { border: 0; }
+        .tone-choice { border: 1px solid transparent; white-space: nowrap; }
+        .tone-menu { position: absolute; z-index: 20; top: 100%; left: 0; margin-top: 6px; padding: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+        .tone-menu[hidden] { display: none; }
+        progress.pool-use { display: block; width: 100%; height: 6px; margin-top: 6px; border: 0; border-radius: 3px; overflow: hidden; appearance: none; -webkit-appearance: none; background: var(--surface2); }
+        progress.pool-use::-webkit-progress-bar { background: var(--surface2); }
+        progress.pool-use::-webkit-progress-value { background: var(--primary); }
+        progress.pool-use::-moz-progress-bar { background: var(--primary); }
+        progress.pool-use.usage-warn::-webkit-progress-value { background: var(--warning); }
+        progress.pool-use.usage-warn::-moz-progress-bar { background: var(--warning); }
+        progress.pool-use.usage-full::-webkit-progress-value { background: var(--danger); }
+        progress.pool-use.usage-full::-moz-progress-bar { background: var(--danger); }
+        .badge-v6 { font-size: 9px; padding: 1px 5px; margin-right: 4px; }
+        .danger-card { margin-top: 16px; border-color: var(--danger); }
         .badge-tone-blue { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
         .badge-tone-green { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
         .badge-tone-red { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
@@ -1135,7 +1153,7 @@ function applyTheme(id, persist) {
     });
 })();
 
-// v5.70.0-beta.1 (Q205, AU11 b) - an authored-config apply that reached the route lands on another page (Settings -> Kea): the draft the Author page kept in sessionStorage is done with. A round trip
+// v5.70.0-beta.1 (Q205, AU11 b) - an authored-config apply that reached the route lands on a different page (Settings -> Kea): the draft the Author page kept in sessionStorage is done with. A round trip
 // through the password confirmation comes back to the Author page itself (which clears the marker and keeps the draft), so it never gets here.
 (function() {
     try {

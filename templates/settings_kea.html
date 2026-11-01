@@ -590,7 +590,7 @@
                         <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
                         <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
                     </div>
-                    {% if infra.d2_inherit_over_http %}<div class="form-hint" style="color:var(--warning);">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
+                    {% if infra.d2_inherit_over_http %}<div class="form-hint u-52df2b">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
                 </div>
             </div>
             <button type="submit" class="btn btn-primary">Save D2 API</button>
@@ -761,7 +761,7 @@
                     <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
                     <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
                 </div>
-                    {% if infra.kea6_inherit_over_http %}<div class="form-hint" style="color:var(--warning);">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
+                    {% if infra.kea6_inherit_over_http %}<div class="form-hint u-52df2b">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
             </div>
         </div>
         <div class="form-row">

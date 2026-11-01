@@ -831,6 +831,9 @@ class TestTheInheritOverHttpHint:
     `credentials._inherit` is unchanged (CRED-002 documents the design: the credential follows its HOST)."""
 
     SENTENCE = "the inherited password travels to it in clear text"
+    FLASH = (
+        "Note: this endpoint is reached over http - " + SENTENCE
+    )  # the save's flash; the page's own hint starts "Inheriting here:" and stays while the URL is http
 
     def test_the_pure_rule_is_http_under_https_only(self):
         from jen.services import auth
@@ -878,7 +881,7 @@ class TestTheInheritOverHttpHint:
             api_pass="",
             inherit_api_pass="1",
         )
-        assert self.SENTENCE.encode() in r.data
+        assert self.FLASH.encode() in r.data
         assert _disk(isolated_config).get("kea6", "api_url") == "http://kea-a:8006"
 
     def test_the_save_without_inherit_or_over_https_says_nothing_of_the_kind(
@@ -892,7 +895,7 @@ class TestTheInheritOverHttpHint:
             api_pass="",
             inherit_api_pass="1",
         )
-        assert self.SENTENCE.encode() not in r.data
+        assert self.FLASH.encode() not in r.data
         r = _post(
             logged_in_client,
             "/settings/infrastructure/save-kea6",
@@ -900,4 +903,4 @@ class TestTheInheritOverHttpHint:
             api_user="",
             api_pass="typed-pw",
         )
-        assert self.SENTENCE.encode() not in r.data
+        assert self.FLASH.encode() not in r.data

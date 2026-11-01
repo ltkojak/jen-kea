@@ -199,6 +199,17 @@ class TestTheRoute:
 
     URL = "/subnets/save-badge-color"
 
+    @pytest.fixture(autouse=True)
+    def _no_tone_left_over(self, db):
+        def clear():
+            with db.cursor() as cur:
+                cur.execute("UPDATE subnet_notes SET badge_color=NULL")
+            db.commit()
+
+        clear()
+        yield
+        clear()
+
     @staticmethod
     def _stored(db, sid=1):
         with db.cursor() as cur:
@@ -250,7 +261,8 @@ class TestTheRoute:
 
         restricted_client(client, db, allowed_subnets=None, role="viewer", username="badge_viewer2")
         page = client.get("/subnets").data.decode()
-        assert "badge-tone-" in page and "tone-btn" not in page and "tone-menu" not in page
+        assert "badge-tone-" in page and '<span class="tone-picker">' not in page and 'class="tone-menu"' not in page
+        assert 'tone-choice" data-subnet-id' not in page
 
     def test_the_picker_offers_the_subnets_own_name_in_each_of_the_seven(self, logged_in_client, mock_kea):
         page = logged_in_client.get("/subnets").data.decode()

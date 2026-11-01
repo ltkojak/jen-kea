@@ -145,14 +145,13 @@ document.addEventListener('click', function(e) {
     <div class="card-header">
         <div class="u-95fd83">
             {% if current_user.role in ('superadmin','admin') %}
-            <span class="tone-picker" style="position:relative;display:inline-block;">
+            <span class="tone-picker">
                 <button type="button" class="badge badge-tone-{{ subnet_tone(s.id) }} tone-btn" data-subnet-id="{{ s.id }}" data-tone-badge="{{ s.id }}" aria-haspopup="true" aria-expanded="false"
-                        title="Choose this subnet's badge colour" style="border:0;cursor:pointer;font:inherit;font-size:11px;font-weight:600;">{{ s.name }}</button>
-                <div class="tone-menu" role="group" aria-label="Badge colour for {{ s.name }}" hidden
-                     style="position:absolute;z-index:20;top:100%;left:0;margin-top:6px;padding:8px;display:flex;flex-direction:column;align-items:flex-start;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 14px rgba(0,0,0,.25);">
+                        title="Choose this subnet's badge colour">{{ s.name }}</button>
+                <div class="tone-menu" role="group" aria-label="Badge colour for {{ s.name }}" hidden>
                     {% for t in badge_tones %}
                     <button type="button" class="badge badge-tone-{{ t }} tone-choice" data-subnet-id="{{ s.id }}" data-tone="{{ t }}" aria-pressed="{{ 'true' if subnet_tone(s.id) == t else 'false' }}"
-                            title="{{ t|title }}" style="border:1px solid transparent;cursor:pointer;font:inherit;font-size:11px;font-weight:600;white-space:nowrap;">{{ s.name }} · {{ t }}</button>
+                            title="{{ t|title }}">{{ s.name }} · {{ t }}</button>
                     {% endfor %}
                 </div>
             </span>
@@ -198,7 +197,7 @@ document.addEventListener('click', function(e) {
     </div>
     {# Q205 (AU2): the live usage, by the dashboard's definitions (DEF-001 active leases, DEF-002 pool size, the leases INSIDE the pools); amber from the operator's alert threshold, red when the pool is full #}
     {% set u = s.usage %}
-    <div class="subnet-usage" style="margin-bottom:16px;">
+    <div class="subnet-usage u-87c136">
         <div class="stat-label">Usage</div>
         <div class="u-9aa3cd">
             Active: {{ u.active }}
@@ -208,9 +207,7 @@ document.addEventListener('click', function(e) {
             {% else %}{{ u.pool_used }} of {{ u.pool_size }} ({{ u.pct }}%){% endif %}
         </div>
         {% if u.pool_size and u.pool_used is not none %}
-        <div class="usage-bar" role="img" aria-label="Pool use {{ u.pct }} percent" style="height:6px;border-radius:3px;background:var(--surface2);margin-top:6px;overflow:hidden;">
-            <div class="usage-fill usage-{{ u.level }}" style="height:100%;width:{{ [u.pct, 100]|min }}%;background:{{ 'var(--danger)' if u.level == 'full' else 'var(--warning)' if u.level == 'warn' else 'var(--primary)' }};"></div>
-        </div>
+        <progress class="pool-use usage-bar usage-{{ u.level }}" max="100" value="{{ [u.pct, 100]|min }}" aria-label="Pool use {{ u.pct }} percent"></progress>
         {% endif %}
     </div>
     <div class="u-da12f2">
@@ -257,7 +254,7 @@ document.addEventListener('click', function(e) {
     {% if current_user.role in ('admin', 'superadmin') %}
     <div style="margin-bottom:12px;font-size:12px;">
         <details class="subnet-options">
-            <summary class="u-5872de" style="cursor:pointer;">
+            <summary class="u-5872de u-3b6a3a">
                 {{ icon("wrench") }} Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
             </summary>
             {% if s.option_rows %}
@@ -274,7 +271,7 @@ document.addEventListener('click', function(e) {
                 </tbody>
             </table>
             {% else %}
-            <div class="muted" style="margin:6px 0;">No options at this level or above.</div>
+            <div class="muted u-c1fafc">No options at this level or above.</div>
             {% endif %}
             <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" class="u-5872de">Edit these options…</a>
         </details>

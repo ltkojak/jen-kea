@@ -280,7 +280,7 @@ class TestOptionValueCandidates:
     def test_the_page_lists_them_unticked_and_says_why_text_options_are_absent(self, db, kea, logged_in_client):
         self._seed(kea)
         page = logged_in_client.get("/database/kea-identifiers").data.decode()
-        assert "4 option value(s) to review" in page
+        assert "4 option values to review" in page  # (Q205, AU10: "value(s)" became the count and the noun that agrees)
         for oid in (1, 2, 3, 4):
             box = _checkbox(page, "option_id", oid)
             assert box and " checked" not in box

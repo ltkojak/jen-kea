@@ -38,7 +38,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 <div class="alert alert-warning">{{ icon("triangle-alert") }} No sibling Kea config found and no interfaces could be autodetected — fill in the interface name(s) manually below.</div>
 {% endif %}
 
-<div class="form-hint" id="author-draft-note" hidden style="margin-bottom:8px;">{{ icon("info") }} This form was restored from a draft kept in this browser tab (nothing is stored on the server). <a href="#" id="discard-draft">Discard draft</a></div>
+<div class="form-hint u-fdf33f" id="author-draft-note" hidden>{{ icon("info") }} This form was restored from a draft kept in this browser tab (nothing is stored on the server). <a href="#" id="discard-draft">Discard draft</a></div>
 <div class="card u-48a0d2">
     <form method="POST" id="author-kea-form" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
@@ -58,7 +58,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         <div class="form-group" data-server-id="{{ c.id }}">
             <label>Control API bind address — {{ c.name }}</label>
             {% if c.endpoint_error %}
-            <div class="alert alert-warning" style="margin:6px 0;">{{ c.endpoint_error }}</div>
+            <div class="alert alert-warning u-c1fafc">{{ c.endpoint_error }}</div>
             {% else %}
             <select name="bind_address_{{ c.id }}" class="f-bind">
                 {% for a in c.options %}<option value="{{ a }}" {% if a == c.preselect %}selected{% endif %}>{{ a }}{% if a == c.endpoint_host %} — Jen connects here{% endif %}</option>{% endfor %}

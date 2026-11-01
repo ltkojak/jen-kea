@@ -478,7 +478,7 @@ class TestTheLeaseListQ205:
         page = self._page(logged_in_client)
         assert ".row-checkbox:not(:disabled):checked" in page and ".row-checkbox:not(:disabled)')" in page
         assert (
-            "document.querySelectorAll('.row-checkbox:checked')" not in page
+            "document.querySelectorAll('.row-checkbox:checked').length" not in page
             and "document.querySelectorAll('.row-checkbox').length" not in page
         )
 

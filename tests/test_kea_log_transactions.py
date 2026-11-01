@@ -720,11 +720,14 @@ class TestTheLogsAreReadConcurrentlyInsideOneBudget:
         root = pathlib.Path(__file__).resolve().parent.parent
         html = (root / "templates" / "_explain_result.html").read_text(encoding="utf-8")
         paragraph = re.search(r'(<p class="u-865c33" id="explain-not-checked">.*?</p>)', html, re.S).group(1)
+        from jen.services.reltime import plural
+
         env = jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
+        env.filters["plural"] = plural  # (Q205, AU10: the paragraph names the count with its noun)
         text = env.from_string(paragraph).render(
             not_checked=["kea-a", "kea-d"], exchange={"at": "x"}, log_server="kea-b"
         )
-        assert "2 server(s) could not be checked in time (kea-a, kea-d)" in text
+        assert "2 servers could not be checked in time (kea-a, kea-d)" in text
         assert "What is shown is what the rest said." in text
         assert '"not_checked"' in (root / "jen" / "routes" / "explain.py").read_text(encoding="utf-8")
 

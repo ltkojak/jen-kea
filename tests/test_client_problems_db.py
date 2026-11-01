@@ -1780,7 +1780,11 @@ class TestAReplacedHostIsANewGeneration:
         row_a = body.split("aa:bb:cc:dd:ee:a1")[1].split("</tr>")[0]
         row_b = body.split("aa:bb:cc:dd:ee:b1")[1].split("</tr>")[0]
         # (Q179 adjustment, T4: the label says when the earlier host's rows were closed)
-        assert "(earlier host · resolved 2026-10-04 11:55 UTC)" in row_a and "(earlier host" not in row_b
+        import re
+
+        # (Q205, AU3: the close time is a <time> element now; its TEXT is the same UTC wording)
+        assert "(earlier host · resolved 2026-10-04 11:55 UTC)" in re.sub(r"<[^>]+>", "", row_a)
+        assert "(earlier host" not in row_b
 
     def test_the_dashboard_never_counts_an_earlier_generation(self, db, stack):
         self._put(db, "client_problems_gen:1", "1")
@@ -1868,9 +1872,9 @@ class TestTheEarlierHostLabelSaysWhenItWasClosed:
         helper._row(None, db, "aa:bb:cc:dd:ee:d1", 0, NOW - timedelta(hours=2), NOW - timedelta(minutes=30))
         body = logged_in_client.get("/problems").get_data(as_text=True)
         assert "aa:bb:cc:dd:ee:d1" in body
-        assert "earlier host" in body and "resolved 2026-10-04 11:30 UTC" in body
         import re
 
+        assert "earlier host" in body and "resolved 2026-10-04 11:30 UTC" in re.sub(r"<[^>]+>", "", body)
         option = re.search(r'<option value="nak"[^>]*>([^<]*)</option>', body).group(1)
         assert "(" not in option, "an earlier host's row is listed and not counted"
 
