@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from '_hostname.html' import hostname_or_none %}
+{% from '_subnet_badge.html' import subnet_badge %}
 {% from '_investigate.html' import investigate_link %}
 {% block title %}Search Results{% endblock %}
 {% block content %}
@@ -32,10 +34,10 @@
         {% for l in results.leases %}
         <tr>
             <td class="mono">{{ l.ip }}</td>
-            <td>{{ l.hostname | hostname or '—' }}</td>
+            <td>{{ hostname_or_none(l.hostname) }}</td>
             <td class="mono hide-mobile">{{ l.mac }}</td>
             <td>{% set sname = subnet_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) %}
-                <span class="badge badge-{{ sname.lower().replace(' ','') }}">{{ sname }}</span></td>
+                {{ subnet_badge(l.subnet_id, sname, link=True) }}</td>
             <td><a href="/leases?search={{ l.ip }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link(l.mac, "button") }}</td>
         </tr>
         {% endfor %}
@@ -61,10 +63,10 @@
         {% for r in results.reservations %}
         <tr>
             <td class="mono">{{ r.ip }}</td>
-            <td>{{ r.hostname or '—' }}</td>
+            <td>{{ hostname_or_none(r.hostname) }}</td>
             <td class="mono hide-mobile">{{ r.mac }}</td>
             <td>{% set sname = subnet_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) %}
-                <span class="badge badge-{{ sname.lower().replace(' ','') }}">{{ sname }}</span></td>
+                {{ subnet_badge(r.subnet_id, sname, link=True) }}</td>
             <td><a href="/reservations?search={{ r.ip }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link(r.mac, "button") }}</td>
         </tr>
         {% endfor %}
@@ -118,7 +120,7 @@
         {% for l in results.leases6 %}
         <tr>
             <td class="mono">{{ l.address }}</td>
-            <td>{{ l.hostname or '—' }}</td>
+            <td>{{ hostname_or_none(l.hostname) }}</td>
             <td class="mono hide-mobile">{{ l.duid_hex }}</td>
             <td>{{ subnet6_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) }}</td>
             <td><a href="/leases?view=v6&search={{ l.address }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link('duid:' ~ l.duid_hex if l.duid_hex else l.address, "button") }}</td>
@@ -145,7 +147,7 @@
         <tbody>
         {% for r in results.reservations6 %}
         <tr>
-            <td>{{ r.hostname or '—' }}</td>
+            <td>{{ hostname_or_none(r.hostname) }}</td>
             <td class="mono hide-mobile">{{ r.duid_hex }}</td>
             <td class="mono">{{ r.addresses|join(', ') }}</td>
             <td>{{ subnet6_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) }}</td>

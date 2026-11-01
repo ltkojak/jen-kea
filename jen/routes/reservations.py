@@ -88,7 +88,7 @@ def reservations():
         direction = "asc"
     sort_map = {
         "ip": "h.ipv4_address",
-        "hostname": "h.hostname",
+        "hostname": "COALESCE(h.hostname, '')",  # (Q205 AU10)
         "mac": "h.dhcp_identifier",
         "subnet": "h.dhcp4_subnet_id",
     }

@@ -1,3 +1,5 @@
+{% from '_hostname.html' import hostname_or_none %}
+{% from '_subnet_badge.html' import subnet_badge %}
 {% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
 {% from '_investigate.html' import investigate_link %}
 {% from '_empty.html' import empty_state %}
@@ -20,9 +22,9 @@
         {% else %}—{% endif %}
     </td>
     {% endif %}
-    <td class="nw-d" data-m="{{ 'hide' if d.device_name else 'primary' }}">{{ d.last_hostname | hostname or '—' }}</td>
+    <td class="nw-d" data-m="{{ 'hide' if d.device_name else 'primary' }}">{{ hostname_or_none(d.last_hostname) }}</td>
     <td class="hide-mobile" data-m="hide">
-        {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
+        {% if d.subnet_name %}{{ subnet_badge(d.last_subnet_id, d.subnet_name, link=True) }}{% else %}—{% endif %}
     </td>
     <td class="nw-d" data-m="badge">
         {% set icon_url = get_manufacturer_icon_url(d.manufacturer) if d.manufacturer else None %}
@@ -118,9 +120,9 @@
         {% for a in d.addresses %}<div title="{{ a.type_name }}">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</div>{% endfor %}
     </td>
     {% endif %}
-    <td class="nw-d" data-m="primary">{{ d.hostname | hostname or '—' }}</td>
+    <td class="nw-d" data-m="primary">{{ hostname_or_none(d.hostname) }}</td>
     <td class="hide-mobile" data-m="hide">
-        {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
+        {% if d.subnet_name %}{{ subnet_badge(None, d.subnet_name) }}{% else %}—{% endif %}
     </td>
     <td data-m="hide">—</td>
     <td class="mono muted hide-mobile" data-m="hide">—</td>

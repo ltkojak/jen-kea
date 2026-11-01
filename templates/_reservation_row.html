@@ -1,3 +1,5 @@
+{% from '_hostname.html' import hostname_or_none %}
+{% from '_subnet_badge.html' import subnet_badge %}
 {# Partial template — rendered for both initial page load and HTMX swaps #}
 {# Used by: reservations.html (full page) and reservations.reservation_row (HTMX) #}
 {% from '_device_badge.html' import device_badge %}
@@ -9,13 +11,13 @@
     </td>
     <td class="mono" data-m="secondary">{{ h.ip }}</td>
     <td class="nw-d" data-m="primary">
-        {{ h.hostname | hostname or '—' }}
+        {{ hostname_or_none(h.hostname) }}
         {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
         {# the action menu (which carries Investigate) is an admin's; everyone else gets the link beside the name #}
         {% if current_user.role not in ('superadmin','admin') %}{{ investigate_link(h.mac, "icon") }}{% endif %}
     </td>
     <td class="mono hide-mobile" data-m="hide">{{ h.mac }}</td>
-    <td data-m="secondary"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
+    <td data-m="secondary">{{ subnet_badge(h.subnet_id, h.subnet_name, link=True) }}</td>
     <td data-m="secondary">
         {% if h.is_conflict %}
         <span class="warn small" title="Reserved IP is currently leased to a different MAC than this reservation">{{ icon("triangle-alert") }} Conflict</span>

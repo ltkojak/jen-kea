@@ -1,0 +1,5 @@
+{#- v5.70.0-beta.1 (Q205, AU10): a lease, device or reservation with no hostname says so - the dash read as "unknown / broken". The trailing dot Kea sometimes stores ("tardis.") is stripped,
+    and a name that is only that dot is no name. -#}
+{% macro hostname_or_none(name) -%}
+{%- if name | hostname -%}{{ name | hostname }}{%- else -%}<span class="muted">no hostname</span>{%- endif -%}
+{%- endmacro %}

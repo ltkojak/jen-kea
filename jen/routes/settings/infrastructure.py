@@ -389,6 +389,13 @@ def settings_kea():
         # v5.23.0 (Q19) — same "raw, not the fallen-back global" reasoning
         # as kea6_api_url above.
         "d2_api_url": extensions.cfg.get("d2", "api_url", fallback=""),
+        # Q205 (AU11 a): the hint under "Inherit the Kea API password" - this endpoint reached over http while the Kea API is https
+        "kea6_inherit_over_http": __auth.inherit_over_http(
+            extensions.cfg.get("kea6", "api_url", fallback=""), extensions.cfg.get("kea", "api_url", fallback="")
+        ),
+        "d2_inherit_over_http": __auth.inherit_over_http(
+            extensions.cfg.get("d2", "api_url", fallback=""), extensions.cfg.get("kea", "api_url", fallback="")
+        ),
         "d2_api_user": extensions.cfg.get("d2", "api_user", fallback=""),
         # v5.29.0 (Q29) — see bind_default on the extra servers above.
         "bind_default": _bind_default(extensions.cfg.get("kea_ssh", "host", fallback="")),
@@ -807,6 +814,10 @@ def save_infra_kea6():
     summary = "; ".join(changed)
     __user.set_global_setting("restart_pending", "true")
     flash(f"Kea6 settings saved: {summary}. Restart Jen to apply.", "success")
+    if inherit_api_pass and __auth.inherit_over_http(
+        api_url or extensions.cfg.get("kea6", "api_url", fallback=""), v4_api_url
+    ):
+        flash(f"Note: {__auth.INHERIT_OVER_HTTP_SENTENCE}.", "warning")  # Q205 (AU11 a)
     __user.audit("SAVE_INFRA", "kea6_api", summary)
     return redirect(url_for("settings.settings_kea"))
 
@@ -919,6 +930,10 @@ def save_infra_d2():
     summary = "; ".join(changed)
     __user.set_global_setting("restart_pending", "true")
     flash(f"D2 settings saved: {summary}. Restart Jen to apply.", "success")
+    if inherit_api_pass and __auth.inherit_over_http(
+        api_url or extensions.cfg.get("d2", "api_url", fallback=""), extensions.cfg.get("kea", "api_url", fallback="")
+    ):
+        flash(f"Note: {__auth.INHERIT_OVER_HTTP_SENTENCE}.", "warning")  # Q205 (AU11 a)
     __user.audit("SAVE_INFRA", "d2_api", summary)
     return redirect(url_for("settings.settings_kea"))
 

@@ -191,7 +191,7 @@
         <tr><td class="stat-label" style="width:160px;padding:8px 0;">API URL</td>
             <td class="mono u-6cb285">{{ s.server.api_url|shown_url }}</td></tr>
         <tr><td class="stat-label u-d8c022">Role</td>
-            <td><span class="badge badge-production">{{ s.server.role|title }}</span></td></tr>
+            <td><span class="badge badge-tone-blue">{{ s.server.role|title }}</span></td></tr>
         <tr><td class="stat-label u-d8c022">Version</td>
             <td class="mono u-6cb285">{{ s.version or '—' }}</td></tr>
         <tr><td class="stat-label u-d8c022">SSH Host</td>
@@ -405,7 +405,7 @@
     <div class="card-header"><span class="card-title">{{ icon("info") }} HA State Reference</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;font-size:13px;">
         <div><span class="badge badge-reserved">hot-standby</span><br><span class="u-2bb516">Normal HA — primary active, standby ready to take over</span></div>
-        <div><span class="badge badge-production">load-balancing</span><br><span class="u-2bb516">Both servers actively handling leases</span></div>
+        <div><span class="badge badge-tone-blue">load-balancing</span><br><span class="u-2bb516">Both servers actively handling leases</span></div>
         <div><span class="badge badge-dynamic">partner-down</span><br><span class="u-2bb516">Partner unreachable — this server operating alone</span></div>
         <div><span class="badge badge-dynamic">waiting</span><br><span class="u-2bb516">Starting up, waiting for partner sync</span></div>
         <div><span class="badge badge-dynamic">syncing</span><br><span class="u-2bb516">Synchronizing lease database with partner</span></div>

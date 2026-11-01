@@ -9,6 +9,8 @@ journeys exercise the real preview round trip without needing to fake
 an SSH helper.
 """
 
+import re
+
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -58,3 +60,39 @@ class TestClassBuilderLivePreview:
         row.locator('select[name="rule_field"]').select_option("vendor_class")
 
         page.wait_for_selector("#class-preview:has-text('PXEClient')", timeout=10000)
+
+
+class TestPickABadgeTone:
+    """Q205 (AU1 d/e): pick green on the card; the Leases page's badge for the same subnet carries `badge-tone-green` (the tone is chosen per subnet, by id)."""
+
+    def test_pick_green_on_the_card_and_see_it_on_the_leases_page(self, logged_in_page, base_url):
+        from playwright.sync_api import expect
+
+        from tests.e2e.test_core_journeys import _seed_active_lease
+
+        _seed_active_lease(mac_hex="AABBCCDDEE61", ip="10.99.0.61", hostname="e2e-badge-host")
+        page = logged_in_page
+        page.goto(f"{base_url}/subnets")
+        btn = page.locator('.tone-btn[data-subnet-id="1"]')
+        btn.click()
+        menu = page.locator('.tone-picker:has(.tone-btn[data-subnet-id="1"]) .tone-menu')
+        expect(menu).to_be_visible()
+        assert menu.locator(".tone-choice").count() == 7, "seven swatches, each carrying the subnet's own name"
+        menu.locator('.tone-choice[data-tone="green"]').click()
+        expect(btn).to_have_class(re.compile(r"badge-tone-green"))
+        expect(menu).to_be_hidden()
+
+        page.goto(f"{base_url}/leases")
+        row = page.locator("tr", has_text="e2e-badge-host").first
+        expect(row.locator(".badge-tone-green")).to_have_count(1)
+
+    def test_escape_closes_the_row_of_swatches(self, logged_in_page, base_url):
+        from playwright.sync_api import expect
+
+        page = logged_in_page
+        page.goto(f"{base_url}/subnets")
+        page.locator('.tone-btn[data-subnet-id="1"]').click()
+        menu = page.locator('.tone-picker:has(.tone-btn[data-subnet-id="1"]) .tone-menu')
+        expect(menu).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(menu).to_be_hidden()

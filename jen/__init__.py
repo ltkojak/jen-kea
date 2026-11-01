@@ -196,42 +196,20 @@ def create_app() -> Flask:
 
     register_url_filters(app.jinja_env)  # Q190 (AF2): an address in a page is shown without user-info
 
-    @app.template_filter("utcfmt")
-    def utcfmt_filter(value, fmt="%Y-%m-%d %H:%M"):
-        """Format a datetime as UTC, appending ' UTC' suffix for clarity."""
-        if not value:
-            return "—"
-        try:
-            return value.strftime(fmt) + " UTC"
-        except Exception:
-            return str(value)
+    # v5.70.0-beta.1 (Q205, AU3) - the four time filters emit a `<time>` element whose TEXT is the UTC wording they always printed (jen/services/timefmt.py); the browser rewriter in
+    # base.html shows it in the reader's zone when they pick local. AU9/AU10: `duration_short` and `plural` are the other two shared text filters.
+    from jen.services import reltime as _reltime
+    from jen.services import timefmt as _timefmt
 
-    @app.template_filter("relfmt")
-    def relfmt_filter(value):
-        """A datetime as a short relative time for a phone row ("in 3 d", "2 h ago")."""
-        from jen.services.reltime import relative_time
-
-        return relative_time(value)
-
-    @app.template_filter("utcdate")
-    def utcdate_filter(value):
-        """Format a datetime as date only (no time, no UTC suffix needed)."""
-        if not value:
-            return "—"
-        try:
-            return value.strftime("%Y-%m-%d")
-        except Exception:
-            return str(value)
-
-    @app.template_filter("utctime")
-    def utctime_filter(value):
-        """Format a datetime as time only with UTC suffix."""
-        if not value:
-            return "—"
-        try:
-            return value.strftime("%H:%M:%S") + " UTC"
-        except Exception:
-            return str(value)
+    app.add_template_filter(_timefmt.fmt_filter, "utcfmt")
+    app.add_template_filter(_timefmt.rel_filter, "relfmt")
+    app.add_template_filter(_timefmt.date_filter, "utcdate")
+    app.add_template_filter(_timefmt.time_filter, "utctime")
+    app.add_template_filter(_reltime.duration_short, "duration_short")
+    app.add_template_filter(_reltime.plural, "plural")
+    app.add_template_filter(
+        _reltime.relative_time, "reltext"
+    )  # (the relative phrase as plain text: a `title=` attribute, never a <time> element)
 
     @app.template_filter("hostname")
     def hostname_filter(value):
@@ -239,6 +217,30 @@ def create_app() -> Flask:
         if not value:
             return value
         return value.rstrip(".")
+
+    # v5.70.0-beta.1 (Q205, AU1/AU8) - the subnet badge: its tone comes from one per-request map keyed by id (never from a name), and a badge that is a filter links to the same page with
+    # `?subnet=<id>` (the Leases, Devices and Reservations pages keep their other arguments and drop `page`) or to /leases?subnet=<id> from anywhere else
+    from jen.services import subnet_tones as _subnet_tones
+
+    app.jinja_env.globals["subnet_tone"] = _subnet_tones.tone_for
+
+    def subnet_filter_href(subnet_id):
+        from urllib.parse import urlencode
+
+        from flask import request
+
+        try:
+            sid = int(subnet_id)
+        except (TypeError, ValueError):
+            return None
+        if request.endpoint in ("leases.leases", "devices.devices", "reservations.reservations"):
+            args = request.args.to_dict()
+            args["subnet"] = str(sid)
+            args.pop("page", None)
+            return request.path + "?" + urlencode(args)
+        return f"/leases?subnet={sid}"
+
+    app.jinja_env.globals["subnet_filter_href"] = subnet_filter_href
 
     # ── Login manager ─────────────────────────────────────────────────────────
     login_manager.init_app(app)

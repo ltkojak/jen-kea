@@ -5,6 +5,8 @@ Tests for lease list, search, and IP map pages.
 Kea DB queries are mocked — no real Kea database needed.
 """
 
+import re
+
 import pytest
 
 
@@ -430,3 +432,113 @@ class TestBulkReleaseLeases:
         assert 'id="bulk-form"' in body
         assert 'action="/leases/bulk-release"' in body
         assert 'name="ips[]" value="10.10.10.98"' in body
+
+
+# ── Q205 (v5.70.0-beta.1): AU4 / AU5 / AU8 / AU10 on the lease list ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def q205_rows(db):
+    """Subnet 1: a lease that has a reservation, a plain lease, and a plain lease with NO hostname."""
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+        cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier) IN ('AABBCC000001')")
+        for ip, mac, host in (
+            ("10.99.0.21", "AABBCC000001", "reserved-host"),
+            ("10.99.0.22", "AABBCC000002", "plain-host"),
+            ("10.99.0.23", "AABBCC000003", None),
+        ):
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state, hostname) "
+                "VALUES (INET_ATON(%s), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 13 DAY), 1, 0, %s)",
+                (ip, mac, host),
+            )
+        cur.execute(
+            "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) VALUES (UNHEX('AABBCC000001'), 0, 1, INET_ATON('10.99.0.21'), 'reserved-host')"
+        )
+    db.commit()
+    yield
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+        cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier) IN ('AABBCC000001')")
+    db.commit()
+
+
+class TestTheLeaseListQ205:
+    def _page(self, client, path="/leases"):
+        return client.get(path).data.decode()
+
+    def test_au4_a_reserved_lease_shows_a_disabled_box_not_an_empty_cell(self, logged_in_client, q205_rows):
+        page = self._page(logged_in_client)
+        assert 'disabled title="Reserved - the address is not released from here"' in page
+        assert page.count('name="ips[]"') == 2, "only the releasable rows carry a submitted box"
+        assert 'name="ips[]" value="10.99.0.21"' not in page and 'name="ips[]" value="10.99.0.22"' in page
+
+    def test_au4_the_count_and_select_all_count_enabled_boxes_only(self, logged_in_client, q205_rows):
+        page = self._page(logged_in_client)
+        assert ".row-checkbox:not(:disabled):checked" in page and ".row-checkbox:not(:disabled)')" in page
+        assert (
+            "document.querySelectorAll('.row-checkbox:checked')" not in page
+            and "document.querySelectorAll('.row-checkbox').length" not in page
+        )
+
+    def test_au5_delete_stale_leaves_the_filter_bar_for_the_foot_of_the_table(self, logged_in_client, q205_rows):
+        page = self._page(logged_in_client)
+        assert "Delete Stale" not in page
+        assert page.count('action="/leases/delete-stale"') == 1
+        assert page.index('action="/leases/delete-stale"') > page.index("</table>"), (
+            "after the table, not in the filter bar above it"
+        )
+        assert 'data-confirm="Delete all expired/stale leases from the database?"' in page
+        i = page.index('action="/leases/delete-stale"')
+        assert "btn-danger" not in page[i : i + 400] and "btn-secondary" in page[i : i + 400], (
+            "a quiet secondary control"
+        )
+
+    def test_au5_the_partial_carries_the_control_too(self, logged_in_client, q205_rows):
+        partial = logged_in_client.get("/leases", headers={"HX-Request": "true"}).data.decode()
+        assert 'action="/leases/delete-stale"' in partial and "Delete stale leases" in partial
+
+    def test_au5_a_viewer_has_no_delete_stale(self, client, db, q205_rows):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=None, role="viewer", username="stale_viewer")
+        assert "delete-stale" not in client.get("/leases").data.decode()
+
+    def test_au8_the_badge_is_a_filter_link_that_keeps_the_pages_other_arguments(self, logged_in_client, q205_rows):
+        page = self._page(logged_in_client, "/leases?search=plain&sort=ip&dir=asc&page=3")
+        m = re.search(r'<a class="badge badge-tone-\w+" href="([^"]+)"', page)
+        assert m, "the lease row's badge is a link"
+        href = m.group(1).replace("&amp;", "&")
+        assert (
+            href.startswith("/leases?")
+            and "subnet=1" in href
+            and "search=plain" in href
+            and "sort=ip" in href
+            and "dir=asc" in href
+        )
+        assert "page=" not in href, "a new filter starts at page one"
+
+    def test_au8_a_scoped_viewer_links_only_to_their_own_subnet(self, client, db, q205_rows):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=[1], role="viewer", username="badge_link_viewer")
+        hrefs = set(re.findall(r'<a class="badge badge-tone-\w+" href="([^"]+)"', client.get("/leases").data.decode()))
+        assert hrefs and all(h.endswith("subnet=1") for h in hrefs), hrefs
+
+    def test_au10_an_empty_hostname_says_so(self, logged_in_client, q205_rows):
+        page = self._page(logged_in_client)
+        assert page.count('<span class="muted">no hostname</span>') == 1
+        assert "plain-host" in page and "reserved-host" in page
+
+    def test_au10_the_count_agrees(self, logged_in_client, q205_rows):
+        assert "3 leases found" in self._page(logged_in_client)
+        assert "1 lease found" in self._page(logged_in_client, "/leases?search=plain-host")
+
+    def test_au3_the_expiry_is_a_time_element_with_the_relative_form_as_its_title(self, logged_in_client, q205_rows):
+        page = self._page(logged_in_client)
+        assert re.search(
+            r'<span class="desk-only" title="in 1[23] d"><time datetime="[0-9T:-]+Z" data-jen-time="fmt"', page
+        )
+        assert page.count('data-jen-time="rel"') >= 3, "the phone column keeps its relative form"
+        assert re.search(r">20\d\d-\d\d-\d\d \d\d:\d\d UTC</time>", page), "the server-rendered text is still UTC"

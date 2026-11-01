@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from '_hostname.html' import hostname_or_none %}
+{% from '_subnet_badge.html' import subnet_badge %}
 {% from '_device_badge.html' import device_badge %}
 {% from '_investigate.html' import investigate_link %}
 {% block title %}Dashboard{% endblock %}
@@ -105,7 +107,7 @@
         {% for s6 in subnets6 if s6.paired_v4_id == subnet_id %}
         <div class="stat-extra" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                <span class="badge badge-production u-41ccf8">v6</span>
+                <span class="badge badge-tone-blue u-41ccf8">v6</span>
                 <span class="mono u-749148">{{ s6.cidr }}</span>
             </div>
             <div class="u-749148" id="stat6-meta-{{ s6.id }}">{{ s6.active }} active &nbsp;·&nbsp; {{ s6.reserved }} reserved</div>
@@ -117,7 +119,7 @@
     <div class="stat-card u-3b6a3a" data-subnet-id="{{ s6.id }}" data-href="/devices?view=v6&subnet={{ s6.id }}"  title="View IPv6 devices for {{ s6.name }}">
         <div class="u-69957c">
             <div class="u-97445a">
-                <div class="stat-label"><span class="badge badge-production" style="font-size:9px;padding:1px 5px;margin-right:4px;">v6</span>{{ s6.name }} — {{ s6.cidr }}</div>
+                <div class="stat-label"><span class="badge badge-tone-blue" style="font-size:9px;padding:1px 5px;margin-right:4px;">v6</span>{{ s6.name }} — {{ s6.cidr }}</div>
                 <div class="stat-value" id="stat6-active-{{ s6.id }}">{{ s6.active }}</div>
             </div>
         </div>
@@ -149,11 +151,11 @@
             </div>
             {% if ipv6_summary %}
             <div>
-                <div class="u-1d385c">Active <span class="badge badge-production u-d1f783">v6</span></div>
+                <div class="u-1d385c">Active <span class="badge badge-tone-blue u-d1f783">v6</span></div>
                 <div class="u-37e8cf">{{ ipv6_summary.active }}</div>
             </div>
             <div>
-                <div class="u-1d385c">Reserved <span class="badge badge-production u-d1f783">v6</span></div>
+                <div class="u-1d385c">Reserved <span class="badge badge-tone-blue u-d1f783">v6</span></div>
                 <div class="u-c2569f">{{ ipv6_summary.reserved }}</div>
             </div>
             {% endif %}
@@ -253,11 +255,11 @@
             <tr>
                 <td class="mono">{{ l.ip }}</td>
                 <td class="u-86abda">
-                    {{ l.hostname | hostname or '—' }}
+                    {{ hostname_or_none(l.hostname) }}
                     {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
                 </td>
                 <td class="mono">{{ l.mac }} {{ investigate_link(l.mac, "icon") }}</td>
-                <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+                <td>{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
                 <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
             </tr>
             {% endfor %}
@@ -641,7 +643,7 @@ function loadTopDevices() {
                 var badge = d.has_reservation
                     ? '<span class="badge badge-reserved" style="font-size:10px;margin-left:4px;padding:1px 5px;"><svg class="ico" aria-hidden="true"><use href="#i-pin"></use></svg></span>'
                     : '';
-                var lastSeen = d.last_seen ? d.last_seen.replace('T', ' ').slice(0, 16) + ' UTC' : '—';
+                var lastSeen = d.last_seen ? (jenTime.format(d.last_seen, 'fmt') || (d.last_seen.replace('T', ' ').slice(0, 16) + ' UTC')) : '—';
                 var mfr = d.manufacturer ? '<span class="u-5872de">' + escapeHtml(d.manufacturer) + '</span>' : '—';
                 html += '<tr>'
                     + '<td><strong>' + icon + escapeHtml(name) + '</strong>' + badge + ' ' + investigateLink(d.mac)
@@ -907,14 +909,10 @@ function updateStats() {
         .then(function(data) {
             if (dot) dot.style.background = 'var(--success)';
 
-            // Last updated timestamp — show UTC for consistency
+            // Last updated timestamp — in the reader's zone or UTC by their pick (jenTime, base.html)
             var lu = document.getElementById('last-updated');
             if (lu) {
-                var now = new Date();
-                var hh = String(now.getUTCHours()).padStart(2,'0');
-                var mm = String(now.getUTCMinutes()).padStart(2,'0');
-                var ss = String(now.getUTCSeconds()).padStart(2,'0');
-                lu.textContent = 'Updated ' + hh + ':' + mm + ':' + ss + ' UTC';
+                lu.textContent = 'Updated ' + jenTime.clock();   // (the reader's zone or UTC, by their pick - Q205 AU3)
             }
 
             if (!data.subnets) return;

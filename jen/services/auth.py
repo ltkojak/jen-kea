@@ -382,6 +382,24 @@ def no_weaker_scheme(configured: str, candidate: str) -> bool:
     return pb[0] == "https" or pa[0] == "http"
 
 
+INHERIT_OVER_HTTP_SENTENCE = "this endpoint is reached over http - the inherited password travels to it in clear text"
+
+
+def inherit_over_http(this_url, parent_url) -> bool:
+    """Q205 (AU11 a, Opus's M13): True when an endpoint that takes its password from another one (the "Inherit the Kea API password" box) is reached over http while the endpoint it inherits from
+    is https - the password then crosses the wire in clear text where its owner's address does not. `credentials._inherit` is unchanged (CRED-002 documents the design: the credential follows
+    its HOST); this is the sentence said where the choice is made. Pure; a blank or unreadable address is False."""
+    from urllib.parse import urlparse
+
+    def scheme(url):
+        try:
+            return urlparse(str(url or "").strip(_PADDING)).scheme.lower()
+        except ValueError:
+            return ""
+
+    return scheme(this_url) == "http" and scheme(parent_url) == "https"
+
+
 def kea_url_shape_ok(url) -> bool:
     """Q204 (AT8 d): the ONE definition of a Kea URL's shape - `scheme://host[:port]` and at most a trailing slash: no user-info, no path, no query, no fragment. The Kea control endpoint is dialled
     at its root, and an address Jen sends the saved credentials to (the probe, CRED-002) is where a Kea daemon listens, not `http://internal:8080/admin?x=`. Asked by `valid_api_url` (every saver) and

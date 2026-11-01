@@ -53,7 +53,7 @@
         <div><div class="stat-label">Reservation</div><div class="mono">{{ result.reservation.ip }}</div></div>
         {% endif %}
         {% if result.v6_addresses %}
-        <div><div class="stat-label">IPv6 <span class="badge badge-production u-41ccf8">v6</span></div><div class="mono">{% for a in result.v6_addresses %}{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
+        <div><div class="stat-label">IPv6 <span class="badge badge-tone-blue u-41ccf8">v6</span></div><div class="mono">{% for a in result.v6_addresses %}{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
         {% endif %}
     </div>
 </div>

@@ -1,3 +1,4 @@
+{% from '_hostname.html' import hostname_or_none %}
 <div class="card u-41d7d7">
 <div class="table-wrap">
 <table class="sortable rowlist">
@@ -11,7 +12,7 @@
     <tbody>
     {% for h in hosts6 %}
     <tr>
-        <td data-m="primary">{{ h.hostname or '—' }}</td>
+        <td data-m="primary">{{ hostname_or_none(h.hostname) }}</td>
         <td class="hide-mobile u-bca09b"  data-m="hide">{{ h.duid_hex or '—' }}</td>
         <td data-m="secondary">
             {% for r in h.reservations %}

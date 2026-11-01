@@ -54,7 +54,7 @@
     {% if found.ipv6_enabled %}
     <p>{{ icon('circle-check') }} Managed in Jen.</p>
     {% elif v6_probe %}
-    <p>DHCPv6 answered — Kea {{ v6_probe.version or "unknown version" }}, {{ v6_probe.subnet6_count }} subnet(s) found.</p>
+    <p>DHCPv6 answered — Kea {{ v6_probe.version or "unknown version" }}, {{ v6_probe.subnet6_count|plural('subnet') }} found.</p>
     <form method="POST" action="/setup/found">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="enable_v6">

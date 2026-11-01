@@ -352,7 +352,7 @@ function updateCount() {
 function confirmBulkDelete() {
     const n = document.querySelectorAll('.row-checkbox:checked').length;
     if (n === 0) { alert('No devices selected.'); return false; }
-    jenConfirm(`Remove ${n} device(s) from inventory? This cannot be undone.`, function() {
+    jenConfirm(`Remove ${n} ${n === 1 ? 'device' : 'devices'} from inventory? This cannot be undone.`, function() {
         document.getElementById('bulk-form').submit();
     });
     return false;

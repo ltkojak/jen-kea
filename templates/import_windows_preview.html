@@ -14,7 +14,7 @@
         {% endfor %}
     </ul>
     <p style="font-size:13px;color:var(--text-muted);margin-top:10px;">
-        {{ subnet_count }} subnet(s), {{ reservation_count }} reservation(s) queued.
+        {{ subnet_count|plural('subnet') }}, {{ reservation_count|plural('reservation') }} queued.
     </p>
 </div>
 
@@ -39,7 +39,7 @@
 </div>
 
 <form method="POST" action="{{ url_for('subnets.import_windows_apply', source=src.key) }}"
-      data-confirm="Apply this import to the primary Kea server, restart it, and add {{ reservation_count }} reservation(s)? This is a live change.">
+      data-confirm="Apply this import to the primary Kea server, restart it, and add {{ reservation_count|plural('reservation') }}? This is a live change.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="u-3efc98">
         {% if test_result.ok %}

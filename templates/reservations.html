@@ -41,7 +41,7 @@ function confirmBulk(action) {
     // this JS needed never existed in the template at all, so this
     // mismatch was never actually reachable or noticed until now.
     if (action === 'delete') {
-        jenConfirm(`Delete ${n} reservation(s)? This cannot be undone.`, function() {
+        jenConfirm(`Delete ${n} ${n === 1 ? 'reservation' : 'reservations'}? This cannot be undone.`, function() {
             form.action = '/reservations/bulk-delete';
             form.submit();
         });
@@ -59,7 +59,7 @@ function confirmBulk(action) {
 {% from '_sort_controls.html' import sort_controls %}
 <div class="page-header">
     <h1>{{ icon("pin", "ico-lg") }} Reservations</h1>
-    <p>{{ total }} reservation(s)</p>
+    <p>{{ total|plural('reservation') }}</p>
 </div>
 
 {% from '_ip_version_control.html' import ip_version_control with context %}

@@ -824,3 +824,80 @@ class TestAnAdditionalServersIpv6AddressIsJudgedAgainstThePasswordItUses:
             self.URL, data=_rows(self._row(**{"extra_api6_url[]": "https://elsewhere:8006"})), follow_redirects=True
         )
         assert SENTENCE.encode() in r.data and not _disk(isolated_config).has_option("kea_server_2", "api6_url")
+
+
+class TestTheInheritOverHttpHint:
+    """Q205 (AU11 a; Opus's M13): "Inherit the Kea API password" says, where it is chosen, that an endpoint reached over http gets the inherited password in clear text when the Kea API is https.
+    `credentials._inherit` is unchanged (CRED-002 documents the design: the credential follows its HOST)."""
+
+    SENTENCE = "the inherited password travels to it in clear text"
+
+    def test_the_pure_rule_is_http_under_https_only(self):
+        from jen.services import auth
+
+        cases = [
+            ("http://kea-a:8006", "https://kea-a:8000", True),
+            ("https://kea-a:8006", "https://kea-a:8000", False),
+            ("http://kea-a:8006", "http://kea-a:8000", False),
+            ("https://kea-a:8006", "http://kea-a:8000", False),
+            ("", "https://kea-a:8000", False),
+            ("http://kea-a:8006", "", False),
+            ("HTTP://kea-a:8006", "HTTPS://kea-a:8000", True),
+        ]
+        for this_url, parent, expected in cases:
+            assert auth.inherit_over_http(this_url, parent) is expected, (this_url, parent)
+
+    def test_the_hint_is_rendered_for_http_under_https_and_not_for_https_under_https(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        app_config.write_values([("kea6", "api_url", "http://kea-a:8006")])
+        assert self.SENTENCE.encode() in logged_in_client.get("/settings/kea").data
+        app_config.write_values([("kea6", "api_url", "https://kea-a:8006")])
+        assert self.SENTENCE.encode() not in logged_in_client.get("/settings/kea").data
+
+    def test_the_d2_card_carries_the_same_hint_condition(self):
+        import pathlib
+
+        text = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert (
+            "infra.d2_inherit_over_http" in text
+            and "infra.kea6_inherit_over_http" in text
+            and text.count(self.SENTENCE) == 2
+        )
+
+    def test_the_save_says_it_in_its_flash_when_that_is_what_was_saved(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = _post(
+            logged_in_client,
+            "/settings/infrastructure/save-kea6",
+            api_url="http://kea-a:8006",
+            api_user="",
+            api_pass="",
+            inherit_api_pass="1",
+        )
+        assert self.SENTENCE.encode() in r.data
+        assert _disk(isolated_config).get("kea6", "api_url") == "http://kea-a:8006"
+
+    def test_the_save_without_inherit_or_over_https_says_nothing_of_the_kind(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = _post(
+            logged_in_client,
+            "/settings/infrastructure/save-kea6",
+            api_url="https://kea-a:8006",
+            api_user="",
+            api_pass="",
+            inherit_api_pass="1",
+        )
+        assert self.SENTENCE.encode() not in r.data
+        r = _post(
+            logged_in_client,
+            "/settings/infrastructure/save-kea6",
+            api_url="http://kea-a:8006",
+            api_user="",
+            api_pass="typed-pw",
+        )
+        assert self.SENTENCE.encode() not in r.data

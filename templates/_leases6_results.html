@@ -1,3 +1,4 @@
+{% from '_hostname.html' import hostname_or_none %}
 <div class="card u-41d7d7">
 <div class="table-wrap">
 <table class="sortable rowlist">
@@ -15,7 +16,7 @@
     <tr>
         <td data-m="badge"><span class="badge {{ 'badge-dynamic' if l.lease_type == 0 else 'badge-reserved' }}">{{ l.lease_type_name }}</span></td>
         <td class="u-72126d" data-m="primary">{{ l.address }}{% if l.lease_type == 2 %}/{{ l.prefix_len }}{% endif %}</td>
-        <td data-m="secondary">{{ l.hostname or '—' }}</td>
+        <td data-m="secondary">{{ hostname_or_none(l.hostname) }}</td>
         <td class="hide-mobile u-bca09b"  data-m="hide">{{ l.duid_hex or '—' }}</td>
         <td class="hide-mobile" data-m="hide">{{ l.iaid }}</td>
         <td data-m="secondary">{{ l.subnet_name or l.subnet_id }}</td>

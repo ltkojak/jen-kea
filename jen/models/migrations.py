@@ -1312,6 +1312,29 @@ def _m036_client_problems_generation(db):
     logger.info("Migration 36: client_problems.generation and its unique key")
 
 
+def _m037_subnet_notes_badge_color(db):
+    """
+    v5.70.0-beta.1 (Q205, AU1) - a subnet's badge tone is chosen per subnet, from seven, and stored beside the subnet's note (`subnet_notes` is Jen's per-subnet operator data). `badge_color`
+    is a nullable VARCHAR(12); NULL renders blue, so nothing changes on screen until a tone is picked and no name is baked in. ONE DDL statement, with its own guard: added only when absent,
+    re-declared when it is there with another type, so a crash before the version was recorded is finished by the next start and a rerun over the final state changes nothing.
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'subnet_notes' AND COLUMN_NAME = 'badge_color'"
+        )
+        col = cur.fetchone()
+        if not col:
+            cur.execute("ALTER TABLE subnet_notes ADD COLUMN badge_color VARCHAR(12) NULL")
+        elif not (
+            str(col["DATA_TYPE"]).lower() == "varchar"
+            and int(col["CHARACTER_MAXIMUM_LENGTH"] or 0) == 12
+            and str(col["IS_NULLABLE"]).upper() == "YES"
+        ):
+            cur.execute("ALTER TABLE subnet_notes MODIFY COLUMN badge_color VARCHAR(12) NULL")
+    logger.info("Migration 37: subnet_notes.badge_color")
+
+
 _LEGACY_TELEGRAM_KEYS = ("telegram_token", "telegram_chat_id", "telegram_enabled")
 
 
@@ -1451,6 +1474,11 @@ MIGRATIONS = [
         36,
         "client_problems.generation: a replaced Kea host is a new generation, part of the unique key (v5.69.0-beta.9, Q178)",
         _m036_client_problems_generation,
+    ),
+    (
+        37,
+        "subnet_notes.badge_color: a subnet's badge tone, one of seven, NULL is blue (v5.70.0-beta.1, Q205)",
+        _m037_subnet_notes_badge_color,
     ),
 ]
 

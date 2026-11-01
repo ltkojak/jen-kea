@@ -132,3 +132,91 @@ class TestHealthCenterRefresh:
         page.goto(f"{base_url}/health-center")
         with page.expect_response("**/health-center/data?partial=1&refresh=1", timeout=10000):
             page.get_by_role("button", name="Refresh").click()
+
+
+class TestTheBulkCountIsHonest:
+    """Q205 (AU4): a lease with a reservation shows a disabled box; select-all and the count cover the boxes that can be ticked."""
+
+    def test_select_all_counts_the_releasable_rows_only(self, logged_in_page, base_url):
+        import pymysql
+        import pymysql.cursors
+        from playwright.sync_api import expect
+
+        from tests.conftest import TEST_DB
+
+        conn = pymysql.connect(**TEST_DB, cursorclass=pymysql.cursors.DictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr) IN ('AABBCCDDEE71','AABBCCDDEE72')")
+                cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='AABBCCDDEE71'")
+                for ip, mac, host in (
+                    ("10.99.0.71", "AABBCCDDEE71", "e2e-reserved"),
+                    ("10.99.0.72", "AABBCCDDEE72", "e2e-plain"),
+                ):
+                    cur.execute(
+                        "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, hostname, state) "
+                        "VALUES (INET_ATON(%s), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, %s, 0)",
+                        (ip, mac, host),
+                    )
+                cur.execute(
+                    "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                    "VALUES (UNHEX('AABBCCDDEE71'), 0, 1, INET_ATON('10.99.0.71'), 'e2e-reserved')"
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        page = logged_in_page
+        page.goto(f"{base_url}/leases")
+        page.wait_for_selector("text=e2e-plain")
+        reserved_row = page.locator("tr", has_text="e2e-reserved").first
+        expect(reserved_row.locator(".row-checkbox")).to_be_disabled()
+        enabled = page.locator(".row-checkbox:not([disabled])").count()
+        assert enabled >= 1
+        page.check("#selectAll")
+        expect(page.locator("#selectedCount")).to_have_text(f"{enabled} selected")
+        assert page.locator(".row-checkbox:checked").count() == enabled, "the disabled box is never ticked"
+
+
+class TestTheAuthoredFormSurvivesTheStepUp:
+    """Q205 (AU11 b; Opus's M20): the Author page keeps its form as a draft in the tab, so a confirmation that aged out does not cost the operator the form."""
+
+    def test_the_form_comes_back_filled_after_the_password_confirmation(self, logged_in_page, base_url, monkeypatch):
+        from playwright.sync_api import expect
+
+        from jen import extensions
+        from jen.routes.settings import authoring
+        from jen.services import access
+        from tests.e2e.conftest import ADMIN_PASSWORD
+
+        server = {**extensions.KEA_SERVERS[0], "id": 1, "name": "kea-a", "ssh_host": "127.0.0.1"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        detected = {
+            "found": False,
+            "interfaces": [],
+            "lease_db_type": "",
+            "lease_db_host": "",
+            "lease_db_name": "",
+            "hooks": [],
+        }
+        monkeypatch.setattr(authoring, "_author_kea_detect", lambda service: (server, detected, ["eth0"], None, []))
+        state = {"stale": False}
+        real = access.auth_is_recent
+        monkeypatch.setattr(access, "auth_is_recent", lambda minutes=10: False if state["stale"] else real(minutes))
+
+        page = logged_in_page
+        page.goto(f"{base_url}/settings/infrastructure/author-kea/dhcp4")
+        page.fill("#f-interfaces", "eth7")
+        # the confirmation ages out; the apply is refused for it and the person is sent to confirm
+        state["stale"] = True
+        page.evaluate("() => submitForm()")
+        page.wait_for_url("**/auth/reauth**", timeout=10000)
+        state["stale"] = False
+        page.fill("#f-password", ADMIN_PASSWORD)
+        page.click("button[type=submit]")
+        page.wait_for_url("**/settings/infrastructure/author-kea/dhcp4", timeout=10000)
+        expect(page.locator("#f-interfaces")).to_have_value("eth7")
+        expect(page.locator("#author-draft-note")).to_be_visible()
+        # the explicit discard drops the draft
+        page.click("#discard-draft")
+        page.wait_for_load_state("networkidle")
+        assert page.input_value("#f-interfaces") != "eth7"

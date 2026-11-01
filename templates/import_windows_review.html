@@ -8,7 +8,7 @@
 
 {% if plan.warnings %}
 <div class="card" style="border-color:var(--warning);margin-bottom:20px;">
-    <div class="card-header"><span class="card-title">{{ icon("triangle-alert") }} {{ plan.warnings|length }} warning(s) from the {{ src.file }}</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("triangle-alert") }} {{ plan.warnings|length|plural('warning') }} from the {{ src.file }}</span></div>
     <ul style="margin:0;padding-left:20px;font-size:13px;color:var(--text-muted);">
         {% for w in plan.warnings %}
         <li>{{ w }}</li>
@@ -37,7 +37,7 @@
         <div class="card-header"><h3>Server-level options</h3></div>
         <label class="u-fcdcd0">
             <input type="checkbox" name="server_options" value="1"{% if src.key == 'isc' %} checked{% endif %}>
-            Import {{ server_options_count }} server-level option(s) as global options
+            Import {{ server_options_count|plural('server-level option') }} as global options
         </label>
         <div class="form-hint">{% if src.key == 'isc' %}On by default — a dhcpd.conf's global options are inherited by every subnet exactly as Kea's global option-data is.{% else %}Off by default — server-level options usually overlap with what each subnet already sets.{% endif %}</div>
     </div>

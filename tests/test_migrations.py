@@ -1320,3 +1320,83 @@ class TestMigration36ProblemsGeneration:
 
         src = inspect.getsource(migrations._m036_client_problems_generation)
         assert src.index("ADD UNIQUE KEY uq_client_problem_gen") < src.index('DROP INDEX uq_client_problem"')
+
+
+class TestMigration37SubnetNotesBadgeColor:
+    """Q205 (v5.70.0-beta.1, AU1 c): `subnet_notes.badge_color VARCHAR(12) NULL`. One DDL statement with its own guard: added when absent, re-declared when it is there with another type, a
+    rerun over the final state changes nothing, and no row is lost whichever way it is interrupted."""
+
+    @staticmethod
+    def _column(cur):
+        cur.execute(
+            "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'subnet_notes' AND COLUMN_NAME = 'badge_color'"
+        )
+        return cur.fetchone()
+
+    def test_registered_and_applied(self):
+        from jen.models.migrations import MIGRATIONS
+
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[37] == "_m037_subnet_notes_badge_color" and MIGRATIONS[-1][0] >= 37
+        assert 37 in applied_versions()
+
+    def test_the_column_is_a_nullable_varchar_12(self):
+        with jen_db() as db, db.cursor() as cur:
+            col = self._column(cur)
+        assert (
+            col
+            and col["DATA_TYPE"] == "varchar"
+            and int(col["CHARACTER_MAXIMUM_LENGTH"]) == 12
+            and col["IS_NULLABLE"] == "YES"
+        )
+
+    def test_an_interrupted_migration_is_finished_by_a_rerun_and_keeps_the_rows(self):
+        from jen.models.migrations import _m037_subnet_notes_badge_color
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM subnet_notes WHERE subnet_id=4237")
+            cur.execute("INSERT INTO subnet_notes (subnet_id, notes) VALUES (4237, 'kept across the migration')")
+            db.commit()
+            cur.execute(
+                "ALTER TABLE subnet_notes DROP COLUMN badge_color"
+            )  # the state before 37 (or a crash before the column existed)
+            db.commit()
+            assert self._column(cur) is None
+            _m037_subnet_notes_badge_color(db)
+            db.commit()
+            assert self._column(cur) is not None
+            _m037_subnet_notes_badge_color(db)  # a rerun over the final state
+            db.commit()
+            cur.execute("SELECT notes, badge_color FROM subnet_notes WHERE subnet_id=4237")
+            assert cur.fetchone() == {"notes": "kept across the migration", "badge_color": None}
+            cur.execute("DELETE FROM subnet_notes WHERE subnet_id=4237")
+            db.commit()
+
+    def test_a_column_of_another_type_is_redeclared_and_its_values_survive(self):
+        from jen.models.migrations import _m037_subnet_notes_badge_color
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM subnet_notes WHERE subnet_id=4238")
+            cur.execute("INSERT INTO subnet_notes (subnet_id, badge_color) VALUES (4238, 'green')")
+            cur.execute("ALTER TABLE subnet_notes MODIFY COLUMN badge_color VARCHAR(40) NULL")
+            db.commit()
+            _m037_subnet_notes_badge_color(db)
+            db.commit()
+            col = self._column(cur)
+            assert int(col["CHARACTER_MAXIMUM_LENGTH"]) == 12
+            cur.execute("SELECT badge_color FROM subnet_notes WHERE subnet_id=4238")
+            assert cur.fetchone()["badge_color"] == "green"
+            cur.execute("DELETE FROM subnet_notes WHERE subnet_id=4238")
+            db.commit()
+
+    def test_a_row_with_no_tone_renders_blue(self):
+        from jen.services import subnet_tones
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM subnet_notes WHERE subnet_id=4239")
+            cur.execute("INSERT INTO subnet_notes (subnet_id, notes) VALUES (4239, 'note only')")
+            db.commit()
+            assert subnet_tones.tone_for(4239) == "blue"
+            cur.execute("DELETE FROM subnet_notes WHERE subnet_id=4239")
+            db.commit()

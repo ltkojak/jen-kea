@@ -1,6 +1,59 @@
 {% extends "base.html" %}
+{% from '_subnet_badge.html' import subnet_badge %}
 {% block title %}Subnets{% endblock %}
 {% block scripts %}
+// v5.70.0-beta.1 (Q205, AU1 d) - the badge tone picker on the card. Delegated (one listener serves every card), no inline handler. A choice POSTs /subnets/save-badge-color and repaints
+// every badge of that subnet on the page; Escape or a click outside closes the row of swatches. It is Jen-only data (like the note), not an Edit: Edit writes Kea's config.
+function closeToneMenus(except) {
+    document.querySelectorAll('.tone-menu:not([hidden])').forEach(function(m) {
+        if (m === except) return;
+        m.hidden = true;
+        var b = m.parentNode.querySelector('.tone-btn');
+        if (b) b.setAttribute('aria-expanded', 'false');
+    });
+}
+function saveTone(choice) {
+    var id = choice.getAttribute('data-subnet-id'), tone = choice.getAttribute('data-tone');
+    jenFetch('/subnets/save-badge-color', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': {{ csrf_token()|tojson }}},
+        body: 'subnet_id=' + encodeURIComponent(id) + '&tone=' + encodeURIComponent(tone)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (!data.ok) { alert('Could not save the colour: ' + data.error); return; }
+        document.querySelectorAll('[data-tone-badge="' + id + '"]').forEach(function(el) {
+            el.className = el.className.replace(/badge-tone-\w+/, 'badge-tone-' + data.tone);
+        });
+        choice.closest('.tone-menu').querySelectorAll('.tone-choice').forEach(function(c) {
+            c.setAttribute('aria-pressed', c === choice ? 'true' : 'false');
+        });
+        closeToneMenus(null);
+    });
+}
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.tone-btn');
+    if (btn) {
+        var menu = btn.parentNode.querySelector('.tone-menu');
+        var opening = menu.hidden;
+        closeToneMenus(opening ? menu : null);
+        menu.hidden = !opening;
+        btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        if (opening) { var first = menu.querySelector('.tone-choice'); if (first) first.focus(); }
+        return;
+    }
+    var choice = e.target.closest('.tone-choice');
+    if (choice) { saveTone(choice); return; }
+    closeToneMenus(null);
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Escape') return;
+    var open = document.querySelector('.tone-menu:not([hidden])');
+    if (!open) return;
+    var b = open.parentNode.querySelector('.tone-btn');
+    closeToneMenus(null);
+    if (b) b.focus();
+});
 function editNote(id) {
     document.getElementById('note-display-' + id).style.display = 'none';
     document.getElementById('note-edit-' + id).style.display = 'block';
@@ -91,11 +144,25 @@ document.addEventListener('click', function(e) {
 <div class="card">
     <div class="card-header">
         <div class="u-95fd83">
-            <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
+            {% if current_user.role in ('superadmin','admin') %}
+            <span class="tone-picker" style="position:relative;display:inline-block;">
+                <button type="button" class="badge badge-tone-{{ subnet_tone(s.id) }} tone-btn" data-subnet-id="{{ s.id }}" data-tone-badge="{{ s.id }}" aria-haspopup="true" aria-expanded="false"
+                        title="Choose this subnet's badge colour" style="border:0;cursor:pointer;font:inherit;font-size:11px;font-weight:600;">{{ s.name }}</button>
+                <div class="tone-menu" role="group" aria-label="Badge colour for {{ s.name }}" hidden
+                     style="position:absolute;z-index:20;top:100%;left:0;margin-top:6px;padding:8px;display:flex;flex-direction:column;align-items:flex-start;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 14px rgba(0,0,0,.25);">
+                    {% for t in badge_tones %}
+                    <button type="button" class="badge badge-tone-{{ t }} tone-choice" data-subnet-id="{{ s.id }}" data-tone="{{ t }}" aria-pressed="{{ 'true' if subnet_tone(s.id) == t else 'false' }}"
+                            title="{{ t|title }}" style="border:1px solid transparent;cursor:pointer;font:inherit;font-size:11px;font-weight:600;white-space:nowrap;">{{ s.name }} · {{ t }}</button>
+                    {% endfor %}
+                </div>
+            </span>
+            {% else %}
+            {{ subnet_badge(s.id, s.name) }}
+            {% endif %}
             <span class="mono u-de0080">{{ s.cidr }}</span>
             {% if s.shared_network %}<span class="badge u-d6f005"  title="In shared network {{ s.shared_network }}">shared</span>{% endif %}
             {% for s6 in subnets6 if s6.paired_v4_id == s.id %}
-            <span class="badge badge-production" title="Paired IPv6 subnet">IPv6</span>
+            <span class="badge badge-tone-blue" title="Paired IPv6 subnet">IPv6</span>
             {% endfor %}
         </div>
         {% if current_user.role in ('superadmin','admin') and ssh_ready %}
@@ -110,10 +177,6 @@ document.addEventListener('click', function(e) {
             </form>
             {% endif %}
             <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
-            <form method="POST" action="/subnets/delete/{{ s.id }}" class="u-cccfa4"
-                  data-confirm="Delete subnet '{{ s.name }}' ({{ s.cidr }})? This removes it from Kea's config and restarts Kea. This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm u-be83f6">{{ icon("trash") }} Delete</button>
-            </form>
         </div>
         {% endif %}
     </div>
@@ -121,21 +184,34 @@ document.addEventListener('click', function(e) {
         <div>
             <div class="stat-label">Lease Duration</div>
             <div class="u-9aa3cd">
-                {% if s.valid_lifetime %}
-                    {% set days = (s.valid_lifetime / 86400)|int %}
-                    {% set hours = ((s.valid_lifetime % 86400) / 3600)|round(1) %}
-                    {{ days ~ ' day' ~ ('s' if days != 1) if days else hours ~ 'h' }}
-                {% else %}—{% endif %}
+                {% if s.valid_lifetime %}{{ s.valid_lifetime|duration_short }}{% else %}—{% endif %}
             </div>
         </div>
         <div>
             <div class="stat-label">Renew Timer (T1)</div>
-            <div class="u-9aa3cd">{{ ((s.renew_timer or 0) / 3600)|round(1) }}h</div>
+            <div class="u-9aa3cd">{{ (s.renew_timer or 0)|duration_short }}</div>
         </div>
         <div>
             <div class="stat-label">Rebind Timer (T2)</div>
-            <div class="u-9aa3cd">{{ ((s.rebind_timer or 0) / 3600)|round(1) }}h</div>
+            <div class="u-9aa3cd">{{ (s.rebind_timer or 0)|duration_short }}</div>
         </div>
+    </div>
+    {# Q205 (AU2): the live usage, by the dashboard's definitions (DEF-001 active leases, DEF-002 pool size, the leases INSIDE the pools); amber from the operator's alert threshold, red when the pool is full #}
+    {% set u = s.usage %}
+    <div class="subnet-usage" style="margin-bottom:16px;">
+        <div class="stat-label">Usage</div>
+        <div class="u-9aa3cd">
+            Active: {{ u.active }}
+            · Pool:
+            {% if u.pool_used is none %}<span class="muted">unavailable</span>
+            {% elif not u.pool_size %}<span class="muted">no pool</span>
+            {% else %}{{ u.pool_used }} of {{ u.pool_size }} ({{ u.pct }}%){% endif %}
+        </div>
+        {% if u.pool_size and u.pool_used is not none %}
+        <div class="usage-bar" role="img" aria-label="Pool use {{ u.pct }} percent" style="height:6px;border-radius:3px;background:var(--surface2);margin-top:6px;overflow:hidden;">
+            <div class="usage-fill usage-{{ u.level }}" style="height:100%;width:{{ [u.pct, 100]|min }}%;background:{{ 'var(--danger)' if u.level == 'full' else 'var(--warning)' if u.level == 'warn' else 'var(--primary)' }};"></div>
+        </div>
+        {% endif %}
     </div>
     <div class="u-da12f2">
         <div class="stat-label u-4e420a">Address Pools</div>
@@ -180,9 +256,28 @@ document.addEventListener('click', function(e) {
     {# both pages are admin-only: a viewer would be bounced (v5.69.0-beta.4, Q173) #}
     {% if current_user.role in ('admin', 'superadmin') %}
     <div style="margin-bottom:12px;font-size:12px;">
-        <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" class="u-5872de">
-            {{ icon("wrench") }} Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
-        </a>
+        <details class="subnet-options">
+            <summary class="u-5872de" style="cursor:pointer;">
+                {{ icon("wrench") }} Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
+            </summary>
+            {% if s.option_rows %}
+            <table style="width:100%;margin:6px 0;">
+                <thead><tr><th>Option</th><th>Value</th><th>From</th></tr></thead>
+                <tbody>
+                {% for o in s.option_rows %}
+                <tr>
+                    <td>{% if o.code is not none %}{{ o.code }} {% endif %}<strong>{{ o.name }}</strong></td>
+                    <td class="mono">{{ o.data }}</td>
+                    <td class="muted">{% if o.source == 'subnet' %}this subnet{% elif o.source == 'global' %}global{% else %}{{ o.source|replace('shared-network:', 'shared network ') }}{% endif %}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="muted" style="margin:6px 0;">No options at this level or above.</div>
+            {% endif %}
+            <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" class="u-5872de">Edit these options…</a>
+        </details>
         {% if s.classes %}
         <br>
         <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="u-5872de">
@@ -216,7 +311,7 @@ document.addEventListener('click', function(e) {
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
             <div class="u-95fd83">
-                <span class="badge badge-production">IPv6</span>
+                <span class="badge badge-tone-blue">IPv6</span>
                 <span class="mono u-433de3">{{ s6.cidr }}</span>
             </div>
             {% if current_user.role in ('superadmin','admin') %}
@@ -277,7 +372,7 @@ document.addEventListener('click', function(e) {
 <div class="card">
     <div class="card-header">
         <div class="u-95fd83">
-            <span class="badge badge-production">IPv6</span>
+            <span class="badge badge-tone-blue">IPv6</span>
             <span class="mono u-de0080">{{ s6.cidr }}</span>
             <span class="u-aad8e6">{{ s6.name }}</span>
         </div>

@@ -2,27 +2,28 @@
 {% from '_device_badge.html' import device_badge %}
 {% block title %}Leases{% endblock %}
 {% block scripts %}
+// Q205 (AU4): a lease that has a reservation shows a DISABLED box (the column is no longer half empty); every count and select-all below counts the boxes that can be ticked only.
 function toggleAll(cb) {
-    document.querySelectorAll('.row-checkbox').forEach(c => c.checked = cb.checked);
+    document.querySelectorAll('.row-checkbox:not(:disabled)').forEach(c => c.checked = cb.checked);
     updateCount();
 }
 function updateCount() {
-    const n = document.querySelectorAll('.row-checkbox:checked').length;
+    const n = document.querySelectorAll('.row-checkbox:not(:disabled):checked').length;
     const el = document.getElementById('selectedCount');
     if (el) el.textContent = n + ' selected';
     const bar = document.getElementById('leases-bulk-bar');
     if (bar) bar.style.display = n > 0 ? 'flex' : 'none';
     const all = document.getElementById('selectAll');
     if (all) {
-        const total = document.querySelectorAll('.row-checkbox').length;
+        const total = document.querySelectorAll('.row-checkbox:not(:disabled)').length;
         all.indeterminate = n > 0 && n < total;
         all.checked = n === total && total > 0;
     }
 }
 function confirmBulkRelease() {
-    const n = document.querySelectorAll('.row-checkbox:checked').length;
+    const n = document.querySelectorAll('.row-checkbox:not(:disabled):checked').length;
     if (n === 0) { alert('No leases selected.'); return false; }
-    jenConfirm(`Release ${n} lease(s)? Each device will need to renew to get a new IP.`, function() {
+    jenConfirm(`Release ${n} ${n === 1 ? 'lease' : 'leases'}? Each device will need to renew to get a new IP.`, function() {
         document.getElementById('bulk-form').submit();
     });
     return false;
@@ -42,7 +43,7 @@ document.addEventListener('change', function(e) {
 {% from '_sort_controls.html' import sort_controls %}
 <div class="page-header">
     <h1>{{ icon("list", "ico-lg") }} Leases</h1>
-    <p>{{ total }} lease(s) found</p>
+    <p>{{ total|plural('lease') }} found</p>
 </div>
 
 {% from '_ip_version_control.html' import ip_version_control with context %}
@@ -115,11 +116,6 @@ document.addEventListener('change', function(e) {
         {{ (icon('list') ~ ' Show Active') if show_expired else (icon('clock') ~ ' Show History') }}
     </a>
     <a href="/ipmap" class="btn btn-secondary">{{ icon("map") }} IP Map</a>
-    {% if current_user.role in ('superadmin','admin') %}
-    <form method="POST" action="/leases/delete-stale" class="inline" data-confirm="Delete all expired/stale leases from the database?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-danger btn-sm">{{ icon("trash") }} Delete Stale</button>
-    </form>
-    {% endif %}
     <!-- Saved filters -->
     <div class="flex items-center gap-2">
         <button class="btn btn-secondary btn-sm" id="save-filter-btn">{{ icon("bookmark") }} Save Filter</button>

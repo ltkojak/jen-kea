@@ -826,6 +826,18 @@ Seven presets ship with Jen:
 
 A user who hasn't picked one gets the install's default theme, below.
 
+### Times in your zone or in UTC (v5.70.0-beta.1)
+
+Jen stores and prints every moment as UTC. Beside the theme, the same palette menu has a **Times** choice - *In my browser's time zone* (the default) or *In UTC* - and the page shows every
+timestamp (lease obtained and expiry, last seen, the audit and alert logs, the dashboard's recent leases) in the one you pick. The UTC wording stays in the tooltip of a local time, and a page
+without JavaScript keeps showing UTC. Like the theme, the choice belongs to the browser, not the account.
+
+### A subnet's badge colour (v5.70.0-beta.1)
+
+On **Subnets**, an admin clicks a subnet's name badge to choose its colour from seven (blue, green, red, orange, yellow, purple, mono); each swatch shows the subnet's own name in that colour. The
+colour is kept by subnet, beside the subnet's note, in Jen's own database - it is not an edit of Kea's config and restarts nothing. A subnet with no choice is blue, as every subnet was before.
+Wherever a subnet badge is shown (Leases, Devices, Reservations, the dashboard, Search) it is a link to that page filtered to the subnet.
+
 ### Install default
 
 Go to **Settings → Appearance → Theme** (superadmin only) to set which theme a viewer gets before they've picked one for themselves. Changing it doesn't affect anyone who has already made their own choice.

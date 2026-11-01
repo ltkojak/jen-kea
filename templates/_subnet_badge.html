@@ -1,0 +1,11 @@
+{#- v5.70.0-beta.1 (Q205, AU1/AU8): THE subnet badge. Its tone is looked up by the subnet's ID (one per-request map, `subnet_tone`) - a class is never derived from a name
+    (tests/test_subnet_badges.py). `link=True` makes it a filter (`subnet_filter_href`: the same page with ?subnet=<id>, or /leases?subnet=<id> from anywhere else).
+    A caller prints a badge only for a subnet it is already showing the caller, so a hidden subnet has no badge, no tone and no link. -#}
+{% macro subnet_badge(subnet_id, name, link=False) -%}
+{%- set tone = subnet_tone(subnet_id) -%}
+{%- if link and subnet_filter_href(subnet_id) -%}
+<a class="badge badge-tone-{{ tone }}" href="{{ subnet_filter_href(subnet_id) }}" title="Show only {{ name }}">{{ name }}</a>
+{%- else -%}
+<span class="badge badge-tone-{{ tone }}">{{ name }}</span>
+{%- endif -%}
+{%- endmacro %}

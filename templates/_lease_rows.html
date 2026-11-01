@@ -1,3 +1,4 @@
+{% from '_subnet_badge.html' import subnet_badge %}
 {% from '_device_badge.html' import device_badge %}
 {% from '_investigate.html' import investigate_link %}
 {% from '_icons.html' import icon_trash, icon_pin, icon_dots %}
@@ -7,21 +8,23 @@
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td>
         {% if not l.has_reservation %}
-        <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}">
+        <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}" aria-label="Select {{ l.ip }}">
+        {% else %}
+        <input type="checkbox" class="row-checkbox" disabled title="Reserved - the address is not released from here" aria-label="Reserved - the address is not released from here">
         {% endif %}
     </td>
     {% endif %}
     <td class="mono" data-m="secondary"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
     <td class="nw-d" data-m="primary">
-        {{ l.hostname | hostname or '—' }}
+        {% if l.hostname | hostname %}{{ l.hostname | hostname }}{% else %}<span class="muted">no hostname</span>{% endif %}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
         {# the action menu (which carries Investigate) is an admin's, and only on a live list: everyone else gets the link beside the name (Q134's rule: every row that names a client) #}
         {% if show_expired or current_user.role not in ('superadmin','admin') %}{{ investigate_link(l.mac, "icon") }}{% endif %}
     </td>
     <td class="mono hide-mobile" data-m="hide">{{ l.mac }}</td>
-    <td data-m="secondary"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+    <td data-m="secondary">{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
     <td class="mono muted hide-mobile" data-m="hide">{{ l.obtained|utcfmt }}</td>
-    <td class="mono muted hide-tablet" data-m="secondary"><span class="desk-only">{{ l.expire|utcfmt }}</span><span class="phone-only">{{ l.expire|relfmt }}</span></td>
+    <td class="mono muted hide-tablet" data-m="secondary"><span class="desk-only" title="{{ l.expire|reltext }}">{{ l.expire|utcfmt }}</span><span class="phone-only">{{ l.expire|relfmt }}</span></td>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td data-m="trailing">
         <div class="action-menu">

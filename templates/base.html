@@ -384,9 +384,19 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 
         /* Badges */
         .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
-        .badge-production { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
-        .badge-iot { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
-        .badge-vlan70 { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
+        /* v5.70.0-beta.1 (Q205, AU1) - a subnet's badge tone is chosen per subnet from seven and nothing is derived from its name. blue and green are, byte for byte, the declarations the old
+           by-name rules for the maintainer's own production and iot subnets carried (tests/test_subnet_badges.py pins the text); the other five are siblings by the same color-mix
+           recipe. yellow and purple are fixed hues mixed 50% toward --text so they read on a light and on a dark preset alike (the test measures every preset: 3:1 or better). */
+        .badge-tone-blue { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
+        .badge-tone-green { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+        .badge-tone-red { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+        .badge-tone-orange { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+        .badge-tone-yellow { background: color-mix(in srgb, #e6b400 18%, transparent); color: color-mix(in srgb, #e6b400 50%, var(--text)); }
+        .badge-tone-purple { background: color-mix(in srgb, #a371f7 18%, transparent); color: color-mix(in srgb, #a371f7 50%, var(--text)); }
+        .badge-tone-mono { background: color-mix(in srgb, var(--text) 18%, transparent); color: var(--text); }
+        .table-foot { display:flex; justify-content:flex-end; margin:8px 0; }   /* Q205 AU5: the quiet controls under a list (Delete stale leases) */
+        a.badge { text-decoration: none; }
+        a.badge:hover, a.badge:focus-visible { filter: brightness(1.15); text-decoration: underline; }
         .badge-admin { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
         .badge-viewer { background: color-mix(in srgb, var(--text-muted) 18%, transparent); color: var(--text-muted); }
         .badge-dynamic { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
@@ -479,7 +489,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            .active on the matching button on load/switch). */
         .nav-dropdown-content button.theme-pick { display:flex; align-items:center; gap:8px; }
         .theme-pick-check { visibility:hidden; display:inline-flex; }
-        .theme-pick.active .theme-pick-check { visibility:visible; color:var(--primary); }
+        .theme-pick.active .theme-pick-check, .time-pick.active .theme-pick-check { visibility:visible; color:var(--primary); }
+        .nav-dropdown-content button.time-pick { display:flex; align-items:center; gap:8px; }
 
         /* Row action menu — same checkbox-toggle mechanism as .nav-dropdown
            above, so it works identically across browsers with zero JS
@@ -834,6 +845,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
                     <span class="theme-pick-check">{{ icon("circle-check") }}</span> {{ tname }}
                 </button>
                 {% endfor %}
+                <div class="nav-dropdown-divider"></div>
+                <div class="nav-dropdown-header"><strong>Times</strong></div>
+                <button type="button" class="linkish time-pick" data-time-mode="local">
+                    <span class="theme-pick-check">{{ icon("circle-check") }}</span> In my browser's time zone
+                </button>
+                <button type="button" class="linkish time-pick" data-time-mode="utc">
+                    <span class="theme-pick-check">{{ icon("circle-check") }}</span> In UTC
+                </button>
             </div>
         </div>
         <!-- User avatar dropdown -->
@@ -1028,6 +1047,15 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         </button>
         {% endfor %}
     </div>
+    <div class="sheet-group-label">Times</div>
+    <div class="sheet-list">
+        <button type="button" class="full time-pick" data-time-mode="local" data-sheet-close>
+            <span class="theme-pick-check">{{ icon("circle-check") }}</span> In my browser's time zone
+        </button>
+        <button type="button" class="full time-pick" data-time-mode="utc" data-sheet-close>
+            <span class="theme-pick-check">{{ icon("circle-check") }}</span> In UTC
+        </button>
+    </div>
 </div>
 {% endif %}
 
@@ -1105,6 +1133,93 @@ function applyTheme(id, persist) {
         var initial = (saved && THEME_IDS.indexOf(saved) !== -1) ? saved : THEME_DEFAULT;
         applyTheme(initial, false);
     });
+})();
+
+// v5.70.0-beta.1 (Q205, AU11 b) - an authored-config apply that reached the route lands on another page (Settings -> Kea): the draft the Author page kept in sessionStorage is done with. A round trip
+// through the password confirmation comes back to the Author page itself (which clears the marker and keeps the draft), so it never gets here.
+(function() {
+    try {
+        var applying = sessionStorage.getItem('jen-author-applying');
+        if (applying && location.pathname.indexOf('/settings/infrastructure/author-kea') !== 0 && location.pathname.indexOf('/auth/') !== 0) {
+            sessionStorage.removeItem('jen-author-draft-' + applying);
+            sessionStorage.removeItem('jen-author-applying');
+        }
+    } catch (e) { /* storage blocked */ }
+})();
+
+// v5.70.0-beta.1 (Q205, AU3) - times: the server prints every moment as UTC text inside <time datetime="...Z" data-jen-time="fmt|date|time|rel">; this ONE rewriter shows
+// them in the browser's zone when the reader's per-browser pick is "local" (the default; localStorage 'jen-time-pick' = 'local' | 'utc', beside the theme pick - it follows
+// the browser like the theme does, no column). The UTC wording moves to `title` and comes back on "utc". It runs on load and after every htmx swap, and the dashboard's two
+// browser-built strings ask the same function (window.jenTime.format / .clock).
+window.jenTime = (function() {
+    var KEY = 'jen-time-pick';
+    function mode() { var m = null; try { m = localStorage.getItem(KEY); } catch (e) { /* private mode */ } return m === 'utc' ? 'utc' : 'local'; }
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    function zoneName(d) {
+        try {
+            var parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(d);
+            for (var i = 0; i < parts.length; i++) if (parts[i].type === 'timeZoneName') return parts[i].value;
+        } catch (e) { /* no Intl */ }
+        return '';
+    }
+    function parse(iso) {
+        if (!iso) return null;
+        var s = String(iso).trim().replace(' ', 'T');
+        if (!/(Z|[+-]\d\d:?\d\d)$/.test(s)) s += 'Z';   // a naive moment is UTC (Kea's and Jen's own clock)
+        var d = new Date(s);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    function strf(d, fmt, utc) {
+        var g = utc ? { Y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), H: d.getUTCHours(), M: d.getUTCMinutes(), S: d.getUTCSeconds() }
+                    : { Y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate(), H: d.getHours(), M: d.getMinutes(), S: d.getSeconds() };
+        return fmt.replace(/%([YmdHMS])/g, function(_all, c) { return c === 'Y' ? String(g.Y) : pad(g[c]); });
+    }
+    // the text for a moment of `kind`, in the reader's zone ("local") or UTC
+    function format(iso, kind, fmt) {
+        var d = parse(iso);
+        if (!d) return null;
+        var utc = mode() === 'utc';
+        var suffix = utc ? ' UTC' : (zoneName(d) ? ' ' + zoneName(d) : '');
+        if (kind === 'date') return strf(d, '%Y-%m-%d', utc);
+        if (kind === 'time') return strf(d, '%H:%M:%S', utc) + suffix;
+        return strf(d, fmt || '%Y-%m-%d %H:%M', utc) + suffix;
+    }
+    function apply(root) {
+        var scope = root && root.querySelectorAll ? root : document;
+        var m = mode();
+        scope.querySelectorAll('time[data-jen-time]').forEach(function(el) {
+            var kind = el.getAttribute('data-jen-time');
+            if (kind === 'rel') return;   // a relative phrase is the same in every zone
+            if (!el.hasAttribute('data-jen-utc')) el.setAttribute('data-jen-utc', el.textContent);
+            var original = el.getAttribute('data-jen-utc');
+            if (m === 'utc') { el.textContent = original; el.removeAttribute('title'); return; }
+            var text = format(el.getAttribute('datetime'), kind, el.getAttribute('data-jen-fmt'));
+            if (text === null) return;
+            el.textContent = text;
+            el.setAttribute('title', original);
+        });
+    }
+    function clock() { return format(new Date().toISOString(), 'time'); }
+    function paintPicks() {
+        var m = mode();
+        document.querySelectorAll('.time-pick').forEach(function(b) { b.classList.toggle('active', b.getAttribute('data-time-mode') === m); });
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        apply(document);
+        paintPicks();
+        document.querySelectorAll('.time-pick').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                try { localStorage.setItem(KEY, btn.getAttribute('data-time-mode') === 'utc' ? 'utc' : 'local'); } catch (e) { /* private mode: applies for this load */ }
+                apply(document);
+                paintPicks();
+                document.dispatchEvent(new CustomEvent('jen:time'));
+                var dd = document.getElementById('dd-theme');
+                if (dd) dd.checked = false;
+            });
+        });
+    });
+    document.addEventListener('htmx:afterSwap', function(e) { apply(e.detail && e.detail.target ? e.detail.target : (e.target || document)); });
+    return { mode: mode, format: format, apply: apply, clock: clock };
 })();
 
 // v5.55.0 (Q63) — resolve a CSS custom property to its actual computed value,

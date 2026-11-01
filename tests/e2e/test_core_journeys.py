@@ -161,3 +161,53 @@ class TestSearchToInvestigate:
             page.wait_for_load_state("networkidle")
             assert f"tab={tab.lower()}" in page.url
             assert "aabbccddee01" in page.locator(q_input).input_value().lower().replace(":", "")
+
+
+class TestTimesInTheReadersZone:
+    """Q205 (AU3): every timestamp is UTC text in a <time> element; the reader's per-browser pick shows it in their zone or in UTC, and a swapped partial is rewritten too."""
+
+    def _seed(self):
+        conn = _kea_db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE hwaddr=UNHEX('AABBCCDDEE62')")
+                cur.execute(
+                    "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, hostname, state) "
+                    "VALUES (INET_ATON('10.99.0.62'), UNHEX('AABBCCDDEE62'), 3600, '2037-06-15 12:00:00', 1, 'e2e-zone-host', 0)"
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_local_then_utc_then_a_swapped_partial(self, browser, base_url):
+        from playwright.sync_api import expect
+
+        self._seed()
+        ctx = browser.new_context(
+            timezone_id="Pacific/Auckland"
+        )  # UTC+12 on that date, with no daylight saving in June
+        try:
+            page = ctx.new_page()
+            login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+            page.goto(f"{base_url}/leases")
+            stamp = page.locator("tr", has_text="e2e-zone-host").locator('time[data-jen-time="fmt"]').first
+            expect(stamp).to_contain_text(
+                "2037-06-16 00:00"
+            )  # 12:00 UTC is midnight the next day in Auckland (the default pick is local)
+            assert stamp.get_attribute("datetime") == "2037-06-15T12:00:00Z"
+            assert "2037-06-15 12:00 UTC" in (stamp.get_attribute("title") or ""), "the UTC wording moved to the title"
+
+            page.locator('label[for="dd-theme"]').click()
+            page.locator('.nav-dropdown-content .time-pick[data-time-mode="utc"]').click()
+            expect(stamp).to_have_text("2037-06-15 12:00 UTC")
+
+            page.locator('label[for="dd-theme"]').click()
+            page.locator('.nav-dropdown-content .time-pick[data-time-mode="local"]').click()
+            expect(stamp).to_contain_text("2037-06-16 00:00")
+
+            # a swapped partial (the filter bar re-renders the results) is rewritten too
+            page.fill('input[name="search"]', "e2e-zone")
+            fresh = page.locator("tr", has_text="e2e-zone-host").locator('time[data-jen-time="fmt"]').first
+            expect(fresh).to_contain_text("2037-06-16 00:00")
+        finally:
+            ctx.close()

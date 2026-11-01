@@ -50,7 +50,7 @@ def leases():
         direction = "desc"
     sort_map = {
         "ip": "l.address",
-        "hostname": "l.hostname",
+        "hostname": "COALESCE(l.hostname, '')",  # (Q205 AU10: NULL and an empty name sort together)
         "mac": "l.hwaddr",
         "subnet": "l.subnet_id",
         "obtained": "(l.expire - INTERVAL l.valid_lifetime SECOND)",

@@ -25,7 +25,7 @@
             <div class="mono" style="color:var(--text-muted);white-space:nowrap;min-width:150px;">{{ r.ts|utcfmt }}</div>
             <div style="min-width:170px;">
                 {% set kd = describe_kind(r.kind) %}
-                <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-production{% endif %}">{% if kd.icon %}{{ icon(kd.icon) }} {% endif %}{{ kd.label }}</span>
+                <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-tone-blue{% endif %}">{% if kd.icon %}{{ icon(kd.icon) }} {% endif %}{{ kd.label }}</span>
             </div>
             <div class="u-5872de">{{ r.detail }}
                 {% if r.related == 'address' %}<div class="u-42e3b5">possibly related — same address, client unknown</div>{% endif %}

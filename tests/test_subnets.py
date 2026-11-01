@@ -1,3 +1,6 @@
+import pytest
+
+
 class TestSaveSubnetNoteAccessControl:
     """v4.4.9: save_subnet_note() had no can_access_subnet() check at
     all, unlike every sibling route on this page (edit_subnet,
@@ -993,3 +996,208 @@ class TestEditSubnetAuditFollowsTheOutcome:
         with patch("jen.services.kea_changeset.apply_change", return_value=ChangeSetResult("ok", "ok", [], covered=[])):
             logged_in_client.post("/subnets/edit/1", data={"valid_lifetime": "7200"})
         assert self._count(db, "EDIT_SUBNET") == before + 1
+
+
+# ── Q205 (v5.70.0-beta.1): the subnet card ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+_Q205_CFG = {
+    "valid-lifetime": 3600,
+    "renew-timer": 1800,
+    "rebind-timer": 3150,
+    "option-data": [{"name": "domain-name-servers", "data": "9.9.9.9"}],
+    "shared-networks": [],
+    "subnet4": [
+        {
+            "id": 1,
+            "subnet": "10.99.0.0/24",
+            "valid-lifetime": 129600,
+            "renew-timer": 21600,
+            "rebind-timer": 37800,
+            "pools": [{"pool": "10.99.0.10 - 10.99.0.50"}],
+            "option-data": [{"name": "routers", "data": "10.99.0.1"}, {"name": "domain-search", "data": "lan.example"}],
+        }
+    ],
+}
+
+
+def _wire_q205(monkeypatch, cfg=None):
+    from jen.services import kea as kea_svc
+
+    config = _Q205_CFG if cfg is None else cfg
+
+    def fake(command, *a, **kw):
+        if command == "config-get":
+            return {"result": 0, "arguments": {"Dhcp4": config}}
+        return {"result": 0, "text": "mocked", "arguments": {"subnet4": [], "Dhcp4": {}, "hosts": []}}
+
+    monkeypatch.setattr(kea_svc, "kea_command", fake)
+    monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: {"id": 1, "name": "Test Kea"})
+    monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: True)
+
+
+@pytest.fixture
+def q205_leases(db):
+    """Five active leases on subnet 1 - three INSIDE the pool (.11-.13), two outside it (.200, .201) - and one expired inside it."""
+    rows = [
+        ("10.99.0.11", "DATE_ADD(NOW(), INTERVAL 1 HOUR)"),
+        ("10.99.0.12", "DATE_ADD(NOW(), INTERVAL 1 HOUR)"),
+        ("10.99.0.13", "DATE_ADD(NOW(), INTERVAL 1 HOUR)"),
+        ("10.99.0.200", "DATE_ADD(NOW(), INTERVAL 1 HOUR)"),
+        ("10.99.0.201", "DATE_ADD(NOW(), INTERVAL 1 HOUR)"),
+        ("10.99.0.14", "DATE_SUB(NOW(), INTERVAL 1 HOUR)"),
+    ]
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+        for i, (ip, expire_sql) in enumerate(rows):
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) "
+                f"VALUES (INET_ATON(%s), UNHEX(%s), 3600, {expire_sql}, 1, 0)",
+                (ip, f"AABBCCDD00{i:02X}"),
+            )
+    db.commit()
+    yield
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+    db.commit()
+
+
+class TestTheCardShowsUsage:
+    """Q205 (AU2): the card's usage is built by the dashboard's definitions - DEF-001 active leases, DEF-002 pool size, the leases INSIDE the pools - so the card and the dashboard's `/api/stats`
+    say the same numbers for the same subnet."""
+
+    def test_the_numbers_equal_the_dashboards_for_the_same_subnet(self, logged_in_client, monkeypatch, q205_leases):
+        _wire_q205(monkeypatch)
+        stats = logged_in_client.get("/api/stats").get_json()
+        page = logged_in_client.get("/subnets").data.decode()
+        active, size, used = (
+            stats["subnets"]["1"]["active"],
+            stats["pool_sizes"]["1"],
+            stats["subnets"]["1"]["pool_used"],
+        )
+        assert (active, size, used) == (5, 41, 3)
+        assert f"Active: {active}" in page
+        assert f"{used} of {size} ({round(100 * used / size)}%)" in page
+
+    def test_the_bar_is_amber_past_the_alert_threshold_and_red_when_full(
+        self, logged_in_client, db, monkeypatch, q205_leases
+    ):
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
+
+        _wire_q205(monkeypatch)
+        try:
+            set_global_setting("alert_threshold_pct", "5")  # 3 of 41 = 7% is past 5
+            _invalidate_settings_cache()
+            page = logged_in_client.get("/subnets").data.decode()
+            assert "usage-warn" in page and "var(--warning)" in page
+            set_global_setting("alert_threshold_pct", "80")
+            _invalidate_settings_cache()
+            page = logged_in_client.get("/subnets").data.decode()
+            assert "usage-ok" in page and "usage-warn" not in page
+            with db.cursor() as cur:  # fill the pool: 41 addresses in .10-.50
+                cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+                for n in range(10, 51):
+                    cur.execute(
+                        "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) "
+                        "VALUES (INET_ATON(%s), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0)",
+                        (f"10.99.0.{n}", f"AABBCC{n:06X}"),
+                    )
+            db.commit()
+            page = logged_in_client.get("/subnets").data.decode()
+            assert "usage-full" in page and "41 of 41 (100%)" in page and "var(--danger)" in page
+        finally:
+            set_global_setting("alert_threshold_pct", "80")
+            _invalidate_settings_cache()
+
+    def test_unavailable_when_kea_could_not_be_read(self, logged_in_client, monkeypatch, q205_leases):
+        from jen.services import kea as kea_svc
+
+        monkeypatch.setattr(kea_svc, "kea_command", lambda c, *a, **kw: {"result": 1, "text": "down", "arguments": {}})
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: {"id": 1, "name": "Test Kea"})
+        page = logged_in_client.get("/subnets").data.decode()
+        assert "Active: 5" in page and "unavailable" in page
+
+    def test_a_subnet_with_no_pool_says_so(self, logged_in_client, monkeypatch, q205_leases):
+        cfg = {**_Q205_CFG, "subnet4": [{**_Q205_CFG["subnet4"][0], "pools": []}]}
+        _wire_q205(monkeypatch, cfg)
+        page = logged_in_client.get("/subnets").data.decode()
+        assert "no pool" in page and "usage-bar" not in page
+
+    def test_a_scoped_admin_sees_only_their_cards(self, client, db, monkeypatch, q205_leases):
+        from jen import extensions
+        from tests.conftest import restricted_client
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {1: {"name": "Test Network", "cidr": "10.99.0.0/24"}, 2: {"name": "ZZ-HIDDEN-NET", "cidr": "10.77.0.0/24"}},
+        )
+        hidden = {"id": 2, "subnet": "10.77.0.0/24", "pools": [{"pool": "10.77.0.10 - 10.77.0.20"}]}
+        _wire_q205(monkeypatch, {**_Q205_CFG, "subnet4": [*_Q205_CFG["subnet4"], hidden]})
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="usage_scoped")
+        page = client.get("/subnets").data.decode()
+        assert "Active: 5" in page and "ZZ-HIDDEN-NET" not in page and "10.77.0." not in page
+        assert page.count('class="subnet-usage"') == 1
+
+
+class TestTheCardLosesItsDeleteAndGainsItsOptions:
+    def test_the_card_has_no_delete_form(self, logged_in_client, monkeypatch):
+        from jen import extensions
+
+        _wire_q205(monkeypatch)
+        monkeypatch.setattr("os.path.exists", lambda p: True)  # ssh_ready: the key file exists
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
+        card = logged_in_client.get("/subnets").data.decode()
+        assert "/subnets/delete/" not in card and "Delete subnet" not in card
+        assert "/subnets/edit/1" in card
+
+    def test_the_edit_page_ends_with_the_same_delete_form_route_and_confirm(self, logged_in_client, mock_kea):
+        page = logged_in_client.get("/subnets/edit/1").data.decode()
+        assert 'id="delete-subnet-section"' in page
+        assert 'action="/subnets/delete/1"' in page
+        assert "This removes it from Kea's config and restarts Kea. This cannot be undone." in page
+        assert page.index('id="delete-subnet-section"') > page.index('id="confirm-panel"')
+
+    def test_a_v6_subnet_has_no_delete_route_so_its_edit_page_carries_no_section(self):
+        import pathlib
+
+        text = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "edit_subnet.html").read_text(
+            encoding="utf-8"
+        )
+        assert "{% if family != 'v6' %}" in text
+        assert text.index("{% if family != 'v6' %}") < text.index("delete-subnet-section")
+
+
+class TestTheOptionsLineExpandsInPlace:
+    def test_the_card_lists_each_option_with_where_it_comes_from(self, logged_in_client, monkeypatch):
+        _wire_q205(monkeypatch)
+        page = logged_in_client.get("/subnets").data.decode()
+        assert '<details class="subnet-options">' in page
+        assert "Options: 2 here · 1 inherited" in page
+        for expected in ("routers", "domain-search", "domain-name-servers", "10.99.0.1", "9.9.9.9", "lan.example"):
+            assert expected in page
+        assert "this subnet" in page and "global" in page
+        assert "level=subnet" in page and "key=1" in page, "the link to the options page stays"
+
+    def test_a_viewer_gets_no_options_block(self, client, db, monkeypatch):
+        from tests.conftest import restricted_client
+
+        _wire_q205(monkeypatch)
+        restricted_client(client, db, allowed_subnets=None, role="viewer", username="options_viewer")
+        assert "subnet-options" not in client.get("/subnets").data.decode()
+
+    def test_the_card_reads_the_options_through_the_options_pages_own_service(self):
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "subnets.py").read_text(
+            encoding="utf-8"
+        )
+        assert 'option_rows = __opts.effective_options(cfg, s["id"])' in src
+        assert "def effective_options" not in src, "one reader of the config's options: the service"
+
+
+class TestTheTimersAreHumanised:
+    def test_the_card_prints_short_durations_not_decimals(self, logged_in_client, monkeypatch):
+        _wire_q205(monkeypatch)
+        page = logged_in_client.get("/subnets").data.decode()
+        assert "1 d 12 h" in page and "6 h" in page and "10 h 30 min" in page
+        assert "6.0h" not in page and "10.5h" not in page and "1 day" not in page

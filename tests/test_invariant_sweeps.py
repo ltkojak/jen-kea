@@ -514,6 +514,9 @@ S10_ALLOWED = {
     ("jen/services/auth.py", "kea_url_shape_ok", "ValueError", "return False"): (
         "an address `urlsplit` cannot parse (a bad port, a bracket) is NOT a Kea URL shape: the saver and the probe refuse it - fail closed (Q204 AT8 d)"
     ),
+    ("jen/services/auth.py", "inherit_over_http.scheme", "ValueError", 'return ""'): (
+        "an address `urlparse` cannot parse has no scheme, so the HINT under the Inherit box is not shown; the hint decides nothing - the credential rule (CRED-002, `credentials._inherit`) is unchanged and judges the secret (Q205 AU11 a)"
+    ),
     ("jen/services/auth.py", "usable_file", "(OSError, ValueError, TypeError)", "return False"): (
         "a path that cannot be examined is NOT a usable file: the caller refuses the CA bundle / client certificate it was asked to trust (Q174)"
     ),

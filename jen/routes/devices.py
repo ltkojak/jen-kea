@@ -63,7 +63,7 @@ def devices():
         "device_name": "d.device_name",
         "owner": "d.owner",
         "last_ip": "d.last_ip",
-        "hostname": "d.last_hostname",
+        "hostname": "COALESCE(d.last_hostname, '')",  # (Q205 AU10)
         "subnet": "d.last_subnet_id",
         "first_seen": "d.first_seen",
         "last_seen": "d.last_seen",

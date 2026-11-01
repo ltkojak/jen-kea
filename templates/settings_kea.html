@@ -201,7 +201,7 @@
     <div id="kea-ca" class="u-10a65a">
         <div class="stat-label u-c81ce4">Jen-managed Kea CA (for https sockets)</div>
         {% if kea_ca.present %}
-        <div class="form-hint u-fdf33f"><code>{{ kea_ca.subject }}</code> — {% if kea_ca.days_left is none %}expiry unreadable{% else %}expires in {{ kea_ca.days_left }} day(s){% endif %}. Jen's client certificate: {% if kea_ca.client_ok %}<span class="u-5a4529">valid, signed by this CA</span>{% elif kea_ca.client_state == 'expiring' %}<span class="u-52df2b">{{ kea_ca.client_why }}</span>{% else %}<span class="u-52df2b">{% if kea_ca.client_state == 'none' %}missing{% else %}damaged: {{ kea_ca.client_why }}{% endif %} - setting up an https socket re-issues it from this CA</span>{% endif %}. Server certificates Rotate will re-issue: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({% if d is none %}expiry unreadable{% else %}{{ d }} d{% endif %}){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.{% if kea_ca.external %} Not on Jen's CA, so Rotate leaves them alone: {{ kea_ca.external|join(', ') }}.{% endif %}</div>
+        <div class="form-hint u-fdf33f"><code>{{ kea_ca.subject }}</code> — {% if kea_ca.days_left is none %}expiry unreadable{% else %}expires in {{ kea_ca.days_left|plural('day') }}{% endif %}. Jen's client certificate: {% if kea_ca.client_ok %}<span class="u-5a4529">valid, signed by this CA</span>{% elif kea_ca.client_state == 'expiring' %}<span class="u-52df2b">{{ kea_ca.client_why }}</span>{% else %}<span class="u-52df2b">{% if kea_ca.client_state == 'none' %}missing{% else %}damaged: {{ kea_ca.client_why }}{% endif %} - setting up an https socket re-issues it from this CA</span>{% endif %}. Server certificates Rotate will re-issue: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({% if d is none %}expiry unreadable{% else %}{{ d }} d{% endif %}){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.{% if kea_ca.external %} Not on Jen's CA, so Rotate leaves them alone: {{ kea_ca.external|join(', ') }}.{% endif %}</div>
         {% if kea_ca.refused %}<div class="form-hint u-fdf33f"><span class="u-52df2b">Rotate would be refused:</span> {{ kea_ca.refused|join('; ') }}.</div>{% endif %}
         {% if kea_ca.parked %}
         <div class="form-hint u-fdf33f">Parked certificate records (the server is not on an https endpoint now, but its daemon may still present the certificate - Jen keeps the record, watches its expiry and drops it when the socket is removed; Rotate leaves it alone): {{ kea_ca.parked|join(', ') }}.</div>
@@ -393,7 +393,7 @@
     </div>
     {% if readiness %}
     <div class="form-hint u-da12f2">
-        {% if readiness.ready %}{{ icon("circle-check") }} Ready for Kea 3.2{% elif readiness.actions %}{{ icon("triangle-alert") }} {{ readiness.actions }} action(s) before upgrading to Kea 3.2{% else %}Kea 3.2 readiness: nothing to check on this install{% endif %}
+        {% if readiness.ready %}{{ icon("circle-check") }} Ready for Kea 3.2{% elif readiness.actions %}{{ icon("triangle-alert") }} {{ readiness.actions|plural('action') }} before upgrading to Kea 3.2{% else %}Kea 3.2 readiness: nothing to check on this install{% endif %}
         — <a href="/health-center">Health Center → Kea 3.2 readiness</a>
     </div>
     {% endif %}
@@ -590,6 +590,7 @@
                         <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
                         <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
                     </div>
+                    {% if infra.d2_inherit_over_http %}<div class="form-hint" style="color:var(--warning);">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
                 </div>
             </div>
             <button type="submit" class="btn btn-primary">Save D2 API</button>
@@ -760,6 +761,7 @@
                     <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
                     <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
                 </div>
+                    {% if infra.kea6_inherit_over_http %}<div class="form-hint" style="color:var(--warning);">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
             </div>
         </div>
         <div class="form-row">

@@ -27,6 +27,8 @@ import jen.services.kea_classes as __classes
 import jen.services.kea_config_edit as __edit
 import jen.services.kea_config_view as __view
 import jen.services.kea_host as __host
+import jen.services.pools as __pools
+import jen.services.subnet_tones as __tones
 import jen.services.win_dhcp_import as __win
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access, can_access_subnet6, paired_v4_id
@@ -147,7 +149,11 @@ def subnets():
                     elif opt.get("name") == "domain-name-servers":
                         dns_servers = opt.get("data", "")
                 options_here, options_inherited = __opts.count_here_and_inherited(cfg, s["id"])
+                # Q205 (AU7): the card's expandable list is read by the SAME service as the options page (`effective_options`: global -> shared network -> subnet, each row with where it comes from)
+                option_rows = __opts.effective_options(cfg, s["id"])
                 kea_subnets[s["id"]] = {
+                    "pool_defs": s.get("pools", []),
+                    "option_rows": option_rows,
                     "valid_lifetime": s.get("valid-lifetime", global_lifetime),
                     "renew_timer": s.get("renew-timer", global_renew),
                     "rebind_timer": s.get("rebind-timer", global_rebind),
@@ -162,6 +168,10 @@ def subnets():
     except Exception:
         pass
     try:
+        threshold = int(__user.get_global_setting("alert_threshold_pct", "80"))
+    except (TypeError, ValueError):
+        threshold = 80
+    try:
         with __db.kea_db() as db:
             accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
             with db.cursor() as cur:
@@ -174,12 +184,15 @@ def subnets():
                     cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                     reserved = cur.fetchone()["cnt"]
                     kea = kea_subnets.get(subnet_id, {})
+                    usage = _subnet_usage(cur, subnet_id, kea, active, threshold)
                     subnet_data.append(
                         {
                             "id": subnet_id,
                             "name": info["name"],
                             "cidr": info["cidr"],
                             "active": active,
+                            "usage": usage,
+                            "option_rows": kea.get("option_rows", []),
                             "reserved": reserved,
                             "valid_lifetime": kea.get("valid_lifetime", 0),
                             "renew_timer": kea.get("renew_timer", 0),
@@ -209,7 +222,7 @@ def subnets():
         with __db.jen_db() as jdb, jdb.cursor() as jcur:
             jcur.execute("SELECT subnet_id, notes FROM subnet_notes")
             for row in jcur.fetchall():
-                subnet_notes[row["subnet_id"]] = row["notes"]
+                subnet_notes[row["subnet_id"]] = row["notes"] or ""  # (a row that holds only a badge tone has no note)
     except Exception:
         pass
     return render_template(
@@ -217,11 +230,33 @@ def subnets():
         subnets=subnet_data,
         ssh_ready=ssh_ready,
         subnet_notes=subnet_notes,
+        badge_tones=__tones.TONES,
         subnets6=_get_subnets6_data(accessible_subnet6_map()),
         shared_networks=shared_networks,
         can_manage_networks=current_user.all_subnets,
         kea_config_error=kea_config_error,
     )
+
+
+def _subnet_usage(cur, subnet_id, kea, active, threshold) -> dict:
+    """Q205 (AU2) - the card's live usage, by the SAME definitions as the dashboard's per-subnet stats (`api_stats`): active leases are DEF-001's (`ACTIVE_LEASE4`, counted by the caller), the pool is
+    DEF-002's (`pools.total_pool_size`, the union of the subnet's pools) and pool use is `pools.consumption` (the active leases INSIDE the pools). `pool_used` / `pool_size` are None when Kea's
+    config could not be read (the dashboard's own word for it is "unavailable") or the measurement failed; a subnet with no pool has size 0 and no bar. `level` is "ok", "warn" (at or past the
+    alert threshold the operator set) or "full" (the pool is used up)."""
+    pool_defs = kea.get("pool_defs")
+    if pool_defs is None:
+        return {"active": active, "pool_size": None, "pool_used": None, "pct": None, "level": "unknown"}
+    size = __pools.total_pool_size(pool_defs)
+    if not size:
+        return {"active": active, "pool_size": 0, "pool_used": 0, "pct": None, "level": "ok"}
+    try:
+        used = __pools.consumption(cur, subnet_id, pool_defs)
+    except Exception as e:
+        logger.warning(f"subnets: pool consumption for subnet {subnet_id} skipped: {type(e).__name__}")
+        return {"active": active, "pool_size": size, "pool_used": None, "pct": None, "level": "unknown"}
+    pct = round(100 * used / size)
+    level = "full" if used >= size else "warn" if pct >= threshold else "ok"
+    return {"active": active, "pool_size": size, "pool_used": used, "pct": pct, "level": level}
 
 
 def _get_subnets6_data(visible6) -> list:
@@ -1938,6 +1973,39 @@ def save_subnet_note():
     except Exception as e:
         logger.error(f"Error saving note for subnet {subnet_id}: {e}")
         return jsonify({"ok": False, "error": "Could not save note."}), 500
+
+
+@bp.route("/subnets/save-badge-color", methods=["POST"])
+@login_required
+@_admin_required
+def save_subnet_badge_color():
+    """v5.70.0-beta.1 (Q205, AU1 d) - the tone of a subnet's badge, one of seven (`jen.services.subnet_tones.TONES`). Jen-only data beside the subnet's note, so it is NOT an Edit (Edit writes Kea's
+    config and restarts the daemon). The note route's rule: an id Jen does not list and one the caller may not see are the ONE 404 (RBAC-002); a value that is not one of the seven is a 400."""
+    from jen.services import subnet_tones as __tones
+
+    try:
+        subnet_id = int(request.form.get("subnet_id"))
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "Invalid subnet ID"}), 400
+    if subnet_id not in extensions.SUBNET_MAP or not current_user.can_access_subnet(subnet_id):
+        return jsonify({"ok": False, "error": "Subnet not found."}), 404
+    tone = request.form.get("tone", "").strip()
+    if not __tones.valid_tone(tone):
+        return jsonify({"ok": False, "error": "Choose one of: " + ", ".join(__tones.TONES) + "."}), 400
+    try:
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO subnet_notes (subnet_id, badge_color) VALUES (%s, %s) ON DUPLICATE KEY UPDATE badge_color=%s, updated_at=NOW()",
+                    (subnet_id, tone, tone),
+                )
+            db.commit()
+        __tones.forget()
+        __user.audit("SAVE_SUBNET_BADGE_COLOR", str(subnet_id), f"tone={tone}")
+        return jsonify({"ok": True, "tone": tone})
+    except Exception as e:
+        logger.error(f"Error saving badge colour for subnet {subnet_id}: {type(e).__name__}")
+        return jsonify({"ok": False, "error": "Could not save the colour."}), 500
 
 
 def _diff_rows(diff_lines):

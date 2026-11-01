@@ -31,6 +31,14 @@
 </form>
 {% endif %}
 
+{# Q205 (AU5): Delete Stale is not a filter and not a selection action (it removes every expired lease), so it left the filter bar for the foot of the table, quiet, with the same route and the same confirm #}
+{% if current_user.role in ('superadmin','admin') %}
+<div class="table-foot">
+    <form method="POST" action="/leases/delete-stale" class="inline" data-confirm="Delete all expired/stale leases from the database?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-secondary btn-sm" id="delete-stale-btn">Delete stale leases…</button>
+    </form>
+</div>
+{% endif %}
 {% if pages > 1 %}
 <div class="pagination">
     {% set base = '&subnet=' ~ (subnet_filter|urlencode) ~ '&minutes=' ~ minutes ~ '&search=' ~ (search|urlencode) ~ '&expired=' ~ ('1' if show_expired else '0') ~ '&sort=' ~ sort ~ '&dir=' ~ direction ~ '&per_page=' ~ per_page %}

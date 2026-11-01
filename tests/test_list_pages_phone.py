@@ -46,12 +46,18 @@ def _env():
         get_manufacturer_icon_url=lambda m: None,
         device_type_display={"phone": ("Phone", "#00b4d8")},
         device_info={},
+        # Q205 (AU1/AU8): the badge macro reads these two globals create_app() registers
+        subnet_tone=lambda sid: "blue",
+        subnet_filter_href=lambda sid: f"/leases?subnet={sid}" if sid is not None else None,
     )
     env.filters.update(
         hostname=lambda v: v,
         utcfmt=lambda v: "2026-09-21 10:00 UTC" if v else "—",
         utcdate=lambda v: "2026-09-21" if v else "—",
         relfmt=relative_time,
+        reltext=relative_time,  # (Q205 AU3: the desktop expiry's title is the relative phrase as plain text)
+        plural=lambda n, word, plural_form=None: f"{n} {word if n == 1 else (plural_form or word + 's')}",
+        duration_short=lambda v: str(v),
     )
     return env
 
@@ -132,7 +138,10 @@ class TestLeaseRow:
 
     def test_expiry_has_both_renderings_and_the_mac_moves_into_the_menu(self):
         html = _render("_lease_rows.html", leases=[_lease()])
-        assert '<span class="desk-only">2026-09-21 10:00 UTC</span><span class="phone-only">in 3 d</span>' in html
+        assert (
+            '<span class="desk-only" title="in 3 d">2026-09-21 10:00 UTC</span><span class="phone-only">in 3 d</span>'
+            in html
+        )
         assert 'action-menu-item disabled mono">aa:bb:cc:dd:ee:ff<' in html
 
     def test_a_viewer_gets_no_checkbox_or_kebab(self):
