@@ -236,6 +236,7 @@ def _render(role="admin", endpoint="leases.leases", authenticated=True, flashes=
     env = Environment(loader=ChoiceLoader([DictLoader({}), FileSystemLoader(str(TEMPLATES))]))
     env.globals.update(
         icon=icon,
+        author_draft_done=lambda: None,
         nav_icon=nav_icon,
         csrf_token=lambda: "tok",
         url_for=lambda ep, **kw: "/" + ep,

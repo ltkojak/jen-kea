@@ -3,6 +3,8 @@
     A caller prints a badge only for a subnet it is already showing the caller, so a hidden subnet has no badge, no tone and no link. -#}
 {% macro subnet_badge(subnet_id, name, link=False) -%}
 {%- set tone = subnet_tone(subnet_id) -%}
+{#- a subnet Jen does not list has no name: the badge says its number and is not a link (an empty <a> is invisible) -#}
+{%- if not name -%}{%- set link = False -%}{%- set name = '#' ~ subnet_id if subnet_id is not none else '—' -%}{%- endif -%}
 {%- if link and subnet_filter_href(subnet_id) -%}
 <a class="badge badge-tone-{{ tone }}" href="{{ subnet_filter_href(subnet_id) }}" title="Show only {{ name }}">{{ name }}</a>
 {%- else -%}

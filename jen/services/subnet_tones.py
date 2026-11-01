@@ -9,6 +9,8 @@ dict carries ids and tone names only - a hidden subnet's id is not printed anywh
 rows are the caller's own, Q204 RBAC-005).
 """
 
+import logging
+
 TONES = ("blue", "green", "red", "orange", "yellow", "purple", "mono")
 DEFAULT_TONE = "blue"  # one constant: an unset tone is blue so the upgrade is invisible (Q205 deviation named: grey is the other choice)
 
@@ -26,6 +28,7 @@ def _load() -> dict:
             cur.execute("SELECT subnet_id, badge_color FROM subnet_notes WHERE badge_color IS NOT NULL")
             return {int(r["subnet_id"]): r["badge_color"] for r in cur.fetchall() if valid_tone(r["badge_color"])}
     except Exception:
+        logging.getLogger(__name__).warning("subnet badge tones could not be read; every badge is blue", exc_info=True)
         return {}
 
 

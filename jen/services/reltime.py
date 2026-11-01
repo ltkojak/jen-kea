@@ -27,7 +27,7 @@ def duration_short(seconds) -> str:
     if days:
         return f"{days} d" + (f" {hours} h" if hours else "")
     if total < 7200:
-        return "1 h" if total == 3600 else f"{total // 60} min"
+        return "1 h" if total // 60 == 60 else f"{total // 60} min"
     return f"{hours} h" + (f" {minutes} min" if minutes else "")
 
 

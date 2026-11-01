@@ -92,6 +92,8 @@ class TestDurationShort:
             (90, "1 min"),
             (3599, "59 min"),
             (3600, "1 h"),
+            (3659, "1 h"),  # (SP: 60 whole minutes is an hour, not "60 min")
+            (3660, "61 min"),
             (5400, "90 min"),
             (7199, "119 min"),
             (7200, "2 h"),

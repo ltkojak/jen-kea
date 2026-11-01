@@ -72,6 +72,11 @@ def _api_pass_state(endpoint) -> str:
     return "none"
 
 
+def _inherits(endpoint) -> bool:
+    """Whether `credentials.resolve` gave this endpoint its parent's password (Q205, SP-2)."""
+    return endpoint is not None and endpoint.source.startswith("inherited:")
+
+
 def _kea_server_section_ids(cfg) -> list[int]:
     """Every `[kea_server_N]` (N >= 2 — 1 is the primary, `[kea]`) present
     in `cfg`, sorted. v5.19.1 (Q14) — gap-tolerant: a
@@ -390,12 +395,15 @@ def settings_kea():
         # as kea6_api_url above.
         "d2_api_url": extensions.cfg.get("d2", "api_url", fallback=""),
         # Q205 (AU11 a): the hint under "Inherit the Kea API password" - this endpoint reached over http while the Kea API is https
+        # (SP-2: only an endpoint that really takes its password from the Kea API - the resolver's own answer - is told so; one with a password of its own, or none on purpose, is not)
         "kea6_inherit_over_http": __auth.inherit_over_http(
             extensions.cfg.get("kea6", "api_url", fallback=""), extensions.cfg.get("kea", "api_url", fallback="")
-        ),
+        )
+        and _inherits(_resolved_endpoints.get("kea6")),
         "d2_inherit_over_http": __auth.inherit_over_http(
             extensions.cfg.get("d2", "api_url", fallback=""), extensions.cfg.get("kea", "api_url", fallback="")
-        ),
+        )
+        and _inherits(_resolved_endpoints.get("d2")),
         "d2_api_user": extensions.cfg.get("d2", "api_user", fallback=""),
         # v5.29.0 (Q29) — see bind_default on the extra servers above.
         "bind_default": _bind_default(extensions.cfg.get("kea_ssh", "host", fallback="")),

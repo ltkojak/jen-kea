@@ -858,6 +858,15 @@ class TestTheInheritOverHttpHint:
         app_config.write_values([("kea6", "api_url", "https://kea-a:8006")])
         assert self.SENTENCE.encode() not in logged_in_client.get("/settings/kea").data
 
+    def test_an_endpoint_with_its_own_password_or_none_on_purpose_is_not_told_it_inherits(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        # (second pass SP-2) the URL alone is not the condition: the resolver must say the endpoint takes the Kea API's password
+        app_config.write_values([("kea6", "api_url", "http://kea-a:8006"), ("kea6", "api_pass", "its-own")])
+        assert self.SENTENCE.encode() not in logged_in_client.get("/settings/kea").data
+        app_config.write_values([("kea6", "api_pass", "")])  # a blank is an explicit "no password"
+        assert self.SENTENCE.encode() not in logged_in_client.get("/settings/kea").data
+
     def test_the_d2_card_carries_the_same_hint_condition(self):
         import pathlib
 

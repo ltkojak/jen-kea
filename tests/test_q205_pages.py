@@ -148,3 +148,40 @@ class TestTimesAreTimeElements:
             "the rewriter lives in a nonce'd script"
         )
         assert "htmx:afterSwap" in body[start : start + 6000]
+
+
+class TestTheAuthorDraftIsDroppedOnSuccessOnly:
+    """Second pass SP-1: the Author page's draft (sessionStorage) is dropped by the page AFTER a written config - the server says so, once - and by nothing else."""
+
+    def test_the_marker_is_carried_once_and_only_for_a_known_service(self, logged_in_client):
+        with logged_in_client.session_transaction() as sess:
+            sess["author_draft_done"] = "dhcp4"
+        first = logged_in_client.get("/").data.decode()
+        second = logged_in_client.get("/").data.decode()
+        assert 'var done = "dhcp4";' in first
+        assert "var done = null;" in second
+        with logged_in_client.session_transaction() as sess:
+            sess["author_draft_done"] = "x'; alert(1); '"
+        assert "var done = null;" in logged_in_client.get("/").data.decode()
+
+    def test_the_route_sets_it_in_the_ok_branch_only_and_nothing_else_marks_an_apply(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        text = (root / "jen" / "routes" / "settings" / "authoring.py").read_text(encoding="utf-8")
+        assert text.count('session["author_draft_done"]') == 1
+        ok = text.index('if result.status == "ok":')
+        assert ok < text.index('session["author_draft_done"]') < text.index("else:", ok)
+        for name in ("templates/base.html", "templates/author_kea_config.html"):
+            assert "jen-author-applying" not in (root / name).read_text(encoding="utf-8"), name
+
+
+class TestABadgeWithNoNameIsNotAnEmptyLink:
+    def test_a_subnet_jen_does_not_list_prints_its_number_and_is_not_a_link(self, app):
+        from flask import render_template_string
+
+        with app.test_request_context("/leases"):
+            out = render_template_string(
+                "{% from '_subnet_badge.html' import subnet_badge %}{{ subnet_badge(3, '', link=True) }}"
+            )
+        assert "<a " not in out and "#3" in out

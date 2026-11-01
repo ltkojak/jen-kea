@@ -97,6 +97,7 @@ def _render(role="admin", endpoint="servers.servers", pill=None):
     env = Environment(loader=ChoiceLoader([DictLoader({}), FileSystemLoader(str(ROOT / "templates"))]))
     env.globals.update(
         icon=icon,
+        author_draft_done=lambda: None,
         nav_icon=nav_icon,
         csrf_token=lambda: "tok",
         url_for=lambda ep, **kw: "/plugin/" + ep,

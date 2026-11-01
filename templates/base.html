@@ -1153,16 +1153,12 @@ function applyTheme(id, persist) {
     });
 })();
 
-// v5.70.0-beta.1 (Q205, AU11 b) - an authored-config apply that reached the route lands on a different page (Settings -> Kea): the draft the Author page kept in sessionStorage is done with. A round trip
-// through the password confirmation comes back to the Author page itself (which clears the marker and keeps the draft), so it never gets here.
+// v5.70.0-beta.1 (Q205, AU11 b) - the Author page keeps its form as a draft in sessionStorage; the SERVER says when it is done with: the page after an authored config was WRITTEN carries the service
+// once (a failed or refused apply says nothing, so the draft stays and the form comes back), and this drops that service's draft.
 (function() {
-    try {
-        var applying = sessionStorage.getItem('jen-author-applying');
-        if (applying && location.pathname.indexOf('/settings/infrastructure/author-kea') !== 0 && location.pathname.indexOf('/auth/') !== 0) {
-            sessionStorage.removeItem('jen-author-draft-' + applying);
-            sessionStorage.removeItem('jen-author-applying');
-        }
-    } catch (e) { /* storage blocked */ }
+    var done = {{ author_draft_done()|tojson }};
+    if (!done) return;
+    try { sessionStorage.removeItem('jen-author-draft-' + done); } catch (e) { /* storage blocked */ }
 })();
 
 // v5.70.0-beta.1 (Q205, AU3) - times: the server prints every moment as UTC text inside <time datetime="...Z" data-jen-time="fmt|date|time|rel">; this ONE rewriter shows
@@ -1748,7 +1744,7 @@ function sortTable(table, col, th) {
                 var box = tr.querySelector('.row-checkbox');
                 var menu = tr.querySelector('.action-menu-toggle');
                 if (document.body.classList.contains('select-mode') && box) {
-                    box.checked = !box.checked;
+                    if (!box.disabled) box.checked = !box.checked;
                     box.dispatchEvent(new Event('change', { bubbles: true }));
                 } else if (menu) {
                     menu.checked = !menu.checked;

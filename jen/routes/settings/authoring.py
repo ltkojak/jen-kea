@@ -9,7 +9,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from flask import flash, jsonify, redirect, render_template, request, url_for
+from flask import flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import login_required
 
 import jen.config as __config
@@ -686,6 +686,9 @@ def author_kea_config_post(service):
 
     categories = {"success": "success", "warning": "warning", "error": "error"}
     if result.status == "ok":
+        session["author_draft_done"] = (
+            service  # Q205 (SP-1): the ONE writer - the next page drops the form's draft kept in the browser tab, once (templates/base.html)
+        )
         written = {s.get("name") or s.get("ssh_host") or "?": __authoring.conf_path_for(s, service) for s in servers}
         for name in result.covered:
             flash(f"{name}: {written.get(name, '')} written. Enable/restart the service to use it.", "success")

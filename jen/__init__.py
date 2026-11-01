@@ -224,6 +224,17 @@ def create_app() -> Flask:
 
     app.jinja_env.globals["subnet_tone"] = _subnet_tones.tone_for
 
+    def author_draft_done():
+        """Q205 (SP-1): the service whose authored config was just written, once (the page after the apply drops that service's draft from the tab's sessionStorage)."""
+        from flask import has_request_context, session
+
+        if not has_request_context():
+            return None
+        service = session.pop("author_draft_done", None)
+        return service if service in ("dhcp4", "dhcp6") else None
+
+    app.jinja_env.globals["author_draft_done"] = author_draft_done
+
     def subnet_filter_href(subnet_id):
         from urllib.parse import urlencode
 

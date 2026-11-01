@@ -183,8 +183,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
     if (restore() && note) note.hidden = false;
     form.addEventListener('input', save);
     form.addEventListener('change', save);
-    // the apply (submitForm below) marks itself, so base.html can tell a refused-for-confirmation round trip (comes back to this page, draft kept) from an apply that reached the route (lands on Settings -> Kea, draft cleared)
-    try { sessionStorage.removeItem('jen-author-applying'); } catch (e) { /* ignore */ }   // we are on this page: nothing is pending
+    // the draft is dropped by the page after a WRITTEN config (base.html reads the server's word, once), never by an apply that was refused or rolled back
     var discard = document.getElementById('discard-draft');
     if (discard) discard.addEventListener('click', function(ev) {
         ev.preventDefault();
@@ -329,7 +328,6 @@ function submitForm() {
     hidden.value = document.getElementById('f-overwrite').checked ? 'true' : 'false';
     form.appendChild(hidden);
     form.onsubmit = null;
-    try { sessionStorage.setItem('jen-author-applying', {{ service|tojson }}); } catch (e) { /* ignore */ }
     form.submit();
 }
 
