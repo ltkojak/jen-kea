@@ -283,7 +283,7 @@ class TestDevicesSummary:
     def test_a_filter_change_returns_the_partial_with_the_new_total(self, logged_in_client, db):
         self._two_devices(db)
         assert _summary(logged_in_client.get("/devices").data.decode()) == "2 devices"
-        one = logged_in_client.get("/devices?search=ee41", headers=self.HX).data.decode()
+        one = logged_in_client.get("/devices?search=10.10.10.41", headers=self.HX).data.decode()
         assert "<html" not in one and _summary(one) == "1 device"
 
     def test_the_header_no_longer_carries_a_number_and_the_summary_is_inside_the_results(self, logged_in_client, db):
@@ -305,8 +305,9 @@ class TestDevicesSummary:
         assert text.startswith("0 devices") and "not seen for" in text
 
     def test_no_hand_plural_is_left_in_templates(self):
-        # the WHOLE of templates/ (Q206 second pass, SP-4): the `'s' if` spelling of a plural is gone; `|plural` is the one way. The `(s)` spelling is checked on the pages Q206 touched.
+        # the WHOLE of templates/ (Q206 second pass, SP-4): the `'s' if` spelling of a plural is gone; `|plural` is the one way. The `word(s)` spelling is checked on the pages Q206 touched.
         import pathlib
+        import re
 
         offenders = [
             p.name
@@ -329,7 +330,10 @@ class TestDevicesSummary:
             "_leases6_results.html",
             "_reservations6_results.html",
         ):
-            assert "(s)" not in pathlib.Path("templates", name).read_text(encoding="utf-8"), name
+            assert not re.search(
+                r"(?!function)[A-Za-z]+\(s\)(?!\s*(?:\{|=>))",
+                pathlib.Path("templates", name).read_text(encoding="utf-8"),
+            ), name
 
 
 class TestDevicesFilteredEmptyState:

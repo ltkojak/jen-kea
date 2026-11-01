@@ -294,7 +294,8 @@ class TestRoutes:
         with_cookie = client.get("/leases").data.decode()
 
         def rows(body):
-            return re.findall(r'<tr(?: id="[^"]*")?>.*?</tr>', body, re.S)
+            # the DATA rows: the header row's sort links echo the page size (per_page=250), which is the point of the cookie
+            return [r for r in re.findall(r'<tr(?: id="[^"]*")?>.*?</tr>', body, re.S) if "<td" in r]
 
         assert rows(with_cookie) == rows(plain)
 
