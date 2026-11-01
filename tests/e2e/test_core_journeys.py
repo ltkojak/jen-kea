@@ -170,13 +170,10 @@ class TestTimesInTheReadersZone:
         conn = _kea_db()
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SET time_zone = '+00:00'"
-                )  # the stored instant is 12:00 UTC whatever zone the runner's own clock keeps
                 cur.execute("DELETE FROM lease4 WHERE hwaddr=UNHEX('AABBCCDDEE62')")
                 cur.execute(
                     "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, hostname, state) "
-                    "VALUES (INET_ATON('10.99.0.62'), UNHEX('AABBCCDDEE62'), 3600, '2037-06-15 12:00:00', 1, 'e2e-zone-host', 0)"
+                    "VALUES (INET_ATON('10.99.0.62'), UNHEX('AABBCCDDEE62'), 3600, '2037-06-15 13:00:00', 1, 'e2e-zone-host', 0)"
                 )
             conn.commit()
         finally:
@@ -193,6 +190,7 @@ class TestTimesInTheReadersZone:
             page = ctx.new_page()
             login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
             page.goto(f"{base_url}/leases")
+            # the row's FIRST time is "obtained" = expire - the 3600 s lease time = 12:00 UTC
             stamp = page.locator("tr", has_text="e2e-zone-host").locator('time[data-jen-time="fmt"]').first
             expect(stamp).to_contain_text(
                 "2037-06-16 00:00"
