@@ -163,7 +163,7 @@ class TestLeaseRow:
                 "_lease_rows.html",
                 leases=[],
                 search="printer",
-                minutes="",
+                minutes_applied=None,
                 subnet_filter_name="IoT",
                 per_page="all",
                 sort="expires",
@@ -409,7 +409,7 @@ class TestFilteredEmptyStates:
     LEASES = {
         "leases": [],
         "search": "",
-        "minutes": "",
+        "minutes_applied": None,
         "subnet_filter_name": "",
         "per_page": "all",
         "sort": "expires",
@@ -476,21 +476,27 @@ class TestFilteredEmptyStates:
         assert 'href="/health-center"' not in html
 
     def test_leases_name_the_time_window(self):
-        assert "from the last 6 hours" in self._lease(minutes="360")
-        assert "from the last hour" in self._lease(minutes="60")
-        assert "from the last 45 minutes" in self._lease(minutes="45")
+        assert "from the last 6 hours" in self._lease(minutes_applied=360)
+        assert "from the last hour" in self._lease(minutes_applied=60)
+        assert "from the last 45 minutes" in self._lease(minutes_applied=45)
+
+    def test_a_window_the_route_applied_but_cannot_be_named_is_still_a_filter(self):
+        # SP-3: ?minutes=-5 is applied by the route (INTERVAL -5 MINUTE); the row must not claim "no filter"
+        html = self._lease(minutes_applied=-5)
+        assert "No active leases in the selected time window" in html and html.count("Clear filters") == 1
+        assert "No active leases yet" not in html
 
     def test_leases_in_history_say_expired(self):
         html = self._lease(search="printer", show_expired=True)
         assert "No expired leases match “printer”" in html
 
-    def test_a_time_window_that_is_not_a_number_is_no_filter(self):
-        html = self._lease(minutes="abc")
+    def test_a_time_window_the_route_did_not_apply_is_no_filter(self):
+        html = self._lease(minutes_applied=None)
         assert "No active leases yet" in html and "Clear filters" not in html
 
     def test_the_clear_filters_href_drops_every_filter_and_keeps_page_size_and_sort(self):
         html = self._lease(
-            search="printer", minutes="60", subnet_filter_name="IoT", per_page="100", sort="ip", direction="asc"
+            search="printer", minutes_applied=60, subnet_filter_name="IoT", per_page="100", sort="ip", direction="asc"
         )
         assert 'href="/leases?per_page=100&amp;sort=ip&amp;dir=asc"' in html
         assert "search=" not in html.split("Clear filters")[0].rsplit("href=", 1)[1]

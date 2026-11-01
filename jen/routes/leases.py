@@ -85,6 +85,8 @@ def leases():
     total = 0
     expiring_soon = 0
     reserved_macs = set()
+    reserved_visible = set()
+    minutes_applied = None
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
@@ -103,6 +105,7 @@ def leases():
                 if minutes:
                     try:
                         mins = int(minutes)
+                        minutes_applied = mins
                         where.append("FROM_UNIXTIME(l.expire) >= DATE_SUB(NOW(), INTERVAL %s MINUTE)")
                         params.append(mins)
                     except ValueError:
@@ -156,10 +159,18 @@ def leases():
                     placeholders = ",".join(["%s"] * len(mac_hexes))
                     with db.cursor() as res_cur:
                         res_cur.execute(
-                            f"SELECT HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
+                            f"SELECT HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
                             mac_hexes,
                         )
-                        reserved_macs = {row["mac_hex"].upper() for row in res_cur.fetchall()}
+                        host_rows = res_cur.fetchall()
+                        reserved_macs = {row["mac_hex"].upper() for row in host_rows}
+                        # Q206 (SP-1): the summary's "N reserved" is a number a viewer reads, so it counts only a reservation in a subnet the caller may see (devices.py's rule); a hidden
+                        # subnet's reservation never changes a visible answer. `has_reservation` below keeps reading every reservation - the pre-existing behaviour of the admin menu.
+                        reserved_visible = {
+                            row["mac_hex"].upper()
+                            for row in host_rows
+                            if current_user.all_subnets or current_user.can_access_subnet(row["subnet_id"])
+                        }
             for lease in leases_list:
                 lease["has_reservation"] = lease["mac"].replace(":", "").upper() in reserved_macs
     except Exception as e:
@@ -190,7 +201,8 @@ def leases():
         # not see, so a hidden subnet's name never reaches the page.
         "subnet_filter_name": __view_prefs.subnet_filter_name(subnet_filter, accessible_subnet_map),
         "expiring_soon": expiring_soon,
-        "reserved_count": len(reserved_macs),
+        "reserved_count": len(reserved_visible),
+        "minutes_applied": minutes_applied,
     }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the

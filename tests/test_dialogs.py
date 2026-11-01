@@ -160,6 +160,15 @@ class TestToastRegion:
         assert "addEventListener('mouseenter', pause)" in fn and "addEventListener('mouseleave'" in fn
         assert "clearTimeout(timer)" in fn
 
+    def test_the_cap_never_drops_an_error_or_a_warning(self):
+        # SP-H1: the polite region keeps at most four; a toast that is an error or a warning is never removed by the cap, only by being closed
+        body = BASE[BASE.index("window.jenToast = function") : BASE.index("window.jenPrompt = function")]
+        assert "if (!urgent) { while (region.children.length > 4) region.firstChild.remove(); }" in body
+
+    def test_the_regions_announce_one_toast_at_a_time(self):
+        for rid in ("jen-toasts", "jen-toasts-alert"):
+            assert 'aria-atomic="false"' in re.search(rf'<div id="{rid}"[^>]*>', BASE).group(0)
+
     def test_every_toast_has_a_close_button(self):
         body = BASE[BASE.index("window.jenToast = function") : BASE.index("window.jenPrompt = function")]
         assert "close.className = 'alert-close'" in body and "setAttribute('aria-label', 'Dismiss')" in body

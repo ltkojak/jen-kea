@@ -100,7 +100,7 @@ if (removeAvatarBtn) {
                 {% endif %}
             </td></tr>
         <tr><td class="stat-label u-d8c022">Trusted Devices</td>
-            <td>{{ device_count }} device{{ 's' if device_count != 1 else '' }}</td></tr>
+            <td>{{ device_count|plural('device') }}</td></tr>
     </table>
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
         <a href="/mfa/enroll" class="btn btn-sm btn-secondary">{{ icon("lock") }} MFA Settings</a>

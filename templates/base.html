@@ -1840,8 +1840,8 @@ function sortTable(table, col, th) {
     </div>
 </div>
 <div class="toast-stack">
-    <div id="jen-toasts" class="toast-region" role="status" aria-live="polite"></div>
-    <div id="jen-toasts-alert" class="toast-region" role="alert"></div>
+    <div id="jen-toasts" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
+    <div id="jen-toasts-alert" class="toast-region" role="alert" aria-atomic="false"></div>
 </div>
 <script nonce="{{ csp_nonce }}">
 (function() {
@@ -1922,7 +1922,7 @@ function sortTable(table, col, th) {
         el.appendChild(text);
         el.appendChild(close);
         region.appendChild(el);
-        while (region.children.length > 4) region.firstChild.remove();
+        if (!urgent) { while (region.children.length > 4) region.firstChild.remove(); }   // an error or a warning is never dropped by the cap
         if (!urgent) autoLeave(el, 5000);
         return el;
     };

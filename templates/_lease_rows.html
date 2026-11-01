@@ -69,13 +69,13 @@
 {% else %}
 <tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}" data-m="full">
     {# Q206 (AV6): with a filter in force the empty row names it and offers the way out; with none, the sentence stays what it always was #}
-    {% set minutes_now = minutes|default('')|int(0) %}
-    {% if search or minutes_now > 0 or subnet_filter_name %}
+    {% set window = minutes_applied|default(none) %}
+    {% if search or window is not none or subnet_filter_name %}
     {% set minute_words = {'5': '5 minutes', '15': '15 minutes', '30': '30 minutes', '60': 'hour', '360': '6 hours', '1440': '24 hours'} %}
     {% set what = 'No ' ~ ('expired' if show_expired else 'active') ~ ' leases'
         ~ (' match “' ~ search ~ '”' if search else '')
         ~ (' in ' ~ subnet_filter_name if subnet_filter_name else '')
-        ~ (' from the last ' ~ (minute_words.get(minutes) or (minutes_now ~ ' minutes')) if minutes_now > 0 else '') %}
+        ~ ((' from the last ' ~ (minute_words.get(window|string) or (window ~ ' minutes')) if window > 0 else ' in the selected time window') if window is not none else '') %}
     {{ empty_state(icon('search'), what, [('Clear filters', '/leases?per_page=' ~ (per_page|urlencode) ~ '&sort=' ~ (sort|urlencode) ~ '&dir=' ~ (direction|urlencode) ~ ('&expired=1' if show_expired else ''))]) }}
     {% else %}
     {{ empty_state(icon('inbox'), 'No active leases yet — Kea hands out leases as clients ask; check Health if you expected some.', [((icon('stethoscope') ~ ' Health'), '/health-center')]) }}

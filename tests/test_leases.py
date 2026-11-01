@@ -651,7 +651,32 @@ class TestResultsSummary:
 
         restricted_client(client, db, allowed_subnets=[1], role="viewer", username="summary_viewer")
         text = _summary(client.get("/leases", headers=self.HX).data.decode())
-        assert text.startswith("3 active leases")
+        assert text == "3 active leases · 2 expire within the hour · 1 reserved"
+
+    def test_a_reservation_in_a_subnet_the_caller_cannot_see_is_not_counted(self, client, db, q206_rows):
+        # SP-1: the lease is in subnet 1, its only reservation is in subnet 2 (the moved-client shape): a viewer scoped to 1 must not read "1 reserved"
+        from tests.conftest import restricted_client
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='AABBCC000013'")
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCC000013'), 0, 2, INET_ATON('10.98.9.33'), 'moved')"
+            )
+        db.commit()
+        restricted_client(client, db, allowed_subnets=[1], role="viewer", username="moved_summary_viewer")
+        text = _summary(client.get("/leases", headers=self.HX).data.decode())
+        assert "reserved" not in text, text
+
+    def test_the_unrestricted_caller_still_counts_every_reservation(self, logged_in_client, db, q206_rows):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='AABBCC000013'")
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCC000013'), 0, 2, INET_ATON('10.98.9.33'), 'moved')"
+            )
+        db.commit()
+        assert "1 reserved" in _summary(logged_in_client.get("/leases", headers=self.HX).data.decode())
 
 
 class TestFilteredEmptyState:
@@ -680,6 +705,19 @@ class TestFilteredEmptyState:
         db.commit()
         body = logged_in_client.get("/leases?subnet=1").data.decode()
         assert "No active leases in Test Network" in body and "Clear filters" in body
+
+    def test_a_time_window_the_route_applied_is_a_filter_even_when_it_has_no_name(
+        self, logged_in_client, db, q206_rows
+    ):
+        # SP-3: ?minutes=-5 is applied (INTERVAL -5 MINUTE), ?minutes=1e3 and 5.5 are ignored (int() raises) - the empty row reads what the ROUTE decided
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+        db.commit()
+        applied = logged_in_client.get("/leases?minutes=-5").data.decode()
+        assert "No active leases in the selected time window" in applied and "Clear filters" in applied
+        for ignored in ("1e3", "5.5", "abc"):
+            body = logged_in_client.get(f"/leases?minutes={ignored}").data.decode()
+            assert "No active leases yet" in body and "Clear filters" not in body, ignored
 
     def test_a_search_is_sanitised_before_it_is_named(self, logged_in_client, q206_rows):
         body = logged_in_client.get("/leases?search=<zzq>").data.decode()

@@ -1205,3 +1205,26 @@ class TestTheListSummariesAndEmptyStatesNameNoHiddenSubnet:
         everything = self._summary(client.get(page, headers=self.HX).data.decode())
         count = lambda s: int(re.match(r"(\d+)", s).group(1))  # noqa: E731
         assert count(scoped) < count(everything), (scoped, everything)
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    def test_a_reservation_in_b_is_not_counted_for_a_lease_in_a(self, client, db, seeded, role):
+        """SP-1 (the second pass's P1): a client whose lease is in A and whose only reservation is in B. The scoped caller's summary has no "reserved" clause; the unrestricted
+        caller's DOES (the branch ran)."""
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX(%s), 0, 2, INET_ATON('10.77.0.99'), 'moved-client')",
+                (A_MAC_HEX,),
+            )
+        db.commit()
+        try:
+            _caller(client, db, "admin_all")
+            everything = self._summary(client.get("/leases", headers=self.HX).data.decode())
+            assert "reserved" in everything, everything
+            _caller(client, db, role)
+            scoped = self._summary(client.get("/leases", headers=self.HX).data.decode())
+            assert "reserved" not in scoped, scoped
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (A_MAC_HEX,))
+            db.commit()

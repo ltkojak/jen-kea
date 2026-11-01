@@ -304,9 +304,16 @@ class TestDevicesSummary:
         text = _summary(logged_in_client.get("/devices?stale=1", headers=self.HX).data.decode())
         assert text.startswith("0 devices") and "not seen for" in text
 
-    def test_no_hand_plural_is_left_in_the_list_pages(self):
+    def test_no_hand_plural_is_left_in_templates(self):
+        # the WHOLE of templates/ (Q206 second pass, SP-4): the `'s' if` spelling of a plural is gone; `|plural` is the one way. The `(s)` spelling is checked on the pages Q206 touched.
         import pathlib
 
+        offenders = [
+            p.name
+            for p in sorted(pathlib.Path("templates").glob("*.html"))
+            if "'s' if" in p.read_text(encoding="utf-8")
+        ]
+        assert not offenders, offenders
         for name in (
             "devices.html",
             "leases.html",
@@ -322,8 +329,7 @@ class TestDevicesSummary:
             "_leases6_results.html",
             "_reservations6_results.html",
         ):
-            text = pathlib.Path("templates", name).read_text(encoding="utf-8")
-            assert "'s' if" not in text and "(s)" not in text, name
+            assert "(s)" not in pathlib.Path("templates", name).read_text(encoding="utf-8"), name
 
 
 class TestDevicesFilteredEmptyState:

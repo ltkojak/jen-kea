@@ -211,3 +211,47 @@ class TestRenderedRows:
             "trailing",
         ]
         assert cells[1][1] == "10.0.0.5"
+
+
+# The WHOLE-TREE sweep (Q206 second pass, SP-2): the first sweep walked six named files and the dashboard's inline copy of the recent-leases table slipped past it - a definition pinned over a list
+# of files. Every core template that prints a MAC or an IP as a text node is a copy control or is here with its reason. Plugin templates are the plugins' own (separate repositories).
+TREE_REVIEWED = {
+    "client.html": "the Investigation page: the identifier is the SUBJECT of the page, and its lease/reservation sub-lists are the page's own detail - a copy control there is a later, separate wish",
+    "timeline.html": "the Timeline page: the identifier is the SUBJECT of the page (a tab of the Investigation)",
+    "edit_reservation.html": "a form editing ONE reservation: the address and MAC are the record being edited",
+    "setup_investigate.html": "the first-hour wizard's own step, a sample row on a page about one client",
+    "_trace_results.html": "the Trace tool's output for ONE client, embedded in the Investigation page",
+    "problems.html": "the Problems inbox: each row's way on is its Investigate link; copying from it is not on Q206's AV3 list (registered, P3)",
+}
+
+
+class TestWholeTree:
+    def _core(self):
+        return sorted(TEMPLATES.glob("*.html"))
+
+    def test_every_core_template_that_prints_a_mac_or_ip_is_a_copy_control_or_reviewed(self):
+        bare = {}
+        for path in self._core():
+            hits = text_nodes_that_print_a_value(path.read_text(encoding="utf-8"))
+            if hits and path.name not in TREE_REVIEWED:
+                bare[path.name] = hits
+        assert not bare, (
+            f"{bare} print a MAC or an IP as plain text - use copy_cell(), or add the template to TREE_REVIEWED with its reason"
+        )
+
+    def test_the_reviewed_list_has_no_stale_entries(self):
+        for name in TREE_REVIEWED:
+            path = TEMPLATES / name
+            assert path.is_file(), f"{name} is on the reviewed list but no longer exists"
+            assert text_nodes_that_print_a_value(path.read_text(encoding="utf-8")), (
+                f"{name} no longer prints a bare MAC or IP - drop it from TREE_REVIEWED"
+            )
+
+    def test_the_dashboard_and_the_row_partials_are_swept_not_listed(self):
+        for name in ["dashboard.html", *ROW_PARTIALS]:
+            assert name not in TREE_REVIEWED
+            assert "import copy_cell" in (TEMPLATES / name).read_text(encoding="utf-8"), name
+
+    def test_the_dashboard_first_render_is_a_copy_control(self):
+        text = (TEMPLATES / "dashboard.html").read_text(encoding="utf-8")
+        assert "{{ copy_cell(l.ip) }}" in text and "{{ copy_cell(l.mac) }}" in text

@@ -3,6 +3,7 @@
 {% from '_subnet_badge.html' import subnet_badge %}
 {% from '_device_badge.html' import device_badge %}
 {% from '_investigate.html' import investigate_link %}
+{% from '_copy.html' import copy_cell %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
@@ -160,7 +161,7 @@
             </div>
             {% endif %}
             <div style="flex:1;min-width:200px;">
-                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Across {{ stats|length }} subnet{{ 's' if stats|length != 1 else '' }}{% if ipv6_summary %} + {{ ipv6_summary.subnet_count }} IPv6{% else %} (IPv4 only){% endif %}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Across {{ stats|length|plural('subnet') }}{% if ipv6_summary %} + {{ ipv6_summary.subnet_count }} IPv6{% else %} (IPv4 only){% endif %}</div>
                 <div class="util-bar">
                     <div class="util-fill" id="total-util-fill" style="width:0%;transition:width 0.5s ease;background:var(--primary);"></div>
                 </div>
@@ -253,12 +254,12 @@
             <tbody>
             {% for l in recent %}
             <tr>
-                <td class="mono">{{ l.ip }}</td>
+                <td class="mono">{{ copy_cell(l.ip) }}</td>
                 <td class="u-86abda">
                     {{ hostname_or_none(l.hostname) }}
                     {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
                 </td>
-                <td class="mono">{{ l.mac }} {{ investigate_link(l.mac, "icon") }}</td>
+                <td class="mono">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
                 <td>{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
                 <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
             </tr>

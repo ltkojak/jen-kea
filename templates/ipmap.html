@@ -19,7 +19,7 @@
     </form>
     {% if pool_blocks %}
     <span class="u-865c33">
-        Pool{{ 's' if pool_blocks|length > 1 else '' }}:
+        {{ 'Pools' if pool_blocks|length > 1 else 'Pool' }}:
         {% for pb in pool_blocks %}{{ pb.start }} — {{ pb.end }}{% if not loop.last %}, {% endif %}{% endfor %}
     </span>
     {% endif %}
