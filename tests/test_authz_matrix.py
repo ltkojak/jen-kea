@@ -1211,10 +1211,14 @@ class TestTheListSummariesAndEmptyStatesNameNoHiddenSubnet:
         """SP-1 (the second pass's P1): a client whose lease is in A and whose only reservation is in B. The scoped caller's summary is EXACTLY what it was before that reservation existed (the
         shared test database may already hold reservations of its own, so the comparison is before/after, not an absolute); the unrestricted caller's summary changes (the branch ran)."""
 
+        unrestricted = (
+            client.application.test_client()
+        )  # two clients: each principal is created once (the user rows are unique by name)
+        _caller(unrestricted, db, "admin_all")
+        _caller(client, db, role)
+
         def summaries():
-            _caller(client, db, "admin_all")
-            everything = self._summary(client.get("/leases", headers=self.HX).data.decode())
-            _caller(client, db, role)
+            everything = self._summary(unrestricted.get("/leases", headers=self.HX).data.decode())
             return everything, self._summary(client.get("/leases", headers=self.HX).data.decode())
 
         before_all, before_scoped = summaries()
