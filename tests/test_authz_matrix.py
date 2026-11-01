@@ -1208,8 +1208,16 @@ class TestTheListSummariesAndEmptyStatesNameNoHiddenSubnet:
 
     @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
     def test_a_reservation_in_b_is_not_counted_for_a_lease_in_a(self, client, db, seeded, role):
-        """SP-1 (the second pass's P1): a client whose lease is in A and whose only reservation is in B. The scoped caller's summary has no "reserved" clause; the unrestricted
-        caller's DOES (the branch ran)."""
+        """SP-1 (the second pass's P1): a client whose lease is in A and whose only reservation is in B. The scoped caller's summary is EXACTLY what it was before that reservation existed (the
+        shared test database may already hold reservations of its own, so the comparison is before/after, not an absolute); the unrestricted caller's summary changes (the branch ran)."""
+
+        def summaries():
+            _caller(client, db, "admin_all")
+            everything = self._summary(client.get("/leases", headers=self.HX).data.decode())
+            _caller(client, db, role)
+            return everything, self._summary(client.get("/leases", headers=self.HX).data.decode())
+
+        before_all, before_scoped = summaries()
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
@@ -1218,12 +1226,9 @@ class TestTheListSummariesAndEmptyStatesNameNoHiddenSubnet:
             )
         db.commit()
         try:
-            _caller(client, db, "admin_all")
-            everything = self._summary(client.get("/leases", headers=self.HX).data.decode())
-            assert "reserved" in everything, everything
-            _caller(client, db, role)
-            scoped = self._summary(client.get("/leases", headers=self.HX).data.decode())
-            assert "reserved" not in scoped, scoped
+            after_all, after_scoped = summaries()
+            assert after_all != before_all, (before_all, after_all)  # the unrestricted caller reads the new reservation
+            assert after_scoped == before_scoped, (before_scoped, after_scoped)  # the scoped caller reads nothing of it
         finally:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (A_MAC_HEX,))
