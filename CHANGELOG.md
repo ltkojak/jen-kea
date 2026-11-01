@@ -2,6 +2,32 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.70.0-beta.1] - 2026-11-01
+
+Beta. The first of the UI releases: what you read on the lease, device, reservation and subnet pages, and the colour and time you read it in. One MINOR step (a new capability and one migration, number 37, which adds a nullable column to `subnet_notes`), no change to any Kea behaviour, no new route that reaches a Kea host. `docs/upgrading.md` gains a 5.70.0-beta.1 section at its head; the page is not restarted. It follows 5.69.4, the stable release; a beta box is offered this one and a stable box is not.
+
+**A subnet's badge colour is chosen per subnet, from seven.** The badge that names a subnet - on Leases, Devices, Reservations, the dashboard and Search - used to take its colour from the subnet's *name*: three names the maintainer's own network happened to use were blue or green, and any further name got no colour at all. It now takes it from a colour stored against the subnet's number, in the same row that holds the subnet's note: blue, green, red, orange, yellow, purple or mono. On the Subnets page an admin clicks the name on a card and a row of seven swatches opens, each one showing the subnet's own name in that colour; the pick is saved at once and the badge changes in place. A subnet with no pick is blue, so a subnet that matched one of those three names looks as it did, and the rest, which had no colour, are blue until someone chooses. Blue and green are, byte for byte, the declarations the old rules carried; the remaining five are built the same way, and yellow and purple are mixed toward the text colour so they stay readable on all seven themes (a test measures every theme). A viewer sees the badge and no picker, and a subnet an account may not see has no badge, no colour and no link for it.
+
+**A subnet card shows its usage, the way the dashboard counts it.** Active leases, and the pool: used of size with a percentage and a small meter that turns amber at the alert threshold and red when the pool is full. The numbers are the dashboard's own - a lease counts when it is active, a pool's size is the addresses its ranges hold - so the card and the dashboard agree. When Kea could not be read the card says "unavailable", and a subnet with no pool says "no pool".
+
+**Every time on a page is a time you can read in your own zone.** The four time formats the pages use now print a `<time>` element whose text is the UTC wording they always printed. A small script shows it in the browser's own zone by default (`2037-06-16 00:00 GMT+12`, with the UTC reading in the tooltip) and the **Times** choice beside the theme - in the desktop palette menu and in the phone sheet - switches the whole page to UTC and back. Like the theme it belongs to the browser, not the account. It also runs on every list that refreshes in place (leases, devices, reservations, the dashboard), and the two strings the dashboard builds in the browser use it. A page with scripts off keeps the UTC text.
+
+**The select-all box and its count on Leases are honest.** A lease with a reservation never could be released from that list, and used to show an empty cell where the checkbox was. It now shows a disabled box that says why, and "Select all" and the "N selected" count cover the boxes that can be ticked - the count no longer includes rows the action would skip.
+
+**Delete stale leases moved to the foot of the table, as a quiet secondary button.** It sat in the filter bar, a red button one slip from Search. It is now under the list, grey, with the same confirmation and the same route; a viewer has none, as before.
+
+**Delete subnet moved behind Edit.** The red button that sat on every subnet card is now the last section of the edit page, with the same confirmation, the same route and the same refusals (a subnet that still has leases or reservations is not deleted). The card keeps Edit.
+
+**The subnet card lists its DHCP options.** A collapsed "Options" line on each card ("3 here · 2 inherited") opens to the options in effect for the subnet, read by the same reader as the Options page, so the two cannot disagree. Admins see it; a viewer does not.
+
+**The subnet badge is a filter.** On Leases, Devices and Reservations the badge in a row is a link to the same page with `?subnet=` set to that subnet, keeping the search, sort and status you had and starting again at page one. From the dashboard's recent leases and from Search it goes to the lease list for the subnet. An account that may see only some subnets gets a link only for its own.
+
+**Durations read as people say them.** The lease time and the pool timers on the subnet pages, which showed "3600" or "1.0h", read "1 h", "90 min", "2 h 30 min" or "1 d 12 h".
+
+**Counts agree with their noun, and an empty hostname says so.** "1 lease", "145 leases", "0 leases" where pages used to print "lease(s)", and a host with no name shows "no hostname" in muted text instead of a dash; sorting by hostname puts the unnamed together.
+
+**Two guards against losing work.** Under Settings -> Kea, an endpoint reached over http while the Kea API is https, and that takes the Kea API's password, now says so where "Inherit the Kea API password" is chosen, and the save's confirmation repeats it: the inherited password then travels to it in clear text. The Author Kea Config page keeps the form you typed in this browser tab as a draft (nothing is stored on the server), so a password confirmation that aged out in the middle of an apply no longer costs you the form; the page says when it restored one and offers "Discard draft". The draft is dropped when the config is written.
+
 ## [5.69.4] - 2026-10-31
 
 Stable. A PATCH to 5.69.3: no new feature and no migration, shipped straight to the stable channel after the pre-release pass (Opus's executing pass on the 5.69.3 tag, ChatGPT's review of it, and the author's own second pass, one Q). `docs/upgrading.md` gains a 5.69.4 section at its head; the page is not restarted (that happens on the first release after a promotion).

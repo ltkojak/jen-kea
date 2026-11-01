@@ -10,6 +10,18 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## Badge colours, times in your own zone, and a quieter Leases and Subnets page
+
+One step (5.70.0-beta.1). It adds one migration (37, a nullable column on `subnet_notes`, applied automatically and safe to run twice) and changes nothing about how Jen talks to Kea. Nothing needs a manual step.
+
+**Badge colours are chosen per subnet.** Until you choose, every subnet badge is blue: a subnet whose name matched one of the three old rules looks as it did, and a subnet that had no colour is now blue. On Subnets, click a subnet's name on its card and pick one of seven. A viewer sees the colours and cannot change them.
+
+**Times follow your browser's zone.** Pages now show a time in the zone of the browser reading it (with the UTC reading in the tooltip). If you would rather see UTC everywhere, open the palette menu - on a phone, the menu sheet - and choose **Times -> In UTC**. The choice is kept in that browser, like the theme.
+
+**On Leases, a reserved lease shows a disabled box**, and "Select all" counts the leases that can be released. **Delete stale leases** is now a grey button under the table. **Delete subnet** is now at the foot of the subnet's Edit page and no longer on its card. A subnet's badge, wherever it appears in a list, filters the list to that subnet.
+
+**Under Settings -> Kea**, an endpoint that takes the Kea API's password but is reached over http while the Kea API is https is marked with a warning, and so is the confirmation after saving it. The Author Kea Config page keeps your typed form in the tab if the password confirmation interrupts an apply.
+
 ## A subnet-restricted account sees only its own subnets; two more routes ask for a recent password; a mapped IPv6 address is not the IPv4 address it wraps
 
 One step (5.69.4). It adds no migration. Two things below can refuse something that used to be accepted, and they are named so a refusal is not a surprise.
