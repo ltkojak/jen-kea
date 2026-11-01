@@ -212,7 +212,7 @@ class TestTheAuthoredFormSurvivesTheStepUp:
         page.wait_for_url("**/auth/reauth**", timeout=10000)
         state["stale"] = False
         page.fill("#f-password", ADMIN_PASSWORD)
-        page.click("button[type=submit]")
+        page.click('form[action$="/auth/reauth"] button[type=submit]')
         page.wait_for_url("**/settings/infrastructure/author-kea/dhcp4", timeout=10000)
         expect(page.locator("#f-interfaces")).to_have_value("eth7")
         expect(page.locator("#author-draft-note")).to_be_visible()

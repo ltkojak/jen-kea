@@ -170,6 +170,9 @@ class TestTimesInTheReadersZone:
         conn = _kea_db()
         try:
             with conn.cursor() as cur:
+                cur.execute(
+                    "SET time_zone = '+00:00'"
+                )  # the stored instant is 12:00 UTC whatever zone the runner's own clock keeps
                 cur.execute("DELETE FROM lease4 WHERE hwaddr=UNHEX('AABBCCDDEE62')")
                 cur.execute(
                     "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, hostname, state) "
