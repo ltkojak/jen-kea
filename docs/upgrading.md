@@ -10,6 +10,12 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## American spelling throughout
+
+One step (5.70.0-beta.3). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step.
+
+**Every page, message and document is written in American English.** The badge color picker on the Subnets card, the theme form's hex color error, this page's headings and the rest of the pages and documentation use the American forms (color, gray, license, canceled, acknowledgment). Nothing you have stored changes: the keys Jen writes to its database and its configuration keep their names. A test now refuses a British spelling anywhere in Jen's own tree, so the change holds.
+
 ## Notices instead of pop-up boxes, a copy click on every MAC and IP, a summary that follows the filter, and a page size that is remembered
 
 One step (5.70.0-beta.2). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step.

@@ -2,6 +2,12 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.70.0-beta.3] - 2026-11-01
+
+Beta. One change, everywhere: Jen is written in American English. No migration, no route and nothing about how Jen talks to Kea changes.
+
+**The spelling is American throughout.** The first UI beta brought a badge color picker whose title spelled color with a u, and the word was not alone: 959 British spellings sat in the pages, the messages, the code's comments, the tests and the documentation - color and behavior with a u, recognize and initialize with an s, labeled and canceled with two l's, gray with an e, license with a c, acknowledgment and judgment with an extra e, afterward and toward with an s, and some seventy more forms. Every one is now the American form - the Subnets card's picker says "Choose this subnet's badge color", the theme form's error says "hex color", the upgrading page's heading says "Badge colors", and so on through 220 files - and a test, `tests/test_american_spelling.py`, walks the whole tree on every push with the table of words and fails on the first British form it finds, so the spelling cannot drift back. The table is a list of words, never a suffix rule, so "advertise", "promise" and "exercise" are safe. Twelve spellings stay by design because they are contracts rather than sentences: a stored settings key, a library's own exception name, an API field's name as it shipped, the Wake & Actions plugin's route and sentence that Jen's tests drive, and the Kea helper's reply field that Jen reads; each is listed in the test with its reason, and the test fails the day one of them no longer exists. The bundled plugins and `jen-kea-helper` are excluded from the pass - a plugin's spelling is fixed in its own release, and a change to the helper is a helper build - and the test prints how many British forms each still carries.
+
 ## [5.70.0-beta.2] - 2026-11-01
 
 Beta. The second of the UI releases: the pop-up boxes the browser draws are gone, a MAC or an IP is copied with a click, the list pages say what is on them and what to do when nothing is, and the rows-per-page choice stays chosen. No migration, no new route, nothing that touches Kea or the configuration. `docs/upgrading.md` gains a 5.70.0-beta.2 section at its head; the page is not restarted.
