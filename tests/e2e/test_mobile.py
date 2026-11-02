@@ -1162,7 +1162,7 @@ class TestTapATimeForItsUtcReading:
         """The phone shows few columns and the times sit in the hidden ones: put one `<time>` exactly as the server prints it into a cell that is showing (the handler is delegated, so it does not care where)."""
         page.evaluate(
             """() => {
-                const td = document.querySelector('table.rowlist tbody tr td:not(.col-check):not(.hide-mobile):not(.hide-tablet)');
+                const td = document.querySelector('table.rowlist tbody tr td[data-m="primary"]');
                 const t = document.createElement('time');
                 t.id = 'q208-time';
                 t.setAttribute('data-jen-time', 'fmt');
