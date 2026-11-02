@@ -117,14 +117,14 @@ def _load_or_create_key() -> bytes:
                     f"MFA encryption key at {key_file} exists but could not be "
                     f"read/parsed ({e}). Refusing to overwrite it — restore the "
                     f"correct key from a backup, or delete this file to have a "
-                    f"new one generated (which orphans existing enrolments)."
+                    f"new one generated (which orphans existing enrollments)."
                 ) from e
             raise MfaKeyUnavailable(
                 f"MFA encryption key at {key_file} exists but is malformed "
                 f"(length {len(existing)}, expected 44). Refusing to overwrite "
                 f"it — restore the correct key from a backup, or delete this "
                 f"file to have a new one generated (which orphans existing "
-                f"enrolments)."
+                f"enrollments)."
             )
         try:
             new_key = Fernet.generate_key()

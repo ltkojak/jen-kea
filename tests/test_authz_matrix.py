@@ -621,7 +621,7 @@ IPMAP_CELLS = [
 
 @pytest.mark.parametrize("role,path", IPMAP_CELLS)
 def test_ipmap_cell(client, db, seeded, role, path):
-    """v5.68.0-beta.22 (Q157, item 8): the IP map is an allowlisted route (a subnet-scoped visualisation, not a per-client diagnostic), so its cells
+    """v5.68.0-beta.22 (Q157, item 8): the IP map is an allowlisted route (a subnet-scoped visualization, not a per-client diagnostic), so its cells
     live here rather than in SURFACES. It used to fall back to the FIRST CONFIGURED subnet for a user who may see none; a caller who must not see B
     sees no B marker on either spelling, and the account whose access list names only a removed subnet sees nothing of any subnet."""
     headers = _caller(client, db, role)
@@ -813,7 +813,7 @@ ROUTE_ALLOWLIST = {
     "leases.delete_stale_leases": "bulk admin action, subnet-restricted — tests/test_leases.py",
     "leases.release_lease": "single-lease admin action, subnet-restricted — tests/test_leases.py",
     "leases.bulk_release_leases": "bulk admin action, subnet-restricted — tests/test_leases.py",
-    "leases.ipmap": "subnet-scoped visualisation of the leases page's own data — the cells in test_authz_matrix.py::TestTheIpMapCells and tests/test_leases.py::TestIpMapForAUserWhoMaySeeNoSubnet",
+    "leases.ipmap": "subnet-scoped visualization of the leases page's own data — the cells in test_authz_matrix.py::TestTheIpMapCells and tests/test_leases.py::TestIpMapForAUserWhoMaySeeNoSubnet",
     # Reservation CRUD — add_subnet_restriction()/assert_subnet_access(); tests/test_reservations.py.
     "reservations.reservations": "list page, subnet-restricted at the query — tests/test_reservations.py",
     "reservations.add_reservation_post": "write route, subnet-restricted — tests/test_reservations.py",
@@ -838,7 +838,7 @@ ROUTE_ALLOWLIST = {
     "dashboard.api_alert_summary": "aggregate counts, subnet-filtered — tests/test_dashboard.py",
     "dashboard.api_recent_leases": "recent-N aggregate, subnet-filtered — tests/test_dashboard.py",
     "dashboard.prometheus_metrics": (
-        "a scrape endpoint has no user: it is authorised by the metrics token or the open flag, and it emits EVERY subnet's name, CIDR and counts. Who may hold the token or set the flag is the "
+        "a scrape endpoint has no user: it is authorized by the metrics token or the open flag, and it emits EVERY subnet's name, CIDR and counts. Who may hold the token or set the flag is the "
         "scope (Q204 AT1 d): the metrics card and `save_metrics_settings` are for an account that may see every subnet (tests/test_authz_matrix.py::TestTheBranchesRun)"
     ),
     # Subnet management — admin-scoped, not a per-client surface.

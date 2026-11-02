@@ -711,7 +711,7 @@ def _m017_encrypt_mfa_secrets(db):
     code from it every 30s), so the fix is encryption with a key kept
     outside the database — see jen/services/crypto.py. This migration
     wraps every existing plaintext value with encrypt_secret(), producing
-    a "v1:"-prefixed Fernet token. New enrolments encrypt at INSERT time
+    a "v1:"-prefixed Fernet token. New enrollments encrypt at INSERT time
     (jen/routes/mfa_routes.py); verification decrypts on read
     (jen/services/mfa.py::verify_totp), with a legacy-plaintext passthrough
     so a row this migration somehow hasn't reached still works.
@@ -1030,7 +1030,7 @@ def _m024_webauthn_transports_aaguid(db):
     v5.31.0 (Q31) — passkeys go live as a second factor. The
     `webauthn_credentials` table has existed since the v4.2.0 baseline
     (credential_id, public_key, sign_count, name); two optional columns
-    join it: `transports` (JSON list the browser reported at enrolment —
+    join it: `transports` (JSON list the browser reported at enrollment —
     handed back in `allowCredentials` so the browser picks the right
     authenticator without prompting for every kind) and `aaguid` (the
     authenticator model id, informational). Both nullable, so every

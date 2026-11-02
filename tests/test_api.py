@@ -371,7 +371,7 @@ class TestHealthApi:
         assert util["status"] in ("ok", "skip")
 
 
-class TestTheApiRefusesASubnetFilterItCannotHonour:
+class TestTheApiRefusesASubnetFilterItCannotHonor:
     """v5.69.0-beta.5 (Q174): `?subnet=` that matched nothing was dropped, so a typo returned everything in scope; and /health/kea told a scoped key how many subnets the install has."""
 
     @staticmethod

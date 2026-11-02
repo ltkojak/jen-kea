@@ -66,7 +66,7 @@ class TestBothRoutesHoldTheLock:
                 "prepare_kea_ca",
                 "discard_prepared_kea_ca",
                 "forget_stale_kea_records",
-                "save_extra_servers",  # Q199 (AO2): the save drops a removed server's records - serialised with the rotation, the setup and Forget that read them
+                "save_extra_servers",  # Q199 (AO2): the save drops a removed server's records - serialized with the rotation, the setup and Forget that read them
                 "save_infra_ssh",  # Q202 (AR9 e): the primary's SSH host is server 1's `ssh_host` - the one writer that was outside the lock its five siblings hold
             }
         )
@@ -508,7 +508,7 @@ def _never_written(monkeypatch):
 
 class TestAProbeThatFailsAfterAReplacementPutsTheWorkingSocketBack:
     """The executed P1 of beta.17: `setup_direct_socket` REPLACES the daemon's http socket in place; when the new one does not answer the old code returned with the working socket gone
-    and Jen still dialling it. The whole list - and the certificate - go back, exactly as for a refused write."""
+    and Jen still dialing it. The whole list - and the certificate - go back, exactly as for a refused write."""
 
     def _silent(self, monkeypatch):
         monkeypatch.setattr(
@@ -1731,7 +1731,7 @@ def _setup_worlds(test):
 
 class TestTheWorldsOfTheSetupHarness:
     """AH0 through `setup_direct_socket` (https and http) and `remove_direct_socket`: every world of the matrix, with T6 (no ordinary action replaces a damaged identity file) and T7 (a CA is created
-    only in the uninitialised world) judged from the files, and the setup harness's own T1 / T4 in its teardown."""
+    only in the uninitialized world) judged from the files, and the setup harness's own T1 / T4 in its teardown."""
 
     FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
 
@@ -1751,11 +1751,11 @@ class TestTheWorldsOfTheSetupHarness:
                 "T6: a damaged CA, and everything beside it, is byte-equal"
             )
             return
-        if world.klass == "uninitialised":
+        if world.klass == "uninitialized":
             assert kt.ca_state() == ("ok", ""), "T7: the one world a CA is created in"
             return
         assert (after_identity["ca_crt"], after_identity["ca_key"]) == ca_before, (
-            "T7/T6: setup never replaces or creates a CA outside the uninitialised world"
+            "T7/T6: setup never replaces or creates a CA outside the uninitialized world"
         )
         if matrix.client_damaged(world):
             if world.state == "unreadable":
@@ -1808,7 +1808,7 @@ class TestTheWorldsOfTheSetupHarness:
 
 class TestQ197TheNameWorldsOfTheHttpsSetup:
     """Q197 (AM2): `verify_issued`'s refusal of a leaf's NAME is `NameRefused`, not `CaDamaged`. The CA is healthy: the page and Health say so, the sentence names the SAN that failed (the bind address OR
-    the SSH host's name), nothing is changed on the host, and the acknowledgement for a damaged CA is never named."""
+    the SSH host's name), nothing is changed on the host, and the acknowledgment for a damaged CA is never named."""
 
     FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
 
@@ -1834,11 +1834,11 @@ class TestQ197TheNameWorldsOfTheHttpsSetup:
         assert "Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for 10.0.0.5" in texts, (
             texts
         )
-        assert "no acknowledgement is needed - the CA is not damaged" in texts
+        assert "no acknowledgment is needed - the CA is not damaged" in texts
         assert "Rotate Kea CA" in texts and "Nothing was changed on kea-a" in texts
         assert "damaged (" not in texts and kt.DAMAGED_CA_ADVICE not in texts
         self._nothing_was_sent(tls_world)
-        assert kt.ca_state() == ("ok", ""), "the CA is still healthy afterwards"
+        assert kt.ca_state() == ("ok", ""), "the CA is still healthy afterward"
 
     def test_the_sentence_names_the_ssh_host_when_that_is_the_name_that_failed(self, tls_world):
         """The bind address is an IP the CA does not constrain by DNS subtrees; the SSH host's DNS name is outside the permitted domain: THAT is the SAN to name, not only the bind."""
@@ -1851,7 +1851,7 @@ class TestQ197TheNameWorldsOfTheHttpsSetup:
         assert "for 10.0.0.5" not in texts, "the bind address is not the name that failed"
         self._nothing_was_sent(tls_world)
 
-    def test_the_acknowledgement_checkbox_exists_only_for_a_damaged_ca(self, tls_world):
+    def test_the_acknowledgment_checkbox_exists_only_for_a_damaged_ca(self, tls_world):
         kt = tls_world["tls"]["tls"]
         self._put_ca(kt, "name-constraints-ip-outside")
         summary = infra._kea_ca_summary()
@@ -1861,7 +1861,7 @@ class TestQ197TheNameWorldsOfTheHttpsSetup:
             "the checkbox sits only inside the damaged-CA branch of the page"
         )
 
-    def test_a_damaged_ca_still_gets_the_damaged_sentence_and_the_acknowledgement(self, tls_world):
+    def test_a_damaged_ca_still_gets_the_damaged_sentence_and_the_acknowledgment(self, tls_world):
         kt = tls_world["tls"]["tls"]
         self._put_ca(kt, "eku-anyeku")
         _post(_inner(infra.setup_direct_socket), **self.FORM)
@@ -2072,10 +2072,10 @@ class TestTheSecondPassOfQ197:
         assert (
             "Rotate Kea CA" not in shape
             and "change the address saved for it" in shape
-            and "no acknowledgement is needed" in shape
+            and "no acknowledgment is needed" in shape
         )
         constraint = kea_tls.name_refusal_remedy(["10.0.0.5"])
-        assert "Rotate Kea CA" in constraint and "no acknowledgement is needed" in constraint
+        assert "Rotate Kea CA" in constraint and "no acknowledgment is needed" in constraint
         assert "Rotate Kea CA" not in kea_tls.name_refusal_remedy(["10.0.0.5"], rotating=True), (
             "Rotate issues from a NEW CA: a refusal there is the name, never the CA"
         )

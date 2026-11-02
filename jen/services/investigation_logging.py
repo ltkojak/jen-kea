@@ -26,8 +26,8 @@ v5.68.0-beta.9 (Q144): each index entry carries the FILE state, the DAEMON state
 a server removed from Jen while an entry exists keeps it (the Health row says how to restore it by hand) and the settings routes refuse
 to remove a server that has one, and every adoption or refused removal writes an audit row.
 
-v5.68.0-beta.23 (Q158): the daemon is OBSERVED, never inferred. Six betas corrected this state machine at the level of acknowledgements (what a call
-returned), and each left a case where the acknowledgement and the truth differ - the sharpest: a `config-reload` Kea APPLIED whose HTTP reply was
+v5.68.0-beta.23 (Q158): the daemon is OBSERVED, never inferred. Six betas corrected this state machine at the level of acknowledgments (what a call
+returned), and each left a case where the acknowledgment and the truth differ - the sharpest: a `config-reload` Kea APPLIED whose HTTP reply was
 lost came back as a failure, the file was put back, the entry dropped, and the daemon stayed at DEBUG 55 with nothing left that knew. Kea answers
 the question directly - `config-get` returns the RUNNING daemon's loggers, severity, debuglevel and user-context included - so `daemon_logger` reads
 it, `observe` turns it into the entry's `daemon` field (debug / restored / other / unknown) after every reload and every restart, and ONE rule
@@ -137,7 +137,7 @@ _legacy_logged: set = set()
 
 def _is_legacy_entry(e) -> bool:
     """An entry written before beta.9 (no file / daemon) or beta.23 (no observations): it carries none of the keys those releases added. `_record`
-    normalises it; anything else that lacks `file` or `daemon` is damaged (v5.68.0-beta.26, Q161, item 3)."""
+    normalizes it; anything else that lacks `file` or `daemon` is damaged (v5.68.0-beta.26, Q161, item 3)."""
     return isinstance(e, dict) and not any(k in e for k in _LEGACY_ABSENT_KEYS)
 
 
@@ -217,7 +217,7 @@ def _record() -> dict:
             for sid, e in data["servers"].items():
                 if (
                     "file" not in e or "daemon" not in e
-                ):  # the defined legacy shape (Q161): normalised, and said once per server
+                ):  # the defined legacy shape (Q161): normalized, and said once per server
                     e.setdefault("file", "debug")
                     e.setdefault("daemon", "debug")
                     e.setdefault("pending", None)
@@ -686,7 +686,7 @@ def conflict_sentence(existing: dict) -> str:
             "(or remove it once you know it is stale)"
         )
     return (
-        f"the Kea host reports an unresolved investigation session Jen does not recognise (armed {existing.get('armed_at') or 'at an unknown time'}, until "
+        f"the Kea host reports an unresolved investigation session Jen does not recognize (armed {existing.get('armed_at') or 'at an unknown time'}, until "
         f"{existing.get('until') or 'an unknown time'}); Jen will not overwrite it - it restores itself at its deadline, or run `{HOST_COMMAND}` on that host"
     )
 
@@ -803,7 +803,7 @@ CONTRADICTION = (
     "the daemon Kea's API answers for is not running the file Jen wrote (api_url and ssh_host may not be the same Kea)"
 )
 UNSTORED = "Jen could not record this (its database did not take the write); the ten-minute scan reads Kea's running logger and finishes it."
-#: v5.68.0-beta.28 (Q164): what is said when the settings table itself cannot be read (the record's `unavailable` flavour of damaged).
+#: v5.68.0-beta.28 (Q164): what is said when the settings table itself cannot be read (the record's `unavailable` flavor of damaged).
 SETTINGS_UNAVAILABLE = "Jen's settings could not be read (its database is unavailable)"
 
 
@@ -1273,7 +1273,7 @@ def _restore_core(server: dict, record: dict, now: datetime | None, summary: str
 
 def _daemon_phase(server: dict, record: dict, entry: dict, lines: list[str], *, fresh: bool) -> dict:
     """The daemon step of a restore, bounded (F1): up to RELOAD_TRIES reloads, then ONE restart per entry, then nothing. `fresh` is the call that
-    wrote the file back: a reload Kea refuses may fall back to the restart at once (the documented behaviour of Turn off and the expiry), once."""
+    wrote the file back: a reload Kea refuses may fall back to the restart at once (the documented behavior of Turn off and the expiry), once."""
     sid = str(server.get("id"))
     tries = int(entry.get("reload_tries") or 0)
     restarted = bool(entry.get("restarted"))
@@ -1810,7 +1810,7 @@ def by_hand_damaged(entry: dict) -> str:
     found = (
         f"revision {revision} (Servers → Config history → /servers/{server_id}/config-history/{revision})"
         if revision and server_id
-        else "the revision recorded just before the one summarised “investigation logging on” (none is on record for this server — "
+        else "the revision recorded just before the one summarized “investigation logging on” (none is on record for this server — "
         "use a backup of the file instead)"
     )
     return (
@@ -2326,7 +2326,7 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                     # v5.68.0-beta.23 (Q158): the FILE is clean. The scan reads the DAEMON too - a running logger at DEBUG carrying the
                     # jen-investigation marker with no entry is the "file restored, daemon DEBUG, nothing owed" state a lost reload reply used
                     # to leave, whatever caused it. It is indexed with the daemon step owed and finished below (reload, then the documented
-                    # restart), and the daemon is observed again afterwards.
+                    # restart), and the daemon is observed again afterward.
                     seen = daemon_logger(server)
                     if (
                         record["servers"].get(sid) is None

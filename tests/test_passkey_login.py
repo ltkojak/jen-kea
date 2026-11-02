@@ -165,7 +165,7 @@ class TestLoginCeremony:
             cur.execute("SELECT COUNT(*) c FROM audit_log WHERE action='PASSKEY_VERIFY' AND details=%s", (USERNAME,))
             assert cur.fetchone()["c"] == 1
 
-    def test_finish_honours_remember_device(self, client, passkey_user, monkeypatch, db):
+    def test_finish_honors_remember_device(self, client, passkey_user, monkeypatch, db):
         monkeypatch.setattr("jen.services.passkeys.webauthn.verify_authentication_response", _fake_auth(4))
         _login(client)
         _begin(client)

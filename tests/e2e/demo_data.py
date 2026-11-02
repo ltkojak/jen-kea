@@ -145,7 +145,7 @@ RESERVATION_NOTES = [
 # the picture.
 #
 # v5.65.8 (Q97 k): the committed list holds only the GENERIC marker (the maintainer's real
-# address range). The personal names - family first names, surname, domain - used to be spelt
+# address range). The personal names - family first names, surname, domain - used to be spelled
 # out here, which published in a public repo exactly what the guard exists to keep out of a
 # picture. They now come from the CI secret JEN_DOCS_FORBIDDEN (comma-separated), appended
 # when present. (`git log` keeps the old file; history is not rewritten.)
@@ -344,7 +344,7 @@ def lease_history_rows(rng: random.Random | None = None, days: int = 30) -> list
 def alert_log_rows(rng: random.Random | None = None) -> list[dict]:
     """Ten rows over the last day: kea up, four new-lease, two
     new-reservation, one new-device, a daily summary, and a kea down->up
-    pair — the standardised alert kinds (jen/services/alerts.py)."""
+    pair — the standardized alert kinds (jen/services/alerts.py)."""
     rng = rng or random.Random(20260921)
     now = datetime.now(timezone.utc)
     kinds = (

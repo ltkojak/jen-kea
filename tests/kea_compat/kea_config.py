@@ -36,7 +36,7 @@ def build(
     """`severity`/`debuglevel` set the kea-dhcp4 logger (the log-level probe, Q135, boots one daemon per level);
     `probe=True` adds what that probe needs on top of the compat config: two client classes whose tests read the
     vendor and user class options, and `store-extended-info` so the relay-agent options reach the lease row.
-    `ddns=True` (v5.68.0-beta.9, Q144) turns DNS updates on towards a kea-dhcp-ddns that is NOT running, so the daemon logs its own
+    `ddns=True` (v5.68.0-beta.9, Q144) turns DNS updates on toward a kea-dhcp-ddns that is NOT running, so the daemon logs its own
     DHCP4_DDNS_REQUEST_SEND_FAILED line - the probe records what that line carries."""
     backend = {"type": "mysql", "host": db_host, "name": db_name, "user": db_user, "password": db_pass}
     cfg = {

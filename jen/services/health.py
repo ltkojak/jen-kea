@@ -274,7 +274,7 @@ def _kea_time_sync(ctx) -> Check:
     ahead = "ahead of" if offset > 0 else "behind"
     if secs > 300:
         c.status = "fail"
-        c.detail = f"Kea clock is {secs:.0f}s {ahead} Jen — HA and lease timers assume synchronised clocks"
+        c.detail = f"Kea clock is {secs:.0f}s {ahead} Jen — HA and lease timers assume synchronized clocks"
     elif secs > 30:
         c.status = "warn"
         c.detail = f"Kea clock is {secs:.0f}s {ahead} Jen"
@@ -344,7 +344,7 @@ def _debug_logging_left_on(ctx) -> Check:
         for e in entries
         if not e["removed"] and not e["marker_invalid"] and (e["overdue"] or (e["error"] and e["remaining_s"] == 0))
     ]
-    # v5.68.0-beta.30 (Q167): what the Kea HOST reports - an unresolved session Jen does not recognise (never overwritten), a restore it could not confirm from Kea's own log after
+    # v5.68.0-beta.30 (Q167): what the Kea HOST reports - an unresolved session Jen does not recognize (never overwritten), a restore it could not confirm from Kea's own log after
     # ten attempts, and a restoration timer that has stayed down for three sweeps (the first two only warn: Jen asks the helper to start it again every sweep)
     conflicted = [e for e in entries if e["host_conflict"] and not e["removed"]]
     needs_hand = [e for e in entries if e["host_needs_hand"] and not e["removed"]]
@@ -1262,7 +1262,7 @@ def _kea_tls_expiry(ctx) -> Check:
         plain = [label for label in left_behind if label not in twinned]
         if plain:
             c.detail += (
-                f" — {', '.join(plain)} is parked and its daemon still runs a certificate from the CA Jen replaced: when it is dialled over https again, "
+                f" — {', '.join(plain)} is parked and its daemon still runs a certificate from the CA Jen replaced: when it is dialed over https again, "
                 "remove the direct socket and set it up again (see Servers)"
             )
         if twinned:
@@ -1308,7 +1308,7 @@ def _kea_tls_expiry(ctx) -> Check:
 
 def _forgotten_labels() -> tuple[list[str], list[str], list[str]]:
     """(forgotten, pending, live): the `record-forgotten` incidents whose files are gone, those whose files Jen still holds (Q200, AP2: the fact is written BEFORE the deletion), and those whose files
-    Jen still holds while the server is dialled over https again - a LIVE record (Q201 AQ6 g; Q202 AR9 h: three lists, not two)."""
+    Jen still holds while the server is dialed over https again - a LIVE record (Q201 AQ6 g; Q202 AR9 h: three lists, not two)."""
     from jen.services import kea as _kea
     from jen.services import kea_changeset, kea_tls
 
@@ -1321,7 +1321,7 @@ def _forgotten_labels() -> tuple[list[str], list[str], list[str]]:
         if not still:
             done.append(label)
             continue
-        # classified by the incident's OWN state (Q201 AQ6 g): files still here and the server dialled over https again is a LIVE record - "press Forget" would never touch it
+        # classified by the incident's OWN state (Q201 AQ6 g): files still here and the server dialed over https again is a LIVE record - "press Forget" would never touch it
         server = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == str(i.get("server_id"))), None)
         try:
             https_now = bool(server) and (_kea.configured_url(server, str(i.get("service"))) or "").lower().startswith(

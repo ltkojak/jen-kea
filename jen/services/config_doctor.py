@@ -273,7 +273,7 @@ def _check_reservation_inside_pool(dhcp4_cfg, hosts) -> list[Finding]:
                 f"/reservations?search={ip}",
                 (
                     "reservations-out-of-pool is on for this subnet, which tells Kea every reservation sits "
-                    "outside the dynamic range — this one doesn't, and Kea will refuse to honour it."
+                    "outside the dynamic range — this one doesn't, and Kea will refuse to honor it."
                     if out_of_pool
                     else "Common and fine — Kea excludes a reserved address from dynamic allocation automatically. "
                     "Flagged only so you know it's there."
@@ -813,7 +813,7 @@ def _check_credential_endpoints(jen_cfg) -> list[Finding]:
                     fix_url="/settings/kea",
                     why=(
                         "A saved password is used at its own endpoint, or by another daemon of the same host - Kea6 and D2 are other daemons of one Kea. A daemon on a DIFFERENT host never receives "
-                        "its neighbour's password: until it has its own, Jen cannot authenticate to it."
+                        "its neighbor's password: until it has its own, Jen cannot authenticate to it."
                     ),
                 )
             )

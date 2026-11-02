@@ -68,7 +68,7 @@ class TestPurgeHistory:
         alerts.purge_history()
         assert {t: _count(t) for t in TABLES} == dict.fromkeys(TABLES, 1)
 
-    def test_the_settings_are_honoured_per_table(self, old_and_new):
+    def test_the_settings_are_honored_per_table(self, old_and_new):
         set_global_setting("history_retention_days", "500")
         set_global_setting("events_retention_days", "500")
         set_global_setting("alert_log_retention_days", "500")

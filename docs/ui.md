@@ -83,7 +83,7 @@ Both are computed by `nav_context()` in `jen/routes/settings/nav.py`
 filtering as everything else there. To add a destination, add it to the tables in
 that file; the strip, the sheet and the settings landing page all read them. The
 top bar on a phone keeps the logo, the status dot and the avatar. The body gets
-bottom padding so content never hides behind the bar; the bar honours
+bottom padding so content never hides behind the bar; the bar honors
 `env(safe-area-inset-bottom)`, and sheets use `85dvh` with a `vh` fallback.
 
 ### Sheets
@@ -110,7 +110,7 @@ Tapping a row (anywhere that is not itself a control) opens the row's action men
 
 A cell whose text is empty or exactly "—" is dropped, so a row never shows
 "NOTES —". Rows are at least 56 px. The cell holding a `.row-checkbox` is
-recognised automatically. The older `table.mobile-cards` / `data-label` pattern
+recognized automatically. The older `table.mobile-cards` / `data-label` pattern
 is no longer used by any page (Q59 and Q60 converted them); the CSS remains for a plugin that still has it.
 `window.jenUi.enhance(root)` re-runs the cell classification; it already runs at
 load and after every htmx swap.

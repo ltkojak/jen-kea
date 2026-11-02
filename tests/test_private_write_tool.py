@@ -191,7 +191,7 @@ class TestTheConfigFileLock:
         assert waited >= 0.9, f"it did not wait for the lock holder ({waited:.2f}s)"
         assert (tmp_path / "jen.config").read_bytes() == b"[a]\nb = 1\n"
 
-    def test_the_lock_file_is_created_0600_and_the_write_holds_nothing_afterwards(self, tmp_path):
+    def test_the_lock_file_is_created_0600_and_the_write_holds_nothing_afterward(self, tmp_path):
         import fcntl
 
         lock = tmp_path / "jen.config.lock"
@@ -228,8 +228,8 @@ class TestTheConfigFileLock:
         assert victim.read_text() == "untouched"
 
 
-class TestTheLockIsOneInodeNormalisedInPlace:
-    """v5.68.0-beta.20 (Q155): `take_lock` opens the lock ONCE with O_NOFOLLOW and normalises THAT inode (fchown/fchmod, which keep an flock); it never
+class TestTheLockIsOneInodeNormalizedInPlace:
+    """v5.68.0-beta.20 (Q155): `take_lock` opens the lock ONCE with O_NOFOLLOW and normalizes THAT inode (fchown/fchmod, which keep an flock); it never
     renames a new file over the path - a lock is an inode, and two inodes are two locks. `--hold-lock` is the installer's side of the same primitive."""
 
     def test_an_existing_loose_lock_is_made_0600_in_place_the_inode_unchanged(self, tool, tmp_path):
@@ -242,7 +242,7 @@ class TestTheLockIsOneInodeNormalisedInPlace:
         assert stat.S_IMODE(lock.stat().st_mode) == 0o600 and lock.stat().st_ino == inode
 
     def test_a_chown_and_chmod_do_not_drop_a_held_flock(self, tool, tmp_path):
-        """The holder keeps its flock across the normalisation another opener makes: the second take_lock waits (it is the same inode)."""
+        """The holder keeps its flock across the normalization another opener makes: the second take_lock waits (it is the same inode)."""
         import fcntl
 
         lock = tmp_path / "jen.config.lock"
@@ -253,7 +253,7 @@ class TestTheLockIsOneInodeNormalisedInPlace:
         try:
             with pytest.raises(TimeoutError, match="held by another process"):
                 tool.take_lock(str(lock), owner=(os.getuid(), os.getgid()), wait_s=0.3)
-            assert stat.S_IMODE(lock.stat().st_mode) == 0o600, "normalised in place while it was held"
+            assert stat.S_IMODE(lock.stat().st_mode) == 0o600, "normalized in place while it was held"
             second = os.open(lock, os.O_RDWR)
             try:
                 with pytest.raises(BlockingIOError):
@@ -266,7 +266,7 @@ class TestTheLockIsOneInodeNormalisedInPlace:
     def test_it_never_replaces_the_file(self, tool):
         import inspect
 
-        source = inspect.getsource(tool.take_lock) + inspect.getsource(tool._normalise_lock)
+        source = inspect.getsource(tool.take_lock) + inspect.getsource(tool._normalize_lock)
         assert "os.replace" not in source and "os.rename" not in source and "os.unlink" not in source
 
     def test_a_hard_linked_lock_is_refused_and_never_chowned(self, tool, tmp_path):

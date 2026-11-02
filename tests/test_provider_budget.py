@@ -200,7 +200,7 @@ class TestOutstandingCalls:
             registry.pop("b", None)
         assert _run(kind)[0]["unavailable"] is False
 
-    def test_a_call_that_never_started_is_cancelled_not_left_to_run_later(self, kind, monkeypatch):
+    def test_a_call_that_never_started_is_canceled_not_left_to_run_later(self, kind, monkeypatch):
         monkeypatch.setattr(pb, "_executor", pb.ThreadPoolExecutor(max_workers=1))
         hang = Hang()
         ran = []
@@ -212,7 +212,7 @@ class TestOutstandingCalls:
             hang.release.set()
         time.sleep(0.2)
         assert [r["unavailable"] for r in out] == [True, True]
-        assert ran == [], "a provider that was still queued when its budget ended must not run afterwards"
+        assert ran == [], "a provider that was still queued when its budget ended must not run afterward"
 
     def test_a_call_waiting_for_a_slot_gets_one_that_frees_inside_the_budget(self, kind, monkeypatch):
         """Q152: the ceiling no longer turns a call away on arrival. A slot that comes back before the page's deadline is used."""

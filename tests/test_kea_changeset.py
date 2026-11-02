@@ -603,7 +603,7 @@ class TestOutcomeReachesTheServersPage:
         )
         assert cs.attention() == {
             "incidents": [{"status": "rolled_back", "service": "dhcp4", "at": "2026-01-01T00:00:00+00:00"}],
-            "unrecognised": 0,
+            "unrecognized": 0,
         }
         cs.clear_attention()
         assert cs.attention() is None
@@ -922,7 +922,7 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
     )
     def test_the_writer_never_stores_what_the_strict_reader_refuses(self, store, caplog, server_id, stored):
         """Q204 AT8 b (M11): `record_attention(None, ...)` used to write an incident the strict reader refuses (`MalformedNote`: "kept until a superadmin sets the note aside"). The writer validates the
-        entry with `recognised_incident` and answers False, logging at ERROR, instead."""
+        entry with `recognized_incident` and answers False, logging at ERROR, instead."""
         with caplog.at_level("ERROR", logger=cs.logger.name):
             assert cs.record_attention(server_id, "dhcp4", "x", "aborted", server_name="kea-a") is stored
         raw = store.get(cs.ATTENTION_KEY, "")
@@ -985,7 +985,7 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         again = json.loads(store[cs.ATTENTION_KEY])  # what a new process reads from the table
         assert again["incidents"][0]["category"] == "tls-not-restored"
 
-    def test_a_superadmins_acknowledgement_clears_matching_incidents_only(self, store):
+    def test_a_superadmins_acknowledgment_clears_matching_incidents_only(self, store):
         cs.record_attention(1, "dhcp4", "x", "aborted")
         cs.record_attention(1, "dhcp4", "y", "probe-pending")
         cs.record_attention(2, "dhcp4", "z", "aborted")
@@ -1199,7 +1199,7 @@ class TestMalformedNote:
         assert [i.get("status") for i in notes] == ["rolled_back", "tls-not-restored"]
 
     @pytest.mark.parametrize("bad", BAD)
-    def test_every_writer_refuses_it_and_the_stored_value_is_byte_equal_afterwards(self, store, bad):
+    def test_every_writer_refuses_it_and_the_stored_value_is_byte_equal_afterward(self, store, bad):
         store[cs.ATTENTION_KEY] = bad
         result = ChangeSetResult("rolled_back", "x", [("error", "boom")], needs_hands=["kea-a"], needs_hands_ids=[1])
         assert self._record() is False
@@ -1220,7 +1220,7 @@ class TestMalformedNote:
         shown = cs.attention()
         # (second pass of Q190, adjusted: a LISTED entry that is not an incident is on record and the banner says so; a note that does not parse at all has nothing to list)
         listed = cs._listed_count(bad)
-        assert shown is None if listed == 0 else shown == {"incidents": [], "unrecognised": listed}
+        assert shown is None if listed == 0 else shown == {"incidents": [], "unrecognized": listed}
 
     def test_health_says_unknown_before_the_set_aside_and_ok_after(self, store):
         from jen.services import health
@@ -1318,7 +1318,7 @@ def _outcome(**over):
 
 class TestEveryEntryOfTheNoteHasAShape:
     """Q190 (AF3): `{"incidents": [{}]}` was accepted ("a list of dicts"), and `_incident_cleared` returned True for any entry whose status was not `rollback_failed` - an empty dict included - so a clean
-    run DELETED a record nobody could read. A recognised incident has a shape; one that is not recognised is KEPT until a superadmin sets the note aside."""
+    run DELETED a record nobody could read. A recognized incident has a shape; one that is not recognized is KEPT until a superadmin sets the note aside."""
 
     @pytest.fixture
     def store(self, monkeypatch):
@@ -1368,13 +1368,13 @@ class TestEveryEntryOfTheNoteHasAShape:
     }
 
     @pytest.mark.parametrize("name", sorted(GOOD))
-    def test_every_recognised_shape_reads(self, store, name):
+    def test_every_recognized_shape_reads(self, store, name):
         raw = json.dumps(self.GOOD[name])
         notes = cs._incidents_of(raw, strict=True)
-        assert all(cs.recognised_incident(n) for n in notes)
+        assert all(cs.recognized_incident(n) for n in notes)
 
     @pytest.mark.parametrize("name", sorted(BAD))
-    def test_every_unrecognised_shape_raises_naming_the_index_never_the_text(self, name):
+    def test_every_unrecognized_shape_raises_naming_the_index_never_the_text(self, name):
         raw = json.dumps(self.BAD[name])
         with pytest.raises(cs.MalformedNote) as e:
             cs._incidents_of(raw, strict=True)
@@ -1385,7 +1385,7 @@ class TestEveryEntryOfTheNoteHasAShape:
             cs._incidents_of(json.dumps({"incidents": [_attention(), {}]}), strict=True)
 
     @pytest.mark.parametrize("name", sorted(BAD))
-    def test_every_writer_refuses_the_whole_note_and_it_is_byte_equal_afterwards(self, store, name):
+    def test_every_writer_refuses_the_whole_note_and_it_is_byte_equal_afterward(self, store, name):
         raw = json.dumps(self.BAD[name])
         store[cs.ATTENTION_KEY] = raw
         clean = ChangeSetResult("ok", "ok", [])
@@ -1402,31 +1402,31 @@ class TestEveryEntryOfTheNoteHasAShape:
         assert cs._incident_cleared({"status": "rolled_back"}, clean, "dhcp4") is False
         assert cs._incident_cleared(_attention(), clean, "dhcp4") is False
         assert cs._incident_cleared(_outcome(), clean, "dhcp4") is True, (
-            "a RECOGNISED rolled_back note is still cleared by any clean run"
+            "a RECOGNIZED rolled_back note is still cleared by any clean run"
         )
 
     def test_the_banner_counts_what_it_cannot_read_and_keeps_it(self, store):
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": [_attention(), {}, {"kind": "attention"}]})
         note = cs.attention()
-        assert len(note["incidents"]) == 1 and note["unrecognised"] == 2
+        assert len(note["incidents"]) == 1 and note["unrecognized"] == 2
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": [{}]})
         only = cs.attention()
-        assert only == {"incidents": [], "unrecognised": 1}
+        assert only == {"incidents": [], "unrecognized": 1}
 
     def test_the_banner_counts_an_entry_that_is_not_even_a_dict(self, store):
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": ["x", 5, None, _attention()]})
         note = cs.attention()
-        assert len(note["incidents"]) == 1 and note["unrecognised"] == 3
+        assert len(note["incidents"]) == 1 and note["unrecognized"] == 3
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": ["x"]})
-        assert cs.attention() == {"incidents": [], "unrecognised": 1}
+        assert cs.attention() == {"incidents": [], "unrecognized": 1}
 
     def test_an_integer_server_id_and_an_iso_time_still_read(self):
-        assert cs.recognised_incident(_attention(server_id=3)) and cs.recognised_incident(_attention(server_id="3"))
-        assert cs.recognised_incident(_outcome(at="2026-01-01T00:00:00+00:00"))
+        assert cs.recognized_incident(_attention(server_id=3)) and cs.recognized_incident(_attention(server_id="3"))
+        assert cs.recognized_incident(_outcome(at="2026-01-01T00:00:00+00:00"))
 
-    def test_a_note_that_reads_has_no_unrecognised_entries(self, store):
+    def test_a_note_that_reads_has_no_unrecognized_entries(self, store):
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": [_attention()]})
-        assert cs.attention()["unrecognised"] == 0
+        assert cs.attention()["unrecognized"] == 0
 
     def test_recovery_incidents_strict_raises_on_one(self, store):
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": [_attention(), {}]})

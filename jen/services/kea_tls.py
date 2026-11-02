@@ -232,7 +232,7 @@ def _build_ca(key, cn: str):
 #: Q193 (AI3): the two actions that lead out of a damaged CA - the SAME words in Health, the Settings page, Rotate's refusal, the https setup's refusal and Prepare's: a sentence about a damaged CA names
 #: these two and nothing that the damaged gate itself refuses.
 DAMAGED_CA_ADVICE = (
-    "restore the CA files from a backup, or replace the CA with Rotate Kea CA and tick the acknowledgement "
+    "restore the CA files from a backup, or replace the CA with Rotate Kea CA and tick the acknowledgment "
     "(a server that fails part-way cannot be put back on a damaged CA and would need its socket set up again)"
 )
 
@@ -259,7 +259,7 @@ MAPPED_ADDRESS_WHY = "an IPv4-mapped IPv6 address is a different name from the I
 
 class NameRefused(Exception):
     """Q197 (AM2): Jen's CA is HEALTHY - the verifier accepts what it issues in general - but it cannot issue a certificate for THIS name (a name constraint that does not permit the address, a host name
-    the verifier's DNS parser does not accept). Distinct from `CaDamaged` on purpose: the damaged-CA sentences send the operator to an acknowledgement for a CA that is not damaged. `.why` is the
+    the verifier's DNS parser does not accept). Distinct from `CaDamaged` on purpose: the damaged-CA sentences send the operator to an acknowledgment for a CA that is not damaged. `.why` is the
     verifier's message; `.names` the names that failed, each tried alone."""
 
     def __init__(self, why: str, names: list):
@@ -284,7 +284,7 @@ def _eku_allows_the_purpose(policy, cert, extension) -> None:
     """Relaxing the CRITICALITY of a CA's Extended Key Usage must not relax its MEANING: the chain verifier enforces an EKU as a purpose through this very validator, and replacing it with nothing made
     a clientAuth-only CA verify for sslserver (executed). The CA's EKU must NAME the purpose being verified. The library also accepts `anyExtendedKeyUsage` as a wildcard; OpenSSL - the
     DAEMON's library - ignores it on a CA (executed, Q197: `anyEKU` alone, `anyEKU`+serverAuth for a client certificate and `anyEKU`+an unknown purpose all fail `openssl verify -purpose`
-    with "unsuitable certificate purpose"), so a CA that relies on it is a CA the daemon will refuse, and the library's wildcard is not honoured here."""
+    with "unsuitable certificate purpose"), so a CA that relies on it is a CA the daemon will refuse, and the library's wildcard is not honored here."""
     if extension is None:
         return  # no EKU on the CA: not restricted
     if policy.extended_key_usage not in extension:
@@ -787,7 +787,7 @@ def ca_identity(
     if state != "ok" or cert_only:
         return state, why
     try:
-        # the structural checks above stay (they give the `why` a person recognises); the library's chain verifier has the next word (Q196), and the daemon's own library the last (Q197)
+        # the structural checks above stay (they give the `why` a person recognizes); the library's chain verifier has the next word (Q196), and the daemon's own library the last (Q197)
         rejection = ca_gate_rejection(cert, private)
     except (ValueError, TypeError, UnsupportedAlgorithm, x509.DuplicateExtension):
         return "damaged", f"{crt_name} has an extension Jen cannot read"
@@ -805,7 +805,7 @@ def ca_state() -> tuple[str, str]:
     have_crt, have_key = os.path.lexists(crt), os.path.lexists(key)
     if not have_crt and not have_key:
         # (second pass, finding 4) neither file - but beside evidence that a CA existed it is DAMAGED, not "no CA yet": one definition, so Health, the setup, the page and Rotate agree
-        evidence = _initialised_evidence()
+        evidence = _initialized_evidence()
         return ("damaged", f"both CA files are missing, and {evidence}") if evidence else ("none", "")
     crt_name, key_name = os.path.basename(crt), os.path.basename(key)
     if not have_crt:
@@ -815,8 +815,8 @@ def ca_state() -> tuple[str, str]:
     return ca_identity(crt, key)
 
 
-def _initialised_evidence() -> str:
-    """Q192 (AH2, T7): why this is NOT the uninitialised world - "" when it is. `ensure_ca` may create a CA only where nothing Jen ever issued can exist: no client certificate files, no copy of
+def _initialized_evidence() -> str:
+    """Q192 (AH2, T7): why this is NOT the uninitialized world - "" when it is. `ensure_ca` may create a CA only where nothing Jen ever issued can exist: no client certificate files, no copy of
     any server pair (live, `.prev`, `.staged`, a marker), no prepared rotation, and a directory that can be read at all (an unlistable one is unknown, and unknown is not 'empty')."""
     pem, key = client_paths()
     if os.path.lexists(pem) or os.path.lexists(key):
@@ -851,14 +851,14 @@ def _initialised_evidence() -> str:
 
 
 def ca_refusal() -> str:
-    """ "" when `ensure_ca()` may proceed (the CA is ok, or this is the uninitialised world); else the sentence for why it may not - the damage, or the evidence that a CA existed (Q192, AH2). Asked
+    """ "" when `ensure_ca()` may proceed (the CA is ok, or this is the uninitialized world); else the sentence for why it may not - the damage, or the evidence that a CA existed (Q192, AH2). Asked
     by a route BEFORE it reads from or sends anything to a host."""
     state, why = ca_state()
     return why if state == "damaged" else ""
 
 
 def ensure_ca() -> dict:
-    """Create the CA ONLY in the uninitialised world (Q192, AH2; invariant T7): `ok` returns it unchanged, `damaged` raises `CaDamaged`, and an absent CA beside evidence that one existed (a client
+    """Create the CA ONLY in the uninitialized world (Q192, AH2; invariant T7): `ok` returns it unchanged, `damaged` raises `CaDamaged`, and an absent CA beside evidence that one existed (a client
     certificate, a server copy, a prepared rotation, an unreadable directory) raises it too. It used to read "a cert without a loadable key counts as absent" and create a new CA whenever either file
     failed to load. (Q197, AM6 a: the `force` path - the pre-Q188 rotation that replaced the CA before any host had it - is gone; a rotation stages, probes and then commits.)
     Returns {"cert": path, "key": path, "created": bool, "subject": cn}."""
@@ -1020,7 +1020,7 @@ def verifier_accepts_name(host: str) -> bool:
 
         return not is_v4_mapped_literal(
             host
-        )  # Q204 (AT5): the mapped spelling is an address the verifier parses, but no certificate for it is accepted by a client dialling the IPv4 address (and the reverse)
+        )  # Q204 (AT5): the mapped spelling is an address the verifier parses, but no certificate for it is accepted by a client dialing the IPv4 address (and the reverse)
     if not host.isascii():
         # (Q198 AN5; Q199 AO4) a name with non-ASCII letters is carried in a certificate as its A-label (punycode, IDNA 2008 as `requests` dials it); the verifier is asked about THAT
         from jen.services.auth import idna_a_label
@@ -1041,25 +1041,27 @@ def verifier_accepts_name(host: str) -> bool:
 
 def name_refusal_remedy(names, rotating: bool = False, prepared: bool = False) -> str:
     """The sentence for what to DO about a name the verifier refused (Q197 second pass, F2). A name no certificate can carry (an underscore, a trailing dot ...) is not cured by a new CA - Rotate fails on it
-    the same way - so the remedy is the address. A name a CA's constraints exclude is cured by the address or by a CA without the constraint (Rotate Kea CA issues one; no acknowledgement: the CA is healthy)."""
+    the same way - so the remedy is the address. A name a CA's constraints exclude is cured by the address or by a CA without the constraint (Rotate Kea CA issues one; no acknowledgment: the CA is healthy)."""
     if any(not verifier_accepts_name(n) for n in names):
-        return "change the address saved for it under Settings → Kea (a certificate cannot carry that name; no acknowledgement is needed - the CA is not damaged)"
+        return "change the address saved for it under Settings → Kea (a certificate cannot carry that name; no acknowledgment is needed - the CA is not damaged)"
     if prepared:
         # (Q198 AN4) the CA being staged is a kept `.next` (Prepare'd, or placed by hand): ITS name constraints refuse the name, and rotating again reuses the same CA - the way out is to discard it (Jen
         # then stages its own, which has none) or to change the address
         return (
             f"the prepared CA's name constraints do not permit {', '.join(names)}: discard the prepared CA under Settings → Kea and rotate again (Jen stages its own CA), or change the address saved for it "
-            "(no acknowledgement is needed - the CA is not damaged)"
+            "(no acknowledgment is needed - the CA is not damaged)"
         )
     if rotating:
-        return "change the address saved for it under Settings → Kea (no acknowledgement is needed - the CA is not damaged)"
-    return "change the address Jen dials, or replace the CA with Rotate Kea CA (no acknowledgement is needed - the CA is not damaged)"
+        return (
+            "change the address saved for it under Settings → Kea (no acknowledgment is needed - the CA is not damaged)"
+        )
+    return "change the address Jen dials, or replace the CA with Rotate Kea CA (no acknowledgment is needed - the CA is not damaged)"
 
 
 def other_record_on_same_daemon(server: dict, service: str, servers, url_for=None, ignore=()) -> str:
     """Q197 (AM5): the NAME of ANOTHER server record that shares this record's SSH host (`same_host`: exact, no DNS) and already holds a record for `service` - files at the paths, whoever issued the pair (Q203 AS3) - "" when there is none. The rule
     the rotation applies (Q196 AL2: one daemon is one target) asked where the world is MADE: an https setup on a second record for the same daemon would put a certificate on the fixed remote paths
-    that the first record's copy then no longer matches. Q202 (AR4): ONE rule, asked by the setup AND by the rotation, over EVERY other record - a parked one (not dialled over https now) included, because
+    that the first record's copy then no longer matches. Q202 (AR4): ONE rule, asked by the setup AND by the rotation, over EVERY other record - a parked one (not dialed over https now) included, because
     the certificate lands at that daemon's fixed remote paths whatever scheme Jen dials it on. `ignore` is a set of (server id text, service) the caller handles itself (the rotation's two TARGETS)."""
     from jen.services.auth import same_host
 
@@ -1081,7 +1083,7 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
         state = record_state(other.get("id"), service, server=other, url=url_for(other, service))[0]
         if state != "none":
             # (Q203 AS3: EVERY state but "none" - the name `record_state` answers when there is nothing at the paths. An `external` record (a pair an administrator's CA issued) holds files at the daemon's
-            # fixed remote paths too, and the rotation's install would overwrite what its endpoint is dialled on; the setup would otherwise ALLOW the second record.)
+            # fixed remote paths too, and the rotation's install would overwrite what its endpoint is dialed on; the setup would otherwise ALLOW the second record.)
             # (Q198 AN5: a record Jen cannot rotate safely - malformed, a pair that does not match, an earlier CA's - is still files at that daemon's fixed paths; it is a second owner too)
             # (Q202 second pass F1: NO exemption for a record whose files name another machine or no machine - a certificate that cannot say which daemon it is for is not evidence that it is not this
             # one's, and the absence of evidence is never evidence: the record still holds files and still names this SSH host)
@@ -1098,7 +1100,7 @@ def forget_report(servers, url_for=None, include_parked: bool = False, fact_firs
     """Q197 (AM4), Q198 (AN2), Q199 (AO5/AO6): drop Jen's own copy of every certificate record that records NOTHING - a server that is not configured at all (the inventory's `stale`), an ORPHAN
     group of files with no live pair included. A local change only: no host is asked anything. A record for a CONFIGURED server whose endpoint is not https now is PARKED: its daemon may still present
     that certificate, so it is kept and named - unless the operator says (`include_parked`) that no daemon presents it any more. A record is `forgotten` only when every one of its files is gone
-    (`discard_local_record` re-checks); one that could not be fully removed is `incomplete` and stays discoverable for a retry. Only a recognised file name is ever touched; an unrecognised one is
+    (`discard_local_record` re-checks); one that could not be fully removed is `incomplete` and stays discoverable for a retry. Only a recognized file name is ever touched; an unrecognized one is
     `skipped`. A directory that cannot be listed is said, not read as "nothing to forget". Returns {"forgotten", "parked", "unreadable", "skipped", "incomplete", "on_word", "no_fact",
     "incomplete_on_word"}.
 
@@ -1289,7 +1291,7 @@ def _record_host_pair(server_id, service: str, files: dict, cause: BaseException
         with contextlib.suppress(OSError):
             mark_unknown(
                 server_id, service
-            )  # Jen does not know which pair the host holds: say so in a FILE too (no acknowledgement removes it)
+            )  # Jen does not know which pair the host holds: say so in a FILE too (no acknowledgment removes it)
         raise HostRecordLost(
             f"Jen cannot record which certificate server {server_id} {service} holds ({type(lost).__name__})"
         ) from cause
@@ -1554,7 +1556,7 @@ def _open_incident_categories(server_id, service: str):
 
 def host_material(server_id, service: str) -> dict | None:
     """The pair the HOST holds, as far as Jen can tell, or None when Jen does not know (Q189, AE2) - never a guess:
-    * the `.unknown` marker beside the pair (a file: no acknowledgement, resolution or database blip removes it - only an operation that gives the host a pair Jen records);
+    * the `.unknown` marker beside the pair (a file: no acknowledgment, resolution or database blip removes it - only an operation that gives the host a pair Jen records);
     * an unresolved `remote-unknown` or `tls-not-restored` incident for this server and service: unknown, whatever the files say (the second says the host holds a certificate Jen did not
       mean to leave there - its live copy may well be a different pair);
     * the incident record cannot be read: unknown;
@@ -1694,7 +1696,7 @@ class RotationInventory:
         skipped=(),
     ):
         self.targets, self.refusals, self.external, self.stale = targets, refusals, external, stale
-        # Q199 (AO6): the records (stale or parked) that are a GROUP of files with no live pair, and the names in the directory Jen does not recognise (named, never touched)
+        # Q199 (AO6): the records (stale or parked) that are a GROUP of files with no live pair, and the names in the directory Jen does not recognize (named, never touched)
         self.orphans, self.skipped = list(orphans), list(skipped)
         # Q198 (AN2): the copies of a CONFIGURED server that is not an https endpoint now - "<server id>-<service>". The daemon may still present the certificate (the socket is still in its config), so the
         # record is kept, watched and never forgotten while the socket exists; `stale` is only a record for a server that is not configured at all
@@ -1980,7 +1982,7 @@ def ssh_host_refusal(cert, server) -> str:
 def _group_certificate(server_id, service: str):
     """Q201 (AQ2): `(certificate | None, [file names present])` - the certificate that represents what the HOST holds for this record GROUP: the live certificate when it loads and no stale marker says
     otherwise; the `.prev` certificate when the live copy is stale-marked, or when the live copy is absent or unreadable; NEVER `.staged` (a host never accepted it). Q202 (AR9 h): it reads the FILES
-    only - `host_material` also honours the `.unknown` marker and the open `remote-unknown` / `tls-not-restored` incidents (and answers "unknown" for a live pair that does not load where this falls
+    only - `host_material` also honors the `.unknown` marker and the open `remote-unknown` / `tls-not-restored` incidents (and answers "unknown" for a live pair that does not load where this falls
     back to `.prev`). Q203 (AS7 a): `group_verdict` DOES move on that difference, on five of the 20 shapes (`current` / `external` where `host_material` answers `unknown`), and no RECORDED outcome moves
     with it; this is the wider rule (a certificate to compare rather than none)."""
     crt = server_copy_path(server_id, service)
@@ -2538,7 +2540,7 @@ def _copies_dir() -> str:
     return os.path.join(SSL_DIR, "kea-servers")
 
 
-#: Q195 (AK2 a): the name of a probe file `copies_dir_writable` writes - `.write-probe-<pid>-<16 hex>` - and nothing else. The cleanup of leftovers and the evidence count (`_initialised_evidence`) both
+#: Q195 (AK2 a): the name of a probe file `copies_dir_writable` writes - `.write-probe-<pid>-<16 hex>` - and nothing else. The cleanup of leftovers and the evidence count (`_initialized_evidence`) both
 #: match THIS pattern exactly: a file an operator keeps in the record directory (`.write-probe-OPERATORS-NOTES.txt`) is not Jen's to delete or to ignore.
 PROBE_NAME = re.compile(r"\.write-probe-\d+-[0-9a-f]{16}")
 PROBE_LEFTOVER_SECONDS = 60
@@ -2552,7 +2554,7 @@ def copies_dir_writable(keep: bool = True) -> str:
     took a pair Jen cannot record is cut off. Asked on EVERY path that will need it: every rotation's inventory, the https setup before `stage_issued`, and the recovery once more before its first
     install (the filesystem can change in between; `HostRecordLost` stays as the backstop after that).
     Second pass (rows 4, 5): the probe has a UNIQUE name (a fixed one, left by a killed process, refused a writable directory for good) and any leftover probe is removed; `keep=False` (the
-    preflights: the inventory, the https setup) leaves the directory as it found it - a refusal changes nothing, and in the uninitialised world an EMPTY directory would read as evidence that a CA
+    preflights: the inventory, the https setup) leaves the directory as it found it - a refusal changes nothing, and in the uninitialized world an EMPTY directory would read as evidence that a CA
     existed - while the check immediately before the first install keeps what it created (a write follows)."""
     d = _copies_dir()
     created = False
@@ -2588,9 +2590,9 @@ _RECORD_FILE = re.compile(
 
 
 def record_groups(strict: bool = False) -> tuple[list[dict], list[str]]:
-    """Q199 (AO6): ([group], [skipped file names]) - every file Jen recognises in its certificate directory (`.crt`, `.key`, `.crt.prev`, `.key.prev`, `.crt.staged`, `.key.staged`, `.crt.stale`,
+    """Q199 (AO6): ([group], [skipped file names]) - every file Jen recognizes in its certificate directory (`.crt`, `.key`, `.crt.prev`, `.key.prev`, `.crt.staged`, `.key.staged`, `.crt.stale`,
     `.crt.unknown`), grouped by `<server number>-<dhcp4|dhcp6|d2>`: {server_id, service, files: [kinds], pair: bool (a live certificate AND key), path}. A group without a live pair is an ORPHAN - the
-    records used to be discovered by `.crt` alone, so a `.key` whose certificate was gone was invisible to the inventory, Health and Forget. A name Jen does not recognise (a stray file, a service it
+    records used to be discovered by `.crt` alone, so a `.key` whose certificate was gone was invisible to the inventory, Health and Forget. A name Jen does not recognize (a stray file, a service it
     does not run, a leading zero) is `skipped`, named, never touched. A directory that is not there lists as none; one that cannot be LISTED is raised under `strict` (Q189, AE1) - unknown, never empty."""
     d = _copies_dir()
     try:

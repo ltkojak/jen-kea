@@ -472,7 +472,7 @@ def _reservation6_matches(host: dict, needle: str) -> bool:
 
 def count_lease6_by_subnet(subnet_ids=None) -> dict:
     """v5.68.0-beta.18 (Q153) - ACTIVE leases per IPv6 subnet and type from ONE aggregate query (`state = 0 AND expire > NOW()`, the
-    same predicate `list_lease6` uses): {subnet_id: {"IA_NA": n, "IA_TA": n, "IA_PD": n}}. The snapshot job used to materialise every
+    same predicate `list_lease6` uses): {subnet_id: {"IA_NA": n, "IA_TA": n, "IA_PD": n}}. The snapshot job used to materialize every
     lease of every subnet through `list_lease6` (a MAC lookup per row) to count them in Python. `subnet_ids` (default
     `extensions.SUBNET6_MAP`) scopes the result: a subnet outside it is never returned."""
     from jen.models.db import kea6_db
@@ -612,7 +612,7 @@ def list_lease6_devices(subnet_id: int = None, search: str = None, allowed_subne
     leases = list_lease6(subnet_id=subnet_id, search=search, show_expired=False)
     if allowed_subnet_ids is not None:
         # v5.68.0-beta.8 (Q143) — a caller's scope is applied to the LEASES, before they are grouped: one DUID commonly holds leases in
-        # several subnets, and filtering the grouped rows afterwards would still print a hidden subnet's addresses inside a visible row.
+        # several subnets, and filtering the grouped rows afterward would still print a hidden subnet's addresses inside a visible row.
         allowed = set(allowed_subnet_ids)
         leases = [lease for lease in leases if lease["subnet_id"] in allowed]
     by_duid = {}

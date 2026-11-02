@@ -602,7 +602,7 @@ class TestAWriteDuringAReloadIsNotHidden:
 
         monkeypatch.setattr(
             usermod, "_settings_cache", {}
-        )  # restored afterwards: the fake rows must not outlive the test
+        )  # restored afterward: the fake rows must not outlive the test
         monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
         monkeypatch.setattr(usermod, "_settings_next_try_mono", 0)
 
@@ -641,7 +641,7 @@ class TestAWriteDuringAReloadIsNotHidden:
 
         monkeypatch.setattr(
             usermod, "_settings_cache", {}
-        )  # restored afterwards: the fake rows must not outlive the test
+        )  # restored afterward: the fake rows must not outlive the test
         monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
 
         class Cur:

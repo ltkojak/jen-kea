@@ -1778,7 +1778,7 @@ def _uses_jen_tls(sockets, service: str) -> bool:
 
 
 #: Q193 second pass (finding 3): the fixed sentence of the incident a failed recovery leaves on a daemon that took the replacement CA's pair (the category's own text is about a restored socket)
-_RECOVERY_CUT_OFF = "A recovery of Jen's damaged CA stopped after this daemon was given a certificate from the replacement CA, which Jen discarded: the daemon will not answer Jen until the recovery is repeated with the acknowledgement."
+_RECOVERY_CUT_OFF = "A recovery of Jen's damaged CA stopped after this daemon was given a certificate from the replacement CA, which Jen discarded: the daemon will not answer Jen until the recovery is repeated with the acknowledgment."
 
 
 def _not_put_back_reason(tls: dict) -> str:
@@ -2670,7 +2670,7 @@ def setup_direct_socket(server_id, service):
             client_issued = __tls.issue_client_cert()
             files = None if already_there else __tls.issue_server_cert(server, service, address, commit=False)
         except __tls.NameRefused as e:
-            # Q197 (AM2): a HEALTHY CA that cannot issue for this name is not a damaged CA - the acknowledgement is never named, and the sentence names the SAN that failed (the bind address OR the SSH host's name)
+            # Q197 (AM2): a HEALTHY CA that cannot issue for this name is not a damaged CA - the acknowledgment is never named, and the sentence names the SAN that failed (the bind address OR the SSH host's name)
             flash(
                 f"Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for {', '.join(e.names)} ({e.why}): {__tls.name_refusal_remedy(e.names)}. "
                 f"Nothing was changed on {name}.",
@@ -3016,7 +3016,7 @@ def rotate_kea_ca():
         # Q192 (AH2): replacing a DAMAGED CA is the recovery - allowed only once the person has read what it cannot do: the current CA cannot sign, so a server that fails part-way cannot be put
         # back on it and will need its socket set up again
         flash(
-            f"Jen's CA is damaged ({ca_why}). To {__tls.DAMAGED_CA_ADVICE}. Tick the acknowledgement on the confirm and rotate again. Nothing was changed.",
+            f"Jen's CA is damaged ({ca_why}). To {__tls.DAMAGED_CA_ADVICE}. Tick the acknowledgment on the confirm and rotate again. Nothing was changed.",
             "error",
         )
         return back
@@ -3214,7 +3214,7 @@ def rotate_kea_ca():
                     )
                     break
                 except __tls.BindNotAnAddress as e:
-                    # (Q202 AR9 c) the record is dialled at a NAME no certificate of Jen's carries as a bind - the setup requires an IP literal; nothing was installed on any target
+                    # (Q202 AR9 c) the record is dialed at a NAME no certificate of Jen's carries as a bind - the setup requires an IP literal; nothing was installed on any target
                     failure = (
                         f"{sname} {daemon}: the CA cannot issue its certificate for {', '.join(e.names)} (it is a name, and a certificate Jen issues is for the address the daemon binds) - "
                         f"{__tls.name_refusal_remedy(e.names, rotating=True)}; nothing was installed on any host"
@@ -3473,12 +3473,12 @@ def rotate_kea_ca():
                     flash(
                         f"The recovery did not complete: {len(left)} of {len(targets)} daemon(s) were left in a state that needs it repeated - {'; '.join(details)} (each recorded on Servers). "
                         + (f"Not changed: {', '.join(untouched)}. " if untouched else "")
-                        + f"Jen's CA is still damaged ({ca_now_why}). Rotate again with the acknowledgement to re-issue them all; the https setup stays refused until the CA is replaced.",
+                        + f"Jen's CA is still damaged ({ca_now_why}). Rotate again with the acknowledgment to re-issue them all; the https setup stays refused until the CA is replaced.",
                         "error",
                     )
                 else:
                     flash(
-                        f"The recovery did not complete: no daemon was changed. Jen's CA is still damaged ({ca_why}). Rotate again with the acknowledgement; the https setup stays refused until the CA is replaced.",
+                        f"The recovery did not complete: no daemon was changed. Jen's CA is still damaged ({ca_why}). Rotate again with the acknowledgment; the https setup stays refused until the CA is replaced.",
                         "error",
                     )
             elif not ca_ok and promotion_attempted:
@@ -3492,7 +3492,7 @@ def rotate_kea_ca():
                 # Q195 (AK2 b): no promotion ran - the CA became unusable DURING the rotation (a file changed, a clock stepped): say what it is now, and the action that works (the setup is refused)
                 flash(
                     f"Jen's CA became unusable during the rotation ({ca_now_why or 'unusable'}), so nothing can be issued from it and a daemon that took the new certificate cannot be put back. "
-                    "Rotate again with the acknowledgement to replace it and re-issue every daemon (or restore the CA files from a backup); the https setup stays refused until the CA is replaced.",
+                    "Rotate again with the acknowledgment to replace it and re-issue every daemon (or restore the CA files from a backup); the https setup stays refused until the CA is replaced.",
                     "error",
                 )
             if not recovery_failed:
@@ -3518,7 +3518,7 @@ def rotate_kea_ca():
                 )
             if outcome["unreachable"]:
                 flash(
-                    f"{', '.join(lb for _s, _v, lb in outcome['unreachable'])}: the previous certificate is back and the daemon restarted, but Jen's endpoint did not answer afterwards. Check the daemon and the network path.",
+                    f"{', '.join(lb for _s, _v, lb in outcome['unreachable'])}: the previous certificate is back and the daemon restarted, but Jen's endpoint did not answer afterward. Check the daemon and the network path.",
                     "error",
                 )
             if outcome["unknown"]:
@@ -3569,7 +3569,7 @@ def rotate_kea_ca():
         still_pending = __changeset.reconcile_rotation_pending(extensions.KEA_SERVERS)
     except ValueError:
         flash(
-            "The CA is rotated; Jen could not read its incident notes afterwards, so the notes of this rotation are not finished - Servers shows them as pending and the next Rotate or Forget stale records finishes them from Jen's files.",
+            "The CA is rotated; Jen could not read its incident notes afterward, so the notes of this rotation are not finished - Servers shows them as pending and the next Rotate or Forget stale records finishes them from Jen's files.",
             "warning",
         )
         __user.audit("ROTATE_KEA_CA", "kea_api", "rotated; the incident store could not be read to finish the notes")
@@ -3645,7 +3645,7 @@ def prepare_kea_ca():
     flash(
         f"A new CA is {verb}: {staged['ca_cert']} (SHA-256 fingerprint {__tls.prepared_fingerprint(staged)}). Add it to the trust anchor of any daemon that is not on Jen's CA and checks "
         "Jen's client certificate - beside the current CA, not instead of it - then rotate"
-        + (" (Rotate Kea CA, with the acknowledgement: Jen's CA is damaged)" if ca_state == "damaged" else "")
+        + (" (Rotate Kea CA, with the acknowledgment: Jen's CA is damaged)" if ca_state == "damaged" else "")
         + ". Nothing was changed on any host.",
         "success",
     )
@@ -4282,7 +4282,7 @@ def remove_direct_socket(server_id, service):
     if result.status == "ok" or (result.status == "nothing" and result.last_code == "nochange"):
         # (Q201 AQ4: `nochange` - the config has no Jen socket to remove - proves what a removal proves: the socket is gone, so Jen's copy of its certificate is a record of nothing)
         # (second pass, Q187, findings 4 and 16) a removal proves only that the socket it removed is gone: it clears the "never answered" note of THAT socket. It proves nothing about whether the
-        # daemon runs (a Control Agent can answer while kea-dhcp4 is down), so every other category waits for a probe of the daemon or an acknowledgement.
+        # daemon runs (a Control Agent can answer while kea-dhcp4 is down), so every other category waits for a probe of the daemon or an acknowledgment.
         if (
             result.status == "ok"
         ):  # (a removal that removed NOTHING clears no note: it proves only that Jen's copy of a socket that is not there is a record of nothing)
@@ -4938,8 +4938,8 @@ def save_extra_servers():
             if no6_ticked or api6_pass.strip():
                 __credentials.clear_shared(cfg, f"server_{out}_v6")  # Y3 (Q183)
 
-        # U3 (Q180): the resolver is the proof. The IPv6 and D2 endpoint of every saved row is judged against the credential `resolve` gives IT: a typed API password authorises
-        # them on the same host only, and one on a different host with no password of its own would be refused its neighbour's - so the form says so instead of saving a
+        # U3 (Q180): the resolver is the proof. The IPv6 and D2 endpoint of every saved row is judged against the credential `resolve` gives IT: a typed API password authorizes
+        # them on the same host only, and one on a different host with no password of its own would be refused its neighbor's - so the form says so instead of saving a
         # credential-less endpoint. (One that was ALREADY in that state and did not change is not this save's doing.)
         after_resolved = __credentials.resolve(cfg)
         for name_, endpoint in after_resolved.items():

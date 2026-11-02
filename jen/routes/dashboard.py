@@ -62,7 +62,7 @@ def _get_ipv6_dashboard_summary(visible6):
     NA/PD were kept as separate counts rather than summed into one
     "leases" figure.
     """
-    # v5.68.0-beta.8 (Q143) — `visible6` is the CALLER's v6 map (access.accessible_subnet6_map()). It was totalled over EVERY v6
+    # v5.68.0-beta.8 (Q143) — `visible6` is the CALLER's v6 map (access.accessible_subnet6_map()). It was totaled over EVERY v6
     # subnet for every caller, so a subnet-scoped user's "Active (v6)" and "+ N IPv6" counted (and so disclosed the size of)
     # subnets they cannot see.
     if not __kea6.is_ipv6_enabled() or not visible6:

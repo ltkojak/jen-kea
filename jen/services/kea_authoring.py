@@ -348,7 +348,7 @@ def referenced_tls_paths(cfg, tls: dict) -> list:
     def walk(node):
         if isinstance(node, dict):
             for k, v in node.items():
-                # (second pass G4: the daemon resolves `/etc/kea/tls/dhcp4/../dhcp4//ca.crt` to the same file, so the match is on the normalised path)
+                # (second pass G4: the daemon resolves `/etc/kea/tls/dhcp4/../dhcp4//ca.crt` to the same file, so the match is on the normalized path)
                 if k in by_key and isinstance(v, str) and canonical(v) == canonical(by_key[k]):
                     named.add(by_key[k])
                 else:

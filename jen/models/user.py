@@ -374,7 +374,7 @@ def _audit_identity() -> tuple:
 
 def set_global_setting_and_audit(key: str, value: str, action: str, entity: str, details: str = "") -> bool:
     """Write a setting AND its audit row in ONE transaction (v5.68.0-beta.27, Q162, item 3). `set_global_setting` then `audit()` are two commits, and `audit()`
-    logs and returns on failure: a decision that is only worth making if it is on record (the acknowledgement of an unreadable investigation record) could be
+    logs and returns on failure: a decision that is only worth making if it is on record (the acknowledgment of an unreadable investigation record) could be
     committed with no durable record of who asserted what. Here one connection carries both statements; any exception rolls BOTH back, is logged, and the
     answer is False. True means the setting is stored AND the audit row is written. The settings cache is invalidated on success."""
     user_id, username, ip = _audit_identity()

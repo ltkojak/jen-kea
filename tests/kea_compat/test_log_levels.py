@@ -490,7 +490,7 @@ def _logger_now() -> dict:
 def test_sighup_reloads_the_logger(findings):
     """v5.68.0-beta.29 (Q165, verify first) - the Kea HOST puts the logger back by itself (jen-kea-helper `--self-restore`): it rewrites the config file and sends the
     unit's main process SIGHUP, with a restart only as the fallback. This records, per Kea version, whether SIGHUP re-reads the file - the new level shows in `config-get` with
-    the process (pid) unchanged - and that putting the level back works the same way. A version that does NOT reload on SIGHUP is not a failure of the product: the helper restarts the unit when it is not active afterwards, and a version recorded here as not reloading would be named in the helper so it restarts at once - the record says which."""
+    the process (pid) unchanged - and that putting the level back works the same way. A version that does NOT reload on SIGHUP is not a failure of the product: the helper restarts the unit when it is not active afterward, and a version recorded here as not reloading would be named in the helper so it restarts at once - the record says which."""
     from jen.services import kea
     from jen.services import kea_config_edit as ed
 
@@ -550,7 +550,7 @@ def test_sighup_reloads_the_logger(findings):
 def test_what_a_ddns_failure_line_carries(findings):
     """v5.68.0-beta.9 (Q144, verify first) - the Problems sweep attributes a DHCP4_DDNS_REQUEST_SEND_FAILED line to the client the
     log showed getting the address it names, preferring the same transaction. Whether that line carries a transaction id (or a client
-    label) at INFO on 3.0 / 3.2 / 3.3 was not known: this turns DNS updates on towards a kea-dhcp-ddns that is not running, sends one
+    label) at INFO on 3.0 / 3.2 / 3.3 was not known: this turns DNS updates on toward a kea-dhcp-ddns that is not running, sends one
     exchange, and RECORDS what the failure line looks like and whether its allocation line has a tid. It asserts only that a lease was
     stored: the facts are the reference, and Jen's parser takes a tid when there is one and the nearest preceding allocation when not."""
     index = 40
@@ -973,7 +973,7 @@ def test_the_daemons_own_control_socket_answers_config_get(findings):
         f"the plain local http socket answers config-get with the same shape: {record['http_shape']}"
     )
 
-    # the helper's OWN functions, against the real daemon: the spec it builds from the config file, the question it asks, the way it reads the answer and the judgement it makes
+    # the helper's OWN functions, against the real daemon: the spec it builds from the config file, the question it asks, the way it reads the answer and the judgment it makes
     helper = _load_helper()
     spec_from_file = helper._control_socket(base)[0]
     record["helper_spec_kind"] = spec_from_file[0] if spec_from_file else None

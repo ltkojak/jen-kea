@@ -794,7 +794,7 @@ class TestControlSocket:
 
 
 class TestTheMutatorsCopyWhatTheyAreGivenAndSayWhenNothingChanged:
-    """v5.69.0-beta.5 (Q174): the new object was aliased into the returned config (editing it afterwards edited the result), and every non-empty field of a subnet edit reported "changed", so an unchanged submit
+    """v5.69.0-beta.5 (Q174): the new object was aliased into the returned config (editing it afterward edited the result), and every non-empty field of a subnet edit reported "changed", so an unchanged submit
     rewrote the file and restarted the daemon."""
 
     def test_extra_pools_and_the_callers_config_are_not_aliased(self):

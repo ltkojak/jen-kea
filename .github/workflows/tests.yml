@@ -858,7 +858,7 @@ jobs:
           sudo test -f /srv/q121/ans/app/current/app/run.py
           sudo test -f /srv/q121/ans/etc/jen.config
           [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
-          echo "the answers file's own layout keys were honoured, and nothing landed at the defaults"
+          echo "the answers file's own layout keys were honored, and nothing landed at the defaults"
 
       - name: Q121 (a) — put the box back
         run: |
@@ -952,7 +952,7 @@ jobs:
           sudo test -f /etc/jen/.jen-directory
           sudo test -f /var/lib/jen/.jen-directory
           sudo test -f /etc/jen-layout.conf
-          echo "config and data were recognised by content and re-stamped"
+          echo "config and data were recognized by content and re-stamped"
           printf 'y\n1\n' | sudo ./uninstall.sh
           sudo rm -rf /etc/jen /var/lib/jen /etc/jen-layout.conf
 

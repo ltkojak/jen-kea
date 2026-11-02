@@ -55,14 +55,14 @@ class TestSprite:
         committed = (ROOT / "templates" / "_icon_sprite.html").read_text(encoding="utf-8").replace("\r\n", "\n")
         assert committed == built, "run: py tools/build_icon_sprite.py"
 
-    def test_every_source_is_a_symbol_and_has_a_licence_next_to_it(self):
+    def test_every_source_is_a_symbol_and_has_a_license_next_to_it(self):
         names = {p.stem for p in (ROOT / "static" / "icons" / "src").glob("*.svg")}
         assert len(names) >= 60
         assert (ROOT / "static" / "icons" / "LICENSE").read_text(encoding="utf-8").startswith("ISC License")
         sprite = (ROOT / "templates" / "_icon_sprite.html").read_text(encoding="utf-8")
         assert set(re.findall(r'<symbol id="i-([a-z0-9-]+)"', sprite)) == names
 
-    def test_nothing_is_baked_in_a_colour(self):
+    def test_nothing_is_baked_in_a_color(self):
         sprite = (ROOT / "templates" / "_icon_sprite.html").read_text(encoding="utf-8")
         assert not re.search(r'(?:fill|stroke)="(?!none|currentColor)', sprite)
 
@@ -112,7 +112,7 @@ class TestNamesUsedExist:
         assert str(nav_icon("🗺️")) == "🗺️"  # a plugin's own emoji still renders, as text
         assert "#i-server" in nav_icon("server")
 
-    def test_icon_only_controls_are_labelled(self):
+    def test_icon_only_controls_are_labeled(self):
         """The two unidentifiable top-bar controls now say what they are."""
         base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
         assert 'title="Keyboard shortcuts (?)"' in base

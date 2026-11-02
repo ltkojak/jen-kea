@@ -373,7 +373,7 @@ class TestCertExpiryAndTheForecastUseTheSameHelper:
         assert len(sender.sent) == 3
 
 
-class TestAnOlderJensStateIsHonoured:
+class TestAnOlderJensStateIsHonored:
     def test_the_beta_18_one_reads_as_active_and_not_notified(self, db):
         """v5.68.0-beta.20 (Q155, item 6): beta.18 wrote "1" after a send whose result nobody checked. Reading it as DELIVERED let an undelivered
         warning survive the upgrade as sent until the condition recovered; it now reads as active, not notified - one attempt on the next pass."""

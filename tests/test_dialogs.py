@@ -3,7 +3,7 @@ tests/test_dialogs.py
 ─────────────────────
 v5.70.0-beta.2 (Q206, AV1 and AV2): the browser's own alert(), prompt() and confirm() are retired for Jen's toast, prompt and confirm dialogs, and a flashed message can be dismissed.
 
-Pure source and render tests - no database (`py -m pytest --noconftest tests/test_dialogs.py`). The behaviour in a real browser (a name typed through the dialog, the toast, the new option
+Pure source and render tests - no database (`py -m pytest --noconftest tests/test_dialogs.py`). The behavior in a real browser (a name typed through the dialog, the toast, the new option
 with no navigation, a success flash that fades and an error that stays) is tests/e2e/test_ui_polish.py.
 """
 
@@ -100,7 +100,7 @@ SITES = [
         "templates/devices.html",
         ["jenToast('Error saving: ' + data.error, 'error')", "jenToast('No devices selected.', 'info')"],
     ),
-    ("templates/subnets.html", ["jenToast('Could not save the colour: '", "jenToast('Error saving note: '"]),
+    ("templates/subnets.html", ["jenToast('Could not save the color: '", "jenToast('Error saving note: '"]),
     ("templates/settings_alerts.html", ["jenToast('Channel not found', 'error')"]),
     ("templates/mfa_backup_codes.html", ["jenToast('Codes copied to clipboard', 'success')"]),
     ("templates/user_profile.html", ['id="avatar-note"', 'getElementById("avatar-note")']),
@@ -188,7 +188,7 @@ class TestToastRegion:
 
 
 class TestPromptDialog:
-    def test_it_is_a_dialog_with_a_labelled_field(self):
+    def test_it_is_a_dialog_with_a_labeled_field(self):
         tag = re.search(r'<div id="jen-prompt-overlay"[^>]*>', BASE).group(0)
         assert 'role="dialog"' in tag and 'aria-modal="true"' in tag and "hidden" in tag
         assert '<label id="jen-prompt-label" for="jen-prompt-input">' in BASE

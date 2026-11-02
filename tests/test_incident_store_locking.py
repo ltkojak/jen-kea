@@ -74,7 +74,7 @@ def test_two_workers_recording_two_servers_both_land(round_):
 
 
 @pytest.mark.parametrize("round_", range(8))
-def test_recording_concurrent_with_an_acknowledgement_keeps_the_new_and_drops_the_acknowledged(round_):
+def test_recording_concurrent_with_an_acknowledgment_keeps_the_new_and_drops_the_acknowledged(round_):
     cs.record_attention(9, "dhcp4", "old", "aborted")
     _together(
         lambda: cs.record_attention(1, "dhcp4", "new", "probe-pending"),
@@ -136,7 +136,7 @@ def test_a_commit_that_fails_is_reported_false_and_leaves_the_stored_list_unchan
     assert cs.record_attention(2, "dhcp4", "lost", "probe-pending") is False
     monkeypatch.setattr("jen.models.db.jen_db", real)
     assert [i["server_id"] for i in _stored()] == [1], "the failed transaction changed nothing"
-    assert cs.resolve_attention(1, "dhcp4") == 1, "and the note is still usable afterwards"
+    assert cs.resolve_attention(1, "dhcp4") == 1, "and the note is still usable afterward"
 
 
 @pytest.mark.parametrize("round_", range(12))
@@ -181,7 +181,7 @@ def test_a_deadlock_victim_retries_instead_of_losing_the_update(monkeypatch):
 @pytest.mark.parametrize("bad", ["{broken json!!!", "[]", '{"incidents": "x"}'])
 def test_a_note_that_is_not_a_note_is_refused_unchanged_by_every_writer(bad):
     """Q189 (AE3): on the REAL table. The transaction reads the stored value under the row lock, the strict parse raises inside it, the transaction rolls back, False comes back - and the value is
-    byte-equal afterwards. (Before: `_incidents_of` read it as `[]`, the writer wrote its new incident over it.)"""
+    byte-equal afterward. (Before: `_incidents_of` read it as `[]`, the writer wrote its new incident over it.)"""
     user_mod.set_global_setting(cs.ATTENTION_KEY, bad)
     assert cs.record_attention(1, "dhcp4", "x", "aborted", server_name="kea-a") is False
     assert cs.acknowledge_recovery(1, "dhcp4", "aborted") is None

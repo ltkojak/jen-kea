@@ -59,12 +59,12 @@ IDS = [str(p.relative_to(REPO)) for p, _ in ALL]
 
 
 class TestScannerSeesTheRealSpellings:
-    def test_a_negated_grep_is_recognised(self):
+    def test_a_negated_grep_is_recognized(self):
         assert re.search(NEGATED, '! grep -q "x" <<< "$page"')
         assert re.search(NEGATED, "   ! grep -q 'x' file")
         assert not re.search(NEGATED, 'if ! grep -q "x" <<< "$p"; then')
 
-    def test_a_pipeline_into_grep_q_is_recognised(self):
+    def test_a_pipeline_into_grep_q_is_recognized(self):
         assert re.search(PIPE_GREP_Q, "curl -sf http://x | grep -q jen_version")
         assert re.search(PIPE_GREP_Q, "x | grep -Pq 'a'")
         assert re.search(PIPE_GREP_Q, "x | grep -qP 'a'")

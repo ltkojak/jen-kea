@@ -47,7 +47,7 @@ _SECS_RE = re.compile(r"for (\d+) seconds")
 _HINT_RE = re.compile(r"hint=(\S+)")
 
 # id -> (log level Kea emits it at, outcome tag). Outcome drives grouping
-# and the badge colour; "info" is context that decides nothing.
+# and the badge color; "info" is context that decides nothing.
 MESSAGES: dict[str, tuple[str, str]] = {
     "DHCP4_PACKET_RECEIVED": ("INFO", "received"),
     "DHCP4_PACKET_SEND": ("INFO", "sent"),
@@ -440,7 +440,7 @@ def problem_events(lines: list[str]) -> list[dict]:
 
 
 def host_log_path(path) -> str:
-    """`path` when the Kea host's helper would accept it as a log to read - an absolute, normalised `*.log` under /var/log (the helper's `_allowed_log_path`, without the symlink
+    """`path` when the Kea host's helper would accept it as a log to read - an absolute, normalized `*.log` under /var/log (the helper's `_allowed_log_path`, without the symlink
     resolution only the host can do) - else "" (v5.69.0-beta.1, Q170). Anything else made the arm refuse with `bad-log-path` even where the control socket could answer on its own."""
     if (
         isinstance(path, str)

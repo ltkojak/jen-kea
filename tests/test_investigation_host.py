@@ -336,7 +336,7 @@ class TestAMarkerThatIsNotTheRecordedOneIsRefused:
 
 
 class TestTheWrappersAroundTheHelperOps:
-    """`kea_host.investigation_arm / _disarm / _status`: the payload each op is sent and how each answer is normalised (there is no legacy engine for these)."""
+    """`kea_host.investigation_arm / _disarm / _status`: the payload each op is sent and how each answer is normalized (there is no legacy engine for these)."""
 
     @pytest.fixture
     def wire(self, monkeypatch):
@@ -561,7 +561,7 @@ class TestTheElevenRowsOfTheCandidateMarker:
 
 
 class TestAnUnresolvedSessionOnTheHostIsNeverOverwritten:
-    """v5.68.0-beta.30 (Q167, INV-008): the host's record is authoritative; Jen shows a session it does not recognise, refuses to turn logging on over it, and never arms over it."""
+    """v5.68.0-beta.30 (Q167, INV-008): the host's record is authoritative; Jen shows a session it does not recognize, refuses to turn logging on over it, and never arms over it."""
 
     OTHER = {"severity": "WARN", "debuglevel": 0}
 
@@ -585,7 +585,7 @@ class TestAnUnresolvedSessionOnTheHostIsNeverOverwritten:
         self._foreign_session(kea)
         original = copy.deepcopy(kea.file)
         out = inv.turn_on(world.servers[0], 5)
-        assert not out["ok"] and "does not recognise" in out["lines"][0] and "--self-restore --now" in out["lines"][0]
+        assert not out["ok"] and "does not recognize" in out["lines"][0] and "--self-restore --now" in out["lines"][0]
         assert kea.file == original and kea.writes == 0 and "host:arm" not in kea.calls and not inv.active()
 
     def test_an_arm_the_host_refuses_after_the_gate_reverts_the_file_and_says_why(self, world, monkeypatch):
@@ -597,7 +597,7 @@ class TestAnUnresolvedSessionOnTheHostIsNeverOverwritten:
         )
         self._foreign_session(kea)
         out = inv.turn_on(world.servers[0], 5)
-        assert not out["ok"] and any("does not recognise" in line for line in out["lines"]), out["lines"]
+        assert not out["ok"] and any("does not recognize" in line for line in out["lines"]), out["lines"]
         assert kea.file == original and not inv.active()
         assert kea.helper_state["restore"] == self.OTHER, "the host's record was not touched"
 
@@ -611,7 +611,7 @@ class TestAnUnresolvedSessionOnTheHostIsNeverOverwritten:
         (row,) = inv.active()
         assert row["host_conflict"] and row["host_conflict"]["restore"] == self.OTHER and row["armed"] is False
         check = health._debug_logging_left_on({})
-        assert check.status == "fail" and "does not recognise" in check.detail and "kea-a" in check.detail
+        assert check.status == "fail" and "does not recognize" in check.detail and "kea-a" in check.detail
         assert kea.helper_state["restore"] == self.OTHER, "Jen never re-armed over it"
 
     def test_an_extension_of_this_entrys_own_session_is_not_a_conflict(self, world):
@@ -879,7 +879,7 @@ class TestTheHostHelperItemsOfBuild18:
     def test_a_daemon_already_running_the_restored_file_is_said_so(self, world):
         kea = world.daemons[1]
         inv.turn_on(world.servers[0], 15)
-        kea.signalled = False
+        kea.signaled = False
         out = inv.turn_off(world.servers[0])
         assert out["ok"] and any("already running the restored file" in line for line in out["lines"]), out["lines"]
 

@@ -413,7 +413,7 @@ class TestTheCooldownCountsFromTheEndOfTheFailure:
 
 class TestTheKea6PoolIsThrottledToo:
     """v5.68.0-beta.22 (Q157, item 10): `get_kea6_db` still created its pool and direct-connected INSIDE `_pool_lock` with no failure mark - the shape
-    Q156 fixed for the jen and kea pools. A separate, down v6 lease host cost ~20 s per call and serialised every other database caller."""
+    Q156 fixed for the jen and kea pools. A separate, down v6 lease host cost ~20 s per call and serialized every other database caller."""
 
     @pytest.fixture
     def broken(self, monkeypatch):

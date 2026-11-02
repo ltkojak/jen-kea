@@ -778,7 +778,7 @@ class TestTheIdentityInvariantHasOneChokePointInTheSource:
         assert "ConfigChangeRefused" in (ROOT / "jen" / "__init__.py").read_text(encoding="utf-8")
 
     def test_03_the_identity_keys_are_exactly_the_four_settings_that_say_which_kea(self):
-        """Behavioural AND structural: changing any of the identity options changes the view; changing any other option of a server does not."""
+        """Behavioral AND structural: changing any of the identity options changes the view; changing any other option of a server does not."""
         identity_options = [
             ("kea", "api_url"),
             ("kea_ssh", "host"),

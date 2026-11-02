@@ -21,7 +21,7 @@ function saveTone(choice) {
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-        if (!data.ok) { jenToast('Could not save the colour: ' + data.error, 'error'); return; }
+        if (!data.ok) { jenToast('Could not save the color: ' + data.error, 'error'); return; }
         document.querySelectorAll('[data-tone-badge="' + id + '"]').forEach(function(el) {
             el.className = el.className.replace(/badge-tone-\w+/, 'badge-tone-' + data.tone);
         });
@@ -147,8 +147,8 @@ document.addEventListener('click', function(e) {
             {% if current_user.role in ('superadmin','admin') %}
             <span class="tone-picker">
                 <button type="button" class="badge badge-tone-{{ subnet_tone(s.id) }} tone-btn" data-subnet-id="{{ s.id }}" data-tone-badge="{{ s.id }}" aria-haspopup="true" aria-expanded="false"
-                        title="Choose this subnet's badge colour">{{ s.name }}</button>
-                <div class="tone-menu" role="group" aria-label="Badge colour for {{ s.name }}" hidden>
+                        title="Choose this subnet's badge color">{{ s.name }}</button>
+                <div class="tone-menu" role="group" aria-label="Badge color for {{ s.name }}" hidden>
                     {% for t in badge_tones %}
                     <button type="button" class="badge badge-tone-{{ t }} tone-choice" data-subnet-id="{{ s.id }}" data-tone="{{ t }}" aria-pressed="{{ 'true' if subnet_tone(s.id) == t else 'false' }}"
                             title="{{ t|title }}">{{ s.name }} · {{ t }}</button>

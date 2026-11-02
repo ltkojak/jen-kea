@@ -677,7 +677,7 @@ def import_inspect():
                 return _abort(f"That file is over the {max_mb} MB import cap ([backups] max_import_mb in jen.config).")
             out.write(chunk)
 
-    # v5.67.0-beta.14 (Q128, item d) — a gzip file is recognised by its magic bytes and measured by streaming it
+    # v5.67.0-beta.14 (Q128, item d) — a gzip file is recognized by its magic bytes and measured by streaming it
     # through gzip; anything else is plain JSON (the parser has always accepted both) and is its own size. Both
     # go through the same cap above and the same admission check below.
     with open(tmp_path, "rb") as head:

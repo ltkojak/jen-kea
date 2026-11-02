@@ -1090,7 +1090,7 @@ class TestTheCardShowsUsage:
             set_global_setting("alert_threshold_pct", "5")  # 3 of 41 = 7% is past 5
             _invalidate_settings_cache()
             page = logged_in_client.get("/subnets").data.decode()
-            # (Q205: the meter is a <progress> whose colour is its level class's rule in base.html - the old inline `background:var(--warning)` is gone with the inline style)
+            # (Q205: the meter is a <progress> whose color is its level class's rule in base.html - the old inline `background:var(--warning)` is gone with the inline style)
             assert 'class="pool-use usage-bar usage-warn"' in page
             set_global_setting("alert_threshold_pct", "80")
             _invalidate_settings_cache()

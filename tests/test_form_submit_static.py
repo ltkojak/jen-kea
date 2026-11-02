@@ -2,7 +2,7 @@
 tests/test_form_submit_static.py
 ──────────────────────────────────
 v5.65.10 (Q99 f) — the source-level half of the full-page-submit fixes, runnable without a browser
-(tests/e2e/test_form_submit_progress.py drives the behaviour). A download form that lacks
+(tests/e2e/test_form_submit_progress.py drives the behavior). A download form that lacks
 `data-download` leaves its button disabled and the bar sweeping until the page is left; the shared
 progress bar must stop on `htmx:afterRequest` alone.
 """
@@ -46,7 +46,7 @@ def test_every_post_route_that_sends_a_file_has_a_data_download_form_or_a_script
         )
 
 
-def test_the_submit_listener_honours_defaultPrevented_before_it_touches_the_form():
+def test_the_submit_listener_honors_defaultPrevented_before_it_touches_the_form():
     assert re.search(
         r"if \(e\.defaultPrevented\) return;\s*"
         r"if \(e\.target && e\.target\.tagName === 'FORM'\) "

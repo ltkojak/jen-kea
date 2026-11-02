@@ -349,7 +349,7 @@ class TestDevicesFilteredEmptyState:
         assert 'href="/devices?per_page=100&amp;sort=last_seen&amp;dir=desc"' in body
         assert "the inventory fills itself" not in body
 
-    def test_a_search_is_sanitised_before_it_is_named(self, logged_in_client, db):
+    def test_a_search_is_sanitized_before_it_is_named(self, logged_in_client, db):
         with db.cursor() as cur:
             cur.execute("DELETE FROM devices")
         db.commit()

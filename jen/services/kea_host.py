@@ -105,7 +105,7 @@ def _open_ssh(server: dict):
     """The one place a kea_host call opens its SSH session. v5.67.0-beta.8 (Q120, item a) —
     helper_call() used to call `_connect_ssh()` OUTSIDE its try, and read_config_versioned()
     and check_helper() catch only HelperMissing/HelperError, so a paramiko or socket exception
-    (the key not yet authorised — the normal first try — or no SSH host at all) propagated
+    (the key not yet authorized — the normal first try — or no SSH host at all) propagated
     straight out of /setup's "Capture baseline" and "Install the helper" as a 500. Any failure
     here is now a HelperUnreachable worded like Q102's legacy-grant probe: `user@host`, then the
     transport's own exception. An empty host is refused BEFORE paramiko is asked to connect —
@@ -1049,7 +1049,7 @@ INVESTIGATION_MIN_HELPER_BUILD = 18  # v5.69.0-beta.1 (Q170): the walls around w
 
 
 def _investigation_op(server: dict, op: str, payload: dict) -> dict:
-    """One investigation-* helper op, normalised: `{"ok": bool, "code": "ok" | "missing" | "old" | "error", "detail": str, ...the helper's own fields}`. Never raises.
+    """One investigation-* helper op, normalized: `{"ok": bool, "code": "ok" | "missing" | "old" | "error", "detail": str, ...the helper's own fields}`. Never raises.
     There is no legacy engine for these: the whole point is a root-owned routine on the Kea host (v5.68.0-beta.29, Q165), so a host without the helper - or with one
     older than build 15 - answers `missing` / `old` and the caller says to press Update helper."""
     try:
@@ -1419,7 +1419,7 @@ def _sudo_l_summary(listing: str) -> str:
     docstring for why that specific form is uninformative here), pull out the python3 rule(s) with
     their tags and the first LATER line granting ALL without NOPASSWD - the pair that distinguishes
     "a rule after jen-kea overrides it" from "the line is genuinely missing". Returns "" when no
-    python3 rule is findable at all (an unrecognised sudo -l format, or the probe produced
+    python3 rule is findable at all (an unrecognized sudo -l format, or the probe produced
     nothing) - the caller falls back to sudo's own refusal reason alone."""
     lines = [line.strip() for line in (listing or "").splitlines() if line.strip()]
     python3_indices = [i for i, line in enumerate(lines) if "python3" in line]
@@ -1658,7 +1658,7 @@ def helper_signature(candidate: bytes) -> bytes | None:
 
 def _source_version(source: str) -> int:
     """HELPER_VERSION as declared by the helper text about to be copied —
-    the only honest "what will the host report afterwards" number."""
+    the only honest "what will the host report afterward" number."""
     m = re.search(r"^HELPER_VERSION = (\d+)$", source, re.M)
     return int(m.group(1)) if m else JEN_HELPER_SHIPPED_VERSION
 
@@ -1666,7 +1666,7 @@ def _source_version(source: str) -> int:
 def _source_build(source: str) -> int:
     """HELPER_BUILD as declared by the helper text about to be copied — v5.66.0-beta.2
     (Q104), beside _source_version() for the same reason: the only honest "what will the
-    host report afterwards" number, this time for the build ordering that survives a
+    host report afterward" number, this time for the build ordering that survives a
     helper-only fix which doesn't bump HELPER_VERSION."""
     m = re.search(r"^HELPER_BUILD = (\d+)$", source, re.M)
     return int(m.group(1)) if m else JEN_HELPER_SHIPPED_BUILD
@@ -1680,7 +1680,7 @@ def _helper_self_test_command() -> str:
     the just-downloaded candidate's `version` op and exits non-zero unless the JSON reply says
     `ok: true` with EXACTLY the version/build this release's own source declares (baked in as
     literals here — V and B are read from _source_version()/_source_build() of the file this
-    install ships, the same "what will the host report afterwards" numbers install_helper()
+    install ships, the same "what will the host report afterward" numbers install_helper()
     itself targets)."""
     source = _helper_source()
     target_version = _source_version(source)
@@ -1916,7 +1916,7 @@ def install_helper(server: dict) -> dict:
     if chk.get("code") == "unreachable":
         # v5.67.0-beta.8 (Q120, item a) — nothing below can work without an SSH session, and
         # its own wording ("no legacy python3 grant to install through") would blame sudo for
-        # what is a refused or unauthorised connection. Say the connection failure itself.
+        # what is a refused or unauthorized connection. Say the connection failure itself.
         return {"ok": False, "version": None, "code": "unreachable", "detail": chk["detail"]}
     current = chk.get("version")
     current_build = chk.get("build")

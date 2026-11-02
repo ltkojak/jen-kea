@@ -313,7 +313,7 @@ class TestTheAlert:
         cp.sweep(NOW, servers=[SERVER_A])
         assert sorted(c[2]["kind"] for c in calls["alerts"]) == ["Declined an address", "NAK"]
 
-    def test_the_threshold_key_is_honoured(self, db, stack, monkeypatch):
+    def test_the_threshold_key_is_honored(self, db, stack, monkeypatch):
         logs, calls = stack
         prime(logs)
         monkeypatch.setattr(extensions, "CLIENT_PROBLEM_THRESHOLD", 2)
@@ -1886,7 +1886,7 @@ class TestTheEarlierHostLabelSaysWhenItWasClosed:
         w = cp.widget(None, True, now=NOW)
         assert w["total"] == 1 and list(w["counts"].values()) == [1]
 
-    def test_a_row_with_no_close_time_is_labelled_without_one(self):
+    def test_a_row_with_no_close_time_is_labeled_without_one(self):
         rows = [
             {
                 "server_id": 1,

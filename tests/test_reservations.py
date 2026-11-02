@@ -1172,7 +1172,7 @@ class TestReservationsFilteredEmptyState:
         body = logged_in_client.get("/reservations?status=active").data.decode()
         assert "No reservations that are active" in body and "Clear filters" in body
 
-    def test_a_search_is_sanitised_before_it_is_named(self, logged_in_client, q206_reservations):
+    def test_a_search_is_sanitized_before_it_is_named(self, logged_in_client, q206_reservations):
         body = logged_in_client.get("/reservations?search=<zzq>").data.decode()
         assert "match “zzq”" in body and "<zzq>" not in body.split('id="reservations-results"', 1)[1]
 

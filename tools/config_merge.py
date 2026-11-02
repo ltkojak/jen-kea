@@ -119,7 +119,7 @@ def identity_diff(before_text, after_text):
 def _credential_rules():
     """Jen's `credentials` module, imported from the tree this file ships in (v5.69.0-beta.13, Q182, X6). The module and the two it uses (`jen.services.auth`, `jen.extensions`) are
     standard-library only, but their package `jen` imports Flask: when `jen` is not already loaded, two empty stand-in packages pointing at the directories let the three be imported
-    by name without running it - and are taken out again afterwards, so nothing else in the process sees them."""
+    by name without running it - and are taken out again afterward, so nothing else in the process sees them."""
     import importlib
     import types
 

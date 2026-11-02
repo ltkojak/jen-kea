@@ -2,8 +2,8 @@
 tests/test_stored_objects_wol.py
 ─────────────────────────────────
 v5.68.0-beta.12 (Q147) — Wake & Actions 1.1.2 through the real pages and API, in BOTH directions of the moved-client fixture
-(tests/stored_object_fixtures.py): a favourite is a stored object judged on its OWN stored subnet by the list, add, delete and the wake from
-the list; a WAKE is an act on a live host judged on where the host is now, and never borrows the SecureOn password of a favourite the caller
+(tests/stored_object_fixtures.py): a favorite is a stored object judged on its OWN stored subnet by the list, add, delete and the wake from
+the list; a WAKE is an act on a live host judged on where the host is now, and never borrows the SecureOn password of a favorite the caller
 may not see. The packet is recorded instead of sent, with the SecureOn it would have carried.
 """
 
@@ -51,7 +51,7 @@ def packets(plugin_app):
     mod._last_sent.clear()
 
 
-def _favourite(db, mac):
+def _favorite(db, mac):
     return one(db, "SELECT id, label, subnet_id FROM wol_hosts WHERE mac=%s", (mac,))
 
 
@@ -71,24 +71,24 @@ class TestDirection1StoredInBClientNowInA:
     ):
         assert "now in" not in page(pclient, db, "admin_B", WOL + "/")
 
-    def test_add_over_an_existing_favourite_cannot_rewrite_it(self, pclient, db, stored_objects):
+    def test_add_over_an_existing_favorite_cannot_rewrite_it(self, pclient, db, stored_objects):
         login(pclient, db, "admin_A")
         pclient.post(WOL + "/favourites/add", data={"mac": A_MAC, "label": "hijacked", "secureon": ""})
-        assert _favourite(db, A_MAC)["label"] == S1 + "-wol"
+        assert _favorite(db, A_MAC)["label"] == S1 + "-wol"
 
     def test_delete_cannot_remove_it(self, pclient, db, stored_objects):
-        fav = _favourite(db, A_MAC)
+        fav = _favorite(db, A_MAC)
         login(pclient, db, "admin_A")
         pclient.post(f"{WOL}/favourites/{fav['id']}/delete")
-        assert _favourite(db, A_MAC) is not None
+        assert _favorite(db, A_MAC) is not None
 
     def test_waking_it_from_the_list_is_not_found_and_sends_nothing(self, pclient, db, stored_objects, packets):
-        fav = _favourite(db, A_MAC)
+        fav = _favorite(db, A_MAC)
         login(pclient, db, "admin_A")
         pclient.post(f"{WOL}/favourites/{fav['id']}/wake")
         assert packets == []
 
-    def test_a_wake_of_the_host_itself_goes_ahead_without_the_hidden_favourites_password(
+    def test_a_wake_of_the_host_itself_goes_ahead_without_the_hidden_favorites_password(
         self, pclient, db, stored_objects, packets
     ):
         login(pclient, db, "admin_A")
@@ -102,7 +102,7 @@ class TestDirection1StoredInBClientNowInA:
         )
         assert r.status_code == 200 and [(m, s) for m, _c, s in packets] == [(A_MAC, None)]
 
-    def test_the_control_an_unrestricted_caller_may_see_the_favourite_so_its_password_is_used(
+    def test_the_control_an_unrestricted_caller_may_see_the_favorite_so_its_password_is_used(
         self, pclient, db, stored_objects, packets
     ):
         login(pclient, db, "admin_all")
@@ -118,18 +118,18 @@ class TestDirection2StoredInAClientNowInB:
         assert_no_marker(body)
         assert S2 + "-wol" not in page(pclient, db, "admin_B", WOL + "/")
 
-    def test_it_can_be_relabelled_and_deleted_by_its_owner(self, pclient, db, stored_objects):
+    def test_it_can_be_relabeled_and_deleted_by_its_owner(self, pclient, db, stored_objects):
         login(pclient, db, "admin_A")
         pclient.post(WOL + "/favourites/add", data={"mac": D_MAC, "label": "renamed", "secureon": ""})
-        fav = _favourite(db, D_MAC)
-        assert fav["label"] == "renamed" and fav["subnet_id"] == 1, "relabelled, and still filed under A"
+        fav = _favorite(db, D_MAC)
+        assert fav["label"] == "renamed" and fav["subnet_id"] == 1, "relabeled, and still filed under A"
         pclient.post(f"{WOL}/favourites/{fav['id']}/delete")
-        assert _favourite(db, D_MAC) is None
+        assert _favorite(db, D_MAC) is None
 
     def test_it_cannot_be_woken_because_the_host_is_now_on_a_network_the_caller_cannot_see(
         self, pclient, db, stored_objects, packets
     ):
-        fav = _favourite(db, D_MAC)
+        fav = _favorite(db, D_MAC)
         login(pclient, db, "admin_A")
         pclient.post(f"{WOL}/favourites/{fav['id']}/wake")
         pclient.post(f"{WOL}/wake?mac={D_MAC}")
@@ -143,14 +143,14 @@ class TestDirection2StoredInAClientNowInB:
         assert r.status_code in (403, 404) and packets == []
 
 
-class TestQ171AWakeStampsOnlyAFavouriteTheCallerMaySee:
-    """v5.69.0-beta.2 (Q171) - Wake & Actions 1.1.5: `last_woken_at/by` is written only for a favourite judged visible to the caller, so a wake of the host never tells the
-    owner of a hidden favourite which account woke it, and the refusal for a favourite that is not the caller's says so without a claim about the MAC."""
+class TestQ171AWakeStampsOnlyAFavoriteTheCallerMaySee:
+    """v5.69.0-beta.2 (Q171) - Wake & Actions 1.1.5: `last_woken_at/by` is written only for a favorite judged visible to the caller, so a wake of the host never tells the
+    owner of a hidden favorite which account woke it, and the refusal for a favorite that is not the caller's says so without a claim about the MAC."""
 
     def _stamp(self, db, mac):
         return one(db, "SELECT last_woken_at, last_woken_by FROM wol_hosts WHERE mac=%s", (mac,))
 
-    def test_a_scoped_callers_wake_of_the_host_does_not_stamp_the_hidden_favourite(
+    def test_a_scoped_callers_wake_of_the_host_does_not_stamp_the_hidden_favorite(
         self, pclient, db, stored_objects, packets
     ):
         login(pclient, db, "admin_A")
@@ -173,7 +173,7 @@ class TestQ171AWakeStampsOnlyAFavouriteTheCallerMaySee:
         assert r.status_code == 200
         assert self._stamp(db, A_MAC)["last_woken_by"] is None
 
-    def test_add_over_a_favourite_that_is_not_the_callers_says_so_and_nothing_about_the_mac(
+    def test_add_over_a_favorite_that_is_not_the_callers_says_so_and_nothing_about_the_mac(
         self, pclient, db, stored_objects
     ):
         login(pclient, db, "admin_A")
@@ -188,9 +188,9 @@ class TestQ171AWakeStampsOnlyAFavouriteTheCallerMaySee:
         assert_no_marker(body)
 
 
-class TestQ171FixupOneRefusalForAFavouriteThatIsNotTheCallers:
-    """v5.69.0-beta.2 (Q171 fixup, G10) - Wake & Actions 1.1.6: saving a favourite over a hidden favourite and saving one for a MAC whose subnet the caller cannot
-    see are ONE sentence, so a scoped caller cannot tell which MACs have a favourite stored in a subnet they cannot see."""
+class TestQ171FixupOneRefusalForAFavoriteThatIsNotTheCallers:
+    """v5.69.0-beta.2 (Q171 fixup, G10) - Wake & Actions 1.1.6: saving a favorite over a hidden favorite and saving one for a MAC whose subnet the caller cannot
+    see are ONE sentence, so a scoped caller cannot tell which MACs have a favorite stored in a subnet they cannot see."""
 
     def _flashed(self, pclient, db, mac):
         r = pclient.post(
@@ -200,14 +200,14 @@ class TestQ171FixupOneRefusalForAFavouriteThatIsNotTheCallers:
         assert_no_marker(body, ignore=(mac,))
         return "That favourite is not yours to change." in body, "subnet you can access" in body
 
-    def test_a_hidden_favourite_and_a_hidden_mac_get_the_same_answer(self, pclient, db, stored_objects):
+    def test_a_hidden_favorite_and_a_hidden_mac_get_the_same_answer(self, pclient, db, stored_objects):
         from tests.test_authz_matrix import B2_MAC
 
         login(pclient, db, "admin_A")
-        hidden_favourite = self._flashed(pclient, db, A_MAC)  # stored in B, the client is in A
-        hidden_mac = self._flashed(pclient, db, B2_MAC)  # no favourite, the client is in B
-        assert hidden_favourite == hidden_mac == (True, False), (hidden_favourite, hidden_mac)
-        assert _favourite(db, B2_MAC) is None, "nothing was written for the hidden MAC"
+        hidden_favorite = self._flashed(pclient, db, A_MAC)  # stored in B, the client is in A
+        hidden_mac = self._flashed(pclient, db, B2_MAC)  # no favorite, the client is in B
+        assert hidden_favorite == hidden_mac == (True, False), (hidden_favorite, hidden_mac)
+        assert _favorite(db, B2_MAC) is None, "nothing was written for the hidden MAC"
 
     def test_a_wake_of_a_mac_in_a_hidden_subnet_keeps_the_mac_sentence(self, pclient, db, stored_objects, packets):
         from tests.test_authz_matrix import B2_MAC

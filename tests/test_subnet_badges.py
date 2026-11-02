@@ -105,7 +105,7 @@ class TestThePinnedDeclarationsAndTheSevenTones:
 
     @staticmethod
     def _mix(a, b, pa):
-        """sRGB mix of two #rrggbb colours, `pa` percent of a."""
+        """sRGB mix of two #rrggbb colors, `pa` percent of a."""
         pa = pa / 100.0
         ca, cb = [int(a[i : i + 2], 16) for i in (1, 3, 5)], [int(b[i : i + 2], 16) for i in (1, 3, 5)]
         return "#" + "".join(f"{round(x * pa + y * (1 - pa)):02x}" for x, y in zip(ca, cb, strict=True))
@@ -118,7 +118,7 @@ class TestThePinnedDeclarationsAndTheSevenTones:
     @pytest.mark.parametrize("preset", sorted(theme.PRESETS))
     @pytest.mark.parametrize(("hue", "tone"), [("#e6b400", "yellow"), ("#a371f7", "purple")])
     def test_the_fixed_hues_read_in_every_preset(self, preset, hue, tone):
-        """yellow and purple are fixed hues mixed 50% toward the preset's own text colour, on an 18% tint of the hue over the preset's surface: the label keeps a legible ratio on a light and on a dark preset."""
+        """yellow and purple are fixed hues mixed 50% toward the preset's own text color, on an 18% tint of the hue over the preset's surface: the label keeps a legible ratio on a light and on a dark preset."""
         tokens = theme.PRESETS[preset]["tokens"]
         text, surface = self._full(tokens["text"]), self._full(tokens["surface"])
         label = self._mix(hue, text, 50)
@@ -126,7 +126,7 @@ class TestThePinnedDeclarationsAndTheSevenTones:
         assert theme.contrast_ratio(label, chip) >= 3.0, (preset, tone, label, chip, theme.contrast_ratio(label, chip))
 
     @pytest.mark.parametrize("preset", sorted(theme.PRESETS))
-    def test_mono_is_the_texts_own_colour_on_a_tint_of_itself(self, preset):
+    def test_mono_is_the_texts_own_color_on_a_tint_of_itself(self, preset):
         tokens = theme.PRESETS[preset]["tokens"]
         text, surface = self._full(tokens["text"]), self._full(tokens["surface"])
         assert theme.contrast_ratio(text, self._mix(text, surface, 18)) >= 3.0
@@ -148,7 +148,7 @@ class TestTheMacro:
     def test_a_tone_comes_from_the_id_not_the_name(self):
         assert self._render("{{ subnet_badge(3, 'iot') }}") == '<span class="badge badge-tone-green">iot</span>'
         assert self._render("{{ subnet_badge(4, 'iot') }}") == '<span class="badge badge-tone-blue">iot</span>', (
-            "the name `iot` carries no colour of its own"
+            "the name `iot` carries no color of its own"
         )
         assert self._render("{{ subnet_badge(5, 'admin') }}") == '<span class="badge badge-tone-purple">admin</span>', (
             "a subnet NAMED admin is not the red role badge"

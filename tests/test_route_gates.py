@@ -181,7 +181,7 @@ class TestEveryWriterOfIdentityOrKeaConfigCarriesItsGate:
         node = ast.parse(src).body[0]
         assert "apply_config" in _called_names(node) and "_superadmin_required" not in _decorators(node)
 
-    def test_the_oidc_writer_and_the_key_writer_are_recognised_by_their_shape(self):
+    def test_the_oidc_writer_and_the_key_writer_are_recognized_by_their_shape(self):
         by_name = {n.name: w for _p, n, w in _writers()}
         assert "[oidc]" in by_name["save_oidc"]
         assert "the SSH key" in by_name["generate_ssh_key"]

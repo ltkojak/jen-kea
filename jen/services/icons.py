@@ -8,7 +8,7 @@ once in base.html) holds one `<symbol id="i-<name>">` per icon; `icon()` emits
 the `<svg><use href="#i-<name>"/></svg>` that references it. Registered as the
 Jinja global `icon` (create_app), so every template — including HTMX partials
 rendered on their own — can call `{{ icon("pencil") }}` without importing
-anything. Icons take their colour from `currentColor`, so they follow the
+anything. Icons take their color from `currentColor`, so they follow the
 theme; nothing is baked in.
 
 Unknown names render nothing and log once (tests/test_icons.py fails on any
@@ -58,7 +58,7 @@ def checked_nav_icon(value, owner: str = "") -> str:
     name - a plugin's own emoji - is left alone, as `nav_icon` always allowed."""
     if not isinstance(value, str) or not value or is_icon(value) or not _NAME_SHAPED.match(value):
         return value if isinstance(value, str) and value else FALLBACK_NAV_ICON
-    if (owner, value) not in _nav_warned:  # discover_plugins() sanitises on every call: warn once
+    if (owner, value) not in _nav_warned:  # discover_plugins() sanitizes on every call: warn once
         _nav_warned.add((owner, value))
         logger.warning(
             f"{owner or 'plugin'}: nav icon {value!r} is not in the icon sprite - showing {FALLBACK_NAV_ICON!r}"

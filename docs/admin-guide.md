@@ -238,7 +238,7 @@ a CA, whose Key Usage leaves out certificate signing, or whose Extended Key
 Usage leaves out `serverAuth` or `clientAuth` is shown as **damaged**: Health
 fails and prints the verifier's own reason, an https setup is refused before
 anything is sent to a host, and Rotate replaces it only with the
-acknowledgement. A CA whose name constraints exclude the name or address of
+acknowledgment. A CA whose name constraints exclude the name or address of
 one of your Kea hosts is refused when Jen issues that host's certificate,
 before anything is installed, and the message says which name. A CA with no
 Key Usage extension at all is accepted (that means unrestricted), and so is
@@ -291,14 +291,14 @@ with a different library might not accept them either. Health says when
 | no Basic Constraints (a root marked only by Key Usage) | Jen needs `ca=True` stated |
 | a server certificate Jen signed with no DNS or IP name in it | `openssl verify -purpose sslserver` accepts a leaf with no subject alternative name (it checks a name only when asked); Jen refuses it as a rotation target, because it proves nothing about which daemon it was installed on |
 | a server certificate whose only name is empty, or an IP network | `openssl verify -purpose sslserver` accepts a leaf whose subject alternative name holds an empty DNS name or an IP network (`10.0.0.0/24`); Jen keeps only a DNS name the verifier's own parser accepts (an empty name, a tab, a NUL, a wildcard, a label over 63 characters or a space at the edge is none) and an IP address as a name, because a network is a range and not the address a daemon serves, so such a leaf names nothing and is refused with the same sentence as one with no name at all |
-| a server certificate for an IPv4-mapped IPv6 address (`::ffff:10.0.0.9`) | `openssl x509 -checkip` and urllib3 compare a subject alternative name with the dialled address byte for byte, so a certificate for the mapped spelling is accepted by no client that dials `10.0.0.9` (and the reverse). Jen compares certificate names exactly the same way (no fold), refuses the spelling where a certificate would be issued for it (the SSH host and API address savers, the bind address of the https setup), and gives a record saved with one the refusal at the setup and the rotation: use the IPv4 address spelled as itself. For a *password* the two spellings stay one place (the credential rule is unchanged) |
+| a server certificate for an IPv4-mapped IPv6 address (`::ffff:10.0.0.9`) | `openssl x509 -checkip` and urllib3 compare a subject alternative name with the dialed address byte for byte, so a certificate for the mapped spelling is accepted by no client that dials `10.0.0.9` (and the reverse). Jen compares certificate names exactly the same way (no fold), refuses the spelling where a certificate would be issued for it (the SSH host and API address savers, the bind address of the https setup), and gives a record saved with one the refusal at the setup and the rotation: use the IPv4 address spelled as itself. For a *password* the two spellings stay one place (the credential rule is unchanged) |
 
 **A CA that is healthy but cannot issue for one address.** A CA whose name
 constraints do not permit the address or host name of one Kea server is not
 damaged. The https setup says so ("Jen's CA is healthy, but it cannot issue a
 certificate the verifier accepts for ..."), names the address that failed (the
 bind address, or the SSH host's name), changes nothing on the host and asks for
-no acknowledgement: change the address, or replace the CA with **Rotate Kea
+no acknowledgment: change the address, or replace the CA with **Rotate Kea
 CA**. When the CA used for a rotation is one you prepared with **Prepare only** (or
 placed by hand) and its name constraints do not permit a host, the message says to
 discard the prepared CA under Settings → Kea and rotate again (Jen then stages its
@@ -337,7 +337,7 @@ host anything and only ever deletes records named like Jen's own. If the
 certificate folder cannot be read, Forget says so and forgets nothing.
 
 Two Kea server records that share one SSH host and service are one daemon - a record that is not
-dialled over https now (parked) counts, exactly as it does for the setup, because the certificate lands
+dialed over https now (parked) counts, exactly as it does for the setup, because the certificate lands
 at that daemon's fixed paths whatever scheme Jen dials it on:
 Rotate refuses them until one record is removed or points at its own host,
 and an https setup on the second record is refused the same way ("kea-b already
@@ -595,7 +595,7 @@ loopback / private network between it and the proxy (no cert needed in
 
 | Key | Description | Default |
 |---|---|---|
-| `client_problem_threshold` | Optional. How many times within an hour one client must have the same kind of DHCP trouble (a NAK, a decline, a failed DNS update, …) before the **Client had DHCP trouble** alert fires — once per client and kind per 24 hours, whatever the count afterwards. A whole number of 1 or more; anything else is logged and read as the default. | `3` |
+| `client_problem_threshold` | Optional. How many times within an hour one client must have the same kind of DHCP trouble (a NAK, a decline, a failed DNS update, …) before the **Client had DHCP trouble** alert fires — once per client and kind per 24 hours, whatever the count afterward. A whole number of 1 or more; anything else is logged and read as the default. | `3` |
 
 Everything else about alerts is configured in Settings → Alerts & Integrations; this is the one alert setting that lives in `jen.config`, because the sweep that fires it runs in the background with no page to configure it from.
 
@@ -763,7 +763,7 @@ Full documentation with examples is available at **Settings → Access & Securit
 
 ### Writing through the API (v5.34.0)
 
-Write access is **per key and off by default**: tick *Allow writes* when creating the key. A read-only key gets `403` on every write endpoint; every key created before v5.34.0 is read-only. Writes honour the key's subnet scope exactly as reads do, are audited with the key's name as the actor (`[api-key:Home Assistant] …`), and are limited to 60 per minute per key. Reservations go through Kea's `host_cmds` hook like the Reservations page — never a config-file change — so a Kea refusal (duplicate address, unknown subnet) comes back as `502` with Kea's own message. Nothing that edits a Kea configuration file (subnets, pools, options, classes) is exposed through the API; those need the preview-and-apply flow in the UI.
+Write access is **per key and off by default**: tick *Allow writes* when creating the key. A read-only key gets `403` on every write endpoint; every key created before v5.34.0 is read-only. Writes honor the key's subnet scope exactly as reads do, are audited with the key's name as the actor (`[api-key:Home Assistant] …`), and are limited to 60 per minute per key. Reservations go through Kea's `host_cmds` hook like the Reservations page — never a config-file change — so a Kea refusal (duplicate address, unknown subnet) comes back as `502` with Kea's own message. Nothing that edits a Kea configuration file (subnets, pools, options, classes) is exposed through the API; those need the preview-and-apply flow in the UI.
 
 ### Home Assistant Quick Start
 
@@ -820,9 +820,9 @@ Seven presets ship with Jen:
 - **Light**
 - **High contrast** — every text/background pairing is at least 7:1 (WCAG AAA)
 - **Phosphor** — amber-on-green terminal look, monospace UI on desktop only (a phone keeps the regular font — a mono table would overflow it)
-- **Slate** — a cooler dark theme, blue-grey surfaces with a blue accent
+- **Slate** — a cooler dark theme, blue-gray surfaces with a blue accent
 - **Ember** — a warm dark theme, near-black with an orange accent
-- **Retro** — an early-90s desktop: a teal background behind grey panels, a navy accent and beveled borders
+- **Retro** — an early-90s desktop: a teal background behind gray panels, a navy accent and beveled borders
 
 A user who hasn't picked one gets the install's default theme, below.
 
@@ -832,15 +832,15 @@ Jen stores and prints every moment as UTC. Beside the theme, the same palette me
 timestamp (lease obtained and expiry, last seen, the audit and alert logs, the dashboard's recent leases) in the one you pick. The UTC wording stays in the tooltip of a local time, and a page
 without JavaScript keeps showing UTC. Like the theme, the choice belongs to the browser, not the account.
 
-### A subnet's badge colour (v5.70.0-beta.1)
+### A subnet's badge color (v5.70.0-beta.1)
 
-On **Subnets**, an admin clicks a subnet's name badge to choose its colour from seven (blue, green, red, orange, yellow, purple, mono); each swatch shows the subnet's own name in that colour. The
-colour is kept by subnet, beside the subnet's note, in Jen's own database - it is not an edit of Kea's config and restarts nothing. A subnet with no choice is blue, as every subnet was before.
+On **Subnets**, an admin clicks a subnet's name badge to choose its color from seven (blue, green, red, orange, yellow, purple, mono); each swatch shows the subnet's own name in that color. The
+color is kept by subnet, beside the subnet's note, in Jen's own database - it is not an edit of Kea's config and restarts nothing. A subnet with no choice is blue, as every subnet was before.
 Wherever a subnet badge is shown (Leases, Devices, Reservations, the dashboard, Search) it is a link to that page filtered to the subnet.
 
 ### Messages, copying and the page size (v5.70.0-beta.2)
 
-Jen no longer opens the browser's own pop-up boxes. A short answer ("Filter saved", "Codes copied", "Could not save the colour") appears as a small notice in the bottom-right corner of the
+Jen no longer opens the browser's own pop-up boxes. A short answer ("Filter saved", "Codes copied", "Could not save the color") appears as a small notice in the bottom-right corner of the
 window (above the tab bar on a phone): a success or an info notice leaves after five seconds, and waits while the pointer is on it; an error or a warning stays until you close it. A question
 that needs a typed answer - naming a saved filter - is Jen's own dialog: Enter confirms, Escape cancels, an empty name cancels. A note about a field (a picture over 200 KB, a missing
 database choice) is printed beside the field. The messages at the top of a page have a close button too, and a success or an info message there fades after six seconds; an error stays.
@@ -922,20 +922,20 @@ SNMPv2c. A port with more than eight MACs is treated as an uplink and shown as "
 belongs to the subnet its management address is in: a subnet-scoped account sees and changes only switches
 addressed inside its own subnets, and a switch addressed by hostname is for accounts that can see every subnet.
 
-**Wake & Actions** — Wake-on-LAN from a lease, reservation or device row, and a favourites list. *Needs* nothing
-from the host beyond being able to send UDP broadcast on the target's subnet. *Stores* the favourites (and an
+**Wake & Actions** — Wake-on-LAN from a lease, reservation or device row, and a favorites list. *Needs* nothing
+from the host beyond being able to send UDP broadcast on the target's subnet. *Stores* the favorites (and an
 optional SecureOn password) in its own `wol_hosts` table. *Sends* one standard magic packet per wake, to the subnet's
 directed broadcast address and the limited broadcast address, at most one per MAC every five seconds; every wake
-is audited. The subnet of a wake or a new favourite is the one the MAC is in (its active lease, then its
+is audited. The subnet of a wake or a new favorite is the one the MAC is in (its active lease, then its
 reservation), never a value in the request, and a MAC Jen has never seen is for accounts that can see every subnet.
 
-**Presence** — publishes tracked devices' online or offline state. *Needs* the Jen host's IPv4 neighbour table
+**Presence** — publishes tracked devices' online or offline state. *Needs* the Jen host's IPv4 neighbor table
 (`ip -4 neigh`, read every five minutes alongside lease events). *Stores* the devices you track, their current
 state, and your sinks (an MQTT password or HTTP bearer token is stored encrypted and never shown again) in its own
 `pr_*` tables. *Sends* every state change to each sink you configured: a Home Assistant webhook, MQTT, or any HTTP
 endpoint; nothing is published for a device you did not choose to track. Because every state change goes to every
 enabled sink, adding, pausing, testing and removing a sink is superadmin-only; other admins see the list
-read-only. A device that is not on a segment the Jen host has an interface on cannot appear in its neighbour table,
+read-only. A device that is not on a segment the Jen host has an interface on cannot appear in its neighbor table,
 so its state follows lease events only, and the page says "lease-based" beside it.
 
 *Presence* is also the push alternative to the polling example in the Home Assistant quick start above, which asks
@@ -1247,7 +1247,7 @@ extracted `jen/` directory, so this is the same two files, not a
 separate download.
 
 **Upgrading the helper.** Press **Update helper** in Settings → Kea → SSH
-(the same button, relabelled once a version is already recorded). What
+(the same button, relabeled once a version is already recorded). What
 happens next depends on the host's current version — see "v5.66.0 ships
 helper v6 — signed updates, no grant" below for a host already at v6:
 below that, this still runs over the legacy `sudo python3` path — the
@@ -1470,7 +1470,7 @@ to the host's Check button, superadmin, recent sign-in required) makes
 the grant delete itself. It refuses unless the helper's own sudoers
 file exists, holds the helper line for the SSH user and passes
 `visudo -c` — so a host is never left with no root path — and it
-re-checks the host afterwards so the chip and the Health row clear.
+re-checks the host afterward so the chip and the Health row clear.
 Jen has no button that adds the grant back: it would be Jen handing
 itself root. Settings → Kea → SSH also carries a collapsed box, **Grant
 or revoke the legacy root path by hand**, with both command blocks
@@ -1568,7 +1568,7 @@ Jen can put a Kea server's `kea-dhcp4` logger at DEBUG, debuglevel 55, for 5, 15
 
 **The Kea host puts the logger back by itself (v5.68.0-beta.29).** Since beta.29 the promise "it is put back" is kept by the Kea host, not by Jen: turning logging on arms a root-owned timer on that host (helper build 15 - see "Kea host helper" above), and at the deadline the host restores the logger and tells Kea, **with Jen stopped, Jen's database down, or Jen's settings pointed at another Kea.** What Jen records (below) is the display of that - the banner, the Servers page, the Health row (which shows the host's own error when its restore fails) - and the way you turn it off early. The Health row says "the Kea host puts the logger back by itself then (within about a minute)" for an armed entry, and the by-hand step for one is the single command `sudo jen-kea-helper --self-restore --now` on that host. `install.sh --configure` refuses to change where Jen reaches a Kea (the API URL, the connection mode, an SSH host, user or config path) without `--change-endpoints` and lists what would change; the old Kea restores itself at its deadline, and Jen keeps showing its entry until you press Forget on Servers.
 
-**What Jen records, and when it lets go (v5.68.0-beta.9).** Jen keeps an index of what it knows is on, and each entry says two things separately: whether the config file is back and whether the running Kea has taken it. An entry is dropped only when both are true. If a reload was refused and the restart failed, the file is already clean but Kea is still at DEBUG: the entry stays, the Health row says so, and the sweep tries the reload or restart again every minute until Kea takes it, even if the original time was longer. When you turn logging on and Kea does not take it, Jen puts the file straight back. **A server cannot be removed from Settings (or have its SSH host or API URL blanked) while it has an entry** until you turn the logging off from Servers. If a server is removed from Jen some different way (a hand edit of `jen.config`) while logging was on, Jen cannot reach it: the Servers page and the Health row show *Investigation logging may still be on on &lt;name&gt; (removed from Jen)*, with the host and the config path, and the by-hand edit above is the restore. Press **I restored it by hand** on the Servers page afterwards so that Jen stops reporting it. A marker Jen finds in a server's config that its own index did not list, and a refused removal, each write an audit row.
+**What Jen records, and when it lets go (v5.68.0-beta.9).** Jen keeps an index of what it knows is on, and each entry says two things separately: whether the config file is back and whether the running Kea has taken it. An entry is dropped only when both are true. If a reload was refused and the restart failed, the file is already clean but Kea is still at DEBUG: the entry stays, the Health row says so, and the sweep tries the reload or restart again every minute until Kea takes it, even if the original time was longer. When you turn logging on and Kea does not take it, Jen puts the file straight back. **A server cannot be removed from Settings (or have its SSH host or API URL blanked) while it has an entry** until you turn the logging off from Servers. If a server is removed from Jen some different way (a hand edit of `jen.config`) while logging was on, Jen cannot reach it: the Servers page and the Health row show *Investigation logging may still be on on &lt;name&gt; (removed from Jen)*, with the host and the config path, and the by-hand edit above is the restore. Press **I restored it by hand** on the Servers page afterward so that Jen stops reporting it. A marker Jen finds in a server's config that its own index did not list, and a refused removal, each write an audit row.
 
 **Where Jen reaches a Kea cannot change while logging is on, however it is saved (5.68.0-beta.28).** Beta.27 refused the change on three Settings pages; since beta.28 it is refused by the one place every change to `jen.config` passes, so the setup wizard and the direct-socket pages are covered too. While a server has investigation logging on (or a restore not finished), or Jen's record of it is unreadable, or Jen's own database cannot be read, a save that changes that server's API URL, SSH host, SSH user or Kea config path, that removes it, or that changes the **connection mode** (Control Agent or direct - it applies to every server) is refused with the reason and writes nothing; turn logging off from Servers first. Adding a server, the credentials, the display names and the DHCPv6/D2 URLs are not affected. Setting up or removing a direct socket is refused before anything is sent to the Kea host. **Do not run `sudo ./install.sh --configure` while investigation logging is on:** the installer is another process and cannot consult Jen's record; it leaves `[kea]` and `[kea_ssh]` alone unless an answers file says otherwise, but Jen cannot stop it. A Settings save of any key waits for a logging turn-on that is in progress (a few seconds).
 
@@ -1753,7 +1753,7 @@ The Kea export is streamed to disk one row at a time, like the Jen export, so a 
 - **Overwrite**: the matched reservation is **updated in place** (its `host_id` stays the same — nothing is deleted and re-inserted), and for each child table the file *contains* (`dhcp4_options`, `dhcp6_options`, `ipv6_reservations`) that reservation's rows are replaced by the file's. A child table the file does not contain is never touched: importing an IPv4-only file over a dual-stack reservation keeps its IPv6 reservations and DHCPv6 options.
 - Options in a file that belong to no reservation in it — older backups also carried global, subnet and class options — are not written anywhere; the result line counts them. (A reservation backup carries **host-scoped options only** since 5.67.0-beta.13: Kea's `dhcp_option_scope` numbers a host's options 3, and the export asks for exactly those.) A backup made before Kea 3.2 lacks columns a newer schema requires (`client_classes` on both options tables); the import fills them with their empty value rather than failing.
 
-**Migrating a Kea database (v5.67.0-beta.13): into an initialised Kea database, data only.** Jen never creates or changes Kea's tables. The target must already be a Kea database that `kea-admin db-init mysql` has initialised — it has Kea's `schema_version` row, with the **same major version** as the source's, and every table of the group being migrated. Anything else is refused before a row is written, naming what is wrong. The rows are copied in one transaction with plain inserts (a primary-key or unique-key collision is an error, not a silently skipped row), counted from what the database reports, and verified per table. If anything fails the transaction is rolled back and nothing that was on the target is touched. Before this release a failed migration dropped whatever tables it believed it had created — including a freshly initialised target's own. **The migration copies the group's rows exactly as the backup does (v5.67.0-beta.17):** the hosts, their IPv6 reservations and a reservation's own, host-scoped options — never the options of Kea's config backend (global, subnet, shared-network, pool and class options), which are not part of a reservation move and would be written into the target by their source ids or fail on its empty subnet tables. The result says how many host-scoped option rows were copied and, when the source had any, how many config-backend option rows it left behind.
+**Migrating a Kea database (v5.67.0-beta.13): into an initialized Kea database, data only.** Jen never creates or changes Kea's tables. The target must already be a Kea database that `kea-admin db-init mysql` has initialized — it has Kea's `schema_version` row, with the **same major version** as the source's, and every table of the group being migrated. Anything else is refused before a row is written, naming what is wrong. The rows are copied in one transaction with plain inserts (a primary-key or unique-key collision is an error, not a silently skipped row), counted from what the database reports, and verified per table. If anything fails the transaction is rolled back and nothing that was on the target is touched. Before this release a failed migration dropped whatever tables it believed it had created — including a freshly initialized target's own. **The migration copies the group's rows exactly as the backup does (v5.67.0-beta.17):** the hosts, their IPv6 reservations and a reservation's own, host-scoped options — never the options of Kea's config backend (global, subnet, shared-network, pool and class options), which are not part of a reservation move and would be written into the target by their source ids or fail on its empty subnet tables. The result says how many host-scoped option rows were copied and, when the source had any, how many config-backend option rows it left behind.
 
 **A CA bundle for the target (v5.67.0-beta.15).** The migration page has an optional **CA bundle** field, used by the connection test and by both migrations: a path to a file on the Jen host, and the connection to the target is then TLS verified against it. Without it the connection is plain, which fails against a target that requires TLS and sends the password in clear to one that merely allows it. A path that is not a file on the Jen host is refused before anything connects.
 
@@ -1778,7 +1778,7 @@ The Kea export is streamed to disk one row at a time, like the Jen export, so a 
 
 **A scoped replace of a parent table needs its dependents.** A restore runs with the database's foreign keys switched off, so deleting a table's rows never cascades. Replacing only `users` would leave multi-factor methods, backup codes, trusted devices, passkeys, saved searches, dashboard layouts and API keys pointing at accounts that no longer exist. If the file carries those tables and you did not tick them, the import is refused before anything changes, naming them; tick them too, or restore the whole file.
 
-**The file is checked first.** An upload that is not a Jen export — the top level is not an object, a table is not a list of rows, a row is not an object, a number is text, `format` is newer than this Jen understands — is refused with `not a Jen export: <reason>`, never an error page. gzip is recognised by its first two bytes, so a damaged gzip says so; a plain-JSON file goes through the same size cap and memory check as a compressed one.
+**The file is checked first.** An upload that is not a Jen export — the top level is not an object, a table is not a list of rows, a row is not an object, a number is text, `format` is newer than this Jen understands — is refused with `not a Jen export: <reason>`, never an error page. gzip is recognized by its first two bytes, so a damaged gzip says so; a plain-JSON file goes through the same size cap and memory check as a compressed one.
 
 **Restoring onto a new machine** (`sudo ./install.sh --restore`, see below) is strict about the core tables as well as the plugins: a table that is missing, a file whose rows have no column this schema knows, a count the database does not confirm, or a skipped row stops the restore and rolls everything back. `--lenient-plugins` relaxes only the plugin half.
 
@@ -1821,7 +1821,7 @@ You'll be prompted for the passphrase (never pass it as a command-line argument 
 
 **A plugin that lost its data fails the restore (v5.67.0-beta.11).** For a plugin whose code is on this machine, a failed migration replay, a failed row import or a failed invariant check used to print a warning, start Jen, pass the health wait and exit 0 over missing data. It is now an error that names the plugin and the table and takes the same rollback as any failed apply: Jen is as it was before the restore, byte for byte. `--lenient-plugins` is the explicit escape — the failures are printed, and recorded with the snapshot in `restore-report.txt`. A plugin whose code is **not** on this machine stays a warning: its data is still in the bundle for a later restore. The Settings → Databases import page shows the same failures as errors, not as a line among the successes.
 
-Flags: `--no-stop` skips the stop/start (use it in Docker, or where Jen is not a systemd unit — stop it yourself first), `--start` starts Jen afterwards even if it was not running, `--force` allows a bundle from a newer Jen, `--lenient-plugins` accepts a plugin's data failing to restore (below). Snapshots are small and are kept. To undo a restore that finished but turned out wrong: `sudo ./install.sh --rollback /path/to/pre-restore-<timestamp>` (add `--no-stop` if Jen is not a systemd unit).
+Flags: `--no-stop` skips the stop/start (use it in Docker, or where Jen is not a systemd unit — stop it yourself first), `--start` starts Jen afterward even if it was not running, `--force` allows a bundle from a newer Jen, `--lenient-plugins` accepts a plugin's data failing to restore (below). Snapshots are small and are kept. To undo a restore that finished but turned out wrong: `sudo ./install.sh --rollback /path/to/pre-restore-<timestamp>` (add `--no-stop` if Jen is not a systemd unit).
 
 Afterward:
 
@@ -2011,7 +2011,7 @@ the same cadence as the snapshot interval, not every alert-loop tick.
 forecast read back), the dashboard's live stats, `GET /api/v1/subnets` (`pool_size`, `pools`, and the new `pool_used`) and the alert loop - comes from
 `jen/services/pools.py`: the **total of every pool** of the subnet (ranges with or without spaces, and CIDR pools), merged so an overlap cannot count an
 address twice. Consumption (`pool_used`, the alert's "used") is the active, unexpired leases whose address is **inside** that union; the history table's
-`active_leases` stays the subnet's whole active count. Utilisation and exhaustion are per subnet over the union. `lease_history` rows written before this
+`active_leases` stays the subnet's whole active count. Utilization and exhaustion are per subnet over the union. `lease_history` rows written before this
 release carry the last pool's size (and none for a CIDR-only subnet); the forecast reads the newest row, so it corrects itself at the next snapshot.
 
 **Threshold-alert state** lives in the `settings` table as `alert_state:<alert type>:<subnet or server id>` = `1` while the condition holds, for
@@ -2037,7 +2037,7 @@ upgrade); the Problems inbox keeps 30 days; the audit log keeps `audit_retention
 `snapshot_interval_minutes` and prunes all of the first group together. `lease6_history` is written only when IPv6 is on, one row per IPv6 subnet per
 snapshot. `jen_alerts_sent_total` keeps counting alerts that retention removed (a stored total, `alert_log_pruned_totals`, is added back).
 
-**Settings saves are serialised.** Two saves at the same moment (two admins, or a save during the setup wizard) used to be able to lose one; Jen now
+**Settings saves are serialized.** Two saves at the same moment (two admins, or a save during the setup wizard) used to be able to lose one; Jen now
 writes `jen.config` one writer at a time - and, since 5.68.0-beta.18, one writer at a time across processes too: `jen.config.lock` (beside the config, owned by
 the service user) is an advisory lock every save takes and that `sudo ./install.sh --configure` holds from the start of its wizard until it has written the file.
 A Settings save made while the wizard is open waits for it (up to 30 s, then says the config is locked) instead of being overwritten. **`--configure` starts from what is configured (5.68.0-beta.21):** the wizard no longer asks for the Kea connection, the Kea database, the SSH target or the DDNS settings, and before this release it therefore wrote them blank - a configured box lost its Kea connection and its DDNS token. It now takes every one of those values from the live `jen.config` first (an answers file or a `JEN_*` environment variable still wins), so `sudo ./install.sh --configure` changes what you answer and keeps the rest. **The prompted answers too (5.68.0-beta.22):** the HTTP and HTTPS ports and the Jen database's host, user and name used to be offered as 5050, 8443, localhost, jen and jen - Enter (or `--unattended` without an answers file) wrote those over what you had, and the Jen database host defaulted to the Kea database's host. The prompt's default is what is configured now; the Jen database password is still typed. **The lock fails closed (5.68.0-beta.19) and is never replaced (5.68.0-beta.20):** if the lock file cannot be opened (a root-owned one from an older run) the save is refused with the exact fix, `sudo chown <the Jen service user> /etc/jen/jen.config.lock; sudo chmod 600 /etc/jen/jen.config.lock`, rather than carrying on without the lock; a symlink there is refused. Jen never swaps in a new file - a lock belongs to a file, and two files would be two locks - and `install.sh` (on every upgrade and `--configure`) puts the existing file right in place for you. `install.sh` requires `flock` (`util-linux`; the dependency step installs it) and `--configure` refuses without it. Restoring from a recovery bundle writes every file the way the installer does - never through a symlink, never partly written, with the recorded owner or not at all, and `--configure` now
@@ -2230,7 +2230,7 @@ runs and recorded in the audit log:
   (`partner-in-maintenance`). So to take node B down for an OS update,
   click **Take over for B** on node **A**. Wait for B's state to show
   `in-maintenance`, then shut B down; A moves to `partner-down`, and
-  when B comes back Kea re-synchronises and both return to normal on
+  when B comes back Kea re-synchronizes and both return to normal on
   their own — no further clicks. **Cancel Handover** returns both
   servers to their previous states and only works while A is still
   `partner-in-maintenance` (before B is actually down). Prefer this over
@@ -2277,7 +2277,7 @@ page so the direction can't be got wrong. No new Kea command is used.
 The flow's state lives in your session, not the database; every
 transition is recorded in the audit log as `ha_maintenance_<step>`
 against both server names. `GET /servers/ha/<id>/status.json` (admin)
-returns a server's normalised HA status for scripting.
+returns a server's normalized HA status for scripting.
 
 **Kea ≥ 3.2 in `ca` mode:** these HA commands go through the Control
 Agent, which Kea 3.2 removes (see "Kea Version Supported" in Health
@@ -2586,7 +2586,7 @@ number on the review page, never a silent drop: option definitions
 `zone`, `ddns-*` — configure dynamic DNS on the DDNS page), pool-level
 options and lease times (Kea pools carry neither), `deny
 unknown-clients` (guard the pool with Kea's built-in `KNOWN` class
-afterwards), `max-lease-time` (Kea's `valid-lifetime` is fixed; set
+afterward), `max-lease-time` (Kea's `valid-lifetime` is fixed; set
 `max-valid-lifetime` by hand if clients may ask for longer), hosts
 identified by `dhcp-client-identifier` rather than a MAC, hosts whose
 `fixed-address` is a hostname or in no declared subnet, `deny booting`
@@ -2601,7 +2601,7 @@ lease from the same pool (a reservation keeps its fixed address). The
 only visible effect is that a client may change address once, at
 renewal, if its old one is taken first. If you need to keep addresses
 stable through the cutover, shorten `default-lease-time` on dhcpd a day
-before switching so every client renews quickly afterwards.
+before switching so every client renews quickly afterward.
 
 Review, preview and apply behave exactly as for the Windows importer
 above, including the primary-server-only rule and the 30-minute
@@ -2775,8 +2775,8 @@ API keys via OIDC are all out of scope for this release.
 ## Icons (v5.50.0)
 
 The interface draws its icons from one inline SVG sprite of
-[Lucide](https://lucide.dev) icons (ISC licence, `static/icons/LICENSE`).
-They take their colour from the surrounding text, so they follow the
+[Lucide](https://lucide.dev) icons (ISC license, `static/icons/LICENSE`).
+They take their color from the surrounding text, so they follow the
 light and dark themes, and they need no extra request and no change to
 the Content-Security-Policy.
 
@@ -2799,4 +2799,4 @@ the Content-Security-Policy.
   page and the alert channels' test messages.
 - Default alert messages open with one of four glyphs, each with one meaning
   (shown as a legend on Settings → Alerts): critical, warning, recovered,
-  information. Templates an operator customised are never rewritten.
+  information. Templates an operator customized are never rewritten.

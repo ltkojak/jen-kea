@@ -31,7 +31,7 @@ helper's `_install_private`, callable from bash with the content on stdin:
      names the directory the descriptor holds) is REFUSED before the rename. Before this, the parent of DEST was a pathname resolved by `open` and
      `rename` at the moment of use, so a symlink the service account planted at `$CONFIG_DIR/backups` was followed by root.
 
-  A lock is an INODE. `take_lock` opens it ONCE with `O_NOFOLLOW` and normalises THAT inode in place (`fchown` to --owner, `fchmod` 0600 - neither
+  A lock is an INODE. `take_lock` opens it ONCE with `O_NOFOLLOW` and normalizes THAT inode in place (`fchown` to --owner, `fchmod` 0600 - neither
   drops a flock); it never renames a new file over the lock path, and it refuses anything that is not a regular file with a single link.
 
 Exit status: 0 written; 2 usage; 3 refused (a symlink or a non-regular file); 4 the write failed (DEST untouched, no temp left); 6 the lock could
@@ -206,7 +206,7 @@ def _write_private_under(dest, data, mode, owner, trusted_root):
         os.close(dfd)
 
 
-def _normalise_lock(fd, path, owner):
+def _normalize_lock(fd, path, owner):
     """Put the lock file the descriptor holds into its right state IN PLACE: a regular file, one link, the service user's, 0600. Same inode throughout
     - `fchown` and `fchmod` do not drop an flock."""
     st = os.fstat(fd)
@@ -221,13 +221,13 @@ def _normalise_lock(fd, path, owner):
 
 
 def take_lock(path, owner=None, wait_s=60.0):
-    """Open `path` ONCE (created 0600, `O_NOFOLLOW`), normalise that inode in place (see `_normalise_lock`) and take an exclusive flock on it,
-    waiting up to `wait_s`. Returns the open fd (closing it releases the lock). Raises OSError when it cannot be opened or normalised (Refused for
+    """Open `path` ONCE (created 0600, `O_NOFOLLOW`), normalize that inode in place (see `_normalize_lock`) and take an exclusive flock on it,
+    waiting up to `wait_s`. Returns the open fd (closing it releases the lock). Raises OSError when it cannot be opened or normalized (Refused for
     a symlink or a non-regular file) and TimeoutError when the wait runs out. It never replaces the file: the inode an installer locks is the
     inode Jen locks."""
     fd = os.open(path, os.O_RDWR | os.O_CREAT | _NOFOLLOW | _CLOEXEC, 0o600)
     try:
-        _normalise_lock(fd, path, owner)
+        _normalize_lock(fd, path, owner)
         if fcntl is None:
             return fd
         deadline = time.monotonic() + wait_s
@@ -265,7 +265,7 @@ def _hold_lock(path, owner, wait_s=120.0):
         sys.stdout.write("locked\n")
         sys.stdout.flush()
         # until stdin reaches EOF (the installer closed it), or the installer is gone (a child that inherited the pipe keeps EOF from coming), or it
-        # is signalled (the installer's release); the parent is polled once a second
+        # is signaled (the installer's release); the parent is polled once a second
         parent = os.getppid()
         while True:
             ready, _w, _x = select.select([0], [], [], 1.0)

@@ -1,11 +1,11 @@
 """
 tests/test_passkey_routes.py
 ────────────────────────────
-v5.31.0 (Q31) — the passkey enrolment surface on /mfa/enroll and the two
+v5.31.0 (Q31) — the passkey enrollment surface on /mfa/enroll and the two
 JSON halves of the registration ceremony. The WebAuthn verification
 itself is faked at py_webauthn's boundary (see tests/test_passkeys.py);
-what's under test here is Jen's gating: who may enrol (a logged-in user,
-or one held in forced enrolment — nobody else), the single-use session
+what's under test here is Jen's gating: who may enroll (a logged-in user,
+or one held in forced enrollment — nobody else), the single-use session
 state, the last-factor rule on removal, admin reset, and the audit rows.
 """
 
@@ -49,7 +49,7 @@ def clean_admin_passkeys(db):
 @pytest.fixture
 def required_all_unenrolled(app):
     """A user under mfa_mode=required_all with no factor — login parks
-    them in forced enrolment (mirrors tests/test_mfa_enrollment_gate.py)."""
+    them in forced enrollment (mirrors tests/test_mfa_enrollment_gate.py)."""
     set_global_setting("mfa_mode", "required_all")
     _invalidate_settings_cache()
     with jen_db() as db:
@@ -85,7 +85,7 @@ def _finish(client, name="Probe key", response=None):
     )
 
 
-class TestEnrolPage:
+class TestEnrollPage:
     def test_page_offers_passkeys_not_coming_soon(self, logged_in_client, clean_admin_passkeys):
         page = logged_in_client.get("/mfa/enroll").data.decode()
         assert "Add a Passkey" in page
@@ -184,8 +184,8 @@ class TestRegistrationCeremony:
         assert r.status_code in (301, 302) and "/mfa/enroll" in r.headers["Location"]
 
 
-class TestForcedEnrolment:
-    """A user parked in forced enrolment may enrol a passkey as their
+class TestForcedEnrollment:
+    """A user parked in forced enrollment may enroll a passkey as their
     FIRST factor, and only then gets a real session."""
 
     def _login(self, client):

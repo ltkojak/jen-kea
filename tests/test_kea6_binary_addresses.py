@@ -150,7 +150,7 @@ class TestSearchingABinaryColumn:
     def _addresses(self, **kw):
         return [r["address"] for r in kea6.list_lease6(**kw)]
 
-    def test_a_whole_address_is_an_exact_match_not_a_prefix_of_its_neighbours(self, v6db):
+    def test_a_whole_address_is_an_exact_match_not_a_prefix_of_its_neighbors(self, v6db):
         self._seed(v6db)
         assert self._addresses(search="2001:db8::10") == ["2001:db8::10"], "::100 must not match ::10"
         assert self._addresses(search="fd00::1") == ["fd00::1"]

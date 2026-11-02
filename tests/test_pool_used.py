@@ -251,7 +251,7 @@ class TestNoPathReadsActiveLeasesAsPoolUse:
     # (file, function) -> why a function that names `active_leases` AND does arithmetic or calls a capacity routine is not a capacity calculation on it
     REVIEWED = {
         ("jen/routes/api.py", "api_v1_subnets"): (
-            "reports `active_leases` (the subnet's whole active count) as its own field beside `pool_used`; the utilisation, the forecast and the "
+            "reports `active_leases` (the subnet's whole active count) as its own field beside `pool_used`; the utilization, the forecast and the "
             "high-water mark are computed from `pool_used` / the history's `pool_used` (tests/test_pool_used.py, the nine surfaces)"
         ),
         ("plugins/ipam/plugin.py", "_count_sets"): (

@@ -618,7 +618,7 @@ def _is_timestamp(value) -> bool:
     return True
 
 
-def recognised_incident(entry) -> bool:
+def recognized_incident(entry) -> bool:
     """Is `entry` an incident Jen wrote (Q190, AF3)? An ATTENTION incident is `kind == "attention"` with a known `category`, a `service` of dhcp4 / dhcp6 / d2, a `server_id` and a `summary` and
     `at` that are text. An OUTCOME incident (a rolled-back or failed-rollback change, and the single note of 5.65.x) is a `status` of `rolled_back` or `rollback_failed` with a `service` and an
     `at` that are text; `needs_hands`, `needs_hands_ids`, `lines` and `failed_restart` are optional, and when present are lists - a record from before ids were kept stays valid. Anything else is an
@@ -646,8 +646,8 @@ def _incidents_of(raw, strict: bool = False) -> list[dict]:
     single-note shape written by 5.65.1 to 5.65.9 (`{"status": ..., "service": ...}`) is read as a list of
     one, so a note recorded before an upgrade is neither lost nor misread.
 
-    `strict` (Q189, AE3; Q190, AF3): the only shapes are (a) nothing - `None` or `""`, (b) a dict whose `incidents` is a list of RECOGNISED incidents (`recognised_incident`), (c) the 5.65.x
-    single note, which is one recognised outcome incident. Anything else raises `MalformedNote` naming the entry's INDEX, never its text - a writer that read it as `[]` would write its new
+    `strict` (Q189, AE3; Q190, AF3): the only shapes are (a) nothing - `None` or `""`, (b) a dict whose `incidents` is a list of RECOGNIZED incidents (`recognized_incident`), (c) the 5.65.x
+    single note, which is one recognized outcome incident. Anything else raises `MalformedNote` naming the entry's INDEX, never its text - a writer that read it as `[]` would write its new
     incident over text it never understood, and "a list of dicts" is not a shape: `{"incidents": [{}]}` was accepted, and a clean run deleted the empty entry as "resolved".
     Without `strict` the reader stays forgiving (the Servers banner reads the note on every page load): anything unreadable is no incidents, and an entry that is a dict is kept in the list
     (`_incident_cleared` keeps it, and the banner says an incident Jen cannot read is on record)."""
@@ -670,13 +670,13 @@ def _incidents_of(raw, strict: bool = False) -> list[dict]:
         if not isinstance(listed, list):
             raise MalformedNote("the incident note is not readable")
         for index, entry in enumerate(listed):
-            if not recognised_incident(entry):
-                raise MalformedNote(f"entry {index} of the incident note is not an incident Jen recognises")
+            if not recognized_incident(entry):
+                raise MalformedNote(f"entry {index} of the incident note is not an incident Jen recognizes")
         return list(listed)
     if isinstance(data.get("incidents"), list):
         return [i for i in data["incidents"] if isinstance(i, dict)]
     if strict:
-        if data.get("status") and recognised_incident(data):
+        if data.get("status") and recognized_incident(data):
             return [data]  # the single note of 5.65.x is one outcome incident by the same rule
         raise MalformedNote("the incident note is not readable")
     if data.get("status"):
@@ -697,7 +697,7 @@ def _incident_cleared(incident: dict, result: ChangeSetResult, service: str) -> 
     clean run clears it only when it was for the same service and covered every server in its
     `needs_hands` (a clean restart of each is proof it is running); otherwise it stays until an admin
     dismisses it."""
-    if not recognised_incident(incident):
+    if not recognized_incident(incident):
         return False  # Q190 (AF3): FAIL CLOSED - an entry Jen cannot read is kept, never cleared by a clean run (an empty dict used to read as 'a rolled_back note' and be deleted)
     if incident.get("kind") == ATTENTION_KIND:
         return False  # Q187: an unproved recovery is cleared by a verified recovery of THAT server and service, or acknowledged - never by an unrelated change
@@ -830,10 +830,10 @@ ATTENTION_CATEGORIES = {
     "restart-failed": "The previous config was put back but the daemon did not restart on it, so it may be stopped or running the change.",
     "tls-not-restored": "The certificate Jen installed for the control socket could not be put back, so a restored socket may meet a certificate issued for another address.",
     "tls-local-stale": "The certificate on the Kea host is the one it had, but Jen's own copy of it may not be the one on the host: its expiry warning and the next recovery read that copy.",
-    "restored-endpoint-unreachable": "The daemon's sockets and certificate were put back and it was restarted, but the endpoint Jen uses did not answer as the right daemon afterwards.",
+    "restored-endpoint-unreachable": "The daemon's sockets and certificate were put back and it was restarted, but the endpoint Jen uses did not answer as the right daemon afterward.",
     "probe-pending": "The new control socket was added but has not answered Jen yet. It stays in the daemon's config and Jen's settings are unchanged; run the setup again to probe it.",
     "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
-    "tls-superseded": "A server that is not dialled over https now may still run a certificate from a CA Jen has since replaced. When it is dialled over https again, remove its direct socket and set it up again.",
+    "tls-superseded": "A server that is not dialed over https now may still run a certificate from a CA Jen has since replaced. When it is dialed over https again, remove its direct socket and set it up again.",
     "record-forgotten": "Jen's record of a certificate was forgotten on the operator's word while the daemon may still present it; its expiry is not watched. A later setup of the socket, or its removal, ends this.",
     "config-restart-failed": "A config Jen wrote to the Kea host (a restored revision, or an import) is on disk, but the daemon did not restart on it, so it may be stopped or still running the config it had before. A restart that works ends this.",
     "rotation-pending": "A CA rotation changed what this server's daemon depends on and has not finished recording it. Health names it; the next Rotate, or Forget stale records, finishes it from Jen's files - it is not acknowledged away.",
@@ -886,7 +886,7 @@ def record_attention(
             incident["ca_fingerprint"] = (
                 ca_fingerprint  # (Q201 second pass F2: the live CA when a `rotation-pending` note was written)
             )
-        if not recognised_incident(incident):
+        if not recognized_incident(incident):
             # Q204 (AT8 b): the writer never stores what the strict reader refuses - an incident with a server id of `None` or "" (or a service that is no daemon) was written and made
             # every later strict read raise `MalformedNote` ("kept until a superadmin sets the note aside"). Refused here instead, and the caller says so (False).
             logger.error(
@@ -990,7 +990,7 @@ def recovery_incidents(strict: bool = False) -> list[dict]:
 
 
 def acknowledge_recovery(server_id=None, service: str | None = None, category: str | None = None) -> int | None:
-    """A superadmin's acknowledgement (Q187): clears the recovery incidents matching the filters (None = any) and returns how many. None means the note could not be written - the incidents are
+    """A superadmin's acknowledgment (Q187): clears the recovery incidents matching the filters (None = any) and returns how many. None means the note could not be written - the incidents are
     still shown, and the caller says so. The old `rolled_back` / `rollback_failed` incidents are not touched. Q202 (AR7): nor is a `rotation-pending` note - it is Jen's own bookkeeping of what a rotation owes
     (the next Rotate or Forget stale records finishes it from Jen's files), and acknowledging it would drop the obligation."""
     cleared = [0]
@@ -1042,18 +1042,18 @@ def _listed_count(raw) -> int:
 
 
 def attention() -> dict | None:
-    """The unresolved incidents for the Servers page banner, `{"incidents": [...], "unrecognised": n}` oldest first, or None. `incidents` holds only the entries Jen recognises (the banner renders
-    those); `unrecognised` counts the dicts it does not (Q190, AF3) - the banner says an incident Jen cannot read is on record, with the set-aside for a superadmin."""
+    """The unresolved incidents for the Servers page banner, `{"incidents": [...], "unrecognized": n}` oldest first, or None. `incidents` holds only the entries Jen recognizes (the banner renders
+    those); `unrecognized` counts the dicts it does not (Q190, AF3) - the banner says an incident Jen cannot read is on record, with the set-aside for a superadmin."""
     try:
         from jen.models import user as _user
 
         raw = _user.get_global_setting(ATTENTION_KEY, "")
         entries = _incidents_of(raw)
-        incidents = [i for i in entries if recognised_incident(i)]
-        unrecognised = max(len(entries), _listed_count(raw)) - len(
+        incidents = [i for i in entries if recognized_incident(i)]
+        unrecognized = max(len(entries), _listed_count(raw)) - len(
             incidents
         )  # (an entry that is not even a dict is on record too)
-        return {"incidents": incidents, "unrecognised": unrecognised} if entries or unrecognised else None
+        return {"incidents": incidents, "unrecognized": unrecognized} if entries or unrecognized else None
     except Exception:
         return None
 

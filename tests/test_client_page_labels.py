@@ -2,7 +2,7 @@
 tests/test_client_page_labels.py
 ─────────────────────────────────
 v5.68.0-beta.11 (Q146 e) — the freshness line under the Investigation page's facts names each thing it timestamps once. The first
-item (when the device row was read) was labelled "Config", and the config's own SHA, further along the same line, was labelled
+item (when the device row was read) was labeled "Config", and the config's own SHA, further along the same line, was labeled
 "Config" too: two different things under one word. The device fetch is "Device"; the SHA keeps "Config". No database: the line is
 read from the template source.
 `pytest --noconftest tests/test_client_page_labels.py`.
@@ -20,7 +20,7 @@ def _freshness_line() -> str:
 
 
 class TestTheFreshnessLine:
-    def test_the_device_fetch_is_labelled_device(self):
+    def test_the_device_fetch_is_labeled_device(self):
         line = _freshness_line()
         assert re.search(r"Device \{\{ view\.fetched_at\.get\('device'\)", line)
         assert not re.search(r"Config \{\{ view\.fetched_at", line)

@@ -992,7 +992,7 @@ class TestOneAnswerAboutTheStateFile:
             and tick["failed"][0]["error"].startswith("the state file is not usable")
             and host.last_code == 1
         )
-        assert host.signals == [] and host.config() == _config(), "nothing was restored, signalled or overwritten"
+        assert host.signals == [] and host.config() == _config(), "nothing was restored, signaled or overwritten"
 
     def test_an_absent_file_is_no_session_everywhere(self, host):
         self._write(host, "absent")
@@ -2247,7 +2247,7 @@ class TestEveryRemainingP3OfTheHelperItems:
         )
         assert code == 2 and json.loads(out.getvalue())["error"] == "bad-json"
 
-    def test_a_daemon_that_already_runs_the_restored_file_is_reported_as_not_signalled(self, host):
+    def test_a_daemon_that_already_runs_the_restored_file_is_reported_as_not_signaled(self, host):
         host.write_config(_config(at_debug=False, marker=False))
         host.arm()
         reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})

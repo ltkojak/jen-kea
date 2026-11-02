@@ -206,7 +206,7 @@ def login():
             # moved to oidc.establish_session() so the OIDC callback can
             # share it exactly, rather than keeping its own copy in sync.
             __oidc.establish_session(row, f"User {username} logged in from {ip}")
-            # v5.69.0-beta.5 (Q174): the page the person was sent from (Flask-Login's ?next=), as the MFA and OIDC paths always honoured - a plain login dropped it
+            # v5.69.0-beta.5 (Q174): the page the person was sent from (Flask-Login's ?next=), as the MFA and OIDC paths always honored - a plain login dropped it
             return redirect(_safe_next(request.args.get("next", "")) or url_for("dashboard.dashboard"))
 
         # Failed login — record attempt (async, don't block response)

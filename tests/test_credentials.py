@@ -246,7 +246,7 @@ class TestEndpointForSendsNothingWithoutACredential:
 
 
 class _FakeConfig:
-    """Just what `credentials.materialise` asks of `app_config`: the parser as it is, and `mutate`."""
+    """Just what `credentials.materialize` asks of `app_config`: the parser as it is, and `mutate`."""
 
     def __init__(self, parser):
         self.parser = parser
@@ -266,7 +266,7 @@ class _FakeConfig:
         self.typed.append(set(typed or ()))
 
 
-class TestMaterialise:
+class TestMaterialize:
     CFG = (
         BASE
         + "[kea_server_2]\napi_url = https://b:8000\n[kea_server_3]\napi_url = https://c:8000\napi_pass = OWN\n[kea_server_4]\nname = no url\n[kea_server_5]\napi_url = https://a:8001\n"
@@ -274,7 +274,7 @@ class TestMaterialise:
 
     def test_a_server_on_another_host_with_no_key_gets_a_marked_copy_and_the_others_are_untouched(self):
         fake, rows = _FakeConfig(_p(self.CFG)), []
-        done = cred.materialise(fake, audit=lambda *a: rows.append(a))
+        done = cred.materialize(fake, audit=lambda *a: rows.append(a))
         assert done == ["server_2"]
         assert (
             fake.parser.get("kea_server_2", "api_pass") == "S"
@@ -291,7 +291,7 @@ class TestMaterialise:
             (
                 "CONFIG_MIGRATION",
                 "kea_server_2",
-                "kea_server_2: the parent's api_pass materialised; it no longer follows the parent's",
+                "kea_server_2: the parent's api_pass materialized; it no longer follows the parent's",
             )
         ]
         assert "server_2" in fake.typed[0]
@@ -304,7 +304,7 @@ class TestMaterialise:
             + "[kea_server_2]\napi_url = https://b:8000\napi6_url = https://b6:8006\napi_d2_url = https://bd:53001\n"
         )
         fake = _FakeConfig(_p(cfg))
-        done = cred.materialise(fake)
+        done = cred.materialize(fake)
         assert sorted(done) == ["d2", "kea6", "kea6_db", "server_2", "server_2_d2", "server_2_v6"]
         r = cred.resolve(fake.parser)
         assert (r["kea6"].password, r["d2"].password, r["kea6_db"].password) == ("S", "S", "KDB")
@@ -319,13 +319,13 @@ class TestMaterialise:
         fake = _FakeConfig(
             _p(BASE.replace("https://a:8000", "https://kea-a.lan:8000") + "[kea6]\napi_url = https://10.0.0.5:8006\n")
         )
-        assert cred.materialise(fake) == ["kea6"] and fake.parser.get("kea6", "api_pass") == "S"
+        assert cred.materialize(fake) == ["kea6"] and fake.parser.get("kea6", "api_pass") == "S"
 
     def test_a_second_call_changes_nothing(self):
         fake, rows = _FakeConfig(_p(self.CFG)), []
-        cred.materialise(fake, audit=lambda *a: rows.append(a))
+        cred.materialize(fake, audit=lambda *a: rows.append(a))
         snapshot = {s: dict(fake.parser.items(s)) for s in fake.parser.sections()}
-        assert cred.materialise(fake, audit=lambda *a: rows.append(a)) == []
+        assert cred.materialize(fake, audit=lambda *a: rows.append(a)) == []
         assert fake.writes == 1 and len(rows) == 1
         assert {s: dict(fake.parser.items(s)) for s in fake.parser.sections()} == snapshot
 
@@ -333,12 +333,12 @@ class TestMaterialise:
         """The point of converting: the peer on another host is reached with the same password after the conversion as it was by the old inheritance."""
         before = cred.resolve(_p(self.CFG))["server_2"].password
         fake = _FakeConfig(_p(self.CFG))
-        cred.materialise(fake)
+        cred.materialize(fake)
         assert before == "" and cred.resolve(fake.parser)["server_2"].password == "S"
 
     def test_a_primary_with_no_password_has_nothing_to_copy(self):
         fake = _FakeConfig(_p("[kea]\napi_url = https://a:8000\n[kea_server_2]\napi_url = https://b:8000\n"))
-        assert cred.materialise(fake) == [] and fake.writes == 1, (
+        assert cred.materialize(fake) == [] and fake.writes == 1, (
             "nothing to copy - the marker alone is written, so a server left keyless LATER is never converted"
         )
         assert not fake.parser.has_option("kea_server_2", "api_pass") and cred.has_model_marker(fake.parser)
@@ -348,7 +348,7 @@ class TestMaterialise:
 
         fake = _FakeConfig(_p(self.CFG))
         with Flask(__name__).test_request_context("/"):
-            assert cred.materialise(fake) is None
+            assert cred.materialize(fake) is None
         assert fake.writes == 0
 
     def test_a_failure_is_logged_never_raised_and_says_it_did_not_run(self):
@@ -356,7 +356,7 @@ class TestMaterialise:
             def mutate(self, *a, **k):
                 raise OSError("disk full")
 
-        assert cred.materialise(Broken(_p(self.CFG))) is None
+        assert cred.materialize(Broken(_p(self.CFG))) is None
 
     def test_a_failing_audit_does_not_undo_the_conversion(self):
         fake = _FakeConfig(_p(self.CFG))
@@ -364,7 +364,7 @@ class TestMaterialise:
         def audit(*a):
             raise RuntimeError("database down")
 
-        assert cred.materialise(fake, audit=audit) == ["server_2"] and fake.parser.has_option(
+        assert cred.materialize(fake, audit=audit) == ["server_2"] and fake.parser.has_option(
             "kea_server_2", "api_pass"
         )
 
@@ -376,28 +376,28 @@ class TestTheMarkerLivesInTheFileItDescribes:
 
     def test_a_fresh_config_with_the_key_copies_nothing_and_writes_nothing(self):
         fake = _FakeConfig(_p(self.LEGACY + "[jen]\ncredential_model = explicit\n"))
-        assert cred.materialise(fake) == [] and fake.writes == 0
+        assert cred.materialize(fake) == [] and fake.writes == 0
         assert not fake.parser.has_option("kea_server_2", "api_pass"), (
             "a passwordless peer in a file born explicit is the operator's answer"
         )
 
     def test_a_pre_beta11_config_gets_the_copies_and_the_key_in_one_write(self):
         fake, rows = _FakeConfig(_p(self.LEGACY)), []
-        assert cred.materialise(fake, audit=lambda *a: rows.append(a)) == ["server_2"]
+        assert cred.materialize(fake, audit=lambda *a: rows.append(a)) == ["server_2"]
         assert fake.writes == 1, "one atomic mutate: marker and copies together or neither"
         assert (
             fake.parser.get("jen", "credential_model") == "explicit"
             and fake.parser.get("kea_server_2", "api_pass") == "S"
         )
         assert len(rows) == 1
-        assert cred.materialise(fake, audit=lambda *a: rows.append(a)) == [] and fake.writes == 1 and len(rows) == 1, (
+        assert cred.materialize(fake, audit=lambda *a: rows.append(a)) == [] and fake.writes == 1 and len(rows) == 1, (
             "a second start: nothing"
         )
 
     def test_the_conversion_copies_the_parents_user_with_the_password(self):
         """The old inheritance carried the parent's USER with its password; the resolver inherits a user on the same host only, so a copied password without its user would fail Basic auth."""
         fake = _FakeConfig(_p(self.LEGACY + "[kea6]\napi_url = https://k6:8006\n"))
-        assert sorted(cred.materialise(fake)) == ["kea6", "server_2"]
+        assert sorted(cred.materialize(fake)) == ["kea6", "server_2"]
         r = cred.resolve(fake.parser)
         assert (r["server_2"].user, r["server_2"].password) == ("u", "S")
         assert (r["kea6"].user, r["kea6"].password) == ("u", "S")
@@ -405,7 +405,7 @@ class TestTheMarkerLivesInTheFileItDescribes:
 
     def test_a_user_the_section_already_has_is_kept(self):
         fake = _FakeConfig(_p(self.LEGACY + "api_user = mine\n"))
-        cred.materialise(fake)
+        cred.materialize(fake)
         assert cred.resolve(fake.parser)["server_2"].user == "mine"
 
     def test_a_config_without_the_key_whose_database_says_it_converted_and_nothing_pending_gets_the_key_and_no_copies(
@@ -414,21 +414,21 @@ class TestTheMarkerLivesInTheFileItDescribes:
         fake = _FakeConfig(
             _p(BASE + "[kea_server_2]\napi_url = https://a:8001\n")
         )  # a peer on the primary's own host: nothing to convert
-        assert cred.materialise(fake, already_converted=True) == []
+        assert cred.materialize(fake, already_converted=True) == []
         assert cred.has_model_marker(fake.parser) and not fake.parser.has_option("kea_server_2", "api_pass")
         assert fake.writes == 1
 
     def test_a_restored_legacy_file_whose_database_row_says_converted_is_converted_not_merely_marked(self):
         """Q182 (X5a, subagent S9): the settings row describes the DATABASE's old file, not this one. A restored pre-beta.11 file with a passwordless peer on another host keeps it working."""
         fake, rows = _FakeConfig(_p(self.LEGACY)), []
-        assert cred.materialise(fake, audit=lambda *a: rows.append(a), already_converted=True) == ["server_2"]
+        assert cred.materialize(fake, audit=lambda *a: rows.append(a), already_converted=True) == ["server_2"]
         assert fake.writes == 1 and cred.has_model_marker(fake.parser)
         assert fake.parser.get("kea_server_2", "api_pass") == "S" and len(rows) == 1
 
     def test_a_restored_older_database_changes_nothing_because_the_marker_is_not_in_it(self):
         """The decision reads the FILE: with the key present the answer is the same whatever the settings table says."""
         fake = _FakeConfig(_p(self.LEGACY + "[jen]\ncredential_model = explicit\n"))
-        assert cred.materialise(fake, already_converted=False) == [] and fake.writes == 0
+        assert cred.materialize(fake, already_converted=False) == [] and fake.writes == 0
 
     def test_a_read_only_file_logs_one_error_naming_it_and_raises_nothing(self, caplog, monkeypatch):
         # (Q185 AA2: the log line names the file the WRITER writes - `extensions.CONFIG_FILE` - rather than a `getattr` on the writer object, which the typed= checker refuses)
@@ -443,7 +443,7 @@ class TestTheMarkerLivesInTheFileItDescribes:
         import logging
 
         with caplog.at_level(logging.ERROR, logger="jen.services.credentials"):
-            assert cred.materialise(ReadOnly(_p(self.LEGACY))) is None
+            assert cred.materialize(ReadOnly(_p(self.LEGACY))) is None
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert len(errors) == 1 and "/etc/jen/jen.config" in errors[0].getMessage()
 
@@ -455,11 +455,11 @@ class TestTheMarkerLivesInTheFileItDescribes:
         tree = ast.parse(src)
         create_app = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "create_app")
         text = ast.get_source_segment(src, create_app)
-        assert "materialise(" in text and "already_converted=" in text and "beta11_flag()" in text
+        assert "materialize(" in text and "already_converted=" in text and "beta11_flag()" in text
         assert "credentials_materialised" not in text.replace("beta11_flag", ""), (
             "create_app no longer reads or writes the settings row itself"
         )
-        assert "set_global_setting" not in text.split("materialise(")[1].split("Background workers")[0], (
+        assert "set_global_setting" not in text.split("materialize(")[1].split("Background workers")[0], (
             "the settings-table row is never written again"
         )
 
@@ -476,11 +476,11 @@ class TestTheMarkerLivesInTheFileItDescribes:
 
     def test_after_the_conversion_a_keyless_server_stays_keyless(self):
         fake = _FakeConfig(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n"))
-        assert cred.materialise(fake) == ["server_2"]
+        assert cred.materialize(fake) == ["server_2"]
         fake.parser.add_section("kea_server_3")
         fake.parser.set("kea_server_3", "api_url", "https://c:8000")  # added later, on purpose, with no key
         assert cred.resolve(fake.parser)["server_3"].withheld == "kea"
-        assert cred.materialise(fake) == [] and not fake.parser.has_option("kea_server_3", "api_pass")
+        assert cred.materialize(fake) == [] and not fake.parser.has_option("kea_server_3", "api_pass")
 
 
 class TestAnIpv6LiteralDatabaseHost:
@@ -728,7 +728,7 @@ class TestTheMarkerIsAValue:
 
         fake = Named(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n[jen]\ncredential_model = explcit\n"))
         with caplog.at_level(logging.ERROR, logger="jen.services.credentials"):
-            assert cred.materialise(fake) is None
+            assert cred.materialize(fake) is None
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert fake.writes == 0 and not fake.parser.has_option("kea_server_2", "api_pass")
         assert len(errors) == 1 and "credential_model" in errors[0].getMessage() and "explcit" in errors[0].getMessage()
@@ -742,12 +742,12 @@ class TestTheBridgeKeepsBeta11sBlankAsAnAnswer:
 
     def test_the_bridge_marks_the_file_and_copies_nothing(self):
         fake = _FakeConfig(_p(self.FILE))
-        assert cred.materialise(fake, already_converted=True) == []
+        assert cred.materialize(fake, already_converted=True) == []
         assert fake.parser.get("kea_server_2", "api6_pass") == "" and cred.has_model_marker(fake.parser)
 
     def test_without_the_bridge_it_is_still_a_legacy_blank(self):
         fake = _FakeConfig(_p(self.FILE))
-        assert cred.materialise(fake, already_converted=False) == ["server_2_v6"]
+        assert cred.materialize(fake, already_converted=False) == ["server_2_v6"]
         assert fake.parser.get("kea_server_2", "api6_pass") == "P"
 
 
@@ -759,7 +759,7 @@ class TestALegacyBlankIsInherit:
     def test_a_marker_less_file_lists_it_and_the_conversion_fills_it(self):
         assert cred.pending_conversions(_p(self.LEGACY)) == ["server_2_v6"]
         fake = _FakeConfig(_p(self.LEGACY))
-        assert cred.materialise(fake) == ["server_2_v6"]
+        assert cred.materialize(fake) == ["server_2_v6"]
         assert (
             fake.parser.get("kea_server_2", "api6_pass") == "P"
             and fake.parser.get("kea_server_2", "api6_pass_shared") == "1"
@@ -772,7 +772,7 @@ class TestALegacyBlankIsInherit:
         e = cred.resolve(marked)["server_2_v6"]
         assert (e.password, e.source, e.withheld) == ("", "none", "")
         fake = _FakeConfig(marked)
-        assert cred.materialise(fake) == [] and fake.writes == 0
+        assert cred.materialize(fake) == [] and fake.writes == 0
 
 
 class TestAModeSwitchRepointsTheDaemonsWholesale:
@@ -948,7 +948,7 @@ class TestAnUnreadableSettingsTableIsNotAnAbsentRow:
         )
         text = ast.get_source_segment(src, create_app)
         assert "beta11_flag()" in text and "_bridge is not None" in text and "forget_beta11_flag()" in text
-        assert text.index("_bridge is not None") < text.index("materialise(")
+        assert text.index("_bridge is not None") < text.index("materialize(")
 
     def test_a_marker_that_appears_between_the_probe_and_the_write_stops_the_conversion(self):
         class Racing(_FakeConfig):
@@ -958,7 +958,7 @@ class TestAnUnreadableSettingsTableIsNotAnAbsentRow:
                 super().mutate(fn, reload, typed)
 
         fake = Racing(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n"))
-        assert cred.materialise(fake) == [] and not fake.parser.has_option("kea_server_2", "api_pass")
+        assert cred.materialize(fake) == [] and not fake.parser.has_option("kea_server_2", "api_pass")
 
 
 class TestTheKea6DatabaseIsAnEndpoint:
@@ -1040,7 +1040,7 @@ class TestTypedIsAHumansAct:
 
     #: what may be dynamic, and the ONE thing each may do (tests/typed_claims.py DYNAMIC) - asserted here so it cannot grow silently
     EXPECTED_DYNAMIC = {
-        ("jen/services/credentials.py", "materialise"): "conversion",
+        ("jen/services/credentials.py", "materialize"): "conversion",
         ("jen/services/setup_wizard.py", "save_connection"): "params",
         ("jen/services/setup_wizard.py", "enable_v6"): "params",
         ("jen/routes/settings/infrastructure.py", "setup_direct_socket"): "endpoint_name",

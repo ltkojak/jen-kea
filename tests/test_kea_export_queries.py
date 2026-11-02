@@ -5,7 +5,7 @@ v5.67.0-beta.13 (Q127, item e) — the reservation backup carries host-scoped op
 also hold the global, subnet, class, shared-network and pool options of its config backend; a reservation backup
 that did `SELECT *` over them wrote all of those back by their auto-increment ids on restore. The exporter now
 takes one fixed query per table. Pure — no database: `py -m pytest --noconftest tests/test_kea_export_queries.py`;
-the behaviour against real rows is in tests/kea_compat/test_db_moves.py and tests/test_kea_binary_roundtrip.py.
+the behavior against real rows is in tests/kea_compat/test_db_moves.py and tests/test_kea_binary_roundtrip.py.
 """
 
 import inspect

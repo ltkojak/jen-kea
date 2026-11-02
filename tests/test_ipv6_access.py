@@ -6,7 +6,7 @@ v5.68.0-beta.8 (Q143) — ONE IPv6 access rule (jen/services/access.py: `subnet6
 subnet it is paired with, never by comparing its own id with that list, and an unpaired v6 subnet is for unrestricted users only. The review
 that found this (ChatGPT, beta.7, item 1) listed the surfaces that did not: a forbidden explicit `?subnet=` fell back to "all" - and "all"
 was never filtered; delete-reservation6 and the three edit-subnet6 routes checked nothing about the user; add-reservation6 compared v6 keys
-with v4 ids; the Subnets page and the dashboard totalled every v6 subnet; every template was handed the whole map.
+with v4 ids; the Subnets page and the dashboard totaled every v6 subnet; every template was handed the whole map.
 
 The topology (v4 subnets 1, 2, 3; the scoped users see v4 subnets 1 and 2):
 

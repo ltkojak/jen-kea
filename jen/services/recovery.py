@@ -389,6 +389,6 @@ def decrypt_any(in_fp, passphrase: str, out_fp) -> int:
     in_fp.seek(-len(head), os.SEEK_CUR)
     if _sniff(head) == 2:
         return decrypt_stream(in_fp, passphrase, out_fp)
-    tar_bytes = decrypt(in_fp.read(), passphrase)  # v1 (and its errors for anything unrecognised)
+    tar_bytes = decrypt(in_fp.read(), passphrase)  # v1 (and its errors for anything unrecognized)
     out_fp.write(tar_bytes)
     return len(tar_bytes)

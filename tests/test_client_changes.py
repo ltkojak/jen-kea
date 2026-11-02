@@ -29,7 +29,7 @@ def _config(
     dns="10.0.0.53",
     pool_end=200,
     own_res_dns="9.9.9.9",
-    neighbour_res_dns="8.8.4.4",
+    neighbor_res_dns="8.8.4.4",
     subnet2_dns="1.1.1.1",
     global_dns="lan.example",
     lifetime=3600,
@@ -39,8 +39,8 @@ def _config(
     lease_host="db.lan",
 ):
     """A Dhcp4 config with a shared network holding subnet 1 (our client's: a pool it is in, a pool it is not in, its own
-    reservation and a neighbour's) and a subnet 2 beside it, a class that guards the second pool, global options and
-    lifetime (Q146: client behaviour) and the server settings that are NOT client behaviour (loggers, control socket, hooks,
+    reservation and a neighbor's) and a subnet 2 beside it, a class that guards the second pool, global options and
+    lifetime (Q146: client behavior) and the server settings that are NOT client behavior (loggers, control socket, hooks,
     interfaces, the lease database)."""
     return {
         "Dhcp4": {
@@ -77,7 +77,7 @@ def _config(
                                 {
                                     "hw-address": "11:22:33:44:55:66",
                                     "ip-address": "10.0.0.51",
-                                    "option-data": [{"name": "domain-name-servers", "data": neighbour_res_dns}],
+                                    "option-data": [{"name": "domain-name-servers", "data": neighbor_res_dns}],
                                 },
                             ],
                         }
@@ -158,23 +158,23 @@ class TestWhatIsOnThePath:
             cc.GLOBAL_LABEL,
         }
 
-    def test_nothing_of_a_neighbour_a_pool_it_is_not_in_or_the_other_subnet(self):
+    def test_nothing_of_a_neighbor_a_pool_it_is_not_in_or_the_other_subnet(self):
         out = cc.extract(_config(), PATH)
         blob = json.dumps(out)
-        assert "11:22:33:44:55:66" not in blob, "a neighbour's reservation is not on this client's path"
+        assert "11:22:33:44:55:66" not in blob, "a neighbor's reservation is not on this client's path"
         assert "10.0.0.201" not in blob and "10.0.1." not in blob
 
     def test_the_global_settings_every_client_inherits_are_on_the_path_and_only_those(self):
         # Q146: a global option or lifetime is what every client in the service is given - it changes a client's answer
-        # more often than anything else, so it is on every client's path - and the component carries client behaviour only
+        # more often than anything else, so it is on every client's path - and the component carries client behavior only
         settings = cc.extract(_config(), PATH)[cc.GLOBAL_LABEL]
         assert settings == {
             "option-data": [{"name": "domain-name", "data": "lan.example"}],
             "valid-lifetime": 3600,
         }
         blob = json.dumps(cc.extract(_config(), PATH))
-        for not_client_behaviour in ("kea-dhcp4", "kea4-ctrl.sock", "libdhcp_lease_cmds", "eth0", "db.lan"):
-            assert not_client_behaviour not in blob, f"{not_client_behaviour!r} is not what a client is given"
+        for not_client_behavior in ("kea-dhcp4", "kea4-ctrl.sock", "libdhcp_lease_cmds", "eth0", "db.lan"):
+            assert not_client_behavior not in blob, f"{not_client_behavior!r} is not what a client is given"
 
     def test_a_config_with_none_of_the_global_keys_has_no_global_component(self):
         bare = {"Dhcp4": {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24"}], "loggers": [{"name": "x"}]}}
@@ -256,8 +256,8 @@ class TestDiffingTwoConfigs:
     def test_a_change_to_the_clients_own_reservation_is_on_the_path(self):
         assert list(self._changes(own_res_dns="4.4.4.4")) == [f"reservation {MAC}"]
 
-    @pytest.mark.parametrize("after", [{"neighbour_res_dns": "4.4.4.4"}, {"subnet2_dns": "4.4.4.4"}])
-    def test_a_neighbours_reservation_or_the_other_subnet_is_not(self, after):
+    @pytest.mark.parametrize("after", [{"neighbor_res_dns": "4.4.4.4"}, {"subnet2_dns": "4.4.4.4"}])
+    def test_a_neighbors_reservation_or_the_other_subnet_is_not(self, after):
         assert self._changes(**after) == {}
 
     def test_a_change_to_a_global_dns_option_appears(self):
@@ -282,10 +282,10 @@ class TestDiffingTwoConfigs:
         ],
         ids=["loggers", "control-socket", "interfaces", "lease-database"],
     )
-    def test_a_change_to_a_setting_that_is_not_client_behaviour_does_not(self, after):
+    def test_a_change_to_a_setting_that_is_not_client_behavior_does_not(self, after):
         assert self._changes(**after) == {}
 
-    def test_hooks_libraries_are_not_client_behaviour_either(self):
+    def test_hooks_libraries_are_not_client_behavior_either(self):
         after = copy.deepcopy(_config())
         after["Dhcp4"]["hooks-libraries"].append({"library": "/usr/lib/kea/hooks/libdhcp_host_cmds.so"})
         assert cc.diff_paths(_config(), after, PATH) == []
@@ -426,7 +426,7 @@ class TestTheCost:
         out = cc.changes_for_revisions(rows, PATH)
         elapsed = time.perf_counter() - start
         print(f"\nclient_changes: 51 revisions x {len(rows[0]['config']) // 1024} KB walked in {elapsed:.2f}s")
-        # every revision whose neighbour differs on subnet 1's option: i = 0, 9, 10, 19, 20, 29, 30, 39, 40, 49
+        # every revision whose neighbor differs on subnet 1's option: i = 0, 9, 10, 19, 20, 29, 30, 39, 40, 49
         assert out["scanned"] == 50 and len(out["revisions"]) == 10
         assert elapsed < 3.0, f"the Changes tab walk took {elapsed:.1f}s - the docstring promises about a second"
 

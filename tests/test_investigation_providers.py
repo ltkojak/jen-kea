@@ -131,7 +131,7 @@ class TestTheCardIsNotTrusted:
     def _card(self, **kw):
         return ip._card({"summary": "s", **kw})
 
-    def test_the_shape_is_normalised(self):
+    def test_the_shape_is_normalized(self):
         card = ip._card(
             {
                 "summary": "On port 3",

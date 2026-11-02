@@ -626,7 +626,7 @@ class TestResultsSummary:
         assert "reserved" not in _summary(logged_in_client.get("/leases?search=soon", headers=self.HX).data.decode())
 
     def test_a_paged_list_says_the_reserved_count_is_for_the_page(self, logged_in_client, q206_rows):
-        # the reserved set is read for the rows shown, so a paged list says so rather than imply the whole filtered set (the route honours any whole number of rows, the select offers four)
+        # the reserved set is read for the rows shown, so a paged list says so rather than imply the whole filtered set (the route honors any whole number of rows, the select offers four)
         text = _summary(logged_in_client.get("/leases?per_page=2", headers=self.HX).data.decode())
         assert text.startswith("3 active leases") and "1 reserved on this page" in text
         one_page = _summary(logged_in_client.get("/leases?per_page=50", headers=self.HX).data.decode())
@@ -719,7 +719,7 @@ class TestFilteredEmptyState:
             body = logged_in_client.get(f"/leases?minutes={ignored}").data.decode()
             assert "No active leases yet" in body and "Clear filters" not in body, ignored
 
-    def test_a_search_is_sanitised_before_it_is_named(self, logged_in_client, q206_rows):
+    def test_a_search_is_sanitized_before_it_is_named(self, logged_in_client, q206_rows):
         body = logged_in_client.get("/leases?search=<zzq>").data.decode()
         assert "match “zzq”" in body and "<zzq>" not in body.split('id="leases-results"', 1)[1]
 

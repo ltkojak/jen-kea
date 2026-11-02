@@ -765,7 +765,7 @@ class TestDesktopIsUntouched:
 class TestListPagesOnThePhone:
     """v5.52.0 (Q59): the real Leases / Reservations / Devices pages use the vocabulary."""
 
-    def test_leases_filters_collapse_into_a_labelled_sheet(self, phone, base_url):
+    def test_leases_filters_collapse_into_a_labeled_sheet(self, phone, base_url):
         _visit(phone, base_url, "/leases")
         bar = phone.locator(".filter-bar").first
         expect(bar.locator(".fs-filter-toggle")).to_be_visible()

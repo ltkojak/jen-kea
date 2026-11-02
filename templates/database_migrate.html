@@ -126,7 +126,7 @@
         {{ icon("triangle-alert") }} This will copy data to the target database. The source (<strong>{{ jen_db_host }}</strong> / <strong>{{ kea_db_host }}</strong>) is never touched.
         If the migration fails at any point, what it wrote to the target is removed and nothing that was already there is touched.
         <br><strong>Jen database:</strong> the target must not already have the tables being copied — the migration creates them, and refuses to replace or merge into one that exists (use an empty database).
-        <br><strong>Kea database:</strong> the target must already be an initialised Kea database (<code>kea-admin db-init</code>) of the same schema major version. Jen copies data only; it never creates or changes Kea's tables.
+        <br><strong>Kea database:</strong> the target must already be an initialized Kea database (<code>kea-admin db-init</code>) of the same schema major version. Jen copies data only; it never creates or changes Kea's tables.
     </div>
     <div style="display:flex;gap:10px;margin-bottom:16px;">
         <button class="btn btn-secondary" id="step3-back-btn">← Back</button>

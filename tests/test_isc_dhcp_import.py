@@ -348,7 +348,7 @@ class TestParseFixture:
             ("line 132", "deny unknown-clients"),
             ("line 133", "no BOOTP"),
             ("line 160", "group blocks are flattened"),
-            ("line 221", "`frobnicate` is not recognised"),
+            ("line 221", "`frobnicate` is not recognized"),
         ],
     )
     def test_every_unsupported_construct_warns_once_with_its_line(self, plan, line, fragment):

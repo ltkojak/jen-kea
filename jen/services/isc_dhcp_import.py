@@ -620,7 +620,7 @@ class _Interp:
             elif kw == "":
                 self.warn(f"line {line}: a bare `{{ … }}` block — ignored")
             else:
-                self.warn(f"line {line}: `{kw}` is not recognised — not imported")
+                self.warn(f"line {line}: `{kw}` is not recognized — not imported")
 
     def _int(self, st: Stmt, what: str) -> int | None:
         words = st.words()
@@ -666,7 +666,7 @@ class _Interp:
         elif target in ("client-updates", "duplicates", "declines", "leasequery"):
             self.note_once(target, f"line {line}: `{words[0]} {target}` is not imported")
         else:
-            self.warn(f"line {line}: `{words[0]} {target}` is not recognised — ignored")
+            self.warn(f"line {line}: `{words[0]} {target}` is not recognized — ignored")
 
     # -- subnet --------------------------------------------------------------
     def handle_subnet(self, st: Stmt, ctx: _Ctx, network: str | None) -> None:

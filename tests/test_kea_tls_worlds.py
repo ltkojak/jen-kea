@@ -6,12 +6,12 @@ v5.69.0-beta.23 (Q192, AH0): the TLS module's inputs are its WORLDS.
 Three reviews in a row found v5.29 TLS functions (`ensure_ca`, `ca_present`, `client_cert_ok`) by reading the whole archive, while our own passes executed the diff. This is the answer: a generated
 matrix over every file `jen/services/kea_tls.py` reads - the CA, Jen's client pair, a server pair and the `.prev` / `.staged` / `.stale` / `.unknown` files beside it, the four `.next` files of a prepared
 rotation, and the three configured paths (`api_ca`, `api_client_cert`, `api_client_key`) - in each state that applies, built as Lab worlds, and for EVERY world each ordinary action: the Health TLS row,
-`issue_client_cert`, `ensure_ca`, `rotate_kea_ca` (with and without the acknowledgement of a damaged CA) and - through the setup harness - `setup_direct_socket` (https and http) and
+`issue_client_cert`, `ensure_ca`, `rotate_kea_ca` (with and without the acknowledgment of a damaged CA) and - through the setup harness - `setup_direct_socket` (https and http) and
 `remove_direct_socket`. `check_invariants` (T1-T5) runs after each, plus two more:
 
   T6  no ORDINARY action replaces a damaged identity file: after Health / setup / remove / `issue_client_cert` / `ensure_ca` the CA files and Jen's client pair are byte-equal - except a damaged
       client pair under an ok CA, which `issue_client_cert` (and the setup that calls it) re-issues from the same CA and says so;
-  T7  `ensure_ca` creates a CA ONLY in the uninitialised world (no CA files, no client pair, no server copy, no prepared rotation).
+  T7  `ensure_ca` creates a CA ONLY in the uninitialized world (no CA files, no client pair, no server copy, no prepared rotation).
 
 The matrix is ENUMERATED from `kea_tls`'s own path functions: a test lists the module's path functions, file suffixes, configured inputs and reading functions and fails on one that is not a row here,
 so a new file the module reads is a new row. Each world's expected outcome is stated per state CLASS (CA damaged / client damaged / ...), not per cell.
@@ -45,7 +45,7 @@ lab_world = _rotation.lab_world  # ... and the world it checks (Q199: `lab` depe
 class World:
     role: str  # which input
     state: str  # in which state
-    klass: str  # baseline | uninitialised | ca | client | copy | aux | config
+    klass: str  # baseline | uninitialized | ca | client | copy | aux | config
 
     @property
     def id(self) -> str:
@@ -53,7 +53,7 @@ class World:
 
 
 def _worlds() -> list[World]:
-    out = [World("baseline", "healthy", "baseline"), World("everything", "removed", "uninitialised")]
+    out = [World("baseline", "healthy", "baseline"), World("everything", "removed", "uninitialized")]
     out += [World("ca_crt", s, "ca") for s in ("absent", "malformed", "unreadable", "mismatched", "invalid-key")]
     # (second pass, finding 4/7) the CA's files gone while evidence they existed remains: the client pair and copies; a leftover `.prev`; an EMPTY copies directory
     out += [World("ca_both", "absent-beside-the-client-pair-and-copies", "ca")]
@@ -233,8 +233,8 @@ def client_damaged(world: World) -> bool:
     return world.klass == "client"
 
 
-def initialised(world: World) -> bool:
-    return world.klass != "uninitialised"
+def initialized(world: World) -> bool:
+    return world.klass != "uninitialized"
 
 
 def _health():
@@ -245,7 +245,7 @@ def _health():
 def built(lab, monkeypatch, tmp_path, request):
     world = request.param
     apply_world(world, monkeypatch, tmp_path)
-    if world.klass == "uninitialised":
+    if world.klass == "uninitialized":
         lab.hosts.clear()  # (no daemon holds anything in this world)
     lab.begin()  # the world IS the state before any action
     return world
@@ -268,7 +268,7 @@ class TestTheWorldsOfTheLab:
         assert c.status in ("ok", "warn", "fail", "skip")
         if ca_damaged(built):
             assert c.status == "fail" and "damaged" in c.detail, c.detail
-        elif built.klass == "uninitialised":
+        elif built.klass == "uninitialized":
             assert c.status == "skip", c.detail
         elif client_damaged(built):
             assert c.status == "fail", c.detail
@@ -277,7 +277,7 @@ class TestTheWorldsOfTheLab:
     def test_issue_client_cert_never_replaces_what_it_may_not(self, lab, built):
         lab.before = None  # a direct call to the module, not a request: T5 is about requests (T6 and T7 judge these)
         before_identity, before_tree = identity_files(), worlds.tree(kea_tls.SSL_DIR)
-        if ca_damaged(built) or built.klass == "uninitialised":
+        if ca_damaged(built) or built.klass == "uninitialized":
             with pytest.raises(kea_tls.CaDamaged):
                 kea_tls.issue_client_cert()
             assert worlds.tree(kea_tls.SSL_DIR) == before_tree
@@ -304,10 +304,10 @@ class TestTheWorldsOfTheLab:
         assert worlds.tree(kea_tls.SSL_DIR) == before_tree
 
     @_all
-    def test_ensure_ca_creates_only_in_the_uninitialised_world(self, lab, built):
+    def test_ensure_ca_creates_only_in_the_uninitialized_world(self, lab, built):
         lab.before = None  # a direct call to the module, not a request: T5 is about requests (T6 and T7 judge these)
         before_identity, before_tree = identity_files(), worlds.tree(kea_tls.SSL_DIR)
-        if built.klass == "uninitialised":
+        if built.klass == "uninitialized":
             result = kea_tls.ensure_ca()
             assert result["created"] is True and kea_tls.ca_state() == ("ok", ""), "T7: the one world it may create in"
             lab.hosts.clear()
@@ -327,7 +327,7 @@ class TestTheWorldsOfTheLab:
         """'rotated' | 'refused' for the world, by its class."""
         if world.klass in ("baseline", "aux"):
             return "rotated"
-        if world.klass == "uninitialised":
+        if world.klass == "uninitialized":
             return "refused"
         if world.klass == "ca":
             if not acknowledged:
@@ -356,7 +356,7 @@ class TestTheWorldsOfTheLab:
         assert "Kea CA rotated" not in texts, (built.id, texts)
         assert lab.remote_actions() == 0, f"{built.id}: a refusal asked a host for nothing"
         assert worlds.tree(kea_tls.SSL_DIR) == before, f"{built.id}: a refusal changed a file"
-        if built.klass == "uninitialised":
+        if built.klass == "uninitialized":
             assert "No Jen-managed Kea CA exists yet" in texts
         elif built.klass == "ca" and not acknowledged:
             assert "Jen's CA is damaged" in texts and kea_tls.DAMAGED_CA_ADVICE in texts, texts
@@ -366,13 +366,13 @@ class TestTheWorldsOfTheLab:
             assert "Rotate refused" in texts, texts
 
     @_all
-    def test_rotate_without_the_acknowledgement_does_what_its_class_means(self, lab, built):
+    def test_rotate_without_the_acknowledgment_does_what_its_class_means(self, lab, built):
         before = worlds.tree(kea_tls.SSL_DIR)
         _rotate()
         self._check_rotate(lab, built, False, before)
 
     @_all
-    def test_rotate_with_the_acknowledgement_does_what_its_class_means(self, lab, built):
+    def test_rotate_with_the_acknowledgment_does_what_its_class_means(self, lab, built):
         before = worlds.tree(kea_tls.SSL_DIR)
         _rotate({"acknowledge_damaged_ca": "1"})
         self._check_rotate(lab, built, True, before)
@@ -382,7 +382,7 @@ class TestTheWorldsOfTheLab:
 
 
 #: the path functions kea_tls reads files through - each is a row above (`ca_*` -> the CA worlds, `client_*` -> the client worlds, `server_*` and the markers -> the copy and aux worlds, `_staged_paths` ->
-#: the `.next` worlds, `_copies_dir` -> the uninitialised-evidence worlds)
+#: the `.next` worlds, `_copies_dir` -> the uninitialized-evidence worlds)
 MATRIX_PATH_FUNCS = {
     "_group_certificate_path",  # Q201 (AQ2): the path of the certificate that represents what the host holds for a record group
     "ca_paths",
@@ -427,7 +427,7 @@ MATRIX_READERS = {
         "load_key",
     },  # Q196 second pass: reads a CA the verifier judged DAMAGED, for the opinion in both directions  # Q196 (AL1): the `openssl verify` cross-check (`TestCaIdentityIsTheVerifier`)
     "ca_state": {"lexists"},
-    "_initialised_evidence": {"lexists", "listdir"},
+    "_initialized_evidence": {"lexists", "listdir"},
     "copies_dir_writable": {
         "lexists",
         "open",
@@ -553,7 +553,7 @@ class TestEveryInputOfTheModuleIsARow:
         assert {"server_crt.prev", "server_crt.staged", "server.stale", "server.unknown"} <= roles  # the suffixed files
         assert {"next", "next_ca_cert", "next_client_key"} <= roles  # _staged_paths
         assert {"api_ca", "api_client"} <= roles  # the configured inputs
-        assert "everything" in roles  # _copies_dir / the uninitialised evidence
+        assert "everything" in roles  # _copies_dir / the uninitialized evidence
 
     def test_the_matrix_is_big_enough_to_mean_something(self):
         # worlds x actions: five Lab actions here, three setup/remove actions in the setup harness (test_direct_socket_lock.py::TestTheWorldsOfTheSetupHarness)
@@ -816,9 +816,7 @@ class TestTheRecoveryNamesActionsThatWork:
         staged = kea_tls._staged_paths()
         assert all(os.path.exists(p) for p in staged.values()), "Prepare kept .next"
         assert "A new CA is prepared" in lab.texts() and kea_tls.prepared_fingerprint(staged) in lab.texts()
-        assert (
-            "Nothing to prepare" not in lab.texts() and "with the acknowledgement: Jen's CA is damaged" in lab.texts()
-        )
+        assert "Nothing to prepare" not in lab.texts() and "with the acknowledgment: Jen's CA is damaged" in lab.texts()
         # the operator adds the next CA to the external daemon's trust anchor, beside the current one
         lab.hosts[3]["client_trust"] = _rotation._ca_pem() + pathlib.Path(staged["ca_cert"]).read_text(encoding="ascii")
         lab.flashes.clear()
@@ -1312,8 +1310,8 @@ class TestTheLeafShapesOfQ202:
         assert (refusal == "") is accepted, (url_host, refusal)
         lab.before = None
 
-    def test_a_mapped_san_does_not_authorise_the_plain_address_nor_the_reverse(self, lab):
-        """Q204 AT5 a, on the leaf table: the library's own verifier refuses SAN `::ffff:a00:6` for `10.0.0.6` and Jen's role judgement agrees (no fold)."""
+    def test_a_mapped_san_does_not_authorize_the_plain_address_nor_the_reverse(self, lab):
+        """Q204 AT5 a, on the leaf table: the library's own verifier refuses SAN `::ffff:a00:6` for `10.0.0.6` and Jen's role judgment agrees (no fold)."""
         cert = self._cert("mapped-ip")
         assert kea_tls.ssh_host_refusal(cert, {"id": 2, "ssh_host": "10.0.0.6"}), (
             "the plain host is not the mapped name"
@@ -1377,7 +1375,7 @@ class TestTheLeafShapesOfQ202:
             (["10.0.0.6", "kea-b.lan"], "kea-b.lan", "10.0.0.7", False),
             (["10.0.0.6", "kea-b.lan"], "10.0.0.6", "10.0.0.6", False),  # the SSH half: the LAST name
             (["10.0.0.6", "mid.lan", "kea-b.lan"], "kea-b.lan", "mid.lan", True),  # any name, the middle one too
-            # Q204 AT5 a: this row was `True` (Q202). A TLS client dialling `[::ffff:10.0.0.6]` against a certificate for `10.0.0.6` is refused by openssl and urllib3 - `names_match` no longer folds
+            # Q204 AT5 a: this row was `True` (Q202). A TLS client dialing `[::ffff:10.0.0.6]` against a certificate for `10.0.0.6` is refused by openssl and urllib3 - `names_match` no longer folds
             # the mapped spelling onto the plain one, so the record reads as refused with the destination sentence. Inverted on purpose, and its mirror image is added.
             (["10.0.0.6"], "10.0.0.6", "[::ffff:10.0.0.6]", False),
         ],

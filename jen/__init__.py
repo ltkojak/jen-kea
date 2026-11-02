@@ -440,7 +440,7 @@ def create_app() -> Flask:
             "default-src 'self'; "
             f"script-src 'self' 'nonce-{nonce}'; "
             "style-src 'self' 'unsafe-inline'; "
-            # v5.31.1 — the TOTP enrolment QR and uploaded avatars are
+            # v5.31.1 — the TOTP enrollment QR and uploaded avatars are
             # data: URLs; with no img-src of its own they fell through to
             # default-src 'self' and the browser blocked them (broken
             # since the header arrived in v4.4.5). A data: image can't
@@ -959,7 +959,7 @@ def create_app() -> Flask:
 
         _bridge = _credentials.beta11_flag()  # None = the settings table could not be read: do nothing this start (it cannot tell "absent" from "unreadable")
         if _bridge is not None:
-            _converted = _credentials.materialise(app_config, audit=_audit, already_converted=_bridge)
+            _converted = _credentials.materialize(app_config, audit=_audit, already_converted=_bridge)
             if _converted is not None and _bridge:
                 _credentials.forget_beta11_flag()
     except Exception as e:

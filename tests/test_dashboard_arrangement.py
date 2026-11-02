@@ -101,7 +101,7 @@ class TestDashboardPageMarkup:
         assert 'id="arrange-save-btn"' in html and 'id="arrange-cancel-btn"' in html
         assert 'id="dash-compact-toggle"' in html
 
-    def test_widget_catalog_is_serialised_for_the_page_script(self, logged_in_client, db, mock_kea):
+    def test_widget_catalog_is_serialized_for_the_page_script(self, logged_in_client, db, mock_kea):
         from jen.services import dashboard_prefs as dp
 
         html = logged_in_client.get("/").data.decode()

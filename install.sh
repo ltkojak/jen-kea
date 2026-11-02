@@ -463,7 +463,7 @@ _private_write() {
 }
 
 # ── The config file lock (v5.68.0-beta.18, Q153) ─────────────────────────────────────────────────────────────────────────────────────
-# Jen's AppConfig writers serialise their threads with an in-process lock AND take an exclusive advisory flock on <config>.lock for each
+# Jen's AppConfig writers serialize their threads with an in-process lock AND take an exclusive advisory flock on <config>.lock for each
 # read-modify-replace. `install.sh --configure` runs an interactive wizard and rewrites jen.config with Jen RUNNING, so a Settings save made
 # during the wizard was overwritten by the installer's older copy. `--configure` now holds the SAME lock from before `detect_existing` until
 # `write_config` has finished, so a save waits (and says why) instead of being lost, and because the wizard is interactive `write_config`
@@ -480,10 +480,10 @@ _config_lock_acquire() {
     if ! command -v flock >/dev/null 2>&1; then
         fatal "--configure needs flock (util-linux) to hold Jen's config lock while the wizard runs: apt-get install util-linux"
     fi
-    # v5.68.0-beta.20 (Q155): the lock is OPENED ONCE, by `tools/private_write.py --hold-lock` (take_lock: one O_NOFOLLOW open, the SAME inode normalised
+    # v5.68.0-beta.20 (Q155): the lock is OPENED ONCE, by `tools/private_write.py --hold-lock` (take_lock: one O_NOFOLLOW open, the SAME inode normalized
     # in place - chown to the service user, chmod 600, neither drops an flock - never a new file renamed over it). A lock is an inode: the `-L` test and
     # `install -o` above/below it were a check-then-open, and an installer holding one inode while Jen locked another held no lock at all. The holder
-    # is a coprocess that prints "locked" and keeps the flock until it is signalled (`_config_lock_release`) or this installer dies (it polls its parent).
+    # is a coprocess that prints "locked" and keeps the flock until it is signaled (`_config_lock_release`) or this installer dies (it polls its parent).
     local owner; owner="$(id -u "$JEN_USER"):$(id -g "$JEN_USER")"
     coproc CONFIG_LOCK_HOLDER { "$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/private_write.py" --hold-lock "$CONFIG_LOCK_FILE" --owner "$owner"; }
     CONFIG_LOCK_PID="$CONFIG_LOCK_HOLDER_PID"
@@ -552,7 +552,7 @@ _layout_kv() {
 # pre-created EMPTY --app-dir (which the contract allows) was refused as
 # "relocating an existing install", and a non-Jen /opt/jen with no layout
 # file was treated as an upgrade, tolerated, then chowned and stamped. A
-# pre-Q114 box (no $LAYOUT_FILE, a real app_dir) is recognised by content
+# pre-Q114 box (no $LAYOUT_FILE, a real app_dir) is recognized by content
 # and so reads as an upgrade without being asked to prove anything else.
 #
 # Must be called AFTER the flags and the answers file have been read (main()
@@ -768,7 +768,7 @@ require_root() {
 # ── Detect existing install ───────────────────────────────────────────────────
 detect_existing() {
     # v5.67.0-beta.9 (Q121, item b) — the checker's own answer (LAYOUT_MODE:
-    # marker, or recognised by content) says whether an install is recorded
+    # marker, or recognized by content) says whether an install is recorded
     # here at all; the files below say whether there is anything TO upgrade.
     # A box whose app was removed (uninstall.sh level 1) but whose layout
     # file and config were kept is "upgrade" to the checker and a reinstall
@@ -1181,7 +1181,7 @@ _jen_db_install_local_opted_in() {
 
 # Install MariaDB's server on THIS machine (Debian/Ubuntu, as the installer already is), start it, and wait for the
 # socket. A server that is already installed is started, never reinstalled. Output goes to the install log. Returns
-# 0 when a root-socket connection works afterwards (Ubuntu's MariaDB authenticates root over the unix socket, which is
+# 0 when a root-socket connection works afterward (Ubuntu's MariaDB authenticates root over the unix socket, which is
 # what the existing self-create below relies on), 1 with the log tail printed otherwise.
 _jen_db_install_local() {
     if ! command -v mariadbd &>/dev/null && ! dpkg -s mariadb-server &>/dev/null; then
@@ -1736,7 +1736,7 @@ CONFEOF
     # re-applies the mode on every Settings save) so a file holding every
     # DB password, API credential and DDNS token this install has stays
     # owner-only for good, not just until the next save.
-    # (the owner and the 0600 mode are applied by `_private_write` to the open file, before the rename - no chown/chmod afterwards)
+    # (the owner and the 0600 mode are applied by `_private_write` to the open file, before the rename - no chown/chmod afterward)
     ok "Config written → ${DIM}${CONFIG_FILE}${NC}"
 
     # Initialize the database on a fresh install: run migrations and seed
@@ -2281,7 +2281,7 @@ verify_install() {
     # v5.67.0-beta.9 (Q121, item f) — every failure below goes through
     # fatal(), never a bare `return 1`/`exit 1`: fatal() is what rolls an
     # upgrade back (ROLLBACK_ARMED is still set here) and what the INT/TERM
-    # trap's own cleanup is modelled on. A bare exit skipped all of it, so a
+    # trap's own cleanup is modeled on. A bare exit skipped all of it, so a
     # verification failure left a broken upgrade in place.
     systemctl is-active --quiet jen \
         && ok "Service running" \

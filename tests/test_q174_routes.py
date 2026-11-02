@@ -1,7 +1,7 @@
 """
 tests/test_q174_routes.py
 ─────────────────────────
-v5.69.0-beta.5 (Q174): the P3 sweep's route-level behaviours - each is the one-line test its register item implies. Database-backed (the app, the test client, the settings table).
+v5.69.0-beta.5 (Q174): the P3 sweep's route-level behaviors - each is the one-line test its register item implies. Database-backed (the app, the test client, the settings table).
 """
 
 import io

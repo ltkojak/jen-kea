@@ -8,8 +8,8 @@ breaking the page. Since v5.68.0-beta.11 (Q146) a provider is run by `provider_b
 stops waiting; a provider that is not done shows "unavailable (over 1 s)") and caps how many calls can be outstanding.
 
 What a provider is handed is the ALREADY-AUTHORIZED view of the client (`client_subject.authorize`): it never resolves the
-client itself and sees only what the caller may. Defence in depth, the Q55 rule - the plugin's own filtering is never trusted
-alone: the card is validated and normalised here (`_card`), a restricted caller is refused any link that is not a path inside
+client itself and sees only what the caller may. Defense in depth, the Q55 rule - the plugin's own filtering is never trusted
+alone: the card is validated and normalized here (`_card`), a restricted caller is refused any link that is not a path inside
 Jen, and the caller's own subnet scope is passed beside the subject so the provider can put it in its own query.
 """
 
@@ -60,7 +60,7 @@ def _text(value, limit: int) -> str:
 
 
 def _card(raw) -> dict | None:
-    """Validate and normalise one provider answer. Returns the card, or raises ValueError for something that is not one."""
+    """Validate and normalize one provider answer. Returns the card, or raises ValueError for something that is not one."""
     if raw is None:
         return None
     if not isinstance(raw, dict):

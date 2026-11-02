@@ -3,7 +3,7 @@ jen/services/private_files.py
 ─────────────────────────────
 v5.68.0-beta.15 (Q150) — write a secret so that it is private from its FIRST BYTE.
 
-The old writers (`jen.config`, the SSL private key, the Fernet key) did `open(tmp, "w")` and `os.chmod` afterwards. The file is created
+The old writers (`jen.config`, the SSL private key, the Fernet key) did `open(tmp, "w")` and `os.chmod` afterward. The file is created
 with the process umask (0022 under systemd's default: world-readable), the secret is written into it, and only then is it tightened.
 What closed that window was the directory's own mode, which is not something to depend on. `write_private_file` is the discipline in one
 place, the same one jen-kea-helper's `_private_tempfile` uses for every file it writes on a Kea host:

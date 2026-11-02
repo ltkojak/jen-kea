@@ -8,15 +8,15 @@ Beta.7 to beta.10 each fixed one form of the same defect: a secret reaching a ho
 resolver's "its own, else the server's" chain). This module is the rule, pure (a parser in, a dict out, no I/O), and every consumer asks it:
 
     A secret is used at its OWN endpoint, or inherited by another daemon ON THE SAME HOST (`auth.same_host`: another port of that host is the same box).
-    An endpoint on a different host with no secret of its own has NONE - never its neighbour's.
+    An endpoint on a different host with no secret of its own has NONE - never its neighbor's.
 
 A blank `api_pass =` is an explicit "no credential" (none); an ABSENT key is "inherit, if the host is the same". The same reading everywhere.
 
 `Endpoint.source` is "own", "inherited:<name>" or "none". `Endpoint.withheld` is the name of the endpoint whose secret WOULD have been inherited had the host been the
 same: it is what lets `kea._endpoint_for` tell "this endpoint has no credential because none was ever set" (a Kea with no authentication: send nothing extra) from "this one
-was refused its neighbour's" (send nothing at all, and say why).
+was refused its neighbor's" (send nothing at all, and say why).
 
-Also here: `materialise` (a legacy extra server that inherited the primary's password across hosts since 5.10 is converted ONCE, audibly) and `move_refusal`
+Also here: `materialize` (a legacy extra server that inherited the primary's password across hosts since 5.10 is converted ONCE, audibly) and `move_refusal`
 (the check `AppConfig._write_parser` runs on every write: a saved password does not follow an endpoint to a new host, and does not appear on a second host, unless it was typed
 in this request).
 """
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # key in CA mode) - the writer's mode-switch exemption reads it without the parser
 Endpoint = namedtuple("Endpoint", "name url user password source withheld url_own", defaults=("", True))
 
-#: the marker `materialise` and the "share" box write beside a copied password
+#: the marker `materialize` and the "share" box write beside a copied password
 SHARED_MARKER = "api_pass_shared"
 
 
@@ -110,7 +110,7 @@ def server_numbers(parser) -> list[int]:
 def resolve(parser) -> dict[str, Endpoint]:
     """Every place Jen sends a Kea or database credential, with the url, user and password it WILL send and where the password came from (CRED-004, Q180; Q181 for url and
     user). The one rule: a secret is used at its own endpoint, or inherited by another daemon ON THE SAME HOST (`same_host`; another port of that host is the same box). An
-    endpoint on a different host with no secret of its own has NONE - never its neighbour's. Names: "kea", "kea6", "d2", "kea_db", "kea6_db", "jen_db", "server_<N>",
+    endpoint on a different host with no secret of its own has NONE - never its neighbor's. Names: "kea", "kea6", "d2", "kea_db", "kea6_db", "jen_db", "server_<N>",
     "server_<N>_v6", "server_<N>_d2".
 
     THE THREE READINGS, the same for url, user and password (v5.69.0-beta.12, Q181 - what this returns is what the transport sends, and nothing downstream may change it):
@@ -447,7 +447,7 @@ def pending_conversions(parser, legacy: bool | None = None) -> list[str]:
 
 
 #: the marker, in the file it describes (v5.69.0-beta.12, Q181): `[jen] credential_model = explicit` says "every endpoint's password in this file is its own, or deliberately absent" -
-#: written by the installer and the setup wizard on a fresh install, and by `materialise` in the SAME atomic write as the copies it makes. A file without it is a legacy file.
+#: written by the installer and the setup wizard on a fresh install, and by `materialize` in the SAME atomic write as the copies it makes. A file without it is a legacy file.
 MODEL_SECTION, MODEL_KEY, MODEL_VALUE = "jen", "credential_model", "explicit"
 
 
@@ -486,7 +486,7 @@ def forget_beta11_flag() -> None:
 def model_marker(parser) -> str:
     """The marker as a VALUE (v5.69.0-beta.13, Q182, X3): "absent" (no `[jen] credential_model` key: a legacy file), "explicit" (the value Jen writes, whitespace ignored) or "invalid"
     (the key is there with anything else - a typo, an empty value). An invalid marker is neither: Jen cannot tell whether every password in the file is its own, so it converts
-    nothing and says so (`materialise`, the Doctor's `credential-model-invalid`, Health)."""
+    nothing and says so (`materialize`, the Doctor's `credential-model-invalid`, Health)."""
     if not _has(parser, MODEL_SECTION, MODEL_KEY):
         return "absent"
     return "explicit" if _get(parser, MODEL_SECTION, MODEL_KEY).strip() == MODEL_VALUE else "invalid"
@@ -507,7 +507,7 @@ def has_model_marker(parser) -> bool:
     return model_marker(parser) == "explicit"
 
 
-def materialise(app_config, audit=None, today: str = "", already_converted: bool = False) -> list[str] | None:
+def materialize(app_config, audit=None, today: str = "", already_converted: bool = False) -> list[str] | None:
     """Convert a legacy configuration ONCE, audibly (CRED-004, Q180 U2, Q181 V3). Until beta.11 an extra server - and Kea6, D2, the Kea6 database and a server's IPv6 and D2
     endpoints - with no password of its own inherited its parent's whatever host it was on (HA peers since 5.10), and the resolver no longer does. For each endpoint that has a url,
     no password key and a parent with a password on a DIFFERENT host (`pending_conversions`), the parent's CURRENT password is written into its section with a `<key>_shared = 1`
@@ -596,7 +596,7 @@ def materialise(app_config, audit=None, today: str = "", already_converted: bool
                     audit(
                         "CONFIG_MIGRATION",
                         section,
-                        f"{section}: the parent's {option} materialised; it no longer follows the parent's",
+                        f"{section}: the parent's {option} materialized; it no longer follows the parent's",
                     )
                 except Exception as e:  # the audit row is a record, not a gate
                     logger.warning(f"credentials: could not audit the conversion of [{section}]: {type(e).__name__}")

@@ -33,7 +33,7 @@ function the writes pass through, and add the whole-tree source test.
 grep -rn "register_identity_guard\|investigation_writer\|file_write_refusal" jen/
 ```
 
-**(d) Every call sequence, four cases.** For each new or changed multi-step operation: the *lost-reply* case (applied, no acknowledgement), the *silent* case (the peer does not answer), the *database-failed-
+**(d) Every call sequence, four cases.** For each new or changed multi-step operation: the *lost-reply* case (applied, no acknowledgment), the *silent* case (the peer does not answer), the *database-failed-
 at-this-write* case, and the *reconfigured-mid-request* case (the settings changed between the check and the act).
 
 **(e) Run the machines.**
@@ -69,7 +69,7 @@ server's three. Ask of every new exemption: what ELSE does this skip let through
 
 **The second pass EXECUTES (Q183).** The passes that found beta.12's findings, beta.13's and beta.14's did not read the credential rule, they ran it: the real writer, resolver and transport on
 crafted configurations. That is now the procedure, and its instrument is `tests/probe/credential_probe.py` (a temporary jen.config, the real `AppConfig.mutate` / `write_values` /
-`preflight_identity_change`, `kea_command` with a captured `post`, `materialise`, `config_merge.credential_refusal`; one function per scenario returning what it observed;
+`preflight_identity_change`, `kea_command` with a captured `post`, `materialize`, `config_merge.credential_refusal`; one function per scenario returning what it observed;
 `tests/test_credential_probe.py` asserts them all). The second pass on any change to the credential rule EXECUTES: it extends `tests/probe/credential_probe.py` with one scenario per
 exemption used for a purpose its comment does not state, runs it, and reports each finding with the executed input and the observed output; a finding reported from reading alone is a
 hypothesis.
@@ -83,7 +83,7 @@ hypothesis.
 3. **A register item is executed before it is registered.** An entry dismissed from reading is a hypothesis too: Q188's register item (f) ("the pre-rotation pair, same CA") was dismissed from reading and,
    executed, was the staged-CA pair - the opposite of what the marker promised. The register says which of its items were executed.
 
-**(p) A classification is a row, everywhere (v5.69.0-beta.21, Q190).** Step (n) generalised from the credential rule. Any code that sorts targets into acted-on / left-alone / refused has a row
+**(p) A classification is a row, everywhere (v5.69.0-beta.21, Q190).** Step (n) generalized from the credential rule. Any code that sorts targets into acted-on / left-alone / refused has a row
 per CLASS, written before the classifier, and the left-alone class is proved by the invariant over the HOST (the daemon's own answer, its files, its trust relationship before and after), never by
 the classifier's own word: beta.20's `_trust_is_jens` was a global path-string switch added by a second-pass fix, it made every Jen-issued endpoint 'the administrator's', and the invariant that
 should have caught it only looked at a set the tests populated. Four rules follow.
@@ -121,7 +121,7 @@ next extension; X.509 has dozens (name constraints, policy constraints, path len
 (`openssl verify -purpose sslserver`) and make that tool - or its library equivalent (`cryptography.x509.verification`) - the product's check, with the structural checks kept only for the sentence.
 The second pass then executes every constraint the library can express, cross-checked against the reviewer's tool where it exists, and a disagreement between the two is a warning the operator sees.
 
-**(q), a structural check is never stricter than the verifier it annotates (v5.69.0-beta.30, Q199).** `ca_identity` keeps a structural ladder (`_cert_structure`) for the SENTENCE a person recognises; the
+**(q), a structural check is never stricter than the verifier it annotates (v5.69.0-beta.30, Q199).** `ca_identity` keeps a structural ladder (`_cert_structure`) for the SENTENCE a person recognizes; the
 verifier and the stacks are the authority. Q198's `_same_name` returned "damaged" for a root whose issuer and subject were the same text in different ASN.1 string types, with a docstring that said the
 opposite of what OpenSSL's `X509_NAME_cmp` does; executed, BMP, Universal, IA5 and T61 holding ASCII are one name with UTF-8, and only a T61 or IA5 string holding the UTF-8 bytes of a non-ASCII letter is two.
 The test for every such check is **"stricter than the oracle = finding"**: `TestTheStringTypeFamily` runs every type pair, in ASCII and non-ASCII text and with a case and a white-space variant, against
@@ -163,10 +163,10 @@ You are an independent adversarial release reviewer for Jen at <repo root>. Read
 For every piece of evidence, guard or check the diff adds, ask what else could produce the same observation without the thing it is taken to prove; for every
 check-then-act, name what could change between the two; for every except, say whether a failure reads as success; for every new state or field, find every reader and
 writer; for every multi-step operation, inject a failure at each step and say what state is left and whether it is visible. Compare what the tests pin with what the
-code does: name a test that pins a weak rule as desired and a behaviour no test asserts. Output a numbered list, most severe first, each with: severity (P1 = a scoped
+code does: name a test that pins a weak rule as desired and a behavior no test asserts. Output a numbered list, most severe first, each with: severity (P1 = a scoped
 or lower-role account reads or changes data it may not, auth or CSRF bypass, root reads or writes outside a wall, data loss, a daemon left in a wrong state, a loop
-that dies silently, a 500 any user can trigger with ordinary input; P2 = wrong behaviour a user sees, a failure read as success, inconsistent answers, a missing
-validation with no exploit; P3 = nit), the exact file:line in the CURRENT tree, a concrete triggering sequence, and whether a test pins the current behaviour. Then a
+that dies silently, a 500 any user can trigger with ordinary input; P2 = wrong behavior a user sees, a failure read as success, inconsistent answers, a missing
+validation with no exploit; P3 = nit), the exact file:line in the CURRENT tree, a concrete triggering sequence, and whether a test pins the current behavior. Then a
 short list of what you checked and found correct. Keep hypotheses in a separate list. No padding: say so when nothing is at a severity.
 On any change to the credential rule (credentials.py, AppConfig._write_parser, kea._endpoint_for, the connection forms, the wizard, the installer's merge) the pass EXECUTES: run
 `py tests/probe/credential_probe.py`, extend it with one scenario per exemption used for a purpose its comment does not state, and report each finding with the executed input and the
@@ -206,7 +206,7 @@ the procedure that replaces it. It runs on every tagged beta BEFORE the archive 
 
 9. **A refusal world always carries every record state (Q198).** The harness lineage ran beta.28's refusal worlds with no `.prev` and no stale marker beside the targets and so never saw the failure branch
    destroy the recorded pair of a target it never touched; the fresh reader, building the world from the tree, found it and reproduced it through the real route (the shipped T5 fired). Every refusal
-   branch is run with `.prev`-bearing untouched targets (one of them stale-marked) and the records compared byte for byte afterwards; likewise the AKI rows had every single-value form and not a list of two
+   branch is run with `.prev`-bearing untouched targets (one of them stale-marked) and the records compared byte for byte afterward; likewise the AKI rows had every single-value form and not a list of two
    issuer names with the wrong one first - the second time a value-level shape escaped a class-level enumeration (rule 7 above), found again by the reader who started from the tree.
 
 **The exit rule.** Promotion is judged against Jen's threat model (`docs/ARCHITECTURE.md`): a P1 in a supported configuration blocks and gets a Q; a finding that requires the operator to
@@ -234,17 +234,17 @@ every finding the previous review named.
 **(r), two lines from Q200.** **A comparison of two SETS says all-of or any-of, in the Q and in the code, every time.** Q199's AO7 said Jen compares the certificate's SANs with the configured SSH host and the URL's host and never said whether each must match ITS OWN or any may match any; the implementation chose any-of-any, and a moved SSH host with an unchanged URL was accepted - the rotation modified the wrong machine. The quantifier is where that P1 lived, so a Q that compares sets states it, and the test list has a row per quantifier. **A test case the Q lists that the implementation inverts is a deviation the report must name, never a pin**: Q199's test list said the SSH-host-moved case must be REFUSED and the shipped test pinned it as DESIRED. The second pass's row for any fixup checks the Q's own test list against the shipped tests, one by one, and the release report prints that reconciliation.
 
 **Evidence level is a second attribute on every finding, separate from severity.** `Reproduced` (the production function executed, the failure observed), `Integration-confirmed` (the whole
-route executed), `Source-confirmed` (path and defect established by reading, not exercised), `Environment-dependent` (behaviour established; impact needs a particular deployment),
+route executed), `Source-confirmed` (path and defect established by reading, not exercised), `Environment-dependent` (behavior established; impact needs a particular deployment),
 `Suspected` (a hypothesis). A chart row carries both. A `Suspected` item is never written as a defect, and a `Source-confirmed` one never as a reproduction - this document already said so in
 (m); the five names make it checkable.
 
 **Severity reflects realistic consequences under the supported deployment contract** - the reviewer's own words: "Do not automatically label an edge case P1 merely because it involves
 cryptography or security-related code", and "A beta may be a strong release candidate even if lower-priority issues remain, provided the outstanding risks are understood, bounded and
 explicitly accepted." That is the exit rule under "The pre-reviewer executing pass" and CLAUDE.md rule 11, stated by the reviewer; both sides now hold each other to it. Jen keeps three tiers
-(P1 blocks, P2 is wrong behaviour or a dead end, P3 is a nit); a reviewer's P0 is a P1 that is also an incident.
+(P1 blocks, P2 is wrong behavior or a dead end, P3 is a nit); a reviewer's P0 is a P1 that is also an incident.
 
 **The matrices, as checklists** (the reviewer's lists, with Jen's stronger rule where it has one):
-- *Input state*: absent · empty · normal · malformed · stale · contradictory (inherit selected with an explicit value) · unauthorised · duplicated (two records, one resource) · aliased
+- *Input state*: absent · empty · normal · malformed · stale · contradictory (inherit selected with an explicit value) · unauthorized · duplicated (two records, one resource) · aliased
   (two paths or names, one resource) · inconsistent (a certificate without its key) · partially updated (remote changed, local not) · concurrent (two writers) · restored (database and
   configuration from different points in time).
 - *Role*: anonymous · viewer · scoped admin · unrestricted admin · superadmin · superadmin past the step-up window · an API key · a background or non-interactive context - through the

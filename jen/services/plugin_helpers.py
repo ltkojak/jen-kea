@@ -86,7 +86,7 @@ def search_scope(accessible_ids, all_subnets, column):
         cur.execute(f"... WHERE (label LIKE %s) AND {clause} ORDER BY ... LIMIT 20", (like, *params))
 
     Jen re-filters every returned row anyway (the Q55 rule), but that runs AFTER the provider's own
-    `LIMIT`: a provider that filters only afterwards can spend its 20 rows on other subnets' matches and
+    `LIMIT`: a provider that filters only afterward can spend its 20 rows on other subnets' matches and
     hand a restricted caller nothing. Filter in the query, so the limit applies to what the caller may see.
     An unrestricted caller gets `1=1`. `column` must be a plain (optionally table-qualified) column name."""
     if not _COLUMN_RE.match(column or ""):

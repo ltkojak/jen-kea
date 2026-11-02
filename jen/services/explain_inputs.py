@@ -1,7 +1,7 @@
 """
 jen/services/explain_inputs.py
 ───────────────────────────────
-v5.68.0-beta.2 (Q135) — the client Explain evaluates, built from everything Jen can know, with each input labelled by where
+v5.68.0-beta.2 (Q135) — the client Explain evaluates, built from everything Jen can know, with each input labeled by where
 it came from. Pure: the caller hands in the lease row, what Kea's log said (jen/services/kea_log_inputs.py) and what the
 person typed.
 
@@ -65,7 +65,7 @@ def build(
     `typed`: the form's values (any of FIELDS; blanks are ignored). `lease`: the newest active lease row
     (`client_subject.load_leases4` shape: `client_id` hex, `hostname`, `user_context`). `log`: {"classes": latest_classes(),
     "query": latest_query_data(), "cid": client_id_from_log()} — any may be None. `auto=False` turns every inferred source
-    off, leaving the MAC and what was typed (the old behaviour; `?auto=0`).
+    off, leaving the MAC and what was typed (the old behavior; `?auto=0`).
 
     Returns {"client": {field: value}, "sources": {field: key of SOURCE_LABELS}, "when": {field: "at <log timestamp>"},
     "assigned": the class list for explain(assigned_classes=) or None}."""
@@ -92,7 +92,7 @@ def build(
             if classes.get("before_config_change"):
                 assigned["before_config_change"] = True
             # v5.68.0-beta.10 (Q145): a class list logged before the live config's newest revision is what Kea decided under an OLDER
-            # config - labelled, not presented as the current decision
+            # config - labeled, not presented as the current decision
             stale = " (observed before the config changed)" if classes.get("before_config_change") else ""
             put("vendor_class", _li.vendor_class_from(classes["classes"]), "log-classes", classes["at"] + stale)
         if lease:

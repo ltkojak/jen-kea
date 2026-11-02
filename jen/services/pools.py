@@ -20,7 +20,7 @@ config_doctor); they are one function now.
                                    count per merged range, summed. An active lease OUTSIDE every pool (a reservation, a static address
                                    handed out by a reservation) never consumes dynamic capacity.
 
-Utilisation and exhaustion are judged per SUBNET over the union of its pools. The Subnets page may list each pool for information.
+Utilization and exhaustion are judged per SUBNET over the union of its pools. The Subnets page may list each pool for information.
 
 No Flask: importable anywhere; `consumption` takes the caller's open Kea-database cursor.
 """

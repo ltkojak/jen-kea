@@ -113,7 +113,7 @@ def _kea_response(version_text="2.7.5"):
 
 # test_kea_connection() is tested against real local servers in tests/test_setup_connection_modes.py
 # (v5.67.0-beta.8, Q120) — the mocked-requests.post tests that used to live here asserted the very
-# behaviour that was the bug (any answer to a service-style probe is "ca").
+# behavior that was the bug (any answer to a service-style probe is "ca").
 
 
 # ── save_connection() — pure, write_values mocked ───────────────────────────
@@ -1114,7 +1114,7 @@ class TestInvestigateVisitRedirect:
 
 class TestSshFailuresAreNotA500:
     """v5.67.0-beta.8 (Q120, item a) — "Skip" on the helper step, then "Capture baseline" (no SSH host), and
-    "Install the helper" before the key is authorised (the normal first try) both used to propagate a
+    "Install the helper" before the key is authorized (the normal first try) both used to propagate a
     paramiko or socket exception out of the route."""
 
     def _server(self, monkeypatch, **over):
@@ -1139,7 +1139,7 @@ class TestSshFailuresAreNotA500:
         assert r.status_code == 200
         assert b"SSH to jen@kea.lan failed" in r.data
 
-    def test_install_the_helper_before_the_key_is_authorised_is_a_message_not_a_500(
+    def test_install_the_helper_before_the_key_is_authorized_is_a_message_not_a_500(
         self, logged_in_client, db, monkeypatch
     ):
         self._server(monkeypatch, ssh_host="kea.lan", ssh_user="jen")

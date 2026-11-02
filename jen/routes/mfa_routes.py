@@ -95,7 +95,7 @@ def _remaining_mfa_factor_count(user_id, excluding_method_id=None, excluding_cre
 
 def _enrolling_user():
     """(user, is_forced) for the MFA-management surface: a logged-in user,
-    or one held in forced enrolment (password verified, no session yet).
+    or one held in forced enrollment (password verified, no session yet).
     (None, False) for anyone else."""
     if current_user.is_authenticated:
         return current_user, False
@@ -223,7 +223,7 @@ def _set_trusted_cookie(resp, user_id, days_raw):
 def _finish_second_factor(pending_id, pending_username, audit_action, *, remember=None, days_raw=None, resp=None):
     """The one success path for every second factor on /mfa/verify (and,
     v5.31.0, the passkey JSON finish): clear the attempt counter, rotate
-    the session, honour "remember this device", audit. `remember` /
+    the session, honor "remember this device", audit. `remember` /
     `days_raw` default to the posted form fields; `resp` defaults to a
     redirect to the post-login page (the passkey path passes a callable
     that builds its JSON response from that URL). None when the pending
@@ -400,13 +400,13 @@ def mfa_enroll():
     )
 
 
-# ── Passkeys (v5.31.0, Q31) — enrolment ───────────────────────────────────────
+# ── Passkeys (v5.31.0, Q31) — enrollment ───────────────────────────────────────
 #
 # Two JSON halves around the browser's navigator.credentials.create():
 # /begin hands back the options (and parks the challenge in the session),
-# /finish verifies the attestation and stores the public key. Both honour
+# /finish verifies the attestation and stores the public key. Both honor
 # the same two doors as /mfa/enroll — a logged-in user, or one held in
-# forced enrolment — and the same recent-auth step-up. CSRF: the page
+# forced enrollment — and the same recent-auth step-up. CSRF: the page
 # sends the token in X-CSRFToken (jen/services/csrf.py reads it there).
 
 
@@ -422,7 +422,7 @@ def passkey_register_begin():
         options_json, state = __passkeys.begin_registration(enrolling.id, enrolling.username, request)
     except Exception as e:
         logger.error(f"passkey register begin failed for {enrolling.username}: {e}")
-        return _json_error("could not start passkey enrolment — see the Jen log", 500)
+        return _json_error("could not start passkey enrollment — see the Jen log", 500)
     session["passkey_reg"] = state
     return jsonify({"ok": True, "options": options_json})
 
@@ -457,11 +457,11 @@ def passkey_register_finish():
             has_backup = cur.fetchone()["c"] > 0
         if not has_backup:
             # First factor (or the codes are all spent): issue recovery
-            # codes like TOTP enrolment does. An existing unused set is
+            # codes like TOTP enrollment does. An existing unused set is
             # kept — a second factor doesn't invalidate it.
             codes = __mfa.generate_backup_codes(enrolling.id)
     except Exception as e:
-        logger.error(f"backup code check after passkey enrolment failed for {enrolling.username}: {e}")
+        logger.error(f"backup code check after passkey enrollment failed for {enrolling.username}: {e}")
     if is_forced:
         # First factor is in place — promote the pending state to a real
         # session (this clears the session, so stash the codes after).
@@ -478,7 +478,7 @@ def passkey_enrolled():
     """Where the page lands after a successful /finish: shows freshly
     issued backup codes once, else back to the MFA page."""
     codes = session.pop("passkey_backup_codes", None)
-    if session.pop("passkey_just_enrolled", None):  # set by /finish: a plain GET of this URL is not an enrolment
+    if session.pop("passkey_just_enrolled", None):  # set by /finish: a plain GET of this URL is not an enrollment
         flash("Passkey enrolled successfully!", "success")
     if codes:
         return render_template("mfa_backup_codes.html", codes=codes)

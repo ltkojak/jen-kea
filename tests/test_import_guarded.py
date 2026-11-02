@@ -85,7 +85,7 @@ def _snapshots(tmp_path):
 
 
 def _fail_wol_once(monkeypatch):
-    """The first time wol's migrations are replayed, fail; afterwards behave (the rollback replays them again)."""
+    """The first time wol's migrations are replayed, fail; afterward behave (the rollback replays them again)."""
     real = plugins_svc.run_plugin_migrations
     state = {"failed": 0}
 

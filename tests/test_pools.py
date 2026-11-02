@@ -107,7 +107,7 @@ class TestMembership:
 
 
 class FakeCursor:
-    """Answers `SELECT COUNT(*)` for lease4 from a list of (address, active) rows, honouring the BETWEEN bounds."""
+    """Answers `SELECT COUNT(*)` for lease4 from a list of (address, active) rows, honoring the BETWEEN bounds."""
 
     def __init__(self, leases):
         self.leases, self.statements, self._n = leases, [], 0

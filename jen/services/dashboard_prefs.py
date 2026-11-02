@@ -71,7 +71,7 @@ def _as_int_list(value) -> list:
 
 def upgrade(raw) -> dict:
     """Read whatever is stored (a v1 list, a v2 dict, or nothing readable) and
-    return a v2-shaped dict. Never raises — an unrecognised shape falls back
+    return a v2-shaped dict. Never raises — an unrecognized shape falls back
     to DEFAULT_PANELS, same as an empty dashboard_prefs row always has."""
     if isinstance(raw, dict) and raw.get("v") == 2:
         subnets = raw.get("subnets") if isinstance(raw.get("subnets"), dict) else {}

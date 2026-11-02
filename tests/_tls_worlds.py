@@ -9,7 +9,7 @@ the fake daemon: it writes bytes.
 
   absent        the file is not there
   malformed     the file holds text that is not PEM
-  unreadable    the path is a DIRECTORY (every `open()` of it raises; on a platform that honours modes this is what a permission error looks like)
+  unreadable    the path is a DIRECTORY (every `open()` of it raises; on a platform that honors modes this is what a permission error looks like)
   mismatched    a valid file that is NOT its partner's (a certificate whose key is not the one beside it, or a key that is not the certificate's)
   earlier-jen   a certificate (and its key) issued by an EARLIER Jen CA - one that is not the live CA
   other-ca      a certificate (and its key) issued by a CA that is not Jen's at all

@@ -409,7 +409,7 @@ class TestForeignKeys:
 class TestMigration24WebauthnColumns:
     """v5.31.0 (Q31) — passkeys as a second factor. The table itself is
     from the v4.2.0 baseline; migration 24 adds the two optional columns
-    the enrolment flow records. Both must be nullable so the rows that
+    the enrollment flow records. Both must be nullable so the rows that
     predate them (none in practice — the feature was never live) and a
     downgrade stay valid."""
 
@@ -702,7 +702,7 @@ class TestMigration33ClientProblemsScopeKey:
     the per-server watermarks, and runs only when the column is absent.
 
     Q178 adjustment: these tests are about migration 33's own world - the five-column key under the name `uq_client_problem` - and the database they run on is at the
-    head, where migration 36 has replaced it. Each test therefore starts in migration 33's end state and puts the head back afterwards (36 is idempotent)."""
+    head, where migration 36 has replaced it. Each test therefore starts in migration 33's end state and puts the head back afterward (36 is idempotent)."""
 
     @pytest.fixture(autouse=True)
     def _in_migration_33s_world(self):

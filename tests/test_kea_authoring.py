@@ -41,7 +41,7 @@ class TestConfPathFor:
         server = {"kea_conf": "/etc/kea/kea-dhcp4.conf"}
         assert conf_path_for(server, "d2") == "/etc/kea/kea-dhcp-ddns.conf"
 
-    def test_the_configured_dhcp4_filename_is_honoured_and_the_siblings_keep_the_directory(self):
+    def test_the_configured_dhcp4_filename_is_honored_and_the_siblings_keep_the_directory(self):
         """v5.69.0-beta.3 (Q172): `kea_conf` IS the dhcp4 file. It used to be reduced to its directory and the file name replaced by `kea-dhcp4.conf`, so a host whose
         file is called anything else was read, written and rolled back as a file that does not exist there."""
         from jen.services.kea_authoring import conf_path_for
@@ -1767,7 +1767,7 @@ class TestAuthorKeaPreviewMissingBinary:
 
 class TestAuthorKeaConfigPostRoute:
     """The write route is a change set since v5.68.0-beta.15 (Q150): see tests/test_author_config_changeset.py for the all-or-nothing, preview-sha
-    and rollback behaviour. These are the route's original expectations, driven against the stateful fake hosts of tests/_author_world.py."""
+    and rollback behavior. These are the route's original expectations, driven against the stateful fake hosts of tests/_author_world.py."""
 
     def test_requires_superadmin(self, client, db):
         from tests.conftest import restricted_client
@@ -1865,7 +1865,7 @@ class TestBuildControlSocket:
             "key-file",
             "cert-required",
         ]
-        assert entry["cert-required"] is True  # normalised to a real bool, as before
+        assert entry["cert-required"] is True  # normalized to a real bool, as before
         assert entry["socket-port"] == 8004
 
     def test_http_never_carries_tls_keys_even_if_given(self):

@@ -77,7 +77,7 @@ class TestSynthetic:
         self._plugin(tmp_path, "demo", [{"endpoint": "demo.index"}, {"endpoint": "demo.second"}], self.SRC)
         assert pages.plugin_pages(tmp_path) == [("plugin-demo", "/x/demo"), ("plugin-demo-2", "/x/demo/second")]
 
-    def test_screenshot_pages_in_the_manifest_are_honoured(self, tmp_path):
+    def test_screenshot_pages_in_the_manifest_are_honored(self, tmp_path):
         self._plugin(
             tmp_path,
             "demo",

@@ -372,7 +372,7 @@
         {% endif %}
         <details class="u-56f435">
             <summary class="u-3928fa">Grant or revoke the legacy root path by hand</summary>
-            <p class="u-707d4f">Jen needs this grant for ONE run to install the helper, and — below helper v6 — for ONE more run to reach v6; remove it afterwards, with the button above or the command below. From v6 on, updates are verified by signature and need this grant never again. The helper's own grant, <code>/etc/sudoers.d/jen-kea-helper</code>, is a different file and stays.</p>
+            <p class="u-707d4f">Jen needs this grant for ONE run to install the helper, and — below helper v6 — for ONE more run to reach v6; remove it afterward, with the button above or the command below. From v6 on, updates are verified by signature and need this grant never again. The helper's own grant, <code>/etc/sudoers.d/jen-kea-helper</code>, is a different file and stays.</p>
             {% for s in ssh_servers %}
             <div class="stat-label" style="margin:8px 0 4px;">{{ s.name }} &mdash; probed as <code>{{ s.ssh_user }}@{{ s.ssh_host }}</code></div>
             <div class="stat-label u-239b88">Grant (one line — paste it whole)</div>

@@ -352,7 +352,7 @@ class TestTheKeaExportIsStreamed:
         with pytest.raises(ValueError):
             dbexport.write_kea_export(str(tmp_path / "x.json.gz"), "nope")
 
-    def test_the_export_never_materialises_the_table_dict_again(self):
+    def test_the_export_never_materializes_the_table_dict_again(self):
         import inspect
 
         src = inspect.getsource(dbexport.export_kea) + inspect.getsource(dbexport.write_kea_export)
@@ -520,7 +520,7 @@ class TestAFileWrittenBeforeThisFix:
 
 class TestMigration:
     """A migration is a copy between two live databases: bytes as bytes, nothing through JSON. (The Kea
-    migration — which needs an INITIALISED Kea target since Q127 — is in tests/test_migrate_contract.py.)"""
+    migration — which needs an INITIALIZED Kea target since Q127 — is in tests/test_migrate_contract.py.)"""
 
     @pytest.fixture
     def scratch(self):
@@ -610,7 +610,7 @@ class TestMigration:
             db.commit()
 
 
-class TestRecognisingDamage:
+class TestRecognizingDamage:
     def test_find_damaged_flags_exactly_the_damaged_rows(self, kea_tables):
         _seed(kea_tables)
         with kea_tables.cursor() as cur:

@@ -337,7 +337,7 @@ def discover_plugins() -> list[dict]:
                 # with a chip, not an ImportError at boot.
                 manifest["api_ok"] = plugin_api_ok(manifest)
                 # the Plugins page, the cards and the screenshot job read THESE manifests, not the
-                # loaded set _load_plugin sanitised: a registry plugin with a bad icon name would have
+                # loaded set _load_plugin sanitized: a registry plugin with a bad icon name would have
                 # printed the word on its card (v5.65.8, Q97 j)
                 sanitize_nav_icons(manifest)
                 by_id[manifest["id"]] = manifest  # later base in `bases` wins
@@ -451,7 +451,7 @@ def _run_register_blueprints_last(app, register) -> None:
     (a blueprint name already taken), the ones before it stay - Flask cannot unregister a blueprint."""
     recorded: list[tuple] = []
     original = app.register_blueprint
-    # A real Flask app has register_blueprint on its class: remove the instance override afterwards so the
+    # A real Flask app has register_blueprint on its class: remove the instance override afterward so the
     # app is bit-for-bit what it was. Anything else (a test double) gets the original put back.
     own = "register_blueprint" in getattr(app, "__dict__", {})
     on_class = hasattr(type(app), "register_blueprint")

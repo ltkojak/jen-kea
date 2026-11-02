@@ -9,7 +9,7 @@ attributes out of the templates and into classes.
     py tools/extract_inline_styles.py --all --dry    # count what would change
 
 For each `style="decls"` whose value is static (no Jinja) and appears at least twice across
-the templates, the tool picks a class `u-<6 hex of sha1(normalised decls)>`, records it in
+the templates, the tool picks a class `u-<6 hex of sha1(normalized decls)>`, records it in
 tools/inline_style_map.json (append-only: a class name never changes), rewrites the tag
 (adding the class to an existing `class="…"` or creating one) and regenerates
 static/css/ui-classes.css from the map. Each rule doubles its selector (`.u-x.u-x`) so it
@@ -56,7 +56,7 @@ def write(path, text: str) -> None:
         f.write(text)
 
 
-def normalise(value: str) -> str:
+def normalize(value: str) -> str:
     v = re.sub(r"\s+", " ", value.strip())
     v = re.sub(r"\s*([:;])\s*", r"\1", v)
     return v.rstrip(";")
@@ -79,7 +79,7 @@ def stacks_on_phone(decl: str) -> bool:
 def static_decl(value: str) -> str | None:
     if not value.strip() or "{" in value or SKIP_PROPS.search(value):
         return None
-    return normalise(value)
+    return normalize(value)
 
 
 def count_uses() -> dict[str, int]:

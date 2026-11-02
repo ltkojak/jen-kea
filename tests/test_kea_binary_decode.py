@@ -91,7 +91,7 @@ class TestDecode:
         assert dbexport._decode_import_rows("t", rows, ["b", "a"], set(), 3) == [[b"\xff", 1]]
 
 
-class TestRecognisingDamage:
+class TestRecognizingDamage:
     def test_pure_rules(self):
         f = kea_identifiers.looks_like_hex_of_itself
         assert f(b"341343e60e2a", 0)  # 6-byte MAC written as text

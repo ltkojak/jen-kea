@@ -78,7 +78,7 @@ class FakeKea:
         self.log_rotated = (
             False  # the log evidence of a tick is lost (rotated away, exhausted or unreadable): unconfirmed
         )
-        self.signalled = (
+        self.signaled = (
             True  # False: the host found the daemon already running the restored file and sent no signal (build 18)
         )
         self.state_bad = False  # the host's state file exists and cannot be read (INV-009)
@@ -389,7 +389,7 @@ class FakeKea:
         ok, how, detail = self.host_restore()
         if not ok:
             return {"ok": False, "code": "error", "detail": detail}
-        return {"ok": True, "code": "ok", "restored": True, "how": how, "signalled": self.signalled, "detail": ""}
+        return {"ok": True, "code": "ok", "restored": True, "how": how, "signalled": self.signaled, "detail": ""}
 
     def host_tick(self):
         """The host's timer firing (`jen-kea-helper --self-restore`): restores when an armed state's `until` has passed. Needs nothing of Jen."""

@@ -76,7 +76,7 @@ def _drain(db, first, count):
 
 
 def _pass(db, pools):
-    """One pass of the alert loop's utilisation check - everything a restart would lose is passed in fresh each time."""
+    """One pass of the alert loop's utilization check - everything a restart would lose is passed in fresh each time."""
     with db.cursor() as cur:
         alerts.check_utilization_alerts(cur, _cfg(pools))
 
@@ -140,7 +140,7 @@ class TestTwoPoolsOneSubnet:
         _pass(db, TWO_POOLS)
         assert world == []
 
-    def test_high_utilisation_is_judged_on_the_union_and_reports_it(self, db, world):
+    def test_high_utilization_is_judged_on_the_union_and_reports_it(self, db, world):
         _fill(db, 10, 50)
         _fill(db, 256, 150)  # 200 of 250 = 80 %
         _pass(db, TWO_POOLS)
@@ -169,7 +169,7 @@ class TestTwoPoolsOneSubnet:
         assert world == []
 
 
-class TestUtilisationAcrossARestart:
+class TestUtilizationAcrossARestart:
     def test_a_restart_in_the_middle_of_the_condition_sends_nothing(self, db, world):
         _fill(db, 10, 17)  # 85 % and 3 free: both alert
         _pass(db, A_RANGE)

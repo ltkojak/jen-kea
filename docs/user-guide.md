@@ -57,7 +57,7 @@ skipped, or still open.
 3. **Kea host helper** — installs/updates `jen-kea-helper` over SSH,
    the root-owned script Jen uses for config pushes and service
    control on the Kea host (`docs/ARCHITECTURE.md` §3.3). A host Jen
-   cannot reach over SSH — no host set, or the key not authorised yet,
+   cannot reach over SSH — no host set, or the key not authorized yet,
    which is the normal first try — is reported as a message naming the
    user, the host and the reason, here and on Settings → Kea → SSH
    (v5.67.0-beta.8).
@@ -267,7 +267,7 @@ Explain can only decide a client-class test over what it knows about the client.
 | Hostname, vendor class, user class, circuit id, remote id | Kea's log at **debuglevel 55 or higher** — the `DHCP4_QUERY_DATA` packet dump |
 | Anything | what you type into the form on the Explain tab (what you type wins) |
 
-Those log levels were measured against real Kea 3.0.3, 3.2.0 and 3.3.1 (the same on all three), not assumed. At Kea's default INFO level, and at DEBUG with a debuglevel of 15 or 30, the log carries the packets, the offers and the allocations — and the client id — but not the vendor class, user class, hostname or relay options of the packet. To let Explain read them from Kea itself, set the `kea-dhcp4` logger to severity `DEBUG` with `debuglevel` 55 (45 is enough for the assigned classes and the vendor class). That is a lot of log; turn it back down afterwards. A class Kea listed as assigned is shown as *assigned by Kea at <time>* and outranks Jen's own reading of its test; a class Kea did not list keeps whatever Jen could work out.
+Those log levels were measured against real Kea 3.0.3, 3.2.0 and 3.3.1 (the same on all three), not assumed. At Kea's default INFO level, and at DEBUG with a debuglevel of 15 or 30, the log carries the packets, the offers and the allocations — and the client id — but not the vendor class, user class, hostname or relay options of the packet. To let Explain read them from Kea itself, set the `kea-dhcp4` logger to severity `DEBUG` with `debuglevel` 55 (45 is enough for the assigned classes and the vendor class). That is a lot of log; turn it back down afterward. A class Kea listed as assigned is shown as *assigned by Kea at <time>* and outranks Jen's own reading of its test; a class Kea did not list keeps whatever Jen could work out.
 
 With more than one Kea server, Jen reads every server's log **at the same time** and waits at most 20 seconds for all of them together (v5.68.0-beta.23); the newest complete exchange among the servers that answered in time is what Explain uses, and a server that did not answer is named under the Inputs card (*N server(s) could not be checked in time*). When another server also logged a complete exchange, the card says so: *at about the same time* when the two clocks can be compared, or *the two clocks cannot be compared, so this one was chosen because it is first in order* when they cannot. Reading Kea's log needs the Kea host helper and an admin with access to every subnet (the same rule as Trace: a log line has no subnet boundary Jen can trust). Anyone else still gets the lease-derived inputs for a subnet they may see, and can type the rest. `?auto=0` on the Explain page turns every inferred input off, leaving the MAC and what you typed.
 
@@ -324,7 +324,7 @@ Under the core facts on the Overview, **What else Jen knows** carries one card p
 - **IPAM Lite** — whether the client's address is designated, and to what; the next free address when the subnet is unmanaged.
 - **Host Watchdog** — whether the host answers, since when, and how many checks in a row have failed.
 - **DNS Sync** — the records that carry its name on each DNS target, and whether they match its lease or reservation.
-- **Wake & Actions** — whether it is a favourite, whether a SecureOn password is set, and when it was last woken.
+- **Wake & Actions** — whether it is a favorite, whether a SecureOn password is set, and when it was last woken.
 
 A card whose subject needs a look (a host that is down, a record that does not match) says **Needs a look**, and its one sentence is also added to the line at the top of the page under **Worth a look**. A plugin that cannot answer right now shows "unavailable" for its card and nothing else on the page changes. What a card shows follows the same rule as the rest of the page: a user restricted to some subnets sees a plugin's card only for a client in a subnet they may see, and a client outside them is the ordinary "No client matched" answer.
 
@@ -731,7 +731,7 @@ Switch Port Locator needs `snmpbulkwalk` on the Jen host (package `snmp` — Set
 
 Every Lease, Reservation, and Device row gains a **Wake** action: click it, confirm the MAC it's about to wake, and Jen sends a standard Wake-on-LAN magic packet straight away — no separate tool needed to get a sleeping machine back online.
 
-Open **Management → Wake** to see and manage a list of favourites: hosts you wake often enough to want one click from a dedicated page instead of hunting them down on Leases or Reservations. Add one by MAC address (reservations you can access appear in the picker as you type), with an optional label, an IP to help Jen work out which subnet it's on, and an optional SecureOn password for hardware that expects one. Each favourite remembers when it was last woken and by whom.
+Open **Management → Wake** to see and manage a list of favorites: hosts you wake often enough to want one click from a dedicated page instead of hunting them down on Leases or Reservations. Add one by MAC address (reservations you can access appear in the picker as you type), with an optional label, an IP to help Jen work out which subnet it's on, and an optional SecureOn password for hardware that expects one. Each favorite remembers when it was last woken and by whom.
 
 A wake packet goes out to both the target subnet's own broadcast address and the general broadcast address, which covers the common case of Jen and its targets sharing the same network; a target on a different network needs directed broadcast allowed on the router between them. Jen won't send more than one wake packet to the same MAC within five seconds, however it was triggered.
 

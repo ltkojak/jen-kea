@@ -219,10 +219,10 @@ class TestTheCheckerCatchesWhatItIsFor:
     def test_an_entry_with_no_test_is_refused_unless_it_says_why(self):
         bare = self.GOOD.replace("- `tests/test_safety_invariants.py::TestTheCheckerCatchesWhatItIsFor`\n", "")
         assert any("no test reference" in p for p in self._problems(bare))
-        said = bare.replace("**Tests.**\n", "**Tests.**\n- (no automated test: the thing is a person's judgement)\n")
+        said = bare.replace("**Tests.**\n", "**Tests.**\n- (no automated test: the thing is a person's judgment)\n")
         assert self._problems(said) == []
         entries, _r = parse_registry(said)
-        assert entries[0]["no_test_reason"] == "the thing is a person's judgement"
+        assert entries[0]["no_test_reason"] == "the thing is a person's judgment"
 
     def test_an_id_used_twice_is_reported(self):
         twice = self.GOOD.replace(

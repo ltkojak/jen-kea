@@ -267,7 +267,7 @@ def _refuse_lock(lock_path, reason, cause):
 def _file_lock(path):
     """An exclusive advisory `flock` on `<config>.lock`, held for the whole read-modify-replace of one writer.
 
-    v5.68.0-beta.18 (Q153): `AppConfig._write_lock` serialises this PROCESS's threads, and the installer is another process - `install.sh
+    v5.68.0-beta.18 (Q153): `AppConfig._write_lock` serializes this PROCESS's threads, and the installer is another process - `install.sh
     --configure` runs its wizard and rewrites jen.config while Jen is running, so a Settings save made during the wizard was overwritten by the
     installer's older copy. The installer and `tools/private_write.py` take this same lock. Taken once per thread (a nested writer, which the
     RLock allows, must not queue behind its own thread on a second descriptor); the lock file is created 0600, never through a symlink."""
@@ -482,7 +482,7 @@ def _serialized(fn):
         if getattr(_writer_state, "in_mutate", False):
             # v5.68.0-beta.18 (Q153): `mutate` hands its callback the parser to change and writes THAT parser when it returns, so a writer
             # called from inside it would write to disk and then be overwritten - silently - by the outer write of the parser read before.
-            # The contract refuses what it cannot honour instead of advertising it.
+            # The contract refuses what it cannot honor instead of advertising it.
             raise RuntimeError("mutate the parser you were given")
         with identity_lock, AppConfig._write_lock, _file_lock(self.path):
             return fn(self, *args, **kwargs)
@@ -495,7 +495,7 @@ _USERINFO_WARNED: set = set()
 
 def _warn_userinfo_urls(cfg) -> None:
     """Q190 (AF2, CRED-005): a URL with a user name or password in it is legacy input (`valid_api_url` refuses it on save now). ONE warning per (section, key) per process, naming the section and key
-    - never the value. Jen keeps dialling it as before; the credential rule is not touched."""
+    - never the value. Jen keeps dialing it as before; the credential rule is not touched."""
     try:
         from jen.services.auth import urls_with_userinfo, userinfo_legacy_note
 
@@ -517,7 +517,7 @@ class AppConfig:
     # or Author Kea Config's `[subnets]` write - were a lost update: the second read missed the first write. The lock is held from the
     # read to the end of the reload, so what a writer reads is what is on disk when it replaces it and the globals follow the same
     # order as the file. It is an RLock because `mutate`'s callback may itself call a writer, and CLASS-level so every AppConfig
-    # instance (the module's `app_config`, a test's own) serialises against every other. Readers (`load`, `reload`) take no lock:
+    # instance (the module's `app_config`, a test's own) serializes against every other. Readers (`load`, `reload`) take no lock:
     # `os.replace` means they see the old file or the new one, never half of one.
     _write_lock = threading.RLock()
 
@@ -740,7 +740,7 @@ class AppConfig:
         #     install.sh) self-heals on its first Settings save instead of
         #     failing every save with EACCES.
         # v5.68.0-beta.15 (Q150) - private from its FIRST BYTE: this file holds every database password and API credential, and
-        # `open(tmp, "w")` created it with the process umask (world-readable under systemd's 0022) and tightened it afterwards. The
+        # `open(tmp, "w")` created it with the process umask (world-readable under systemd's 0022) and tightened it afterward. The
         # write goes through jen.services.private_files (unique O_EXCL 0600 temp in this directory, fsync, fchmod 0600 on the
         # descriptor, os.replace) - the same discipline as the helper's `_private_tempfile`.
         import io
@@ -888,7 +888,7 @@ class AppConfig:
     def derive_kea_servers(cfg: configparser.ConfigParser, quiet: bool = False) -> list:
         """Return list of server dicts from config. `quiet` (Q164) is for a parser that is only being compared - the identity view reads every write twice - so a
         stray `[kea_server_1]` is not warned about on each."""
-        # v5.69.0-beta.11 (Q180, CRED-004): every password on a server dict is what `credentials.resolve` says that endpoint WILL send - its own, or its host's neighbour's -
+        # v5.69.0-beta.11 (Q180, CRED-004): every password on a server dict is what `credentials.resolve` says that endpoint WILL send - its own, or its host's neighbor's -
         # and `*_withheld` names the endpoint whose password was refused it (kea._endpoint_for answers with a sentence and sends nothing)
         resolved = _credentials.resolve(cfg)
         shared = _credentials.shared_copies(cfg)  # the same fact the Settings page reads (Q183, Y3)

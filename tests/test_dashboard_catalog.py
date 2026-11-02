@@ -69,7 +69,7 @@ class TestReadinessWidget:
     list instead of calling health.run_checks() itself, so the catalog
     route can share one pass with ddns_errors_widget()."""
 
-    def test_filters_to_the_readiness_group_and_summarises(self):
+    def test_filters_to_the_readiness_group_and_summarizes(self):
         checks = [
             Check("kea32_control_transport", "Control transport", "readiness", "ok", "fine"),
             Check("kea32_helper_version", "Helper current", "readiness", "warn", "old helper"),

@@ -76,7 +76,7 @@
             status.textContent = 'Passkey verified — confirming…';
             form.submit();
         } catch (e) {
-            status.textContent = (e && e.name === 'NotAllowedError') ? 'The passkey prompt was cancelled or timed out.'
+            status.textContent = (e && e.name === 'NotAllowedError') ? 'The passkey prompt was canceled or timed out.'
                                : (e && e.message) ? e.message : 'Passkey check failed.';
             btn.disabled = false;
         }

@@ -162,8 +162,8 @@ def remove(user_id: int, cred_id: int) -> bool:
 
 def transports_from_stored(raw) -> list[AuthenticatorTransport] | None:
     """The `transports` column (a JSON list of strings the browser
-    reported at enrolment) as the enum values py_webauthn's option
-    serialiser requires — it calls `.value` on each, so a bare string
+    reported at enrollment) as the enum values py_webauthn's option
+    serializer requires — it calls `.value` on each, so a bare string
     crashes `options_to_json` (v5.31.2). Unknown or malformed entries
     are dropped; nothing usable → None (the browser then tries every
     transport it has)."""
@@ -286,7 +286,7 @@ def _credential_id_of(response) -> str | None:
     try:
         raw = response if isinstance(response, dict) else json.loads(response)
         cid = raw.get("rawId") or raw.get("id")
-        # Normalise whatever padding/alphabet the browser used to our stored form.
+        # Normalize whatever padding/alphabet the browser used to our stored form.
         return bytes_to_base64url(base64url_to_bytes(cid)) if cid else None
     except Exception:
         return None

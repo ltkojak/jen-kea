@@ -3,7 +3,7 @@ tests/test_theme.py
 ──────────────────────
 v5.55.0 (Q63) — jen/services/theme.py is pure (no Flask/DB), so most of
 this runs straight against it: render_css()'s output, validate_palette()'s
-injection boundary, and the WCAG contrast maths. The other half is the
+injection boundary, and the WCAG contrast math. The other half is the
 "hex wall" — a repo-wide sweep asserting no template that extends
 base.html (nor ui-classes.css, nor a template-inline <script>) still
 carries a literal `#rrggbb`/`#rgb` color: every one of those was either
@@ -368,7 +368,7 @@ class TestPickerNeverPersistsTheFallback:
     def test_the_check_mark_is_derived_from_stored_state_not_the_applied_id(self):
         # v5.55.0-5.55.2's applyTheme() marked whichever button's
         # data-theme-id matched the id just applied — including the
-        # install-default fallback, mislabelling it as a personal pick.
+        # install-default fallback, mislabeling it as a personal pick.
         src = self._base_html()
         assert "localStorage.getItem('jen-theme-pick')" in src
         assert "bid === pick" in src and "bid === ''" in src

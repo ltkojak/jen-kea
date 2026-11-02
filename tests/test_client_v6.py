@@ -4,7 +4,7 @@ tests/test_client_v6.py
 v5.68.0-beta.1 (Q134 b) — the Investigation page takes an IPv6 address or a DUID.
 
 An address is resolved through lease6 (or a v6 reservation of it) to the DUID that holds it; a DUID goes straight to its
-leases and its reservation; the MAC Kea captured on a lease — else the one a DUID-LL/LLT embeds, labelled as Jen's own reading
+leases and its reservation; the MAC Kea captured on a lease — else the one a DUID-LL/LLT embeds, labeled as Jen's own reading
 — carries the subject on into everything keyed by MAC, so Overview, Timeline and the Dhcp4 tabs work for the same client.
 Explain, Trace and Config stay DHCPv4 engines and say so. A v6 object is judged on its v6 subnet's paired v4 subnet (the
 rule Devices and global search already apply); an unpaired v6 subnet is for unrestricted callers only. All of it is gated on
@@ -361,7 +361,7 @@ class TestRouteAnIpv6AddressOrADuid:
         assert "IPv6 address" in body and "alpha6" in body
         assert "2001:db8:a:1000::/56" in body and "excluding 2001:db8:a:1000:ff00::/64" in body
 
-    def test_a_mac_kea_captured_is_labelled_as_captured(self, logged_in_client, v6world):
+    def test_a_mac_kea_captured_is_labeled_as_captured(self, logged_in_client, v6world):
         body = logged_in_client.get("/client", query_string={"q": "2001:db8:c::30"}).data.decode()
         assert CAPTURED_MAC in body and "(captured by Kea)" in body and "read from the DUID" not in body
 

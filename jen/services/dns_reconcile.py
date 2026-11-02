@@ -242,7 +242,7 @@ def reconcile(
                 }
             )
     finally:
-        # Lookups still QUEUED are cancelled; one already running in the
+        # Lookups still QUEUED are canceled; one already running in the
         # resolver cannot be interrupted and keeps its pool slot until libc
         # returns — that, not a growing thread count, is the ceiling.
         for fut in futures:

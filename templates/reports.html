@@ -33,7 +33,7 @@
         {% if s.pool_used is not none %}<span>Free: <strong class="u-5a4529">{{ s.pool_size - s.pool_used }}</strong></span>{% endif %}
         {% endif %}
     </div>
-    {# v5.68.0-beta.19 (Q154): utilisation is the leases INSIDE the pools (the newest snapshot's pool_used), not the subnet's whole active count - a reservation outside every pool is active but uses none of the pool #}
+    {# v5.68.0-beta.19 (Q154): utilization is the leases INSIDE the pools (the newest snapshot's pool_used), not the subnet's whole active count - a reservation outside every pool is active but uses none of the pool #}
     {% if s.pool_size > 0 and s.pool_used is not none %}
     <div class="util-bar u-8a77e5">
         <div class="util-fill" style="width:{{ [(s.pool_used / s.pool_size * 100)|round, 100]|min }}%;

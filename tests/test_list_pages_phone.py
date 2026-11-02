@@ -320,7 +320,7 @@ class TestSourceShape:
         for f in ("leases.html", "reservations.html", "devices.html"):
             for m in re.finditer(r"<select\b[^>]*>", _src(f)):
                 tag = m.group(0)
-                if 'id="edit' in tag:  # the Edit Device modal's own form field, labelled by its <label>
+                if 'id="edit' in tag:  # the Edit Device modal's own form field, labeled by its <label>
                     continue
                 assert "aria-label=" in tag, (f, tag)
 

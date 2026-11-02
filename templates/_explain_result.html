@@ -48,7 +48,7 @@
 {% if provenance or form %}
 <div class="card">
     <div class="card-header"><span class="card-title">Inputs used</span>
-        <span class="u-865c33">each labelled by where Jen got it</span></div>
+        <span class="u-865c33">each labeled by where Jen got it</span></div>
     {% if form %}
     <form method="GET" action="{{ form.action }}" autocomplete="off">
         {% for k, v in form.hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}

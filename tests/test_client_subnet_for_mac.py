@@ -4,7 +4,7 @@ tests/test_client_subnet_for_mac.py
 v5.65.6 (Q95) — plugin_api.client_subnet_for_mac: the ONE precedence for attributing a MAC
 to a subnet. Wake, Presence and Switch Port each carried a private lookup with a slightly
 different order (lease then reservation; device then lease then reservation); a plugin that
-disagrees with Jen about where a client is authorises on the wrong subnet.
+disagrees with Jen about where a client is authorizes on the wrong subnet.
 
 Precedence: current lease (state 0, not past its expiry) → reservation (a global one has no
 subnet and says nothing) → the device's last known subnet → None.

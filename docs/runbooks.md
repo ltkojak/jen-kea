@@ -276,7 +276,7 @@ a throwaway VM, never against a live box, before you need it for real.
    file's row count, so a row the database refused — or a row the fresh
    install had already created, such as the first admin — could be kept
    or mangled and still be counted. Now a missing table, a file whose rows
-   have no recognised column, a count that is not the file's, or a skipped
+   have no recognized column, a count that is not the file's, or a skipped
    row fails the restore, which rolls back as in step 7. In the drill, a
    restore that completes has put back every row the bundle carried.
    Plugins the bundle names but whose code is not on the VM stay a

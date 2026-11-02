@@ -12,7 +12,7 @@ rows are the caller's own, Q204 RBAC-005).
 import logging
 
 TONES = ("blue", "green", "red", "orange", "yellow", "purple", "mono")
-DEFAULT_TONE = "blue"  # one constant: an unset tone is blue so the upgrade is invisible (Q205 deviation named: grey is the other choice)
+DEFAULT_TONE = "blue"  # one constant: an unset tone is blue so the upgrade is invisible (Q205 deviation named: gray is the other choice)
 
 
 def valid_tone(value) -> bool:

@@ -479,7 +479,7 @@ class TestDocsCarryTheSameByHandLine:
     """v5.66.0-beta.7 (Q109, item b) — one source (_helper_download_command() and
     _helper_verify_and_install_command()), several places that show a copy of it. Rather than
     trust hand-maintained doc prose to stay in sync forever, render the real command (with
-    JEN_VERSION normalised to the same `vX.Y.Z` placeholder the docs already use) and assert
+    JEN_VERSION normalized to the same `vX.Y.Z` placeholder the docs already use) and assert
     it appears byte-for-byte in each doc's fenced code block."""
 
     def _online_normalized(self):

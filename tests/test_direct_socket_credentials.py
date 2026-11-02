@@ -705,7 +705,7 @@ class TestTheProbeRowsOfQ190:
         )
 
     def test_every_entry_of_the_note_has_a_shape(self):
-        assert probe.q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refused() == {
+        assert probe.q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognized_one_is_refused() == {
             "empty list": "read",
             "attention": "read",
             "outcome without ids": "read",

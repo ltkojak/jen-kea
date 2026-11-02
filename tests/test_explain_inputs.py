@@ -2,7 +2,7 @@
 tests/test_explain_inputs.py
 ────────────────────────────
 v5.68.0-beta.2 (Q135) — the client Explain evaluates, built from the MAC, the lease row, Kea's own log and what was typed,
-each input labelled by where it came from (jen/services/explain_inputs.py); plus the pure parts of the lookups' glue
+each input labeled by where it came from (jen/services/explain_inputs.py); plus the pure parts of the lookups' glue
 (jen/services/explain_context.py) and the Changes tab's element filter. Pure: `pytest --noconftest tests/test_explain_inputs.py`.
 """
 
@@ -81,7 +81,7 @@ class TestBuild:
         assert built["client"]["hostname"] == "lease-host" and built["client"]["mac"] == MAC
         assert "bogus" not in built["client"]
 
-    def test_auto_off_is_the_old_behaviour(self):
+    def test_auto_off_is_the_old_behavior(self):
         built = ei.build(
             MAC, lease=LEASE, log={"query": QUERY, "classes": CLASSES}, typed={"hostname": "typed-host"}, auto=False
         )

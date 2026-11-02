@@ -1275,7 +1275,7 @@ class TestACredentialBelongsToItsProvider:
 
 
 class TestTheModeSaysWhatItKnows:
-    """v5.69.0-beta.8 (Q177, DDNS-STATUS-001): an explicit `mode = none` is honoured (it was documented and ignored), and a loaded run_script hook is a mode of its own -
+    """v5.69.0-beta.8 (Q177, DDNS-STATUS-001): an explicit `mode = none` is honored (it was documented and ignored), and a loaded run_script hook is a mode of its own -
     `hook` - beside D2 and the provider, which stay separate facts. A failed read is `unknown`, never "Not configured"."""
 
     @pytest.mark.parametrize(

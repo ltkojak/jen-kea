@@ -1,7 +1,7 @@
 """
 tests/test_config_file_lock.py
 ──────────────────────────────
-v5.68.0-beta.18 (Q153) - the config lock covers the INSTALLER too. `AppConfig._write_lock` serialises Jen's threads; `install.sh --configure` is
+v5.68.0-beta.18 (Q153) - the config lock covers the INSTALLER too. `AppConfig._write_lock` serializes Jen's threads; `install.sh --configure` is
 another process that runs an interactive wizard and rewrites jen.config with Jen running, so a Settings save made during it was overwritten by the
 installer's older copy. Every writer now also takes an exclusive advisory `flock` on `<config>.lock` for its whole read-modify-replace, and the
 installer and `tools/private_write.py` take the same one. Linux (flock is POSIX); no database needed.

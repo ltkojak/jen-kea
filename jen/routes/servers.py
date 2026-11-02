@@ -324,7 +324,7 @@ def acknowledge_recovery_incident():
         flash("Unknown Kea service.", "error")  # (Q188, AD9) validated before the audit row, like the category
         return redirect(url_for("servers.servers"))
     # Q189 (second pass, finding 2): acknowledging a note that says Jen does not know (or doubts) which certificate a host holds must not make the live copy the host's pair again - the fact
-    # goes to a FILE first; when Jen cannot write it the acknowledgement is refused (the directory has to be fixed, which is the point of the note)
+    # goes to a FILE first; when Jen cannot write it the acknowledgment is refused (the directory has to be fixed, which is the point of the note)
     from jen.services import kea_tls as __tls
 
     try:
@@ -352,7 +352,7 @@ def acknowledge_recovery_incident():
     cleared = __changeset.acknowledge_recovery(server_id, service, category)
     if cleared is None:
         flash(
-            "The acknowledgement could not be saved - the incident is still shown. " + _RECORD_NOT_UPDATED,
+            "The acknowledgment could not be saved - the incident is still shown. " + _RECORD_NOT_UPDATED,
             "error",
         )
     elif cleared == 0:
@@ -802,7 +802,7 @@ def ha_maintenance_cancel():
         flash(f"{up['name']} refused ha-maintenance-cancel: {text}", "error")
         return redirect(url_for("servers.ha_maintenance"))
     _maint_clear()
-    flash(f"Handover cancelled — {down['name']} and {up['name']} return to their previous states.", "success")
+    flash(f"Handover canceled — {down['name']} and {up['name']} return to their previous states.", "success")
     return redirect(url_for("servers.servers"))
 
 
@@ -1075,7 +1075,7 @@ def config_history_restore(server_id, rev_id):
         __changeset.resolve_attention(server_id, service, categories=("config-restart-failed",))
     else:
         # Q203 AS2: the revision is on the host and the daemon did not start on it - it may be stopped, or still running what it had. That is a durable fact (the Servers banner and Health's
-        # row read it from Jen's own note), not a flash that is gone with the next page; the next restart that works, or a superadmin's acknowledgement, ends it.
+        # row read it from Jen's own note), not a flash that is gone with the next page; the next restart that works, or a superadmin's acknowledgment, ends it.
         stored = __changeset.record_attention(
             server_id,
             service,

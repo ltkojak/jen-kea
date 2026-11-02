@@ -4,7 +4,7 @@ tests/probe/credential_probe.py
 v5.69.0-beta.14 (Q183, Y7) - the executing second pass, made permanent.
 
 The adversarial passes that found beta.12's findings, beta.13's and beta.14's did not READ the credential rule - they RAN it: a temporary jen.config, the real `AppConfig.mutate` /
-`write_values` / `preflight_identity_change`, `kea.kea_command` with a captured `post`, `credentials.materialise`, `config_merge.credential_refusal`, on configurations built to
+`write_values` / `preflight_identity_change`, `kea.kea_command` with a captured `post`, `credentials.materialize`, `config_merge.credential_refusal`, on configurations built to
 make an exemption do something its comment does not say. That is the method, so it is a file: one function per scenario, each returning what it OBSERVED, and `EXPECTED` holds what
 the rule says it must be. `tests/test_credential_probe.py` asserts every scenario; `py tests/probe/credential_probe.py` prints the table (and exits 1 on a difference).
 
@@ -255,7 +255,7 @@ def b12_a_file_that_has_the_marker_is_never_written_by_the_conversion():
             self.writes += 1
 
     fake = _Fake(parse(BASE + "[kea_server_2]\napi_url = https://b:8000\n[jen]\ncredential_model = explicit\n"))
-    return (cred.materialise(fake), fake.writes)
+    return (cred.materialize(fake), fake.writes)
 
 
 # ═══ beta.13 pass (the executing walk-through and its second pass) ═════════════════════════════════════════════════════════════
@@ -412,7 +412,7 @@ def b13_s9_a_restored_legacy_file_whose_database_says_converted_is_converted_not
             self.p = q
 
     fake = _Fake(parse(BASE + "[kea_server_2]\napi_url = https://b:8000\n"))
-    done = cred.materialise(fake, already_converted=True)
+    done = cred.materialize(fake, already_converted=True)
     return (done, fake.p.get("kea_server_2", "api_pass", fallback=None), fake.p.get("jen", "credential_model"))
 
 
@@ -436,7 +436,7 @@ def b13_p2_a_bridge_file_whose_blank_is_betas_answer_is_not_filled_in():
     fake = _Fake(
         parse(BASE + "[kea_server_2]\napi_url = https://b:8000\napi_pass = P\napi6_url = https://c:8006\napi6_pass =\n")
     )
-    done = cred.materialise(fake, already_converted=True)
+    done = cred.materialize(fake, already_converted=True)
     return (done, fake.p.get("kea_server_2", "api6_pass"))
 
 
@@ -486,7 +486,7 @@ def b13_p2_an_invalid_marker_converts_nothing_and_writes_nothing():
             self.writes += 1
 
     fake = _Fake(parse(BASE + "[kea_server_2]\napi_url = https://b:8000\n[jen]\ncredential_model = Explicit\n"))
-    return (cred.model_marker(fake.p), cred.materialise(fake), fake.writes)
+    return (cred.model_marker(fake.p), cred.materialize(fake), fake.writes)
 
 
 # ═══ this release (Q183) ═════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1810,7 +1810,7 @@ def q190_af2_a_url_with_user_info_is_refused_shown_without_it_and_scrubbed_from_
     )
 
 
-def q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refused():
+def q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognized_one_is_refused():
     import json
 
     from jen.services import kea_changeset as cs
@@ -1944,7 +1944,7 @@ def q191_ag2_the_twin_refusal_shape_is_seen_by_the_sweep_by_provenance_not_by_na
 
 
 def q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing():
-    """For each way Jen's CA can be damaged (and the two ways it can be absent): what `ca_state` says, what `ensure_ca()` does, and whether every file in Jen's SSL folder is byte-equal afterwards."""
+    """For each way Jen's CA can be damaged (and the two ways it can be absent): what `ca_state` says, what `ensure_ca()` does, and whether every file in Jen's SSL folder is byte-equal afterward."""
     import os
     import pathlib
 
@@ -2203,7 +2203,7 @@ def q194_aj1_a_ca_that_is_not_a_certificate_signing_authority_is_damaged_never_r
 
 def q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed_writable():
     """The record directory is gone: under a writable parent the proof CREATES it to prove it can and puts the world back (the inventory is not refused and a preflight leaves no directory); under a
-    read-only parent the real create fails and the inventory refuses. (refused by the inventory, the directory exists afterwards.)"""
+    read-only parent the real create fails and the inventory refuses. (refused by the inventory, the directory exists afterward.)"""
     import os
     import shutil
 
@@ -2841,7 +2841,7 @@ def q204_h3_an_unchanged_value_never_admits_the_mapped_spelling():
 
 
 def q203_as1_an_admins_probe_never_downgrades_the_scheme():
-    """`probe_kea` driven as an admin and as a superadmin, configured https and http, against a candidate on the same host over each scheme and on a different host: the list of what was DIALLED
+    """`probe_kea` driven as an admin and as a superadmin, configured https and http, against a candidate on the same host over each scheme and on a different host: the list of what was DIALED
     (nothing is sent anywhere - `_probe_once` is a recorder, and a credential is never printed). A probe is a credential send (Q203 AS1)."""
     import inspect
     import types
@@ -2854,7 +2854,7 @@ def q203_as1_an_admins_probe_never_downgrades_the_scheme():
     for role in ("admin", "superadmin"):
         for configured in ("https://kea-a:8000", "http://kea-a:8000"):
             for candidate in ("https://kea-a:8004", "http://kea-a:8004", "https://other:8004", "http://other:8004"):
-                dialled = []
+                dialed = []
                 with contextlib.ExitStack() as stack:
                     stack.enter_context(
                         mock.patch.object(extensions, "KEA_SERVERS", [{"id": 1, "name": "k", "api_url": configured}])
@@ -2865,7 +2865,7 @@ def q203_as1_an_admins_probe_never_downgrades_the_scheme():
                     )
                     stack.enter_context(
                         mock.patch.object(
-                            infra, "_probe_once", lambda url, *a, _d=dialled, **k: (_d.append(url) or "", "no")
+                            infra, "_probe_once", lambda url, *a, _d=dialed, **k: (_d.append(url) or "", "no")
                         )
                     )
                     stack.enter_context(
@@ -2875,7 +2875,7 @@ def q203_as1_an_admins_probe_never_downgrades_the_scheme():
                     app.secret_key = "probe"
                     with app.test_request_context(method="POST", data={"candidate_url": candidate}):
                         inspect.unwrap(infra.probe_kea)()
-                out[(role, configured[:5], candidate)] = bool(dialled)
+                out[(role, configured[:5], candidate)] = bool(dialed)
     return out
 
 
@@ -3600,7 +3600,7 @@ EXPECTED = {
         "half": ("unreadable", 1, 1),
     },
     "q191_ag2_the_twin_refusal_shape_is_seen_by_the_sweep_by_provenance_not_by_name": ["_socket_now", "here"],
-    "q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refused": {
+    "q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognized_one_is_refused": {
         "empty list": "read",
         "attention": "read",
         "outcome without ids": "read",

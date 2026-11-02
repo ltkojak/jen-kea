@@ -1,10 +1,10 @@
 """
 jen/services/theme.py
 ───────────────────────
-v5.55.0 (Q63) — the one source of truth for every colour token Jen's UI
+v5.55.0 (Q63) — the one source of truth for every color token Jen's UI
 renders: the seven built-in presets and the validated custom palette a
 superadmin can define for the whole install. Pure — no Flask, no DB, no
-Jinja — so the generated CSS, the contrast maths and the validator are all
+Jinja — so the generated CSS, the contrast math and the validator are all
 testable directly (tests/test_theme.py).
 
 `dark` and `light` are today's values, byte-identical — the default look
@@ -20,7 +20,7 @@ palette can never define; see `render_css()`.
 `render_css()` is the ONLY place a validated palette's values reach the
 page, through Jinja's `|safe` — `validate_palette()` is the injection
 boundary a hostile form value can never get past (a whitelist regex on
-every colour, an int-clamped radius, nothing else accepted).
+every color, an int-clamped radius, nothing else accepted).
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ CSS_VARS = {
 
 # Retro's only concession to its era: classic beveled borders and a
 # title-bar nav, scoped under its own data-theme so nothing else can see
-# it. Colours and borders, not animation — same "no gimmicks" rule Q63
+# it. Colors and borders, not animation — same "no gimmicks" rule Q63
 # set for Phosphor. Never exposed to the custom-palette form.
 _RETRO_EXTRA_CSS = (
     ':root[data-theme="retro"] .card,'
@@ -96,7 +96,7 @@ _RETRO_EXTRA_CSS = (
     "}"
     # The two nav dropdowns (Theme, avatar) already sit on their own
     # var(--surface) panel, not the navy bar — the broad ".nav a" rule
-    # above would otherwise paint their menu text white-on-grey too.
+    # above would otherwise paint their menu text white-on-gray too.
     # Same specificity as that rule; wins on source order (later).
     ':root[data-theme="retro"] .nav-dropdown-content a,'
     ':root[data-theme="retro"] .nav-dropdown-content button.linkish{'
@@ -250,7 +250,7 @@ _HEX_RE = re.compile(r"^#([0-9a-f]{3}|[0-9a-f]{6})$")
 
 def _normalize_hex(value: str) -> str | None:
     """`#abc` -> `#aabbcc`, `#AABBCC` -> `#aabbcc`. None for anything that
-    isn't exactly a 3- or 6-digit hex colour — no `rgb()`, no named colours,
+    isn't exactly a 3- or 6-digit hex color — no `rgb()`, no named colors,
     no 7+ digit values, nothing CSS-syntax-bearing (`url(`, `;`, `}`,
     `expression(`, …) can ever pass this."""
     v = value.strip().lower()
@@ -299,7 +299,7 @@ def validate_palette(form: dict) -> tuple[dict, list[str]]:
         raw = str(form.get(name, "") or "")
         norm = _normalize_hex(raw)
         if norm is None:
-            errors.append(f"{name.replace('_', ' ')}: '{raw}' is not a valid hex colour (e.g. #1a1a2a)")
+            errors.append(f"{name.replace('_', ' ')}: '{raw}' is not a valid hex color (e.g. #1a1a2a)")
         else:
             tokens[name] = norm
     radius_raw = str(form.get("radius", "") or "").strip()
@@ -337,7 +337,7 @@ def contrast_ratio(hex_a: str, hex_b: str) -> float:
 
 def guess_color_scheme(tokens: dict) -> str:
     """The custom palette has no explicit light/dark field (the form is just
-    eleven colours + radius + a checkbox) — `<meta name="color-scheme">`
+    eleven colors + radius + a checkbox) — `<meta name="color-scheme">`
     mainly steers browser-native chrome (scrollbars, form controls), so a
     background-luminance guess is a fine default rather than one more field."""
     return "light" if _relative_luminance(tokens["bg"]) > 0.5 else "dark"

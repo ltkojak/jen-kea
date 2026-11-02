@@ -140,7 +140,7 @@ class TestCeremonyState:
 
 class TestStoredTransports:
     """v5.31.2 — the browser reports transports as strings and they are
-    stored as a JSON list; py_webauthn's option serialiser calls
+    stored as a JSON list; py_webauthn's option serializer calls
     `.value` on each entry, so they must come back as its enum. The
     first real passkey (Windows Hello → ["internal"]) broke every
     login/reauth `begin` with "could not start the passkey check"."""
@@ -160,7 +160,7 @@ class TestStoredTransports:
 
         assert passkeys.transports_from_stored('["usb", "teleport"]') == [AuthenticatorTransport.USB]
 
-    def test_options_serialise_with_stored_transports(self):
+    def test_options_serialize_with_stored_transports(self):
         """The exact call that failed on the real box: allowCredentials
         built from a row with string transports, run through
         options_to_json."""
@@ -194,7 +194,7 @@ class TestCounter:
     def test_counter_regressed(self, stored, new, regressed):
         assert passkeys.counter_regressed(stored, new) is regressed
 
-    def test_credential_id_is_normalised_to_stored_form(self):
+    def test_credential_id_is_normalized_to_stored_form(self):
         # Padded standard alphabet in, padding-free url-safe out.
         assert passkeys._credential_id_of({"rawId": "AQID", "id": "AQID"}) == "AQID"
         assert passkeys._credential_id_of({"id": "AQID"}) == "AQID"
@@ -322,7 +322,7 @@ class TestStorageRoundTrip:
         options, _state = self._issue()
         assert [c["id"] for c in options["excludeCredentials"]] == ["Y3JlZC0x"]
 
-    def _enrol(self, monkeypatch, sign_count=0):
+    def _enroll(self, monkeypatch, sign_count=0):
         monkeypatch.setattr(
             "jen.services.passkeys.webauthn.verify_registration_response", _fake_registration(sign_count=sign_count)
         )
@@ -332,7 +332,7 @@ class TestStorageRoundTrip:
             from flask import request
 
             # Transports as a real browser reports them (Windows Hello →
-            # ["internal"]) — v5.31.2: begin_authentication must serialise
+            # ["internal"]) — v5.31.2: begin_authentication must serialize
             # them back out, which is exactly what broke on the first real
             # passkey.
             passkeys.finish_registration(
@@ -355,7 +355,7 @@ class TestStorageRoundTrip:
         return ok, json.loads(options_json)
 
     def test_begin_authentication_lists_the_users_credentials(self, clean_passkeys, monkeypatch):
-        self._enrol(monkeypatch)
+        self._enroll(monkeypatch)
         _ok, options = self._assert(monkeypatch, new_sign_count=1)
         assert options["rpId"] == "jen.lan"
         assert [c["id"] for c in options["allowCredentials"]] == ["Y3JlZC0x"]
@@ -370,7 +370,7 @@ class TestStorageRoundTrip:
                 passkeys.begin_authentication(1, request)
 
     def test_successful_assertion_advances_the_counter_and_last_used(self, clean_passkeys, monkeypatch):
-        self._enrol(monkeypatch, sign_count=3)
+        self._enroll(monkeypatch, sign_count=3)
         ok, _ = self._assert(monkeypatch, new_sign_count=4)
         assert ok is True
         row = passkeys.list_for_user(1)[0]
@@ -378,13 +378,13 @@ class TestStorageRoundTrip:
         assert row["last_used"] is not None
 
     def test_counter_that_did_not_advance_is_rejected(self, clean_passkeys, monkeypatch):
-        self._enrol(monkeypatch, sign_count=3)
+        self._enroll(monkeypatch, sign_count=3)
         ok, _ = self._assert(monkeypatch, new_sign_count=3)
         assert ok is False
         assert passkeys.list_for_user(1)[0]["sign_count"] == 3  # untouched
 
     def test_unknown_credential_id_is_rejected_before_verification(self, clean_passkeys, monkeypatch):
-        self._enrol(monkeypatch)
+        self._enroll(monkeypatch)
 
         def must_not_run(**kwargs):
             raise AssertionError("verify_authentication_response must not be called for an unknown credential")
@@ -398,12 +398,12 @@ class TestStorageRoundTrip:
             assert passkeys.finish_authentication(1, {"id": "b3RoZXI", "rawId": "b3RoZXI"}, state, request) is False
 
     def test_assertion_from_another_origin_is_rejected(self, clean_passkeys, monkeypatch):
-        self._enrol(monkeypatch)
+        self._enroll(monkeypatch)
         ok, _ = self._assert(monkeypatch, new_sign_count=1, base_url="https://evil.lan")
         assert ok is False
 
     def test_remove_only_touches_the_users_own_row(self, clean_passkeys, monkeypatch):
-        self._enrol(monkeypatch)
+        self._enroll(monkeypatch)
         cred_id = passkeys.list_for_user(1)[0]["id"]
         assert passkeys.remove(2, cred_id) is False
         assert passkeys.count_for_user(1) == 1

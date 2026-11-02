@@ -2,7 +2,7 @@
 tests/test_q60_pages.py
 ───────────────────────
 v5.53.0 (Q60) — the rest of the pages on the phone: rowlist cells on the remaining
-tables, the alert-template accordion, the Reports chart on a phone, labelled selects.
+tables, the alert-template accordion, the Reports chart on a phone, labeled selects.
 
 Pure except TestPages (needs the CI database):
 `py -m pytest --noconftest tests/test_q60_pages.py -k "not TestPages"`.
@@ -110,7 +110,7 @@ class TestAlertAccordion:
         assert "d.open = open" in src
         assert not re.search(r"<button[^>]*\sonclick=", src)
 
-    def test_the_textarea_is_labelled_for_screen_readers(self):
+    def test_the_textarea_is_labeled_for_screen_readers(self):
         assert 'aria-label="{{ label }} message template"' in _src("settings_alerts.html")
 
     def test_accordion_styles_live_in_base(self):
@@ -128,7 +128,7 @@ class TestReportsOnAPhone:
 
 
 class TestLabels:
-    def test_ipmap_select_is_labelled(self):
+    def test_ipmap_select_is_labeled(self):
         assert 'aria-label="Subnet"' in _src("ipmap.html")
 
     def test_settings_toc_chips_use_the_scrolling_row(self):

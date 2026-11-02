@@ -12,7 +12,7 @@ Section map of `RELEASE_AUDIT.md`:
 - **The pre-reviewer executing pass** - every tag, two independent agents, the whole module by `git blame`, every verdict against a real oracle, values enumerated not only classes;
   and the exit rule for promotion (CLAUDE.md rule 11).
 - **What the reviewer does** - the external reviewer's written method compared and folded in: (r) defeat the fix, evidence level as a second attribute, severity under the supported
-  contract, the five matrices, archive verification, test-count labelling, the promotion gate.
+  contract, the five matrices, archive verification, test-count labeling, the promotion gate.
 - **The output** - the chart: every finding confirmed or refuted with `file:line`, by source, with its evidence level.
 
 The lessons that produced these rules are kept by the maintainer outside the repository (`LESSONS.md`, git-ignored) and are quoted into this document as they become rules.

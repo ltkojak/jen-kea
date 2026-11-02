@@ -1,7 +1,7 @@
 """
 tests/test_source_hygiene.py
 ────────────────────────────
-v5.69.0-beta.5 (Q174): the P3 sweep's pure checks - the drift the register found once is held by a test that reads the whole tree, and the small behaviours that had no test of their
+v5.69.0-beta.5 (Q174): the P3 sweep's pure checks - the drift the register found once is held by a test that reads the whole tree, and the small behaviors that had no test of their
 own get one here. Nothing in this file needs a database (`pytest --noconftest tests/test_source_hygiene.py`), except the one test that builds the app.
 """
 

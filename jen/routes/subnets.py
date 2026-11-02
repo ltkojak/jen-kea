@@ -2004,8 +2004,8 @@ def save_subnet_badge_color():
         __user.audit("SAVE_SUBNET_BADGE_COLOR", str(subnet_id), f"tone={tone}")
         return jsonify({"ok": True, "tone": tone})
     except Exception as e:
-        logger.error(f"Error saving badge colour for subnet {subnet_id}: {type(e).__name__}")
-        return jsonify({"ok": False, "error": "Could not save the colour."}), 500
+        logger.error(f"Error saving badge color for subnet {subnet_id}: {type(e).__name__}")
+        return jsonify({"ok": False, "error": "Could not save the color."}), 500
 
 
 def _diff_rows(diff_lines):

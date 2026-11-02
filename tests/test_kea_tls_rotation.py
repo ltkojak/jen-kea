@@ -272,7 +272,7 @@ class Lab:
     def answers_jens_configured_dial(self, sid) -> bool:
         """Would the daemon answer Jen as Jen is CONFIGURED to dial it: a server certificate issued by ANY certificate of the bundle at `[kea] api_ca` (or no verification at all when it is empty
         and verification is off), and the client certificate Jen presents issued by the CA the daemon loaded? A rotation that leaves the configured bundle on the old CA cuts this off even though
-        the daemon answers Jen's live identity (the second pass of Q190: the dial, not the file Jen would like to be dialling with)."""
+        the daemon answers Jen's live identity (the second pass of Q190: the dial, not the file Jen would like to be dialing with)."""
         loaded = self.hosts[sid]["loaded"]
         if not loaded:
             return False
@@ -479,7 +479,7 @@ class Lab:
                     )
                 )
             # Q192: a rotation that REPORTS success is the one request that may move a Jen-issued daemon that did not answer before (a damaged client pair, a damaged CA replaced with the
-            # acknowledgement) - and on that report EVERY Jen-issued daemon must answer Jen's live identity afterwards
+            # acknowledgment) - and on that report EVERY Jen-issued daemon must answer Jen's live identity afterward
             succeeded = "Kea CA rotated" in self.request_texts()
             if succeeded and self.jen_issued(sid) and not now and not self._named(sid, ("tls-superseded",)):
                 bad.append(
@@ -587,7 +587,7 @@ def lab_world(monkeypatch, tmp_path, caplog):
     kea_tls._ORACLE_VERDICTS.clear()
     kea_tls._GATE_VERDICTS.clear()
     # Q197 (AM4): Health asks the inventory with the DEFAULT url source (`kea.configured_url`, a server's `api_url`); the Lab's servers carry their address in `lab.urls`, so that source answers from it - else every
-    # copy would read as a record of an endpoint that is not https, and Health's stale-record rows would be the Lab's artefact
+    # copy would read as a record of an endpoint that is not https, and Health's stale-record rows would be the Lab's artifact
     from jen.services import kea as _kea
 
     monkeypatch.setattr(
@@ -635,7 +635,7 @@ def lab_world(monkeypatch, tmp_path, caplog):
         import requests as _rq
 
         sid = next((i for i, u in lab.urls.items() if u == url), None)
-        assert sid is not None, f"the route dialled an address the Lab does not know: {url}"
+        assert sid is not None, f"the route dialed an address the Lab does not know: {url}"
         where = f"HTTPSConnectionPool: Max retries exceeded with url: {url}"
         fault = lab.faults.get(sid)
         loaded = lab.hosts[sid]["loaded"]
@@ -1033,7 +1033,7 @@ class TestTheSecondPassOfQ188:
         )  # the 2nd write of server 1's live key is the rollback's, before either file of the pair
         _rotate()
         ca = kea_tls.ca_paths()[0]
-        assert lab.answers(1, ca) and lab.answers(2, ca), "both daemons answer on CA-A afterwards"
+        assert lab.answers(1, ca) and lab.answers(2, ca), "both daemons answer on CA-A afterward"
         assert (1, "dhcp4", "tls-local-stale") in lab.incidents and not any(
             i[2] == "tls-not-restored" for i in lab.incidents
         )
@@ -1448,7 +1448,7 @@ class TestTheInvariantsBite:
             kea_tls,
             "_record_host_pair",
             lambda server_id, service, files, cause: kea_tls.mark_stale(server_id, service),
-        )  # the beta.19 behaviour: `.prev` is whatever commit_file_set copied
+        )  # the beta.19 behavior: `.prev` is whatever commit_file_set copied
         monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
         _fail_replace(monkeypatch, "1-dhcp4.key", nth=2)
         _rotate()
@@ -1880,7 +1880,7 @@ class TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths:
 
 
 class TestALegacyUrlWithAPasswordNeverReachesText:
-    """Q190 (AF2): a URL with user-info already in jen.config is legacy input. Jen keeps dialling it, and the password it carries is in NOTHING Jen prints - a flash, an audit row, a log line, an
+    """Q190 (AF2): a URL with user-info already in jen.config is legacy input. Jen keeps dialing it, and the password it carries is in NOTHING Jen prints - a flash, an audit row, a log line, an
     incident - however the dial fails. The fake transport raises `requests` exceptions whose TEXT carries the address as configured; the real probe, identify and scrub code run over it. T4 in
     the teardown looks for the password and for `user:password` in everything printed, for every failure below."""
 
@@ -2039,7 +2039,7 @@ def _bundle_world(kind, tmp_path, monkeypatch):
 
 class TestClientIdentity:
     """Q191 (AG1, the P1): the client pair is half of what a daemon with `cert-required` checks, and beta.21 judged only the CA bundle. With `api_client_cert` a byte COPY of Jen's client pem and the
-    bundle an alias (or empty with verification off), a rotation promoted the new CA and client pair, every daemon demanded a certificate from the NEW CA, Jen kept dialling with the old copy, and the
+    bundle an alias (or empty with verification off), a rotation promoted the new CA and client pair, every daemon demanded a certificate from the NEW CA, Jen kept dialing with the old copy, and the
     screen said "rotated". Every row is a WORLD the Lab builds from a shape of the input; the teardown's T3 judges the daemon's answer to the CONFIGURED dial."""
 
     def _refused_before_staging(self, lab, needle):
@@ -2196,7 +2196,7 @@ class TestTheInvariantsBiteTooQ191:
 
     def test_T3_bites_on_the_P1_world_when_the_client_refusal_is_monkeypatched_away(self, lab, monkeypatch, tmp_path):
         """The pass's C1X, now a shipped test: client pair a COPY, bundle an alias - with the refusal removed the rotation promotes a new CA and client pair, every daemon demands a certificate from the
-        new CA, Jen keeps dialling with the old copy, and the teardown names it."""
+        new CA, Jen keeps dialing with the old copy, and the teardown names it."""
         _bundle_world("alias", tmp_path, monkeypatch)
         _client_world("copy", tmp_path, monkeypatch)
         real = kea_tls.client_kind
@@ -2526,10 +2526,10 @@ class TestCaState:
         lab.begin()
         _rotate()
         assert "Rotate refused" not in lab.texts() and "Jen's CA is damaged" in lab.texts()
-        assert "Tick the acknowledgement" in lab.texts() and lab.remote_actions() == 0
+        assert "Tick the acknowledgment" in lab.texts() and lab.remote_actions() == 0
         assert self._snapshot() == before
 
-    def test_rotate_with_the_acknowledgement_replaces_a_damaged_ca_and_re_issues_every_target(self, lab):
+    def test_rotate_with_the_acknowledgment_replaces_a_damaged_ca_and_re_issues_every_target(self, lab):
         os.unlink(kea_tls.ca_paths()[1])
         old_cert = pathlib.Path(kea_tls.ca_paths()[0]).read_bytes()
         _rotate({"acknowledge_damaged_ca": "1"})
@@ -2751,7 +2751,7 @@ class TestAFailedRecoverySaysWhatHappened:
             "remove the direct socket",
         ):
             assert forbidden not in texts, f"the sentence of a recovery that never promoted says {forbidden!r}: {texts}"
-        assert "Rotate again with the acknowledgement" in texts and "Jen's CA is still damaged" in texts
+        assert "Rotate again with the acknowledgment" in texts and "Jen's CA is still damaged" in texts
         # the executed truth, now pinned: the second acknowledged Rotate, with the fault gone, recovers every daemon
         lab.refuse.clear()
         lab.faults.clear()
@@ -2828,7 +2828,7 @@ class TestTheSecondPassOfQ193:
             _rotate({"acknowledge_damaged_ca": "1"})
             texts = lab.texts()
             assert "Kea CA rotated" not in texts
-            assert "The recovery did not complete" in texts and "Rotate again with the acknowledgement" in texts, texts
+            assert "The recovery did not complete" in texts and "Rotate again with the acknowledgment" in texts, texts
             for forbidden in ("matching pair", "put-back failed", ".prev", "set it up again", "ROLLBACK FAILED"):
                 assert forbidden not in texts, f"{forbidden!r}: {texts}"
             assert kea_tls.ca_state()[0] == "damaged"
@@ -2935,7 +2935,7 @@ class TestCaIdentity:
         row = health._kea_tls_expiry({})
         assert row.status == "fail" and CA_IDENTITY_WHY[kind] in row.detail, row.detail
         lab.begin()
-        _rotate()  # without the acknowledgement: refused, and the files are exactly what they were
+        _rotate()  # without the acknowledgment: refused, and the files are exactly what they were
         assert "Jen's CA is damaged" in lab.texts() and _ca_bytes() == before and lab.remote_actions() == 0
         lab.flashes.clear()
         _rotate({"acknowledge_damaged_ca": "1"})
@@ -3187,7 +3187,7 @@ class TestCopiesDir:
 class TestTheSecondPassOfQ194:
     """The second pass on Q194 (agent ad738f2e0befcf065), each finding as its row first: 1 a CA file with a duplicated extension is "damaged" and never raises (`DuplicateExtension` is not a ValueError);
     2 a WORKING operator CA - no KeyUsage extension (RFC 5280: unrestricted) - is not called damaged, and a self-signature Jen cannot verify has its own sentence; 4 a leftover probe never refuses a
-    writable directory; 5 a preflight leaves the directory as it found it (a refusal changes nothing; the uninitialised world stays uninitialised)."""
+    writable directory; 5 a preflight leaves the directory as it found it (a refusal changes nothing; the uninitialized world stays uninitialized)."""
 
     def test_row_1_a_duplicated_extension_in_the_ca_is_damaged_in_every_reader_and_never_raises(self, lab):
         from tests import _tls_worlds as worlds
@@ -3287,7 +3287,7 @@ class TestTheSecondPassOfQ194:
         assert kea_tls.copies_dir_writable() == "" and os.path.isdir(d), "the check before a write keeps what it made"
         lab.begin()
 
-    def test_row_5_the_inventory_in_the_uninitialised_world_leaves_it_uninitialised(self, lab):
+    def test_row_5_the_inventory_in_the_uninitialized_world_leaves_it_uninitialized(self, lab):
         import shutil
 
         shutil.rmtree(kea_tls.SSL_DIR)
@@ -3338,7 +3338,7 @@ class TestRecoveryBesideAnExternal:
     """Q195 (AK1, the P2): Q192's rule "an endpoint that does not answer the live pair is unreachable regardless" is false in a RECOVERY - the live pair fails BECAUSE the CA being replaced is the one the
     external trusts and it can no longer vouch (expired, not a CA, not yet valid). The shipped fake accepted an expired anchor, so no test saw it; `Lab.accepts_client` now checks the anchor as OpenSSL does
     (`_anchor_usable`). In a recovery the staged pair is tried when the live pair is REJECTED BY CERTIFICATE: accepted = not a refusal; rejected too = Prepare, install, rotate again; a transport fault is
-    unchanged. Non-recovery behaviour is unchanged."""
+    unchanged. Non-recovery behavior is unchanged."""
 
     PREPARE_SENTENCE = "rejects Jen's current client certificate (usually because the damaged CA is the one it trusts) and does not accept the new one yet"
 
@@ -3474,7 +3474,7 @@ class TestTheSmallOnesOfQ195:
         assert not kea_tls.ca_consistent(), "the STATE: the CA is unusable"
         why = kea_tls.ca_state()[1]
         assert why and f"Jen's CA became unusable during the rotation ({why})" in texts, texts
-        assert "Rotate again with the acknowledgement" in texts, texts
+        assert "Rotate again with the acknowledgment" in texts, texts
         for forbidden in ("a promotion failed part-way", ".prev", "set it up again", "remove the direct socket"):
             assert forbidden not in texts, f"{forbidden!r}: {texts}"
         assert sorted(i[2] for i in lab.incidents) == ["tls-not-restored", "tls-not-restored"]
@@ -3494,16 +3494,16 @@ class TestTheSmallOnesOfQ195:
         pathlib.Path(kea_tls.SSL_DIR, "kea-servers", f".write-probe-{os.getpid()}-0123456789abcdef").write_text(
             "", encoding="ascii"
         )
-        evidence = kea_tls._initialised_evidence()
+        evidence = kea_tls._initialized_evidence()
         assert "holds" not in evidence and "certificate directory exists" in evidence, evidence
         pathlib.Path(kea_tls.SSL_DIR, "kea-servers", "1-dhcp4.crt").write_text("x", encoding="ascii")
-        assert "holds 1 file(s)" in kea_tls._initialised_evidence()
+        assert "holds 1 file(s)" in kea_tls._initialized_evidence()
         lab.hosts.clear()
         lab.begin()
 
 
 class TestTheSecondPassOfQ195:
-    """The second pass on Q195 (agent a3d86ae2ab7c13ebd), each finding as its row first: 1 the detector recognises what a real TLS 1.3 stack sends (the server's alert races its close: 88-95 percent of
+    """The second pass on Q195 (agent a3d86ae2ab7c13ebd), each finding as its row first: 1 the detector recognizes what a real TLS 1.3 stack sends (the server's alert races its close: 88-95 percent of
     real rejections were 'EOF occurred in violation of protocol' / 'Remote end closed connection'), so the recovery goes on when the replacement is accepted; 2 a name or an alert that is not about the
     client certificate is never read as a rejection of it; 4 the strict fake agrees with the OpenSSL table that was EXECUTED; 6 the Prepare sentence says 'usually because'; the cleanup never deletes a probe
     that is being written."""
@@ -4609,7 +4609,7 @@ class TestHygieneOfQ197:
         pathlib.Path(kea_tls.ca_paths()[1] + ".next.prev").write_bytes(b"an old staged key")
         lab.begin()
         lab.before = None
-        assert "a CA existed" in kea_tls._initialised_evidence()
+        assert "a CA existed" in kea_tls._initialized_evidence()
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
     def test_a_directory_made_under_the_ssl_dir_is_private_by_default(self, tmp_path):
@@ -4633,7 +4633,7 @@ class TestHygieneOfQ197:
 
 
 class TestTheNameWorldsOfRotate:
-    """Q197 (AM2): a saved https address whose host the verifier cannot name (an underscore) is a NAME refusal in Rotate: the CA is healthy, the sentence names the host, and no acknowledgement is asked for."""
+    """Q197 (AM2): a saved https address whose host the verifier cannot name (an underscore) is a NAME refusal in Rotate: the CA is healthy, the sentence names the host, and no acknowledgment is asked for."""
 
     def test_a_saved_https_host_the_verifier_cannot_name_stops_the_rotation_and_leaves_every_host_on_the_old_ca(
         self, lab
@@ -4646,11 +4646,11 @@ class TestTheNameWorldsOfRotate:
         texts = lab.texts()
         # Q204 AT5 b: this row asserted the NAME refusal ("the CA cannot issue its certificate for kea_host"), reached because the record's certificate was read as NAMING `kea_host`. A certificate's DNS names
         # are the verifier's parser's names now, and the parser refuses an underscore: the certificate names only 10.0.0.6, the URL's host is not one of its names, and the rotation is refused one step earlier
-        # by the record check - the same outcome (the rotation stops, every host stays on the old CA, no acknowledgement is asked) with the record's own sentence.
+        # by the record check - the same outcome (the rotation stops, every host stays on the old CA, no acknowledgment is asked) with the record's own sentence.
         assert "Rotate refused" in texts and "kea_host" in texts, texts
         assert "Kea CA rotated" not in texts
-        assert kea_tls.DAMAGED_CA_ADVICE not in texts and "tick the acknowledgement" not in texts, (
-            "a healthy CA is never sent to the damaged-CA acknowledgement"
+        assert kea_tls.DAMAGED_CA_ADVICE not in texts and "tick the acknowledgment" not in texts, (
+            "a healthy CA is never sent to the damaged-CA acknowledgment"
         )
         assert kea_tls.ca_state() == ("ok", "")
         for sid, host in lab.hosts.items():
@@ -5172,7 +5172,7 @@ def _forget(form=None):
 
 
 class TestADaemonLeftBehindIsAFact:
-    """Q199 (AO1): a PARKED daemon (a configured server not dialled over https now) whose daemon still runs its https socket is on the CA a successful rotation just replaced. That is a durable fact -
+    """Q199 (AO1): a PARKED daemon (a configured server not dialed over https now) whose daemon still runs its https socket is on the CA a successful rotation just replaced. That is a durable fact -
     `tls-superseded` on Servers and in Health, the page naming whose certificate it is - not a flash. The world is HONEST: the parked daemon is loaded and answering before the rotation, so T3 passes
     because an incident names it. (Q198's version of this test removed the daemon from the world so the relative invariant would pass; the Lab has no way to ask for that any more.)"""
 
@@ -5536,8 +5536,8 @@ class TestACleanupReportsWhatHappened:
 
 
 class TestARecordIsTheGroupOfItsFiles:
-    """Q199 (AO6): discovery enumerates every recognised record file and groups them by `<server number>-<service>`; a group without a live pair is an ORPHAN, shown by Health and the page and forgettable by
-    the same route and rule. An unrecognised file name is never touched."""
+    """Q199 (AO6): discovery enumerates every recognized record file and groups them by `<server number>-<service>`; a group without a live pair is an ORPHAN, shown by Health and the page and forgettable by
+    the same route and rule. An unrecognized file name is never touched."""
 
     @pytest.mark.parametrize(
         ("which", "pair"),
@@ -5612,7 +5612,7 @@ class TestARecordIsTheGroupOfItsFiles:
         assert any("ghost" in r for r in inventory.refusals), inventory.refusals
         lab.before = None
 
-    def test_unrecognised_names_are_skipped_and_never_touched(self, lab):
+    def test_unrecognized_names_are_skipped_and_never_touched(self, lab):
         d = kea_tls._copies_dir()
         os.makedirs(d, exist_ok=True)
         stray = ["007-dhcp4.crt", "5-other.crt", "abc-d2.key", ".hidden", "notes.txt", "1-dhcp4.crt.bak"]
@@ -5623,7 +5623,7 @@ class TestARecordIsTheGroupOfItsFiles:
         assert {g["server_id"] for g in groups} == {"1", "2"}, "only the Lab's own records are groups"
         report = kea_tls.forget_report(extensions.KEA_SERVERS)
         assert sorted(report["skipped"]) == sorted(stray)
-        assert all(pathlib.Path(d, n).exists() for n in stray), "nothing unrecognised is ever deleted"
+        assert all(pathlib.Path(d, n).exists() for n in stray), "nothing unrecognized is ever deleted"
         lab.before = None
 
     def test_an_unlistable_directory_is_unknown_never_empty(self, lab, monkeypatch):
@@ -5669,7 +5669,7 @@ class TestARecordCarriesItsDestination:
 
     def test_an_alias_of_the_same_host_is_jens(self, lab):
         """Q204 AT5 a: this row said the mapped spelling is "the same host" for a certificate that names `10.0.0.6` (Q188 AD9's credential fold, used for a certificate name). No verifier folds it:
-        a client dialling `[::ffff:10.0.0.6]` is refused by a certificate for `10.0.0.6`. The record reads as refused. (A spelling that really IS the same name still passes: the next rows.)"""
+        a client dialing `[::ffff:10.0.0.6]` is refused by a certificate for `10.0.0.6`. The record reads as refused. (A spelling that really IS the same name still passes: the next rows.)"""
         assert self._state(lab, ssh_host="::ffff:10.0.0.6", url="https://[::ffff:10.0.0.6]:8004")[0] == "refuse"
         assert self._state(lab, ssh_host="10.0.0.6", url="https://[FD00::6]:8004")[0] == "refuse"
 
@@ -6030,7 +6030,7 @@ class TestAForgetPersistsItsFactBeforeItDeletes:
         assert os.path.lexists(kea_tls.server_copy_path(2, "dhcp4"))
 
     def test_two_forgets_in_a_row_the_second_finds_nothing(self, lab):
-        """(The identity lock serialises two concurrent forgets - `test_identity_guard` walks the decorators; what is checked here is what the second one sees.)"""
+        """(The identity lock serializes two concurrent forgets - `test_identity_guard` walks the decorators; what is checked here is what the second one sees.)"""
         self._parked(lab)
         _forget({"include_parked": "1"})
         _forget({"include_parked": "1"})
@@ -7862,7 +7862,7 @@ class TestOneDaemonIsOneTargetParkedIncluded:
 
     def test_q203_as3_an_external_twin_refuses_the_setup_and_the_rotation(self, lab):
         """Q203 AS3 (the pass's N2; Opus's `w3b_external_twin.py` world): a second record of the same daemon whose pair an administrator's CA issued (`external`) holds files at the fixed remote paths
-        too. `other_record_on_same_daemon` counted only `jen`, `jen-stale` and `refuse`, so the rotation installed over what that record's endpoint is dialled on and the setup would have ALLOWED the
+        too. `other_record_on_same_daemon` counted only `jen`, `jen-stale` and `refuse`, so the rotation installed over what that record's endpoint is dialed on and the setup would have ALLOWED the
         second record. Every state but `none` counts."""
         twin = self._twin(lab)  # server 3, parked (http), on the same SSH host as server 1
         kea_tls.commit_issued(3, "dhcp4", _external_files("10.0.0.5"))
@@ -7966,7 +7966,7 @@ class TestTheUrlIsJudgedByEveryName:
             finally:
                 listener.close()
                 worker.join(5)
-        assert verified, "a TLS client dialling that name accepts the certificate: Jen's check is the verifier's"
+        assert verified, "a TLS client dialing that name accepts the certificate: Jen's check is the verifier's"
 
     @pytest.mark.parametrize(
         ("ssh_host", "url_host", "why"),
@@ -7987,7 +7987,7 @@ class TestTheUrlIsJudgedByEveryName:
         assert state == "refuse" and "as the machine it was installed on" in why, (state, why)
         lab.before = None
 
-    def test_a_target_dialled_at_the_machines_name_is_rotated_with_the_certificates_own_bind_address(self, lab):
+    def test_a_target_dialed_at_the_machines_name_is_rotated_with_the_certificates_own_bind_address(self, lab):
         assert self._state(lab, "kea-b.lan", "kea-b.lan") == ("jen", "")
         inventory = kea_tls.rotation_inventory(
             extensions.KEA_SERVERS, url_for=lambda s, svc: lab.urls[s["id"]], prove_storage=False
@@ -8205,7 +8205,7 @@ class TestTheSmallOnesOfQ202:
             kea_tls.issue_server_cert(server, "dhcp4", "", commit=False)
         assert kea_tls._is_ip_literal(" 10.0.0.9 ") and not kea_tls._is_ip_literal("kea-b.lan")
         lab.urls[2] = (
-            "https://kea-b.example:8004"  # a record dialled at a NAME the certificate does not carry as an address
+            "https://kea-b.example:8004"  # a record dialed at a NAME the certificate does not carry as an address
         )
         lab.hold_certificate_naming(2, ["kea-b.example", "kea-b.example"])
         lab.servers[2]["ssh_host"] = "kea-b.example"

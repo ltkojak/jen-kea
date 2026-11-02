@@ -225,7 +225,7 @@ def _author_bind_candidates(service: str, target_server: dict = None, target_add
     One best-effort SSH session per server; a connection failure just
     leaves that server with whatever the endpoint tells us. `target_server`
     / `target_addresses` let the caller pass in what _author_kea_detect()
-    already fetched so the same host isn't dialled twice.
+    already fetched so the same host isn't dialed twice.
     """
     from jen.services.kea import _endpoint_for
 

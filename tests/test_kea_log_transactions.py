@@ -241,7 +241,7 @@ class TestAClassListFromBeforeTheConfigChanged:
     def _revision(self, monkeypatch, created):
         monkeypatch.setattr("jen.services.config_revisions.latest", lambda server_id, service: {"created_at": created})
 
-    def test_it_is_labelled_when_the_newest_revision_is_newer_than_the_exchange(self, servers, monkeypatch):
+    def test_it_is_labeled_when_the_newest_revision_is_newer_than_the_exchange(self, servers, monkeypatch):
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": OWN_LOG}
         monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
         self._revision(monkeypatch, datetime(2026, 10, 4, 11, 0, 0))  # after 10:00:00 of the logged exchange
@@ -252,7 +252,7 @@ class TestAClassListFromBeforeTheConfigChanged:
         fresh = dict(view, classes=dict(view["classes"], before_config_change=False))
         assert "before_config_change" not in inputs.build(MAC, log=fresh)["assigned"]
 
-    def test_it_is_not_labelled_when_the_config_is_older_than_the_exchange(self, servers, monkeypatch):
+    def test_it_is_not_labeled_when_the_config_is_older_than_the_exchange(self, servers, monkeypatch):
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": OWN_LOG}
         monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
         self._revision(monkeypatch, datetime(2026, 10, 4, 9, 0, 0))

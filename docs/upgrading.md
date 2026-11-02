@@ -22,15 +22,15 @@ One step (5.70.0-beta.2). It adds no migration and changes nothing about how Jen
 
 **Rows per page is remembered in the browser** (a small cookie named `jen_view`): pick 100 on Leases once and it stays 100 there, on that browser, until you pick another. Devices and Reservations keep their own.
 
-## Badge colours, times in your own zone, and a quieter Leases and Subnets page
+## Badge colors, times in your own zone, and a quieter Leases and Subnets page
 
 One step (5.70.0-beta.1). It adds one migration (37, a nullable column on `subnet_notes`, applied automatically and safe to run twice) and changes nothing about how Jen talks to Kea. Nothing needs a manual step.
 
-**Badge colours are chosen per subnet.** Until you choose, every subnet badge is blue: a subnet whose name matched one of the three old rules looks as it did, and a subnet that had no colour is now blue. On Subnets, click a subnet's name on its card and pick one of seven. A viewer sees the colours and cannot change them.
+**Badge colors are chosen per subnet.** Until you choose, every subnet badge is blue: a subnet whose name matched one of the three old rules looks as it did, and a subnet that had no color is now blue. On Subnets, click a subnet's name on its card and pick one of seven. A viewer sees the colors and cannot change them.
 
 **Times follow your browser's zone.** Pages now show a time in the zone of the browser reading it (with the UTC reading in the tooltip). If you would rather see UTC everywhere, open the palette menu - on a phone, the menu sheet - and choose **Times -> In UTC**. The choice is kept in that browser, like the theme.
 
-**On Leases, a reserved lease shows a disabled box**, and "Select all" counts the leases that can be released. **Delete stale leases** is now a grey button under the table. **Delete subnet** is now at the foot of the subnet's Edit page and no longer on its card. A subnet's badge, wherever it appears in a list, filters the list to that subnet.
+**On Leases, a reserved lease shows a disabled box**, and "Select all" counts the leases that can be released. **Delete stale leases** is now a gray button under the table. **Delete subnet** is now at the foot of the subnet's Edit page and no longer on its card. A subnet's badge, wherever it appears in a list, filters the list to that subnet.
 
 **Under Settings -> Kea**, an endpoint that takes the Kea API's password but is reached over http while the Kea API is https is marked with a warning, and so is the confirmation after saving it. The Author Kea Config page keeps your typed form in the tab if the password confirmation interrupts an apply.
 
@@ -44,7 +44,7 @@ One step (5.69.4). It adds no migration. Two things below can refuse something t
 
 **A certificate for an IPv4-mapped IPv6 address (`::ffff:10.0.0.9`) is refused where Jen would issue one.** A TLS client that dials `10.0.0.9` does not accept a certificate for the mapped spelling, and the reverse, so the SSH host, the Kea API address and the bind address of the https setup refuse the spelling with a sentence that says to use the IPv4 address. A record saved earlier with one reads as refused at the https setup and at Rotate Kea CA, with the same sentence, and nothing on the host changes. Passwords are not affected: for a password the two spellings are still one place.
 
-**A Kea API address that carries a path, a query or a fragment is refused the next time it is saved.** The Kea control endpoint is dialled at its root. An address saved earlier is not rewritten; it is refused at its next save, with the sentence that names the shape (`scheme://host:port`).
+**A Kea API address that carries a path, a query or a fragment is refused the next time it is saved.** The Kea control endpoint is dialed at its root. An address saved earlier is not rewritten; it is refused at its next save, with the sentence that names the shape (`scheme://host:port`).
 
 **A failed restart after an import now says when Jen could not keep its note**, as a restore already did. The Probe button answers "IPv6 is off" for a kea-dhcp6 probe while the IPv6 switch is off.
 
@@ -82,9 +82,9 @@ proves nothing about which daemon it was installed on, so Rotate, the recovery, 
 **The address Jen dials may be any name the certificate carries.** 5.69.1 required it to be the certificate's first name, which refused a record whose address was changed to the machine's DNS name (the
 certificate's second name) although a TLS client accepts it. The address is now judged the way a TLS client judges it; the SSH host Jen logs into must still be the certificate's last name.
 
-**A record dialled at a name is rotated for the certificate's own address.** The daemon binds an address, so a certificate Jen issues carries an IP literal as its bind: a rotation of a record whose address is a name the certificate carries (the machine's DNS name) re-issues for the address the certificate already names, and one whose certificate carries no such address (a record placed by hand with only DNS names) is refused - including in a damaged-CA recovery, which used to issue a DNS-bind certificate for it. Change the address saved for it to the daemon's IP.
+**A record dialed at a name is rotated for the certificate's own address.** The daemon binds an address, so a certificate Jen issues carries an IP literal as its bind: a rotation of a record whose address is a name the certificate carries (the machine's DNS name) re-issues for the address the certificate already names, and one whose certificate carries no such address (a record placed by hand with only DNS names) is refused - including in a damaged-CA recovery, which used to issue a DNS-bind certificate for it. Change the address saved for it to the daemon's IP.
 
-**A second record on one daemon refuses a rotation too, parked ones included.** The setup already refused to run while another record shared a daemon (even one that is not dialled over https now); the
+**A second record on one daemon refuses a rotation too, parked ones included.** The setup already refused to run while another record shared a daemon (even one that is not dialed over https now); the
 rotation now asks the same question, because its install would overwrite the certificate that record holds. The sentence names the action: remove one of the two records or re-point it at its own host.
 
 **A saved SSH host stays valid only on its own record.** A scoped IPv6 SSH host saved before 5.69.1 is still accepted where it is saved (in any spelling that names the same address) and refused anywhere else.
@@ -98,7 +98,7 @@ host). A rotation, a recovery and the rollback require the SSH host Jen logs int
 count as the SSH host, so a server whose SSH host was changed to the daemon's address (the same machine, written differently) is refused with the sentence "its certificate names *name* as the machine it was
 installed on; this record's SSH host is now *host*": remove the direct socket and set it up again, or restore the previous SSH host. Nothing is installed or restarted by a refused rotation.
 
-**A recovery judges the whole record.** When Jen's CA is damaged and you rotate with the acknowledgement, a server's record is judged by the certificate that represents what its host holds: the
+**A recovery judges the whole record.** When Jen's CA is damaged and you rotate with the acknowledgment, a server's record is judged by the certificate that represents what its host holds: the
 current copy, or the previous pair when the current copy is missing, unreadable or marked as not the host's. A record with files and no certificate that says which machine they belong to is refused
 instead of being made a target; remove the direct socket and set it up again, or restore the previous host. A server with no files at all is still given a fresh pair by the recovery.
 
@@ -107,7 +107,7 @@ it back; if the database cannot take the note, the rotation does not start. Afte
 completes, the note stays as "a rotation's bookkeeping is unfinished", and the next Rotate (or Forget stale records) finishes it from Jen's files; Health only names it.
 
 **The setup checks for a parked twin and for its own record.** Setting up https for a server now stops, before anything is installed, when another server record with the same SSH host still holds a
-Jen certificate for that daemon even if that record is not dialled over https now. It also stops when its own existing record names a different machine than the SSH host now set: remove the direct
+Jen certificate for that daemon even if that record is not dialed over https now. It also stops when its own existing record names a different machine than the SSH host now set: remove the direct
 socket first (a removal on a host whose config has no socket left now sets the record aside), then set it up there.
 
 **A scoped IPv6 address is not accepted as an SSH host.** A certificate cannot carry an interface scope, so `fe80::1%eth0` would never match the certificate Jen issues for `fe80::1`. Saving a NEW such host

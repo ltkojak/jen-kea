@@ -26,7 +26,7 @@ v5.68.0-beta.10 (Q145). WHICH exchange and WHICH server the evidence comes from 
   first (the one whose HA state serves scopes, as the Servers page shows it), then every other configured server in order, and the
   first one whose log holds an exchange for the MAC supplies it - an unreachable or helper-less server is skipped, with its reason
   kept for the case where none can be read;
-* a class list observed BEFORE the live config's newest revision is labelled so - it is what Kea decided under an older config.
+* a class list observed BEFORE the live config's newest revision is labeled so - it is what Kea decided under an older config.
 """
 
 from __future__ import annotations

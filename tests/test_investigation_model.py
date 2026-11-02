@@ -625,7 +625,7 @@ class Walk:
         _kind, entries = self.raw_state()
         if any(e.get("ssh_host") == fake.host for e in entries.values()):
             return
-        self.i1_open = True  # a Kea that is reloaded while the API lies cannot be SEEN at DEBUG: the first healthy full scan afterwards is what finds it
+        self.i1_open = True  # a Kea that is reloaded while the API lies cannot be SEEN at DEBUG: the first healthy full scan afterward is what finds it
         other = self.physical[self.rng.choice([h for h in HOSTS if h != fake.host])]
         self._timed(fake, "second", copy.deepcopy(other.loaded), "second (API answers for another daemon)")
 
@@ -917,9 +917,9 @@ class Walk:
                     "I5", "an acknowledged record was not replaced by the empty one, or the old value was not kept"
                 )
         elif self.world.store.get(inv.RECORD_KEY, "") != raw_before:
-            self.fail("I5", "a refused acknowledgement changed the record")
+            self.fail("I5", "a refused acknowledgment changed the record")
         if self.start_kind == "unavailable" and out:
-            self.fail("I9", "an acknowledgement succeeded while the settings were unavailable")
+            self.fail("I9", "an acknowledgment succeeded while the settings were unavailable")
 
     def _present_extras(self):
         return [s for s in AppConfig.derive_kea_servers(app_config._read_parser(), quiet=True) if s["id"] != 1]
@@ -1103,10 +1103,10 @@ class Walk:
         fake = self.ssh_fake(server)
         if fake is None:
             return
-        flavour = self.rng.choice(["without_marker", "keep_marker", "old_config"])
-        if flavour == "without_marker":
+        flavor = self.rng.choice(["without_marker", "keep_marker", "old_config"])
+        if flavor == "without_marker":
             candidate, _code = ed.clear_investigation_logging(copy.deepcopy(fake.file))
-        elif flavour == "keep_marker":
+        elif flavor == "keep_marker":
             candidate = copy.deepcopy(fake.file)
             candidate["Dhcp4"]["subnet4"] = [{"id": self.rng.randint(1, 9), "subnet": "10.1.0.0/24"}]
         else:
@@ -1153,11 +1153,11 @@ class Walk:
             self.audits("INVESTIGATION_LOGGING_FILE_WRITE_REFUSED")
             - self.start_audits["INVESTIGATION_LOGGING_FILE_WRITE_REFUSED"]
         )
-        self.say(f"file_write {flavour} on {server['id']}: code={res.get('code')} expected_refusal={expected}")
+        self.say(f"file_write {flavor} on {server['id']}: code={res.get('code')} expected_refusal={expected}")
         if refused != expected:
             self.fail(
                 "I8",
-                f"a non-investigation write ({flavour}) to server {server['id']} was {'refused' if refused else 'allowed'}; it should be {'refused' if expected else 'allowed'}",
+                f"a non-investigation write ({flavor}) to server {server['id']} was {'refused' if refused else 'allowed'}; it should be {'refused' if expected else 'allowed'}",
             )
         if rows != (1 if refused else 0):
             self.fail("I5", f"a file write {'refused' if refused else 'allowed'} wrote {rows} audit row(s)")
@@ -1982,7 +1982,7 @@ class TestTheWalkWouldHaveCaught:
         self, world, tmp_path, monkeypatch
     ):
         """beta.26 (Q161): (I4) the same server id pointed at a different SSH host passed the removal guard, so every later restore went to a different Kea;
-        (I2) a rebuilt entry whose deadline did not parse was written and then read back as damaged, for ever; (I5) the acknowledgement of an unreadable
+        (I2) a rebuilt entry whose deadline did not parse was written and then read back as damaged, for ever; (I5) the acknowledgment of an unreadable
         record and its audit row were two commits, so the record could be replaced with no durable note of who said so."""
         import jen.config as jconfig
 
@@ -2014,7 +2014,7 @@ class TestTheWalkWouldHaveCaught:
         inv.sweep(now=NOW, full=True)
         inv.sweep(now=NOW + timedelta(minutes=1), full=True)
         assert inv._record()["damaged"] is False, "I2: the recovery wrote an entry its own reader rejects"
-        # (I5) an acknowledgement whose audit row cannot be written does not replace the record
+        # (I5) an acknowledgment whose audit row cannot be written does not replace the record
         world.store[inv.RECORD_KEY] = "{broken again"
         world.servers.clear()
         inv.sweep(now=NOW + timedelta(minutes=2), full=True)

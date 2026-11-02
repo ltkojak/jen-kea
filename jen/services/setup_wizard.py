@@ -363,11 +363,11 @@ def save_connection(
 
     v5.67.0-beta.8 (Q120, item g) — the Kea database pools are reset after the write
     (models.db.reset_kea_pools): write_values() re-derives the extensions globals but not a pool that
-    already exists, and a pool built while the config still held placeholders kept dialling them until a
+    already exists, and a pool built while the config still held placeholders kept dialing them until a
     restart — so the very next step's lease query failed against settings the operator had just fixed.
     `kea_db_port` is written only when given.
 
-    v5.67.0-beta.15 (Q129, item d) — `kea_db_ssl_ca` is `[kea_db] ssl_ca`: this step could not SET it (it honoured
+    v5.67.0-beta.15 (Q129, item d) — `kea_db_ssl_ca` is `[kea_db] ssl_ca`: this step could not SET it (it honored
     one already in jen.config), so a database that requires TLS could only be reached by hand-editing the file. It
     is written whenever the form supplied it — an empty value clears it, like the Kea API CA beside it — and
     left alone when None."""
@@ -829,7 +829,7 @@ def install_helper_step(server: dict) -> dict:
 
     v5.67.0-beta.8 (Q120, item a) — refused up front without an SSH host
     and user (the step's own "save target" form is what sets them), and a
-    connection that cannot be opened (the key not yet authorised — the
+    connection that cannot be opened (the key not yet authorized — the
     normal first try) comes back as code "unreachable" with the transport's
     own wording, never as an exception out of the route."""
     from jen.services import kea_host as __kea_host

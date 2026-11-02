@@ -173,7 +173,7 @@ DEFAULT_TEMPLATES = {
 
 
 # One glyph, one meaning — the standard set every default alert message opens
-# with (the Settings → Alerts page shows this legend). Customised templates in
+# with (the Settings → Alerts page shows this legend). Customized templates in
 # the database are never rewritten.
 GLYPH_LEGEND = [
     ("🚨", "Critical", "something is down or about to run out"),
@@ -280,7 +280,7 @@ def register_alert_type(plugin_id: str, type_id: str, *, label: str, icon: str, 
     DEFAULT_TEMPLATES at plugin load. `type_id` must start with
     `<plugin_id>_` so two plugins can never collide, and so a type_id
     alone is enough to tell which plugin owns it if the plugin itself is
-    ever removed (its rows in alert_log just keep the id, unlabelled).
+    ever removed (its rows in alert_log just keep the id, unlabeled).
     A custom template a channel saved earlier survives a plugin upgrade
     unchanged — templates live in the settings-table-backed
     alert_templates table by type id, exactly like a core type's."""
@@ -861,7 +861,7 @@ def take_lease6_snapshot():
     from jen.services import kea6 as _kea6
 
     # v5.68.0-beta.18 (Q153): two aggregate queries for the whole map (it was `list_lease6` + `get_ipv6_reservations` per subnet,
-    # materialising every lease with a MAC lookup each), and no DELETE here: the retention of every history table is one
+    # materializing every lease with a MAC lookup each), and no DELETE here: the retention of every history table is one
     # unconditional pass (`take_lease_snapshot`), so turning IPv6 off no longer leaves months of rows behind forever.
     leases = _kea6.count_lease6_by_subnet()
     reservations = _kea6.count_reservations6_by_subnet()
@@ -1010,10 +1010,10 @@ def _purge_old_alert_log():
     removed is first counted into `alert_log_pruned_totals` (a JSON object keyed "type|status") in the same transaction, and
     `alert_sent_totals()` adds the two back together: the exported number never goes down.
 
-    v5.68.0-beta.20 (Q155): the pass SERIALISES FIRST and counts after. beta.17 counted the expiring rows and only then took `FOR UPDATE` on the
+    v5.68.0-beta.20 (Q155): the pass SERIALIZES FIRST and counts after. beta.17 counted the expiring rows and only then took `FOR UPDATE` on the
     totals row, and this runs from the alert thread every `snapshot_interval_minutes` AND from the daily 00:05 cleanup - two overlapping passes
     both counted the same rows, so a counter that by design never decreases was permanently high; and a `FOR UPDATE` on a row that does not exist
-    yet (the first purge) serialises nothing. Now: (1) the totals row is created if absent (`INSERT IGNORE`, its own committed statement so its
+    yet (the first purge) serializes nothing. Now: (1) the totals row is created if absent (`INSERT IGNORE`, its own committed statement so its
     shared lock is gone before the next one asks for the exclusive one - two passes would otherwise deadlock on the upgrade); (2) it is locked
     `FOR UPDATE`; (3) only THEN are the expiring rows counted, deleted and added - a second pass waits at (2), then finds the rows already gone;
     (4) the DELETE's rowcount must equal what was counted, else everything rolls back. Stored totals that are not a JSON object are never

@@ -88,7 +88,7 @@ class TestNoReleaseMarkerInEndUserProse:
 
 
 class TestTheStyleExtractorsBadRuleIsGone:
-    """item 3: `.u-999e54{color:' + color + '}` was a JS fragment the extractor took for a style; its two call sites now colour their lines from script."""
+    """item 3: `.u-999e54{color:' + color + '}` was a JS fragment the extractor took for a style; its two call sites now color their lines from script."""
 
     def test_the_map_and_the_stylesheet_carry_no_javascript_fragment(self):
         root = pathlib.Path(".")

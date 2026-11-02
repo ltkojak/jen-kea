@@ -92,7 +92,7 @@ JEN_TABLES = {
 # ── Kea tables available for export ──────────────────────────────────────────
 # v5.67.0-beta.11 (Q123, item b) — the scheduled and manual "Kea" backup used to be TWO tables (hosts and
 # dhcp4_options): no IPv6 reservation, no v6 option, no lease — yet the setup page called the box "Kea's
-# database". The backup group is now `reservations_all` and is labelled for what it holds, everywhere. Tables
+# database". The backup group is now `reservations_all` and is labeled for what it holds, everywhere. Tables
 # are listed in FOREIGN-KEY order (hosts before the option and v6 rows that point at it); the importer
 # restores in this order whatever order a file lists them in. A table that does not exist on this Kea is
 # left out of the export (never an empty stand-in).
@@ -130,7 +130,7 @@ KEA_HOST_OPTION_SCOPE = 3
 # backend; a RESERVATION move carries the options set on a reservation only (host_id set AND the host scope),
 # because restoring or copying the rest by their auto-increment ids would write them over whatever options the
 # target has — and, on a source that really uses the config backend, would hit the real schema's foreign keys into
-# dhcp4_subnet / dhcp4_shared_network / dhcp4_pool / dhcp4_client_class, which are empty on a freshly initialised
+# dhcp4_subnet / dhcp4_shared_network / dhcp4_pool / dhcp4_client_class, which are empty on a freshly initialized
 # target. hosts, ipv6_reservations and lease4 are wholly what their group says they are (absent here = no filter).
 #
 # v5.67.0-beta.17 (Q131) — KEA_TABLE_WHERE is the ONE place that says so, and KEA_EXPORT_SQL is built from it, so the
@@ -318,7 +318,7 @@ def _get_table_columns(conn, table):
     """Return the real column names for `table` from the live schema.
 
     `table` must already be validated against a known-table whitelist by the
-    caller (SQL identifiers can't be parameterised with %s). Used to filter
+    caller (SQL identifiers can't be parameterized with %s). Used to filter
     untrusted column names — e.g. from an uploaded import file — down to
     columns that actually exist, before they're interpolated into an INSERT.
     """
@@ -871,7 +871,7 @@ def parse_import_file(file_bytes):
     Parse an uploaded export file. Returns (meta, data, error).
     error is None on success.
 
-    v5.67.0-beta.14 (Q128, item d) — gzip is recognised by its magic bytes, not by trying it and falling back
+    v5.67.0-beta.14 (Q128, item d) — gzip is recognized by its magic bytes, not by trying it and falling back
     (a plain-JSON export has always been accepted, and a corrupt gzip is now an error about the gzip, not a
     silent attempt to read its bytes as text); the parsed structure is validated before anything uses it
     (`_envelope_problem`); and `format` is bounded by what this Jen's importers understand — a format 9 file
@@ -1744,7 +1744,7 @@ def _pks_missing(conn, table, pk_cols, keys) -> list[tuple]:
 
 
 def _kea_schema_version(conn):
-    """(version, minor) from Kea's own `schema_version` row, or None when this is not an initialised Kea
+    """(version, minor) from Kea's own `schema_version` row, or None when this is not an initialized Kea
     database (`kea-admin db-init` creates the table and its row)."""
     if not _table_exists(conn, "schema_version"):
         return None
@@ -1974,7 +1974,7 @@ def migrate_kea(
     Migrate Kea reservations (or leases) into another Kea database.
 
     DATA ONLY (v5.67.0-beta.13, Q127): Jen never creates or alters Kea's schema (CLAUDE.md "Databases"). The
-    target must already be an INITIALISED Kea database — `kea-admin db-init` — with a `schema_version` row whose
+    target must already be an INITIALIZED Kea database — `kea-admin db-init` — with a `schema_version` row whose
     major version equals the source's and every table of the group that exists on the source; anything else is
     refused before a row is written, naming what is wrong. Rows are copied in one transaction with plain INSERTs
     (a primary-key or unique-key collision is an error, not a skipped row), counted from what the server
@@ -2008,10 +2008,10 @@ def migrate_kea(
 
     sv_src, sv_dst = _kea_schema_version(src), _kea_schema_version(dst)
     if sv_src is None:
-        _refuse("The source is not an initialised Kea database (it has no schema_version row).")
+        _refuse("The source is not an initialized Kea database (it has no schema_version row).")
     if sv_dst is None:
         _refuse(
-            f"The target ({target_db}) is not an initialised Kea database — it has no schema_version row. "
+            f"The target ({target_db}) is not an initialized Kea database — it has no schema_version row. "
             f"Run `kea-admin db-init mysql` on it first: Jen copies data only and never creates Kea's tables."
         )
     if sv_dst[0] != sv_src[0]:

@@ -6,7 +6,7 @@ subnet at all, for subnet-restricted users and keys.
 
 The regression fixture: a device Jen last saw in subnet A (1, allowed), whose
 active lease and reservation are now in subnet B (2, denied). Before this
-release, authorising on the ONE "subject" subnet (A) handed the caller B's
+release, authorizing on the ONE "subject" subnet (A) handed the caller B's
 lease and reservation as well. Now every object is judged on its own subnet
 (`access.filter_client_view`). Every assertion has an unrestricted twin that
 still sees everything, and every RBAC fix here carries a refusal test.
@@ -201,7 +201,7 @@ class TestTimelinePageMovedClient:
 class TestClientPageMovedClient:
     """v5.63.0 (Q82) — the same fixture, run against the Investigation page
     instead of Timeline: client_subject.authorize(rule="per_object") must
-    reproduce filter_client_view's exact per-object judgement."""
+    reproduce filter_client_view's exact per-object judgment."""
 
     def test_restricted_user_sees_the_device_and_nothing_from_subnet_b(self, client, db, moved):
         c = _restricted(client, db, "moved_client_restricted1")

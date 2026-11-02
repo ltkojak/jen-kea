@@ -5,10 +5,10 @@ v5.68.0-beta.17 (Q152, item c) - `alert_log` was the one history table nothing p
 (default 180) are removed by the same job as the other history tables, the Alert Log page says how long a row is kept, and the
 Prometheus counter built from the table never goes down because of it (what is removed is counted into a stored total first).
 
-v5.68.0-beta.20 (Q155, items 2 and 9) - the pass SERIALISES FIRST. It used to count the expiring rows and only then take `FOR UPDATE` on the
+v5.68.0-beta.20 (Q155, items 2 and 9) - the pass SERIALIZES FIRST. It used to count the expiring rows and only then take `FOR UPDATE` on the
 totals row, so two overlapping passes (the alert thread every `snapshot_interval_minutes` and the daily 00:05 cleanup) both counted the same rows
 and `jen_alerts_sent_total` - a counter that by design never decreases - was permanently high; a `FOR UPDATE` on a row that does not exist yet
-(the first purge) serialised nothing. This file held only this docstring: nothing pinned the pruned totals, their monotonicity, the first purge or
+(the first purge) serialized nothing. This file held only this docstring: nothing pinned the pruned totals, their monotonicity, the first purge or
 concurrency. Needs the MariaDB the suite runs against (CI).
 """
 

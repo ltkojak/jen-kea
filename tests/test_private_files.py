@@ -2,7 +2,7 @@
 tests/test_private_files.py - v5.68.0-beta.15 (Q150, item F-b): a secret is private from its FIRST BYTE.
 
 `jen.config` (every database password and API credential), the SSL private key and the Fernet key were each written with `open(tmp, "w")`
-- the process umask, 0644 under systemd's default 0022 - and tightened with `chmod` afterwards. `jen/services/private_files.py` is the one
+- the process umask, 0644 under systemd's default 0022 - and tightened with `chmod` afterward. `jen/services/private_files.py` is the one
 discipline (a unique O_EXCL 0600 temp in the target's directory, fsync, the final owner/mode applied to the DESCRIPTOR, os.replace); these
 tests prove it three ways: the function itself, a DIRECTORY WATCHER that stats every entry in the directory in a tight loop while each
 real writer runs (so a window of any width, not just one a test happens to look at, is seen), and source guards that keep the umask

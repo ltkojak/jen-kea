@@ -838,7 +838,7 @@ class TestQ121CheckerAdditions:
         d.mkdir()
         assert jen_update_root.detect_layout_mode(str(d)) == "install"
 
-    def test_an_app_dir_recognised_by_content_is_an_upgrade(self, jen_update_root, _bypass, tmp_path):
+    def test_an_app_dir_recognized_by_content_is_an_upgrade(self, jen_update_root, _bypass, tmp_path):
         for name in ("releases", "run.py", "jen.py"):
             d = tmp_path / f"app-{name}"
             d.mkdir()
@@ -853,7 +853,7 @@ class TestQ121CheckerAdditions:
     def test_somebody_elses_directory_is_an_install_whose_own_check_then_refuses_it(
         self, jen_update_root, _bypass, tmp_path
     ):
-        """The old behaviour treated this as an upgrade, tolerated it, then chowned and stamped it."""
+        """The old behavior treated this as an upgrade, tolerated it, then chowned and stamped it."""
         d = tmp_path / "someone-elses"
         d.mkdir()
         (d / "their-file").write_text("not jen\n")
@@ -881,11 +881,11 @@ class TestQ121CheckerAdditions:
 
     # ── (c) a reinstall onto kept config/data ────────────────────────────────────
 
-    def test_install_accepts_a_config_dir_recognised_by_content(self, jen_update_root, tmp_path):
+    def test_install_accepts_a_config_dir_recognized_by_content(self, jen_update_root, tmp_path):
         (tmp_path / "jen.config").write_text("[jen_db]\n")
         assert jen_update_root._layout_target_ok_for_install("config_dir", str(tmp_path)) is None
 
-    def test_install_accepts_a_data_dir_recognised_by_content(self, jen_update_root, tmp_path):
+    def test_install_accepts_a_data_dir_recognized_by_content(self, jen_update_root, tmp_path):
         (tmp_path / "backups").mkdir()
         assert jen_update_root._layout_target_ok_for_install("data_dir", str(tmp_path)) is None
 
@@ -925,7 +925,7 @@ class TestQ121CheckerAdditions:
         out = capsys.readouterr().out
         assert "mode=install" in out and f"app_dir={tmp_path / 'a'}" in out
 
-    def test_cli_auto_on_a_recognised_install_says_upgrade(
+    def test_cli_auto_on_a_recognized_install_says_upgrade(
         self, jen_update_root, _bypass, tmp_path, capsys, monkeypatch
     ):
         app = tmp_path / "app"
@@ -2086,7 +2086,7 @@ class TestRollbackRelease:
             jen_update_root._rollback_release(str(snap), None, True, "5.14.0", str(tmp_path / "rel" / "5.14.0"))
         assert called.get("yes")
 
-    def test_critical_path_keeps_recovery_artefacts(self, jen_update_root, tmp_path, monkeypatch):
+    def test_critical_path_keeps_recovery_artifacts(self, jen_update_root, tmp_path, monkeypatch):
         rel = tmp_path / "releases"
         (rel / "5.13.0").mkdir(parents=True)
         (rel / "5.14.0").mkdir()

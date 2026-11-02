@@ -151,7 +151,7 @@ def _may_read_kea_log() -> bool:
 def _built_inputs(view, *, fetch_log: bool = True) -> dict:
     """The client Explain evaluates for this view (v5.68.0-beta.2, Q135): the MAC, the lease row's client id and hostname
     (the view's lease was already judged by authorize()), what Kea's log said when the caller may read it, and what was
-    typed - each labelled by source. `fetch_log=False` uses only a log read already cached (the Overview must not pay an SSH
+    typed - each labeled by source. `fetch_log=False` uses only a log read already cached (the Overview must not pay an SSH
     round trip for its one line). `?auto=0` turns every inferred source off."""
     auto = request.args.get("auto") != "0"
     log_view = __ctx.read_log(view.mac, allowed=_may_read_kea_log() and auto, fetch=fetch_log)

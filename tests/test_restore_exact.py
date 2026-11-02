@@ -127,7 +127,7 @@ class TestStrict:
         # strict rolled the whole core transaction back — A is what the first (lenient) import left
         assert [r["id"] for r in _rows(db, A)] == [10]
 
-    def test_no_recognised_column_leaves_the_table_alone_and_strict_fails(self, db, scratch):
+    def test_no_recognized_column_leaves_the_table_alone_and_strict_fails(self, db, scratch):
         blob = _file({A: [{"nonsense": 1, "more_nonsense": 2}]})
         results = dbexport.import_jen(blob)
         assert any(r.startswith(f"⚠️ {A}: no recognized columns") and "left unchanged" in r for r in results)

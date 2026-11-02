@@ -199,7 +199,7 @@ def api_v1_subnets():
                 for s, _sn in iter_subnet4(cfg_result["arguments"].get("Dhcp4", {})):
                     for r in result:
                         if r["id"] == s["id"]:
-                            # v5.68.0-beta.18 (Q153): the total of every pool (ranges AND CIDRs, merged), and utilisation over the
+                            # v5.68.0-beta.18 (Q153): the total of every pool (ranges AND CIDRs, merged), and utilization over the
                             # pool union from the leases INSIDE it - an active lease outside every pool (a reservation) consumes
                             # no dynamic capacity. `active_leases` stays the subnet's whole active count.
                             pool_size = __pools.total_pool_size(s.get("pools", []))

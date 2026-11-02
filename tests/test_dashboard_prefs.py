@@ -99,7 +99,7 @@ class TestValidate:
         assert [p["id"] for p in prefs["panels"]] == ["subnet_stats", "totals"]
         assert all(p["w"] == "full" for p in prefs["panels"])
 
-    def test_result_is_always_json_serialisable(self):
+    def test_result_is_always_json_serializable(self):
         import json
 
         json.dumps(dp.validate({"v": 2, "panels": [{"id": "totals", "w": "full"}]}, [1, 2, 3]))

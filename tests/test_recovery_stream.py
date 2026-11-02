@@ -317,7 +317,7 @@ class TestFormatCompatibility:
             assert tf.getnames() == ["a"]
 
     @pytest.mark.parametrize("junk", [b"", b"JENREC", b"NOTJENREC" + b"\x00" * 60, b"JENREC3" + b"\x00" * 60])
-    def test_decrypt_any_refuses_anything_unrecognised(self, junk):
+    def test_decrypt_any_refuses_anything_unrecognized(self, junk):
         with pytest.raises(BadPassphrase):
             decrypt_any(io.BytesIO(junk), PASS, io.BytesIO())
 

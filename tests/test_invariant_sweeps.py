@@ -105,7 +105,7 @@ class TestS1SecretsArePrivateFromTheirFirstByte:
     """Q150 (the running app) + Q151 (every participant). A secret is written through `jen.services.private_files.write_private_file`, the
     helper's `_install_private` or `tools/private_write.py`: a unique O_EXCL 0600 temp, the final owner/mode on the descriptor, then the replace.
     A plain `open(path, "w")` / `Path.write_*` / `cat > path` of a path that names a secret (or lives under the config dir) is created with the
-    process umask and tightened afterwards - the window Q150 closed in `jen/` and Q151 closes in the installer and the Docker bootstrap."""
+    process umask and tightened afterward - the window Q150 closed in `jen/` and Q151 closes in the installer and the Docker bootstrap."""
 
     def test_no_python_file_writes_a_secret_path_with_a_plain_open(self):
         offenders = []
@@ -605,7 +605,7 @@ S10_ALLOWED = {
         "None means 'could not be read' and every caller treats it as unknown, never as 'the marker is gone' (sweep: `carries is False` is the only branch that acts)"
     ),
     ("jen/services/investigation_logging.py", "_raw_marker_text", "(TypeError, ValueError)", 'return ""'): (
-        "a marker that cannot be serialised reads as no text; the Kea-file guard only lets a malformed marker through when its text EQUALS the one recorded at adoption, and a recorded text is never empty, so this refuses"
+        "a marker that cannot be serialized reads as no text; the Kea-file guard only lets a malformed marker through when its text EQUALS the one recorded at adoption, and a recorded text is never empty, so this refuses"
     ),
     ("jen/config.py", "apply", "Exception", "pass"): (
         "a capability-cache drop after a config load; nothing is decided on it, and a stale cache is re-derived on the next read"
@@ -635,7 +635,7 @@ S10_ALLOWED = {
         "output that is not JSON falls through to the HelperMissing / HelperError raise below: a garbled answer is never read as success"
     ),
     ("jen/services/kea_changeset.py", "_is_timestamp", "ValueError", "return False"): (
-        "an entry whose time does not parse is NOT a recognised incident: it is kept and counted as unrecognised, never cleared by a clean run (Q190, AF3)"
+        "an entry whose time does not parse is NOT a recognized incident: it is kept and counted as unrecognized, never cleared by a clean run (Q190, AF3)"
     ),
     ("jen/services/kea_changeset.py", "_with_attention", "Exception", "return False"): (
         "the transaction is reported as NOT done: `record_attention`, `resolve_attention`, `acknowledge_recovery` and the clears turn it into their own False/0/None, which the rotation and the routes act on (refuse, audit, say so); `record_outcome`'s only caller drops it by design - a rollback note that cannot be stored is logged and the route's own flash is all there is - and an unreadable note is refused, never read as empty and written over (Q189)"
@@ -650,7 +650,7 @@ S10_ALLOWED = {
         "'cleared 0' leaves the incident standing: a failed clear is never read as cleared (the rotation's check reads the store strict and counts an unreadable one as still there)"
     ),
     ("jen/services/kea_changeset.py", "acknowledge_recovery", "Exception", "return None"): (
-        "None means the acknowledgement could not be written: the incident is still shown and the route says so"
+        "None means the acknowledgment could not be written: the incident is still shown and the route says so"
     ),
     ("jen/services/kea_changeset.py", "dismiss_rollback_notes", "Exception", "return False"): (
         "False means the note was NOT dismissed: it stays on the Servers page"
@@ -1341,7 +1341,7 @@ class TestS13ATrustPathIsNeverComparedAsAString:
             if path.suffix == ".py" and "jen" in path.parts:
                 found += s13_sites(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         assert found == [], (
-            "a module compares `[kea] api_ca` as a path (or normalises it): a symlink, a copy or a bundle of Jen's own CA is 'not Jen's', and Rotate leaves every Jen-issued endpoint behind "
+            "a module compares `[kea] api_ca` as a path (or normalizes it): a symlink, a copy or a bundle of Jen's own CA is 'not Jen's', and Rotate leaves every Jen-issued endpoint behind "
             f"(Q190, AF1). Ask `kea_tls.trust_includes_jens_ca()` / `trust_kind()` instead: {found}"
         )
 
@@ -1534,7 +1534,7 @@ S16_MAPS = ("SUBNET_MAP", "SUBNET6_MAP")
 
 S16_REVIEWED = {
     ("jen/routes/dashboard.py", "prometheus_metrics"): (
-        "a scrape endpoint has no user: it is authorised by the metrics token or the open flag and emits every subnet by design; who may HOLD the token or set the flag is the scope (Q204 AT1 d: the metrics card and "
+        "a scrape endpoint has no user: it is authorized by the metrics token or the open flag and emits every subnet by design; who may HOLD the token or set the flag is the scope (Q204 AT1 d: the metrics card and "
         "`save_metrics_settings` need `all_subnets`), pinned by tests/test_authz_matrix.py::TestTheBranchesRun"
     ),
     ("jen/routes/reservations.py", "_address_outside_subnet"): (

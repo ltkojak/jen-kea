@@ -167,7 +167,7 @@ class TestProjectionForEveryTrend:
         f = cap.forecast(_rows([300] * 12, pool_size=254), today=TODAY)
         assert f["trend"] == "flat" and {v for _d, v in f["projection"]} == {254}
 
-    def test_projection_days_is_honoured(self):
+    def test_projection_days_is_honored(self):
         f = cap.forecast(_rows([50] * 12), today=TODAY, projection_days=10)
         assert len(f["projection"]) == 11
 
@@ -266,7 +266,7 @@ class TestPoolUsedIsTheConsumptionSeries:
         assert f["trend"] == "rising" and f["days"] == 10 and f["days_to_90pct"] is not None
 
     def test_a_row_with_no_pool_used_key_is_unknown_and_never_read_as_active_leases(self):
-        """The beta.19 test pinned the OTHER behaviour: whole-subnet `active_leases` stood in for pool use, so a reservation outside the pools read
+        """The beta.19 test pinned the OTHER behavior: whole-subnet `active_leases` stood in for pool use, so a reservation outside the pools read
         as consumption exactly as it did before the column existed."""
         rows = _rows([10 + 5 * i for i in range(10)])
         for row in rows:

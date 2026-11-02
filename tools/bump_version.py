@@ -12,7 +12,7 @@ jen/__init__.py, install.sh, Dockerfile, docker-compose.yml,
 docker-compose.mysql.yml, and the CHANGELOG heading. README is NOT a
 spot. Refuses to run if any spot does not carry OLD exactly once, so a
 half-bumped tree is never produced. Working copies may be CRLF; files
-are rewritten with LF, which git's autocrlf normalises as usual.
+are rewritten with LF, which git's autocrlf normalizes as usual.
 """
 
 from __future__ import annotations

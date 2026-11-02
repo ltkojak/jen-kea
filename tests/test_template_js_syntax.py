@@ -80,7 +80,7 @@ class TestMfaPageScriptsParse:
             conn.commit()
         _check_scripts(client.get("/mfa/verify").get_data(as_text=True), tmp_path, "challenge_totp_only")
 
-    def test_enrol_page(self, logged_in_client, admin_with_passkey_and_totp, tmp_path):
+    def test_enroll_page(self, logged_in_client, admin_with_passkey_and_totp, tmp_path):
         _check_scripts(logged_in_client.get("/mfa/enroll").get_data(as_text=True), tmp_path, "enroll")
 
     def test_reauth_page(self, logged_in_client, admin_with_passkey_and_totp, tmp_path):

@@ -112,7 +112,7 @@ class TestTheKea6Form:
         assert disk.get("kea6_db", "host") == "db6-a" and disk.get("kea6_db", "password") == "D6"
 
     def test_inherit_is_the_way_out_and_removes_the_password(self, logged_in_client, db, mock_kea, isolated_config):
-        # (Q178 second pass: Inherit is honoured for another PORT of the Kea API's host - the daemons' own sockets - and not for a different host)
+        # (Q178 second pass: Inherit is honored for another PORT of the Kea API's host - the daemons' own sockets - and not for a different host)
         r = _post(logged_in_client, self.URL, api_url="https://kea-a:9006", db_host="db6-a", inherit_api_pass="1")
         assert SENTENCE.encode() not in r.data and b"different host from the Kea API" not in r.data
         disk = _disk(isolated_config)
@@ -520,7 +520,7 @@ class TestAnAdminsProbeNeverDowngradesTheScheme:
 
         return restricted_client(client, db, None, role="admin", username="q203_as1_admin")[0]
 
-    def test_1_https_configured_an_admins_http_candidate_on_the_same_host_is_refused_and_nothing_is_dialled(
+    def test_1_https_configured_an_admins_http_candidate_on_the_same_host_is_refused_and_nothing_is_dialed(
         self, client, db, monkeypatch
     ):
         admin = self._admin(client, db)

@@ -154,7 +154,7 @@ class TestTheInputsCarryBoth:
         fields = [p["field"] for p in ei.provenance(built)]
         assert fields.index("user_class") < fields.index("user_class_bytes") < fields.index("circuit_id_hex")
 
-    def test_typed_bytes_are_normalised_and_win(self):
+    def test_typed_bytes_are_normalized_and_win(self):
         built = ei.build(
             "aa:bb:cc:dd:ee:01",
             log={"query": self.QUERY},
@@ -189,7 +189,7 @@ class TestTheRuleBuilderOffersBothForms:
         with pytest.raises(ValueError):
             self._expr("user_class_lp", "equals", "x" * 256)
 
-    def test_the_two_forms_are_two_labelled_fields(self):
+    def test_the_two_forms_are_two_labeled_fields(self):
         assert (
             "plain text" in kc.FIELDS["user_class"]["ui_label"]
             and "length-prefixed" in kc.FIELDS["user_class_lp"]["ui_label"]

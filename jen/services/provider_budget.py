@@ -3,13 +3,13 @@ jen/services/provider_budget.py
 ────────────────────────────────
 v5.68.0-beta.11 (Q146) — the one place a plugin's investigation or search provider is actually run, so the one-second budget the
 docs always promised is a bound and not a log line. Both kinds used to run in the request thread and compare the elapsed time
-afterwards: a provider that hung (a database that stopped answering, a socket with no timeout) held the web worker for as long as it
+afterward: a provider that hung (a database that stopped answering, a socket with no timeout) held the web worker for as long as it
 liked and the page waited with it.
 
   * ONE module-level `ThreadPoolExecutor` (`MAX_WORKERS` threads - `[server] threads`, see `configure`) runs every provider call, and the request waits on each call's
     future for at most the budget (`future.result(timeout=...)`), counted from the moment all of a page's calls were submitted - so
     seven slow providers cost one second, not seven. A call that has not answered by then is shown as "unavailable (over 1 s)" and the
-    request goes on; a call still queued is cancelled, one already running cannot be stopped (Python has no safe way to), so it is
+    request goes on; a call still queued is canceled, one already running cannot be stopped (Python has no safe way to), so it is
     logged ONCE, counted, and its answer dropped when it arrives.
   * A `BoundedSemaphore` of `MAX_OUTSTANDING` bounds the calls in flight or abandoned. A slot is returned only when the call really
     ends, not when the request stops waiting - so providers that hang do not pile up without limit. v5.68.0-beta.17 (Q152): the

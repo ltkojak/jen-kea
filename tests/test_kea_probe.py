@@ -272,7 +272,7 @@ class TestProbeServerAndService:
         assert fake.calls[0]["url"] == "http://kea02:9000"
         assert fake.calls[0]["auth"] == ("u2", "p2")
 
-    def test_dhcp6_with_ipv6_off_is_400_and_nothing_is_dialled(self, logged_in_client, db, probe_http):
+    def test_dhcp6_with_ipv6_off_is_400_and_nothing_is_dialed(self, logged_in_client, db, probe_http):
         """Q204 AT8 e (M17): IPv6 is off by default and VERIFIED off - a v6 command never fires before the switch is on, a probe of a v6 daemon included."""
         fake = probe_http({})
         for form in (
@@ -283,7 +283,7 @@ class TestProbeServerAndService:
             r = logged_in_client.post("/settings/infrastructure/probe-kea", data=form)
             assert r.status_code == 400, form
             assert "IPv6 is off" in r.get_json()["error"]
-        assert fake.calls == [], "nothing was dialled"
+        assert fake.calls == [], "nothing was dialed"
 
     def test_dhcp6_with_ipv6_on_is_probed_as_before(self, logged_in_client, db, probe_http, ipv6_flag_on):
         fake = probe_http({})

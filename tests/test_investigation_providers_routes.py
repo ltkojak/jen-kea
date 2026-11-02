@@ -40,7 +40,7 @@ def seeded(db):
 
 @pytest.fixture
 def providers():
-    """Register fakes for the test and put the registry back afterwards; `calls` records what each was asked."""
+    """Register fakes for the test and put the registry back afterward; `calls` records what each was asked."""
     before = dict(ip._PROVIDERS)
     ip._PROVIDERS.clear()
     calls = []

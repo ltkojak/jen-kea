@@ -3,7 +3,7 @@ tests/test_dashboard_chart.py
 ─────────────────────────────
 v5.69.0-beta.6 (Q175) - the Utilization History chart showed 24h, 7 days and 30 days as the same flat line: (a) `drawSparkline` scaled y to `Math.max(100, max(vals))`, so on a 60 px
 canvas a subnet at 26% with a two-point swing was one pixel tall, and (b) nothing said what window the line covered or that the box had only six days of snapshots. The y-range is the
-data's own band and the label carries the window's span. The API was never the cause (`days` is honoured; the buckets are hourly) and its contract is pinned here too.
+data's own band and the label carries the window's span. The API was never the cause (`days` is honored; the buckets are hourly) and its contract is pinned here too.
 
 The JS is checked three ways: the source says what it should (no database), the two functions are RUN under node when it is installed, and the dashboard's e2e test reads the label in a
 real browser (tests/e2e/test_dashboard_arrange.py).
@@ -137,8 +137,8 @@ out.a = '25% of the pool · 50 in the pools · ' + spanText(a, 1);
         ), out["a"]
 
 
-class TestTheHistoryApiHonoursItsWindow:
-    """The API was never the cause: `days` is honoured, clamped to 1..90, the buckets are hourly, and the body says which window it answered."""
+class TestTheHistoryApiHonorsItsWindow:
+    """The API was never the cause: `days` is honored, clamped to 1..90, the buckets are hourly, and the body says which window it answered."""
 
     SID = 1
 

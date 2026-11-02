@@ -56,7 +56,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     function reset() { count = 0; var b = bar(); if (b) b.classList.remove('active'); }
     window.jenProgress = { start: start, stop: stop, reset: reset };
     // Q204 (AT6): a route behind a recent-password step-up answers a fetch with 401 JSON carrying `reauth` (a redirect would be followed into an HTML page). ONE place, every fetch route: the page navigates to
-    // the confirmation once; the response is still handed back, so the caller's own error line shows until the page leaves. The request is not replayed afterwards - the person clicks again.
+    // the confirmation once; the response is still handed back, so the caller's own error line shows until the page leaves. The request is not replayed afterward - the person clicks again.
     var reauthing = false;
     window.jenFetch = function(url, opts) {
         start();
@@ -1367,7 +1367,7 @@ function sortTable(table, col, th) {
         });
     });
     // The shortcuts modal is a dialog (v5.69.0-beta.4, Q173): focus moves into it when it opens, stays on its one control while it is open (Tab does not reach the
-    // page behind), and goes back to whatever opened it when it closes - the same behaviour the phone sheets have below.
+    // page behind), and goes back to whatever opened it when it closes - the same behavior the phone sheets have below.
     var kbOpener = null;
     function kbModalOpen() { var m = document.getElementById('kb-modal'); return !!m && m.style.display !== 'none'; }
     function kbModalSet(open) {
@@ -1927,7 +1927,7 @@ function sortTable(table, col, th) {
         return el;
     };
 
-    // jenPrompt(message, onValue, defaultValue, confirmLabel): one labelled text field (maxlength 100, the saved-search route's own cap). Focus goes to the field, Enter confirms, Escape
+    // jenPrompt(message, onValue, defaultValue, confirmLabel): one labeled text field (maxlength 100, the saved-search route's own cap). Focus goes to the field, Enter confirms, Escape
     // cancels, an empty value cancels, Tab cycles field / Cancel / OK, and focus returns to whatever opened it. onValue gets the trimmed text.
     window.jenPrompt = function(message, onValue, defaultValue, confirmLabel) {
         var el = document.getElementById('jen-prompt-overlay');

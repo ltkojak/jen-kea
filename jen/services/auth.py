@@ -133,7 +133,7 @@ MAPPED_ADDRESS_SENTENCE = (
 
 def is_v4_mapped_literal(value) -> bool:
     """Q204 (AT5): is `value` an IPv4-mapped IPv6 literal (`::ffff:10.0.0.9`, brackets and padding ignored)? For a SECRET the two spellings are one place (`same_host`, Q188 AD9, unchanged); for a
-    CERTIFICATE NAME they are two - openssl and urllib3 compare a SAN with the dialled address byte for byte - so the savers that decide what a certificate will be issued for ask this."""
+    CERTIFICATE NAME they are two - openssl and urllib3 compare a SAN with the dialed address byte for byte - so the savers that decide what a certificate will be issued for ask this."""
     import ipaddress
 
     text = str(value or "").strip().strip("[]")
@@ -181,7 +181,7 @@ def valid_remote_path(value):
 
 
 def valid_log_path(value):
-    """A log file Jen may ask a Kea host to read (v5.69.0-beta.2, Q171): an absolute, already-normalised `*.log` path under /var/log at any depth (the default, /var/log/kea/kea-ddns.log, is nested) - the rule the Kea host
+    """A log file Jen may ask a Kea host to read (v5.69.0-beta.2, Q171): an absolute, already-normalized `*.log` path under /var/log at any depth (the default, /var/log/kea/kea-ddns.log, is nested) - the rule the Kea host
     helper's `_allowed_log_path` applies (it also resolves symlinks, which only the host can do), so a path Jen accepts here is one the helper accepts and a path outside
     /var/log is never handed to the legacy `sudo tail`, which has no wall of its own."""
     import posixpath
@@ -296,7 +296,7 @@ def idna_a_label(host: str):
 
 def _plain_host(host: str) -> bool:
     """Is `host` a name `requests` will send exactly as written: ASCII letters, digits, dots, hyphens, underscores and the colons of an IPv6 literal - or an internationalised name that
-    survives IDNA unchanged (Q184, Z3). Fullwidth and compatibility forms (`ａ.example`) normalise to a DIFFERENT name under IDNA, and a zero-width or no-break space is dropped or
+    survives IDNA unchanged (Q184, Z3). Fullwidth and compatibility forms (`ａ.example`) normalize to a DIFFERENT name under IDNA, and a zero-width or no-break space is dropped or
     refused by it - none of them is a name that means what it looks like."""
     import re
     import unicodedata
@@ -371,7 +371,7 @@ def same_host(a: str, b: str) -> bool:
 
 def no_weaker_scheme(configured: str, candidate: str) -> bool:
     """Is `candidate` reached over no weaker a scheme than `configured` (CRED-002, Q203 AS1): True when the candidate is https, or the configured address is http already -
-    so a secret Jen sends to the one never travels in clear where it travelled encrypted. The scheme is read as `_endpoint_parts` reads it (lower-cased); a blank, an
+    so a secret Jen sends to the one never travels in clear where it traveled encrypted. The scheme is read as `_endpoint_parts` reads it (lower-cased); a blank, an
     unparsable or a scheme-less side is False, because there is no scheme to compare. This is half of the question "may an admin make Jen send the saved credential here":
     `same_host` answers the other half, and neither is enough alone."""
     pa, pb = _endpoint_parts(configured), _endpoint_parts(candidate)
@@ -401,7 +401,7 @@ def inherit_over_http(this_url, parent_url) -> bool:
 
 
 def kea_url_shape_ok(url) -> bool:
-    """Q204 (AT8 d): the ONE definition of a Kea URL's shape - `scheme://host[:port]` and at most a trailing slash: no user-info, no path, no query, no fragment. The Kea control endpoint is dialled
+    """Q204 (AT8 d): the ONE definition of a Kea URL's shape - `scheme://host[:port]` and at most a trailing slash: no user-info, no path, no query, no fragment. The Kea control endpoint is dialed
     at its root, and an address Jen sends the saved credentials to (the probe, CRED-002) is where a Kea daemon listens, not `http://internal:8080/admin?x=`. Asked by `valid_api_url` (every saver) and
     by the probe, which used to carry its own copy."""
     from urllib.parse import urlsplit
@@ -489,7 +489,7 @@ def url_refusal_sentence(url: str, require_port: bool = False) -> str:
     if require_port and host and port is None:
         return "In direct mode the API URL must include an explicit port (e.g. http://kea:8004) - a daemon control socket is never on 80/443."
     if host and not kea_url_shape_ok(value) and "@" not in (parsed.netloc or ""):
-        return "A Kea address is scheme://host:port with nothing after it (no path, query or fragment): the control endpoint is dialled at its root."  # Q204 second pass H6
+        return "A Kea address is scheme://host:port with nothing after it (no path, query or fragment): the control endpoint is dialed at its root."  # Q204 second pass H6
     return ""
 
 
@@ -548,7 +548,7 @@ def userinfo_legacy_note(section: str, key: str) -> str:
 
 def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
     """[(section, key)] of every URL option in a loaded ConfigParser whose value carries user-info (`user:pass@host`) - legacy input from before `valid_api_url` refused it (Q190, AF2). Names only,
-    never a value. Jen keeps dialling such a URL as before; the credential rule is not touched by this."""
+    never a value. Jen keeps dialing such a URL as before; the credential rule is not touched by this."""
     from urllib.parse import urlsplit
 
     found = []

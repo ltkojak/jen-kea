@@ -8,12 +8,12 @@ binary columns as the ASCII of their own hex: the six-byte MAC 34:13:43:e6:0e:2a
 bytes of the text "341343e60e2a" (see jen/services/dbexport.py, EXPORT_FORMAT). The reservation row is
 still there, still looks right in a hex dump, and never matches the client again.
 
-What can be recognised, and what cannot — stated plainly because a repair that guesses corrupts good rows:
+What can be recognized, and what cannot — stated plainly because a repair that guesses corrupts good rows:
 
-  * `hosts.dhcp_identifier` of type 0 (hw-address) that is 12, 16 or 40 ASCII hex digits is recognised: a
+  * `hosts.dhcp_identifier` of type 0 (hw-address) that is 12, 16 or 40 ASCII hex digits is recognized: a
     genuine hardware address is binary, and the chance that six real bytes are ALL printable hex digits is
     about 4e-7.
-  * type 1 (duid) is recognised the same way and additionally validated by its DECODED type word: a DUID
+  * type 1 (duid) is recognized the same way and additionally validated by its DECODED type word: a DUID
     begins with a two-byte type of 1 to 4, so text that decodes to anything else is not a DUID and is left alone.
   * type 3 (client-id) is OPAQUE (option 61): embedded clients that send their MAC as ASCII text
     (`001122334455`) exist, so "looks like hex" is not evidence. A client-id row is "damaged" (offered, ticked)

@@ -4,14 +4,14 @@ tests/stored_object_fixtures.py
 v5.68.0-beta.12 (Q147) — the ONE "moved-client stored-object" fixture the three plugin matrices import
 (tests/test_stored_objects_wol.py, _switchport.py, _presence.py).
 
-The rule being proved (plugins/README.md "Stored data", docs/ARCHITECTURE.md section 2): a plugin's STORED object — a favourite, a tracked
+The rule being proved (plugins/README.md "Stored data", docs/ARCHITECTURE.md section 2): a plugin's STORED object — a favorite, a tracked
 device, a switch position — is judged by the subnet it was stored in, on every surface (page, add, delete, move, search, API, the
 Investigation card), and where the client is NOW never widens that. A wake or any other act on a live host is the one thing judged on where
 the host is now, and it never borrows a stored object the caller may not see. Two clients cover both directions:
 
-  * DIRECTION 1 - `A_MAC`: in subnet A now (a lease), with everything the three plugins hold for it stored in subnet B: a favourite (with a
+  * DIRECTION 1 - `A_MAC`: in subnet A now (a lease), with everything the three plugins hold for it stored in subnet B: a favorite (with a
     SecureOn password) and a tracked row owned by B, and a position on a B switch that is NEWER than its position on an A switch.
-  * DIRECTION 2 - `D_MAC`: in subnet B now (a device row), with everything stored in subnet A: a favourite (with a SecureOn password), a tracked
+  * DIRECTION 2 - `D_MAC`: in subnet B now (a device row), with everything stored in subnet A: a favorite (with a SecureOn password), a tracked
     row owned by A, and a position on an A switch.
 
 `D_MAC` is deliberately not one of the leak markers: what is stored in A is the A caller's own data, and its MAC is part of it. The markers

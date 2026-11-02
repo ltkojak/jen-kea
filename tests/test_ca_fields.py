@@ -4,7 +4,7 @@ tests/test_ca_fields.py
 v5.67.0-beta.15 (Q129, item d) — two missing CA fields. The migration wizard never passed a target `ssl_ca`
 (`_direct_conn(..., ssl_ca="")`, so the connection was plain: a target that requires TLS failed, and one that merely
 allows it got the credentials in clear), and the setup wizard's Connect step could not SET `[kea_db] ssl_ca` (it
-honoured one already in jen.config). Each now has an optional "CA bundle" field carried through the test and the
+honored one already in jen.config). Each now has an optional "CA bundle" field carried through the test and the
 save, validated like the Kea API CA (a file that exists on the Jen host).
 """
 

@@ -179,7 +179,7 @@ class TestNoWeakerScheme:
 
 class TestKeaUrlShape:
     """Q204 AT8 d (M16): ONE definition of a Kea URL's shape - `scheme://host[:port]` and at most a trailing slash - asked by every saver (`valid_api_url`) and by the probe (`_is_kea_url_shape`
-    is a call to it). The Kea control endpoint is dialled at its root."""
+    is a call to it). The Kea control endpoint is dialed at its root."""
 
     OK = ["http://kea:8004", "https://10.0.0.5:8000/", "http://[::1]:8004", "https://kea.example", "http://kea:8004/ "]
     NOT = [

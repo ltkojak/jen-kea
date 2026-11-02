@@ -165,7 +165,7 @@ def leases():
                         host_rows = res_cur.fetchall()
                         reserved_macs = {row["mac_hex"].upper() for row in host_rows}
                         # Q206 (SP-1): the summary's "N reserved" is a number a viewer reads, so it counts only a reservation in a subnet the caller may see (devices.py's rule); a hidden
-                        # subnet's reservation never changes a visible answer. `has_reservation` below keeps reading every reservation - the pre-existing behaviour of the admin menu.
+                        # subnet's reservation never changes a visible answer. `has_reservation` below keeps reading every reservation - the pre-existing behavior of the admin menu.
                         reserved_visible = {
                             row["mac_hex"].upper()
                             for row in host_rows

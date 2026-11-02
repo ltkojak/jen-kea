@@ -19,7 +19,7 @@ from jen.config import app_config, invalid_subnet_name_reason, load_config, writ
 
 @pytest.fixture
 def isolated_config(tmp_path):
-    """Point AppConfig at a throwaway config file, restore afterwards."""
+    """Point AppConfig at a throwaway config file, restore afterward."""
     original_path = extensions.CONFIG_FILE
     cfg = configparser.ConfigParser()
     cfg["kea"] = {"api_url": "http://1.2.3.4:8000", "api_user": "u1", "api_pass": "p1"}
@@ -433,10 +433,10 @@ class TestWritersAreSerialized:
         monkeypatch.setattr(AppConfig, "_write_lock", NoLock())
         monkeypatch.setattr(
             config_module, "identity_lock", NoLock()
-        )  # v5.68.0-beta.28 (Q164): every writer takes this one FIRST - it serialises threads too
+        )  # v5.68.0-beta.28 (Q164): every writer takes this one FIRST - it serializes threads too
         monkeypatch.setattr(
             config_module, "fcntl", None
-        )  # v5.68.0-beta.18: the file lock serialises threads too; remove both
+        )  # v5.68.0-beta.18: the file lock serializes threads too; remove both
         real_write = AppConfig._write_parser
 
         def slow_write(self, parser):

@@ -165,9 +165,9 @@
             say('Passkey "' + done.name + '" enrolled.');
             window.location = done.next;
         } catch (e) {
-            var msg = (e && e.name === 'NotAllowedError') ? 'The passkey prompt was cancelled or timed out.'
+            var msg = (e && e.name === 'NotAllowedError') ? 'The passkey prompt was canceled or timed out.'
                     : (e && e.name === 'InvalidStateError') ? 'This authenticator is already enrolled.'
-                    : (e && e.message) ? e.message : 'Passkey enrolment failed.';
+                    : (e && e.message) ? e.message : 'Passkey enrollment failed.';
             say(msg, true);
             btn.disabled = false;
         }

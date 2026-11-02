@@ -1299,7 +1299,7 @@ S15_PASSPHRASE = "s15-recovery-passphrase-is-long-enough"
 
 
 def _s15_enable_all_plugins():
-    """Bundled plugins ship disabled — same reasoning as _ensure_presence_enabled, generalised
+    """Bundled plugins ship disabled — same reasoning as _ensure_presence_enabled, generalized
     to all seven in one pass (one restart, not seven)."""
     out, _p = st.jen_py(
         f"""
@@ -2011,7 +2011,7 @@ def _s19_flashes(html):
     text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S)
     text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))
     found = re.findall(
-        r"[^.]{0,200}(?:Nothing was changed|refused|not finished|must be build|cannot read|does not recognise)[^.]{0,200}\.",
+        r"[^.]{0,200}(?:Nothing was changed|refused|not finished|must be build|cannot read|does not recognize)[^.]{0,200}\.",
         text,
     )
     return found[:4] or text[:300]
@@ -2093,7 +2093,7 @@ with app.app_context():
     emit([e["name"] for e in inv.active()])
 """
     )
-    assert out[1] == [], f"INVARIANT: once Jen is back the host's restore is recognised and the entry goes: {out}"
+    assert out[1] == [], f"INVARIANT: once Jen is back the host's restore is recognized and the entry goes: {out}"
 
 
 def test_19_the_kea_host_puts_investigation_logging_back_with_jen_stopped_or_its_database_down_or_pointed_elsewhere(
@@ -2241,7 +2241,7 @@ def test_21_an_unreadable_host_record_is_reported_never_taken_for_no_session(sta
     pid = st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split()
     assert pid, "kea-dhcp4 is running on kea-a"
     # scenario 20 leaves the host a record of its own: Jen kept running there, and its sweep (real clock) re-armed the host after the host restored, because the scenarios fake the HOST's
-    # deadline into the past and Jen's own entry still had real time left. That is an artefact of the clock stand-in, not of a real session, so this scenario starts from a clean host.
+    # deadline into the past and Jen's own entry still had real time left. That is an artifact of the clock stand-in, not of a real session, so this scenario starts from a clean host.
     st.dexec(st.KEA_A, "rm", "-f", S19_STATE)
     try:
         _s19_on(web)
@@ -2381,7 +2381,7 @@ with app.app_context(), jen_db() as c, c.cursor() as cur:
 answers = None
 probe_url = "__PROBE__"
 if probe_url:
-    # does the endpoint Jen dials ANSWER afterwards - with the credentials and the TLS context of Jen's own files (Q188, AD4)?
+    # does the endpoint Jen dials ANSWER afterward - with the credentials and the TLS context of Jen's own files (Q188, AD4)?
     from jen.services import kea_tls
     version, _err = infra._probe_after_restart(probe_url, "sysuser", "syspass-123", "dhcp4", verify=kea_tls.ca_paths()[0], cert=kea_tls.client_paths())
     answers = bool(version)
@@ -2485,7 +2485,7 @@ def test_22_d_an_https_replacement_whose_local_commit_fails_stops_with_the_previ
             f"INVARIANT: {name} on the host is the material the existing socket was issued with"
         )
     assert second["answers"] is True, (
-        "INVARIANT: the original endpoint answers afterwards, as the daemon, with Jen's own files"
+        "INVARIANT: the original endpoint answers afterward, as the daemon, with Jen's own files"
     )
     assert "PRIVATE KEY" not in texts and "syspass-123" not in texts
 
@@ -2727,7 +2727,7 @@ emit({
 def test_22_h_a_damaged_ca_refuses_an_https_setup_and_is_replaced_only_by_an_acknowledged_rotation(stack):
     """REMOTE-001 / Q192 (AH2, the P1): kea-a is really on an https socket Jen issued the certificate for; Jen's `kea-ca.key` is then removed. An https setup is REFUSED before anything is sent to
     a host - both of kea-a's TLS files and its daemon config are byte-for-byte the baseline, Jen's CA certificate and client pair are byte-equal, and NO new CA was created (before: `ensure_ca` read
-    "a cert without a loadable key counts as absent" and made one under the existing socket). A Rotate WITHOUT the acknowledgement is refused too; WITH it the damaged CA is replaced, kea-a is re-issued
+    "a cert without a loadable key counts as absent" and made one under the existing socket). A Rotate WITHOUT the acknowledgment is refused too; WITH it the damaged CA is replaced, kea-a is re-issued
     from the new CA, restarted and PROBED with it, and the certificate on the host is the one Jen holds."""
     out, proc = _s22_run("write-ok", scheme="https", port="8014")
     assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
@@ -2749,11 +2749,11 @@ def test_22_h_a_damaged_ca_refuses_an_https_setup_and_is_replaced_only_by_an_ack
     local = emitted(out)
     assert local["state"][0] == "damaged" and not local["key_exists"], "INVARIANT: no new CA key was created"
     assert local["after"] == damaged["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
-    # Rotate without the acknowledgement: refused
+    # Rotate without the acknowledgment: refused
     ip = st.container_ip(st.KEA_A)
     out, proc = st.jen_py(S22H_ROTATE_SCRIPT.replace("__ADDR__", ip).replace("__ACK__", ""), timeout=500)
     refused = emitted(out)
-    assert refused is not None and "Tick the acknowledgement" in " ".join(refused["flashes"]), (
+    assert refused is not None and "Tick the acknowledgment" in " ".join(refused["flashes"]), (
         refused,
         proc.stderr[-1500:],
     )
@@ -3469,7 +3469,7 @@ emit(dict(result, restored_state=list(kea_tls.record_state(1, "dhcp4", server=ex
 def test_22_s_a_hand_placed_certificate_that_names_nothing_refuses_the_rotation_before_the_daemon_is_touched(stack):
     """REMOTE-001 section 6b / Q202 (AR2) / Q203 (AS8): kea-a is really on an https socket Jen issued the certificate for. A Jen-signed certificate with NO subject alternative name is placed (the library
     builds it, the live CA signs it, a real pair) as kea-a's record. Rotate is REFUSED before it stages or installs anything, with AR2's sentence (it names no address and no machine), the helper is never
-    called, Jen's CA and client pair are byte-equal, and kea-a's TLS files and daemon config are the baseline and it still answers. The record is put back afterwards."""
+    called, Jen's CA and client pair are byte-equal, and kea-a's TLS files and daemon config are the baseline and it still answers. The record is put back afterward."""
     out, proc = _s22_run("write-ok", scheme="https", port="8014")
     assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     baseline = _s22_host_state()

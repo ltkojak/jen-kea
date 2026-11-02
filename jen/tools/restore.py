@@ -233,7 +233,7 @@ def safe_extract(tf, dest_dir: Path) -> None:
     hardlinks and `..` paths unrestricted on any interpreter without the
     backported `filter=`. Every member is validated BEFORE anything is
     written, so a refused bundle leaves `dest_dir` untouched; file modes are
-    masked to 0o644/0o755 (the restore steps set the real modes afterwards).
+    masked to 0o644/0o755 (the restore steps set the real modes afterward).
     Raises `RestoreRefused` naming the offending member."""
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
@@ -884,9 +884,7 @@ def run(
         # ── quiesce ──────────────────────────────────────────────────────
         manage = not no_stop
         if no_stop:
-            print(
-                "--no-stop: not stopping or starting Jen — make sure it is stopped, and start it yourself afterwards."
-            )
+            print("--no-stop: not stopping or starting Jen — make sure it is stopped, and start it yourself afterward.")
         elif not _have_systemctl():
             manage = False
             print("systemctl not found — treating this as --no-stop (stop and start Jen yourself).")

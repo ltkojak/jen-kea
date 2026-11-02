@@ -2,10 +2,10 @@
 tests/test_setup_connection_modes.py
 ─────────────────────────────────────
 v5.67.0-beta.8 (Q120, items b, e, k, l) — what the setup wizard's Connect step decides about the URL the
-operator typed, against REAL local HTTP servers that answer the way Kea does (CLAUDE.md: probe behaviour is
+operator typed, against REAL local HTTP servers that answer the way Kea does (CLAUDE.md: probe behavior is
 tested against real local servers, not a mocked `requests.post`).
 
-The behaviour these servers imitate was verified first against real kea-dhcp4 3.0.3, 3.2.0 and 3.3.1
+The behavior these servers imitate was verified first against real kea-dhcp4 3.0.3, 3.2.0 and 3.3.1
 (tests/kea_compat `test_a_daemon_identifies_itself_with_or_without_a_service_field`, results in the
 kea-compat artifact):
 

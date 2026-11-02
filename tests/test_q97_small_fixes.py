@@ -2,9 +2,9 @@
 tests/test_q97_small_fixes.py
 ──────────────────────────────
 v5.65.8 (Q97) - the small items of the second audit of the release candidate: search providers filter
-before they truncate and guard each row, discover_plugins() sanitises nav icons for every reader, a JSON
+before they truncate and guard each row, discover_plugins() sanitizes nav icons for every reader, a JSON
 array body no longer 500s the dashboard prefs, reset-template validates its alert type, the palette
-comment is true, the DNS tab is spelt DNS, api_key_can_access_subnet fails closed on a missing key,
+comment is true, the DNS tab is spelled DNS, api_key_can_access_subnet fails closed on a missing key,
 event kinds and alert type ids cannot exceed their columns, and register_alert_type checks its icon.
 """
 
@@ -55,7 +55,7 @@ class TestSearchProvidersFilterThenTruncate:
         assert sp.run_search_providers("x", {1}, True)[0]["rows"] == []
 
 
-class TestDiscoverPluginsSanitisesIcons:
+class TestDiscoverPluginsSanitizesIcons:
     def test_a_manifest_naming_a_missing_icon_reads_puzzle_for_every_reader(self, tmp_path, monkeypatch):
         from jen import extensions
         from jen.services import plugins as plugins_svc

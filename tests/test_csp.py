@@ -295,10 +295,10 @@ class TestSecurityHeaders:
         assert "style-src 'self' 'unsafe-inline'" in csp
 
     def test_img_src_allows_data_urls(self, logged_in_client):
-        """v5.31.1 — the TOTP enrolment QR (`data:image/png;base64,…`) and
+        """v5.31.1 — the TOTP enrollment QR (`data:image/png;base64,…`) and
         uploaded avatars are data: URLs. Without an img-src directive they
         fell through to default-src 'self' and every browser blocked them
-        — the enrolment page showed a broken image from v4.4.5 (when the
+        — the enrollment page showed a broken image from v4.4.5 (when the
         header arrived) until this. Only images get the scheme; scripts,
         styles and everything else keep 'self'."""
         resp = logged_in_client.get("/")
@@ -310,7 +310,7 @@ class TestSecurityHeaders:
             m = re.search(directive + r" ([^;]+)", csp)
             assert m and "data:" not in m.group(1), directive
 
-    def test_mfa_enrolment_page_embeds_a_real_png_qr(self, logged_in_client):
+    def test_mfa_enrollment_page_embeds_a_real_png_qr(self, logged_in_client):
         """The image the policy now permits must actually be there: the
         route renders a base64 PNG (iVBOR… is the PNG magic) inline."""
         page = logged_in_client.get("/mfa/enroll").get_data(as_text=True)

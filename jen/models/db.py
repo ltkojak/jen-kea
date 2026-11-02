@@ -267,7 +267,7 @@ def get_kea6_db() -> pymysql.connections.Connection:
             if _kea6_pool is None:
                 # v5.68.0-beta.22 (Q157): the same shape as the jen and kea pools (Q156) - a failed creation is recorded and not re-attempted for
                 # _POOL_RETRY_S, and the direct connect runs OUTSIDE the lock. A separate, down v6 lease host used to cost ~20 s per call and
-                # serialise every other database caller behind it.
+                # serialize every other database caller behind it.
                 if _pool_recently_failed("kea6"):
                     direct = True
                 else:
@@ -376,7 +376,7 @@ def reset_kea_pools() -> None:
     extensions.KEA_DB_* / KEA6_DB_* now say — host, port, credentials and ssl_ca alike. v5.67.0-beta.8
     (Q120, item g) — the setup wizard's Connect step saves new Kea database settings through
     app_config.write_values(), which re-derives the extensions globals but does not touch a pool that
-    already exists; a pool created while the config still held placeholders kept dialling them until a
+    already exists; a pool created while the config still held placeholders kept dialing them until a
     restart. Jen's own pool is left alone: this changes nothing about it."""
     global _kea_pool, _kea6_pool
     with _pool_lock:

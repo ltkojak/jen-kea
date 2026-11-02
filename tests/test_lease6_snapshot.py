@@ -68,7 +68,7 @@ class TestTheSnapshotWritesLease6History:
         ]
 
     def test_two_aggregate_queries_for_the_whole_map_not_two_per_subnet(self, v6_world):
-        """Q153 (7): it was `list_lease6` + `get_ipv6_reservations` per subnet (2 x N, every lease materialised with a MAC lookup)."""
+        """Q153 (7): it was `list_lease6` + `get_ipv6_reservations` per subnet (2 x N, every lease materialized with a MAC lookup)."""
         alerts.take_lease6_snapshot()
         assert v6_world == ["leases", "resv"]
 

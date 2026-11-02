@@ -264,7 +264,7 @@ class TestPodman:
         _patch_dockerenv(monkeypatch, False)
         assert not os.path.exists("/run/.containerenv") and not os.path.exists("/.dockerenv")
 
-    def test_podman_restarts_by_signalling_the_gunicorn_master(self, monkeypatch):
+    def test_podman_restarts_by_signaling_the_gunicorn_master(self, monkeypatch):
         import threading
 
         _clear_signals(monkeypatch)

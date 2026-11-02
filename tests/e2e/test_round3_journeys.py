@@ -4,7 +4,7 @@ tests/e2e/test_round3_journeys.py
 v5.49.0-beta.3 (Q52) — browser journeys for the round-3 pages that
 shipped after Q40: Configuration Doctor, Timeline, Client trace, DNS
 Reconcile, and Getting started (including the dismiss button that was a
-grey default <button> until this release).
+gray default <button> until this release).
 
 Same rules as the rest of tests/e2e/: no page.evaluate /
 page.wait_for_function (the CSP has no 'unsafe-eval'), assertions through
@@ -136,7 +136,7 @@ def test_getting_started_dismiss_button_is_a_real_link_style_and_clears_the_pill
     expect(page.get_by_role("heading", name="Getting Started")).to_be_visible()
     dismiss = page.get_by_role("button", name="Dismiss the nav reminder")
     expect(dismiss).to_be_visible()
-    # v5.49.0-beta.3: it used to render as the browser's grey default button
+    # v5.49.0-beta.3: it used to render as the browser's gray default button
     expect(dismiss).to_have_css("background-color", "rgba(0, 0, 0, 0)")
     dismiss.click()
     page.wait_for_url(f"{base_url}/getting-started")

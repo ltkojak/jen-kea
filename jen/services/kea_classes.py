@@ -4,7 +4,7 @@ jen/services/kea_classes.py
 v5.19.0 (Q13) — pure functions for Kea's `Dhcp4.client-classes`: turning
 a guided rule builder into a Kea classification expression, resolving
 the 2.7.4→3.0 attachment-key rename, finding what references a class,
-and recognising Kea's built-in classes (never authored by Jen).
+and recognizing Kea's built-in classes (never authored by Jen).
 
 Pure — no I/O, no Flask. `dhcp4_cfg` throughout is the inner `Dhcp4` map
 (`config["Dhcp4"]`), matching kea_config_view.py's convention.

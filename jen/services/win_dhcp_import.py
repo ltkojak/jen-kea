@@ -267,7 +267,7 @@ def _parse_option_values(elem, context: str) -> tuple[dict[int, str], list[str]]
     return out, warnings
 
 
-_OPTION_81_WARNING = "option 81 (client FQDN flags) is DDNS behaviour, not option-data — configure it on the DDNS page"
+_OPTION_81_WARNING = "option 81 (client FQDN flags) is DDNS behavior, not option-data — configure it on the DDNS page"
 
 # v5.28.0 (Q24, F6) — codes _options_to_kea handles itself, before the
 # catalog lookup: 51/58/59 become lease timers (scope_to_subnet merges

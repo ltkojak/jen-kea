@@ -895,7 +895,7 @@ class TestHiddenAndNonexistentAreOneAnswer:
             body = response.get_json()
         return response.status_code, response.headers.get("Location", ""), flashes, body
 
-    def _pair(self, client, method, hidden_path, ghost_path, data=None, ghost_data=None, normalise=()):
+    def _pair(self, client, method, hidden_path, ghost_path, data=None, ghost_data=None, normalize=()):
         a = self._answer(client, client.open(hidden_path, method=method, data=data or {}))
         b = self._answer(
             client, client.open(ghost_path, method=method, data=ghost_data if ghost_data is not None else (data or {}))
@@ -904,7 +904,7 @@ class TestHiddenAndNonexistentAreOneAnswer:
         # the one thing that may differ is a value the caller itself typed (an IP in the sentence, the id in a URL)
         def n(answer):
             text = repr(answer)
-            for value in normalise:
+            for value in normalize:
                 text = text.replace(value, "<typed>")
             return text
 
@@ -920,7 +920,7 @@ class TestHiddenAndNonexistentAreOneAnswer:
             "/leases/release",
             data={"ip": self.HIDDEN_IP},
             ghost_data={"ip": self.GHOST_IP},
-            normalise=(self.HIDDEN_IP, self.GHOST_IP),
+            normalize=(self.HIDDEN_IP, self.GHOST_IP),
         )
         assert answer[2] == [f"No active lease found for {self.HIDDEN_IP}."]
         with db.cursor() as cur:

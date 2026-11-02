@@ -47,7 +47,7 @@ NOT_THE_WRITER = {"build_inputs"}
 
 #: (file, function) -> (capability, why, details). The capability is the ONE thing that function may do beyond the strict rule; `details` narrows it.
 DYNAMIC = {
-    ("jen/services/credentials.py", "materialise"): (
+    ("jen/services/credentials.py", "materialize"): (
         "conversion",
         "the one-time conversion types every endpoint it writes, by design (CRED-004, U2)",
         {},

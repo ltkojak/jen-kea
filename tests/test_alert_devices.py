@@ -54,7 +54,7 @@ class TestALongHardwareAddressDoesNotStopTheFleet:
             cur.execute("SELECT mac FROM devices WHERE mac LIKE 'aa:bb:cc:dd:ee:1%' ORDER BY mac")
             macs = [r["mac"] for r in cur.fetchall()]
         assert "aa:bb:cc:dd:ee:11" in macs and "aa:bb:cc:dd:ee:13" in macs, (
-            "the good rows landed although a neighbour failed"
+            "the good rows landed although a neighbor failed"
         )
         assert result["failed"] == 1
         _clean(db)

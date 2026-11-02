@@ -27,7 +27,7 @@ UNKNOWN (three-valued logic), and the page says which input would
 settle it.
 
 v5.68.0-beta.2 (Q135) — it also says WHY NOT. The caller may hand in three lookups (all optional, all read-only):
-`assigned_classes` (the classes Kea itself logged for this client — decided by what Kea said, labelled with when),
+`assigned_classes` (the classes Kea itself logged for this client — decided by what Kea said, labeled with when),
 `pool_used(subnet_id, pool_text)` (active leases inside a pool, so a full pool is a verdict, not a hope) and
 `holder_of(ip, mac)` (who holds an address a reservation names). With them a reserved address held by another client, a
 full pool, a reservation whose identifier type is not in `host-reservation-identifiers`, and a relay that does not match
@@ -102,7 +102,7 @@ def tokenize(text: str) -> list[tuple[str, str]]:
     while pos < len(text):
         m = _TOKEN_RE.match(text, pos)
         if not m or m.end() == pos:
-            raise ExprError(f"unrecognised syntax at: {text[pos : pos + 20]!r}")
+            raise ExprError(f"unrecognized syntax at: {text[pos : pos + 20]!r}")
         pos = m.end()
         for kind, val in m.groupdict().items():
             if val is not None:
@@ -386,7 +386,7 @@ def enabled_identifiers(dhcp4_cfg: dict) -> list[str] | None:
 def match_reservation(
     client: dict, candidates: list[dict], subnet_id: int, flags: dict, db_rows: list[dict]
 ) -> dict | None:
-    """First reservation Kea would honour for this client in `subnet_id`:
+    """First reservation Kea would honor for this client in `subnet_id`:
     a subnet reservation (host DB or config file) by hw-address then
     client-id, else a global one when the subnet allows globals."""
     mac = _norm_mac(client.get("mac"))
@@ -475,7 +475,7 @@ def explain(
     {ip, subnet_id, expires?} or None.
 
     v5.68.0-beta.2 (Q135), all optional: `assigned_classes` = {"classes": [names], "at": when} - the classes Kea itself
-    logged for this client, taken as members (and labelled with when); `pool_used(subnet_id, pool_text)` -> active leases
+    logged for this client, taken as members (and labeled with when); `pool_used(subnet_id, pool_text)` -> active leases
     inside that pool, or None; `holder_of(ip, mac)` -> {"mac", "expire", "linkable"} for an active lease on `ip` held by a
     DIFFERENT client, or None. Both callables are read-only lookups; one that raises is treated as "unknown"."""
     steps: list[dict] = []

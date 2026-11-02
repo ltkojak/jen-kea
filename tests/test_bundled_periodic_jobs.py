@@ -14,7 +14,7 @@ from `jen.services.background._periodic` rather than called from a test-owned
 stub — is invoked exactly once, after seeding one representative row through
 that plugin's own tables (never a plugin-repo FakeDB: this runs against the
 real jen_test database), with only the plugin's own network-touching
-primitive(s) stubbed (ping/nmap/an AdGuard HTTP call/the neighbour-table
+primitive(s) stubbed (ping/nmap/an AdGuard HTTP call/the neighbor-table
 parse — the stubs answer, never raise).
 
 Assertions: every job runs without raising, full stop. For the four plugins

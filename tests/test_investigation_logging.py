@@ -2328,7 +2328,7 @@ class TestZeroServersIsNotARecovery:
         assert inv.sweep(now=NOW, full=True)["adopted"] == ["kea-a"]
         assert list(_servers_of(world.store[inv.RECORD_KEY])) == ["1"]
 
-    def test_the_acknowledgement_by_a_restricted_admin_is_refused(self, world):
+    def test_the_acknowledgment_by_a_restricted_admin_is_refused(self, world):
         world.store[inv.RECORD_KEY] = self.DAMAGED
         world.servers.clear()
         inv.sweep(now=NOW, full=True)
@@ -2338,7 +2338,7 @@ class TestZeroServersIsNotARecovery:
             and self._audits(world, "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED") == []
         )
 
-    def test_the_acknowledgement_by_an_all_subnets_admin_writes_an_empty_record_and_audits_it(self, world):
+    def test_the_acknowledgment_by_an_all_subnets_admin_writes_an_empty_record_and_audits_it(self, world):
         from jen.services import health
 
         world.store[inv.RECORD_KEY] = self.DAMAGED
@@ -2355,7 +2355,7 @@ class TestZeroServersIsNotARecovery:
         assert inv._record()["damaged"] is False and health._debug_logging_left_on({}).status == "ok"
         print(f"ACK audit row: {row}")
 
-    def test_the_acknowledgement_is_refused_when_nothing_is_damaged_or_no_problem_was_recorded(self, world):
+    def test_the_acknowledgment_is_refused_when_nothing_is_damaged_or_no_problem_was_recorded(self, world):
         assert inv.acknowledge_damaged("alice", all_subnets=True) is False, "nothing damaged"
         world.store[inv.RECORD_KEY] = self.DAMAGED
         assert inv.acknowledge_damaged("alice", all_subnets=True) is False, (
@@ -2366,7 +2366,7 @@ class TestZeroServersIsNotARecovery:
             and self._audits(world, "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED") == []
         )
 
-    def test_after_the_acknowledgement_logging_works_again(self, world):
+    def test_after_the_acknowledgment_logging_works_again(self, world):
         world.store[inv.RECORD_KEY] = self.DAMAGED
         world.servers[1]["ssh_host"] = ""
         inv.sweep(now=NOW, full=True)
@@ -2452,7 +2452,7 @@ class TestTheEntryValidatorChecksWhatTheFieldsMean:
         )
         assert not inv._valid_entry(self._entry(reload_tries=inv.RELOAD_TRIES + 2))
 
-    def test_the_legacy_shape_is_normalised_not_damaged(self, world, caplog):
+    def test_the_legacy_shape_is_normalized_not_damaged(self, world, caplog):
         import json
         import logging
 
@@ -2483,7 +2483,7 @@ class TestTheEntryValidatorChecksWhatTheFieldsMean:
         assert not inv._valid_entry({"name": "kea-a", "until": FUTURE, "restarted": True, "daemon": "debug"})
 
 
-# ── v5.68.0-beta.27 (Q162): a server with outstanding state keeps its connection identity; the acknowledgement is one transaction ───────
+# ── v5.68.0-beta.27 (Q162): a server with outstanding state keeps its connection identity; the acknowledgment is one transaction ───────
 
 
 class TestAnEndpointChangeKeepsTheServerIdentity:
@@ -2586,7 +2586,7 @@ class TestAnEndpointChangeKeepsTheServerIdentity:
         assert inv.endpoint_change_refusal(99, {"ssh_host": "10.9.9.9"}, actor="alice") == ""
 
 
-class TestTheAcknowledgementAndItsAuditRowAreOneTransaction:
+class TestTheAcknowledgmentAndItsAuditRowAreOneTransaction:
     """Item 3: `_save(...)` then `_audit(...)`, and `user.audit` logs and returns on failure - the empty record was committed with no durable record of who
     asserted what. `set_global_setting_and_audit` carries both statements on one connection; `acknowledge_damaged` re-reads the record under its lock and uses it."""
 
@@ -2594,7 +2594,7 @@ class TestTheAcknowledgementAndItsAuditRowAreOneTransaction:
 
     @staticmethod
     def _problems(world):
-        world.store[inv.RECORD_KEY] = TestTheAcknowledgementAndItsAuditRowAreOneTransaction.DAMAGED
+        world.store[inv.RECORD_KEY] = TestTheAcknowledgmentAndItsAuditRowAreOneTransaction.DAMAGED
         world.servers.clear()
         inv.sweep(now=NOW, full=True)
 
@@ -2634,7 +2634,7 @@ class TestTheAcknowledgementAndItsAuditRowAreOneTransaction:
         assert sorted(results) == [False, True]
         assert len([a for a in world.store["_audit"] if a[0] == "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED"]) == 1
 
-    def test_the_acknowledgement_does_not_use_the_ordinary_audit_helper(self):
+    def test_the_acknowledgment_does_not_use_the_ordinary_audit_helper(self):
         import ast
         import inspect
 

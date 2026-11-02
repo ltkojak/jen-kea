@@ -12,7 +12,7 @@ written):
 
   * Jen:  every selected table must be ABSENT on the target; an empty or unknown selection is refused (it used to
           be widened to everything); a failure drops only what this run created.
-  * Kea:  the target must be an INITIALISED Kea database (schema_version row, same major, the group's tables) and
+  * Kea:  the target must be an INITIALIZED Kea database (schema_version row, same major, the group's tables) and
           Jen copies DATA ONLY — it never issues DDL against Kea's schema; plain INSERT, rollback, and a fallback
           that deletes exactly the rows this run inserted.
 
@@ -201,7 +201,7 @@ class TestMigrateJenTargetContract:
 # ── Kea ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def initialise_kea_target(db, name=SCRATCH, *, rows=True):
+def initialize_kea_target(db, name=SCRATCH, *, rows=True):
     """A scratch database that looks like what `kea-admin db-init` leaves: every Kea table's DDL, the lookup
     rows and the schema_version row — copied from this suite's own (Kea's real) definitions."""
     tgt = _conn(name)
@@ -249,7 +249,7 @@ def add_config_backend_options(conn):
     """What a source that uses Kea's config backend holds besides a reservation's own options (Q131): a GLOBAL option
     (scope 0, no host) and a SUBNET-scoped one that names a dhcp4_subnet_id/dhcp6_subnet_id. Neither belongs to a
     reservation move; on the REAL schema the second one's foreign key into dhcp4_subnet (empty on a freshly
-    initialised target) is what failed the whole migration."""
+    initialized target) is what failed the whole migration."""
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO dhcp4_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
@@ -295,15 +295,15 @@ def kea_source(db):
 
 
 class TestMigrateKeaTargetContract:
-    def test_an_uninitialised_target_is_refused_and_nothing_is_created_in_it(self, db, scratch, kea_source):
-        with pytest.raises(dbexport.MigrationRefused, match="not an initialised Kea database"):
+    def test_an_uninitialized_target_is_refused_and_nothing_is_created_in_it(self, db, scratch, kea_source):
+        with pytest.raises(dbexport.MigrationRefused, match="not an initialized Kea database"):
             migrate_kea()
         tgt = _conn(scratch)
         assert tables_of(tgt) == [], "Jen must never create Kea's tables"
         tgt.close()
 
     def test_a_target_whose_schema_major_differs_is_refused(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         with tgt.cursor() as cur:
             cur.execute("UPDATE schema_version SET version = version + 1")
         before = snapshot(tgt, KEA_ORDER)
@@ -313,7 +313,7 @@ class TestMigrateKeaTargetContract:
         tgt.close()
 
     def test_a_target_missing_a_table_the_source_has_is_refused(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         with tgt.cursor() as cur:
             cur.execute("DROP TABLE dhcp6_options")
         with pytest.raises(dbexport.MigrationRefused, match="missing dhcp6_options"):
@@ -321,8 +321,8 @@ class TestMigrateKeaTargetContract:
         assert "dhcp4_options" in tables_of(tgt) and "hosts" in tables_of(tgt)
         tgt.close()
 
-    def test_data_goes_into_an_initialised_target_byte_for_byte_and_no_ddl_is_issued(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+    def test_data_goes_into_an_initialized_target_byte_for_byte_and_no_ddl_is_issued(self, db, scratch, kea_source):
+        tgt = initialize_kea_target(db)
         results = migrate_kea()
         assert any(r.startswith("✅ hosts: 3 rows") for r in results), results
         db.commit()
@@ -331,10 +331,10 @@ class TestMigrateKeaTargetContract:
         tgt.close()
 
     def test_only_a_reservations_own_options_are_copied_never_the_config_backends(self, db, scratch, kea_source):
-        """Q131 — the migration used to SELECT * the options tables: the global and subnet rows travelled by their
+        """Q131 — the migration used to SELECT * the options tables: the global and subnet rows traveled by their
         option_ids (and, on the real schema, the subnet row's foreign key failed the whole migration)."""
         add_config_backend_options(db)
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         results = migrate_kea()
         db.commit()
         host_scoped = "host_id IS NOT NULL AND scope_id = 3"
@@ -358,7 +358,7 @@ class TestMigrateKeaTargetContract:
         tgt.close()
 
     def test_no_left_behind_line_when_there_is_nothing_left_behind(self, db, scratch, kea_source):
-        initialise_kea_target(db).close()
+        initialize_kea_target(db).close()
         results = migrate_kea()
         assert any(r.startswith("✅ dhcp4_options: 2 host-scoped option rows") for r in results)
         assert not any("left behind" in r for r in results), results
@@ -373,7 +373,7 @@ class TestMigrateKeaTargetContract:
             )
         db.commit()
         try:
-            tgt = initialise_kea_target(db)
+            tgt = initialize_kea_target(db)
             migrate_kea(group="leases")
             assert snapshot(tgt, ["lease4"]) == snapshot(db, ["lease4"])
             tgt.close()
@@ -383,7 +383,7 @@ class TestMigrateKeaTargetContract:
             db.commit()
 
     def test_rows_that_were_already_in_the_target_stay_when_nothing_collides(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         add_host(tgt, 500, bytes.fromhex("02bb00000500"), "q127-already-there")
         migrate_kea()
         with tgt.cursor() as cur:
@@ -394,7 +394,7 @@ class TestMigrateKeaTargetContract:
     def test_a_collision_fails_the_migration_and_leaves_a_populated_target_byte_for_byte_as_it_was(
         self, db, scratch, kea_source
     ):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         add_host(tgt, 12, bytes.fromhex("02bb00000012"), "q127-target-owns-id-12")  # the same host_id as source host 12
         add_option(tgt, 900, 12, bytes([9, 9, 9, 9]))
         before = snapshot(tgt, KEA_ORDER)
@@ -409,7 +409,7 @@ class TestMigrateKeaTargetContract:
             assert forbidden not in src, f"Jen never changes Kea's schema ({forbidden})"
 
     def test_a_group_with_no_table_on_the_source_is_refused(self, db, scratch, kea_source, monkeypatch):
-        initialise_kea_target(db).close()
+        initialize_kea_target(db).close()
         monkeypatch.setattr(dbexport, "KEA_EXPORT_GROUPS", {"x": {"label": "x", "description": "", "tables": ["nope"]}})
         with pytest.raises(dbexport.MigrationRefused, match="None of this group's tables"):
             migrate_kea(group="x")
@@ -421,21 +421,21 @@ class TestMigrateKeaTargetContract:
 
 class TestTheCopyHelpers:
     def test_a_plain_insert_collision_is_an_error_not_a_silent_skip(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         add_host(tgt, 11, bytes.fromhex("02bb00000011"), "q127-collides")
         with pytest.raises(pymysql.err.IntegrityError):
             dbexport._copy_table_rows(db, tgt, "hosts")
         tgt.close()
 
     def test_the_count_is_what_the_server_reports(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         track = []
         n = dbexport._copy_table_rows(db, tgt, "hosts", batch=2, track=track, pk_cols=["host_id"])
         assert n == 3 and sorted(track) == [(11,), (12,), (13,)]
         tgt.close()
 
     def test_delete_tracked_removes_exactly_the_rows_a_run_inserted_children_first(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         add_host(tgt, 700, bytes.fromhex("02cc00000700"), "q127-was-here")
         add_option(tgt, 701, 700, bytes([7]))
         # a run inserted hosts 11, 12 and option 101, then (pretend) could not confirm its rollback
@@ -457,7 +457,7 @@ class TestTheCopyHelpers:
 
     def test_copy_table_rows_with_a_query_copies_exactly_what_it_selects(self, db, scratch, kea_source):
         add_config_backend_options(db)
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         dbexport._copy_table_rows(db, tgt, "hosts")
         track = []
         n = dbexport._copy_table_rows(
@@ -485,7 +485,7 @@ class TestTheCopyHelpers:
         self, db, scratch, kea_source
     ):
         add_config_backend_options(db)
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         dbexport._copy_table_rows(db, tgt, "hosts")
         dbexport._copy_table_rows(db, tgt, "dhcp4_options", sql=dbexport.KEA_EXPORT_SQL["dhcp4_options"])
         where = dbexport.KEA_TABLE_WHERE["dhcp4_options"]
@@ -499,7 +499,7 @@ class TestTheCopyHelpers:
         tgt.close()
 
     def test_a_sampled_key_missing_from_the_target_is_still_caught_with_the_predicate(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         dbexport._copy_table_rows(db, tgt, "hosts")
         dbexport._copy_table_rows(db, tgt, "dhcp4_options", sql=dbexport.KEA_EXPORT_SQL["dhcp4_options"])
         with tgt.cursor() as cur:
@@ -516,7 +516,7 @@ class TestTheCopyHelpers:
         tgt.close()
 
     def test_pk_sample_and_missing(self, db, scratch, kea_source):
-        tgt = initialise_kea_target(db)
+        tgt = initialize_kea_target(db)
         assert dbexport._pk_sample(db, "hosts", ["host_id"]) == [(11,), (12,), (13,)]
         add_host(tgt, 11, MAC1, "x")
         assert dbexport._pks_missing(tgt, "hosts", ["host_id"], [(11,), (12,)]) == [(12,)]

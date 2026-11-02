@@ -134,7 +134,7 @@ settings. **An unattended install whose Jen database does not answer stops** (it
 prints the SQL to create it and the reason, and exits non-zero) rather than
 installing a service that would restart every five seconds; to let the
 installer install MariaDB on this machine and create the database, add
-`JEN_DB_INSTALL_LOCAL=yes` (honoured only for a local `JEN_DB_HOST`). The file is parsed as plain `KEY=value` lines, never sourced
+`JEN_DB_INSTALL_LOCAL=yes` (honored only for a local `JEN_DB_HOST`). The file is parsed as plain `KEY=value` lines, never sourced
 as a shell script, and refused unless it's a regular file not writable
 by group or other. A value may have spaces around the `=`, may be
 wrapped in one matching pair of quotes (stripped), and the line may
@@ -212,7 +212,7 @@ package writes to:
   layout checker from the recorded layout file, a marker, or Jen's own
   content, never by whether the directory merely exists
   (5.67.0-beta.9). A config or data directory a previous install left
-  behind is recognised by its content (`jen.config`; `icons`, `branding`,
+  behind is recognized by its content (`jen.config`; `icons`, `branding`,
   `backups` or `keys`) and stamped once the new install completes.
 - **Not under `/root`** — nothing under it can work, because the service
   runs with `ProtectHome=yes`.
@@ -253,7 +253,7 @@ docker compose up -d
 
 `docker-compose.yml` reads `.env` (it is required — `env_file: .env`) and
 `run.py` turns the `JEN_*` values into `/etc/jen/jen.config` on the first
-start; the Kea side is connected afterwards in the `/setup` wizard, the same
+start; the Kea side is connected afterward in the `/setup` wizard, the same
 as a bare-metal install. `jen.config` is **not** mounted by default — to
 bring a hand-written one instead, uncomment the `./jen.config` mount in the
 compose file. `sudo ./install.sh --docker` writes `.env` for you.

@@ -564,7 +564,7 @@ class TestFlockIsRequired:
 
 class TestTheInstallerLocksTheSameInodeThroughTheOneOpen:
     """v5.68.0-beta.20 (Q155): `_config_lock_acquire` no longer tests `-L` and then `exec {fd}>>`s (a check-then-open) or `install`s a new file. The lock is
-    opened ONCE by `tools/private_write.py --hold-lock` (`take_lock`: O_NOFOLLOW, the same inode normalised in place); a lock is an inode, and two
+    opened ONCE by `tools/private_write.py --hold-lock` (`take_lock`: O_NOFOLLOW, the same inode normalized in place); a lock is an inode, and two
     inodes are two locks."""
 
     SCRIPT = (
@@ -579,7 +579,7 @@ class TestTheInstallerLocksTheSameInodeThroughTheOneOpen:
         script = self.SCRIPT.format(lib=_lib(tmp_path), etc=etc, body=body)
         return subprocess.Popen(["bash", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    def test_an_existing_loose_lock_is_normalised_in_place_and_held_on_that_inode(self, tmp_path):
+    def test_an_existing_loose_lock_is_normalized_in_place_and_held_on_that_inode(self, tmp_path):
         import fcntl
 
         lock = tmp_path / "etc" / "jen.config.lock"

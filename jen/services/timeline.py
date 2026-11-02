@@ -11,7 +11,7 @@ v5.63.0 (Q82) — the device/lease/reservation/v6-address lookups and the
 moved-client subnet filtering are `jen.services.client_subject`'s now
 (the same queries, moved verbatim); this module keeps only what's
 actually Timeline's own job — merging events/audit/alert rows and
-labelling them (`related`, `previous_holder`).
+labeling them (`related`, `previous_holder`).
 
 No access control here — callers resolve the subject's subnet_id
 (`subnet_id_for()`) and gate the whole response themselves; a client

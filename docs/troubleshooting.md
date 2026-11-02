@@ -270,7 +270,7 @@ never reports this as "no session" and never overwrites it. Look at the file; if
 (`control-socket` missing, or only a socket with `socket-type: http` on a non-local address) *and* no readable log file (Kea logging to syslog or stdout). Add a local unix `control-socket` to the
 Kea config (the Kea packages' default), or log to a file, then try again. Nothing was changed on the host.
 
-**"The Kea host reports an unresolved investigation session Jen does not recognise" / "needs hand" (v5.68.0-beta.30, helper build 16).** The host's record under `/var/lib/jen-kea-helper/investigation-dhcp4.json`
+**"The Kea host reports an unresolved investigation session Jen does not recognize" / "needs hand" (v5.68.0-beta.30, helper build 16).** The host's record under `/var/lib/jen-kea-helper/investigation-dhcp4.json`
 is authoritative: Jen will not arm over a session it did not start (a second Jen, a Jen restored from an older backup, a hand edit). It restores itself at its deadline; to end it now run
 `sudo jen-kea-helper --self-restore --now` on that host. `needs_hand` means ten restore ticks in a row could not be confirmed from Kea's own log - read `last_error` in that file (usually
 "Kea refused the restored config: <Kea's line>", a log path Kea does not write to, or a Kea that never restarted), fix it, and run the same command. "Restoration timer is not active": press
@@ -522,7 +522,7 @@ at rest with a key stored at `/etc/jen/mfa_key` — **not** in the
 database and **not** in database exports. If you restore a Jen database
 export onto a different machine, or migrate the database to a new
 server, without also copying `/etc/jen/mfa_key` across, the existing
-authenticator enrolments can't be decrypted and TOTP codes will be
+authenticator enrollments can't be decrypted and TOTP codes will be
 rejected.
 
 This fails safe, not open — affected users are not bypassed. Recovery:
@@ -531,7 +531,7 @@ This fails safe, not open — affected users are not bypassed. Recovery:
   re-enroll the authenticator (Settings → Security), which writes a
   fresh secret under the new key.
 - **An admin resets the user's MFA** — Users → edit user → reset MFA,
-  then the user re-enrols.
+  then the user re-enrolls.
 - **Best: copy the key from the old host** before decommissioning it:
   `scp old-host:/etc/jen/mfa_key new-host:/etc/jen/mfa_key` (then
   `chown` it to the Jen service user, `chmod 600`), and restart Jen.
@@ -588,10 +588,10 @@ These are refusals, not failures: nothing was written, and each message says wha
 
 - **"The target database already has …"** (Jen migration) — a Jen migration creates tables and never replaces or merges into one that exists. Point it at an empty database, or drop those tables on the target yourself first.
 - **"No table was selected …"** (Jen migration) — nothing was ticked, or none of the names is one of Jen's. Select at least one table (nothing selected used to be treated as "everything").
-- **"The target (…) is not an initialised Kea database"** (Kea migration) — Jen copies data only and never creates Kea's schema. On the new server run `kea-admin db-init mysql -h … -u … -p … -n <database>`, then migrate.
-- **"… the major versions must match"** — the target's `schema_version` major differs from the source's. Initialise the target with the same Kea major as the source (or upgrade it with `kea-admin db-upgrade` first), then migrate.
-- **"The target is missing …"** — the target is initialised but lacks one of the tables being migrated; it is usually an older or partial schema. Re-run `kea-admin db-init` or `db-upgrade` on it.
-- **"Kea migration failed — the target was rolled back"** — usually a collision: the target already has a reservation with the same `host_id` (or the same identifier in the same subnet) as one being copied. Nothing on the target changed. Migrate into an empty initialised database, or export and import instead, which merges host by host.
+- **"The target (…) is not an initialized Kea database"** (Kea migration) — Jen copies data only and never creates Kea's schema. On the new server run `kea-admin db-init mysql -h … -u … -p … -n <database>`, then migrate.
+- **"… the major versions must match"** — the target's `schema_version` major differs from the source's. Initialize the target with the same Kea major as the source (or upgrade it with `kea-admin db-upgrade` first), then migrate.
+- **"The target is missing …"** — the target is initialized but lacks one of the tables being migrated; it is usually an older or partial schema. Re-run `kea-admin db-init` or `db-upgrade` on it.
+- **"Kea migration failed — the target was rolled back"** — usually a collision: the target already has a reservation with the same `host_id` (or the same identifier in the same subnet) as one being copied. Nothing on the target changed. Migrate into an empty initialized database, or export and import instead, which merges host by host.
 - **"Import aborted and rolled back — hosts row 12 …"** (Kea import) — row 12 of that table was refused by the database (a foreign-key or type error, or a value too long); the message never shows the value. Nothing was imported. A line that says "skipped" in an import summary now always means a duplicate in skip mode.
 
 ---
@@ -618,7 +618,7 @@ These are refusals, not failures: nothing was written, and each message says wha
 
 **Symptom.** After restoring a Kea backup or import file through Jen, or migrating the Kea database from the Databases page, a reservation is listed with the right IP and name but the client keeps getting a dynamic address. **Cause (fixed in 5.67.0-beta.11, present in every release before it, stable included).** The export wrote a binary column — a reservation's identifier — as hex text, nothing decoded it, and the restore stored that text: the six-byte MAC `34:13:43:e6:0e:2a` came back as the twelve characters `341343e60e2a`. The row looks right in every listing; Kea simply never matches it.
 
-**Find it.** Health Center → **Kea reservations have plausible identifiers**: `fail` names how many rows. It only recognises what is recognisable: a hw-address that is 12, 16 or 40 hex-digit characters, or a DUID of hex-digit characters that decodes to a DUID type word (1 to 4). A client-id is different (v5.67.0-beta.15): it is opaque, and some embedded clients really do send their MAC as ASCII text, so a client-id counts as damaged — and fails the check — only when a lease shows the client using the decoded bytes. Without a lease to say, the check stays `ok` and mentions how many client-ids are hex text for you to review. Circuit-id and flex-id are never flagged — ASCII hex is legitimate text there.
+**Find it.** Health Center → **Kea reservations have plausible identifiers**: `fail` names how many rows. It only recognizes what is recognizable: a hw-address that is 12, 16 or 40 hex-digit characters, or a DUID of hex-digit characters that decodes to a DUID type word (1 to 4). A client-id is different (v5.67.0-beta.15): it is opaque, and some embedded clients really do send their MAC as ASCII text, so a client-id counts as damaged — and fails the check — only when a lease shows the client using the decoded bytes. Without a lease to say, the check stays `ok` and mentions how many client-ids are hex text for you to review. Circuit-id and flex-id are never flagged — ASCII hex is legitimate text there.
 
 **Repair it.** Settings → Databases → **Import** → **Check reservation identifiers** (superadmin). The page is a dry run: it lists each damaged row with the text stored now and the bytes it will become. Tick the rows and press **Repair selected**; each row is changed only if it still holds exactly what the preview showed, and only `hosts.dhcp_identifier` is written. If the correct identifier already exists on another reservation (you re-created it by hand) that row is skipped and left as it is — delete the damaged one from Reservations. Jen never changes Kea's schema; this is data, in the table Kea's own tooling would write.
 
@@ -812,7 +812,7 @@ sslserver` and `sslclient`), and a rejection reads "the daemon's own library rej
 sslserver: ..." with `openssl`'s own line. Two shapes both Jen's verifier and `openssl` reject are an Extended Key
 Usage that is `anyExtendedKeyUsage` alone, and a self-issued CA whose Authority Key Identifier names a key other
 than its own. Restore the CA files from a backup, or replace the CA with **Rotate Kea CA** and tick the
-acknowledgement (a server that fails part-way cannot be put back on a damaged CA).
+acknowledgment (a server that fails part-way cannot be put back on a damaged CA).
 
 **Where Jen looks for `openssl`.** Jen runs the `openssl` command only from the fixed list `/usr/bin:/bin`, not from the PATH the service happens to run with. On a host where it is installed
 somewhere else (for example `/usr/local/bin/openssl` only), Jen finds none and judges the CA by its own verifier alone: there is no second opinion. Health does not print a line for the missing
@@ -820,7 +820,7 @@ command - it prints the second opinion only when there is one, so the absence of
 
 **"Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for *name*"** means the CA is fine: its
 name constraints do not permit that address or host name (or the host name is one a certificate cannot carry, such
-as one with an underscore or a trailing dot). Nothing was changed on the host and no acknowledgement is needed:
+as one with an underscore or a trailing dot). Nothing was changed on the host and no acknowledgment is needed:
 change the address, or replace the CA with **Rotate Kea CA**.
 
 **"parked record for *server* kea-*service*"** in the Kea mTLS Health row is a certificate Jen kept for a server
@@ -830,7 +830,7 @@ daemon's again when the server is switched back. **Forget stale records** keeps 
 the socket under Settings → Kea to drop it.
 
 **"*server* kea-*service* is parked and its daemon still runs a certificate from the CA Jen replaced"** (Health; "tls-superseded" on Servers) is what a Rotate leaves behind for a server that was not
-an https endpoint when it ran: the daemon keeps the certificate it had, from the CA Jen no longer trusts. Nothing is wrong until it is dialled over https again; then the setup says "the socket is there
+an https endpoint when it ran: the daemon keeps the certificate it had, from the CA Jen no longer trusts. Nothing is wrong until it is dialed over https again; then the setup says "the socket is there
 but its certificate is from a CA Jen no longer trusts" - remove the direct socket and set it up again. Removing the socket ends the note.
 
 **"a rotation's bookkeeping for *server* kea-*service* is unfinished"** (Health; "rotation-pending" on Servers) means a CA rotation changed what that server's daemon depends on and Jen could not yet write the final note (the database refused it). The rotation itself finished. Health names it; the next Rotate, or Forget stale records, finishes the note from Jen's files once the database answers. Nothing is for you to do except fix the database if it stays down.
@@ -853,9 +853,9 @@ Remove the direct socket and set it up again on the new machine, or restore the 
 
 **"Config drift needs access to all subnets"** and **"Metrics settings need access to all subnets"** (v5.69.4) mean the account is limited to some subnets. The drift check names subnets by id, name and CIDR across the whole Kea config, and the Prometheus scrape lists every subnet, so both need an account that may see every subnet; the three Health rows that name subnets read "fleet-wide summary is for unrestricted accounts" for such an account.
 
-**"*other* already manages kea-*service* on *host*: one daemon, two records"** in a Rotate refusal means a second server record - one that is not dialled over https now included - shares this record's SSH host and service: the certificate a rotation installs would replace the one that record holds. Remove one of the two records, or re-point it at its own host (the setup refuses to run while two records share a daemon, so "set it up again" is not the remedy here).
+**"*other* already manages kea-*service* on *host*: one daemon, two records"** in a Rotate refusal means a second server record - one that is not dialed over https now included - shares this record's SSH host and service: the certificate a rotation installs would replace the one that record holds. Remove one of the two records, or re-point it at its own host (the setup refuses to run while two records share a daemon, so "set it up again" is not the remedy here).
 
-**"A direct-socket recovery on *server* is not proved" with "A config Jen wrote to the Kea host (a restored revision, or an import) is on disk, but the daemon did not restart on it"** (v5.69.3) means a **Restore** from Config history, or an import applied from Subnets, wrote the config to the host and the restart that follows it failed - the daemon may be stopped, or still running the config it had before. Jen keeps the note on Servers and in Health (as a stopped daemon) until a restart of that daemon works: restore again, or - for kea-dhcp4 - use **Restart Kea** on Servers once the config is right (that button restarts kea-dhcp4 only; a note for kea-dhcp6 or D2 ends by restoring again or by a superadmin's acknowledgement); a superadmin can also acknowledge it after checking the daemon on the host. Restoring a revision needs a superadmin whose password was confirmed in the last ten minutes, like downloading it unmasked.
+**"A direct-socket recovery on *server* is not proved" with "A config Jen wrote to the Kea host (a restored revision, or an import) is on disk, but the daemon did not restart on it"** (v5.69.3) means a **Restore** from Config history, or an import applied from Subnets, wrote the config to the host and the restart that follows it failed - the daemon may be stopped, or still running the config it had before. Jen keeps the note on Servers and in Health (as a stopped daemon) until a restart of that daemon works: restore again, or - for kea-dhcp4 - use **Restart Kea** on Servers once the config is right (that button restarts kea-dhcp4 only; a note for kea-dhcp6 or D2 ends by restoring again or by a superadmin's acknowledgment); a superadmin can also acknowledge it after checking the daemon on the host. Restoring a revision needs a superadmin whose password was confirmed in the last ten minutes, like downloading it unmasked.
 
 **"the bookkeeping of an earlier rotation for *server* kea-*service* is not finished"** (a Rotate refusal) means a note an earlier rotation left on Servers could not be finished because the incident store refused the write. Nothing was changed. Try again when the database answers, or press **Forget stale records**, which finishes it from Jen's files. A rotation note is Jen's own bookkeeping: it has no Acknowledge button.
 

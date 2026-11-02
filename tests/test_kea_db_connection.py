@@ -1,17 +1,17 @@
 """
 tests/test_kea_db_connection.py
 ────────────────────────────────
-v5.67.0-beta.8 (Q120, item g) — the Kea database connection honours what the
+v5.67.0-beta.8 (Q120, item g) — the Kea database connection honors what the
 operator typed: `[kea_db] port`, `[kea_db] ssl_ca`, and a pool that is torn
 down when the settings change.
 
-Before this, `[kea_db]` had no port at all (the pool dialled 3306 whatever was
+Before this, `[kea_db]` had no port at all (the pool dialed 3306 whatever was
 typed into the setup wizard's test), the wizard's test ignored `ssl_ca`, and
 `models/db.py::reset_pools()` had no caller — a pool built while the config
-still held placeholders kept dialling them until a restart.
+still held placeholders kept dialing them until a restart.
 
 The port is proved against a REAL listening socket on an ephemeral port
-(CLAUDE.md: probe behaviour is tested against real local servers, not a mock
+(CLAUDE.md: probe behavior is tested against real local servers, not a mock
 of the call) — a connection that arrives there came from the real pool code.
 """
 
@@ -121,7 +121,7 @@ class TestPoolDialsTheConfiguredPort:
         monkeypatch.setattr(extensions, "KEA_DB_SSL_CA", "")
         with pytest.raises(_DIAL_FAILS):  # the listener never speaks MySQL
             dbmod.get_kea_db()
-        assert listener.accepted >= 1, "the pool never dialled the configured port"
+        assert listener.accepted >= 1, "the pool never dialed the configured port"
 
     def test_the_kea6_pool_dials_its_own_port(self, listener, monkeypatch, isolated_kea_pool):
         monkeypatch.setattr(extensions, "KEA_DB_HOST", "127.0.0.1")
@@ -165,7 +165,7 @@ class TestConnectionTestUsesTheSameTlsAsThePool:
         )
         assert ok is False
         assert "kea-db-ca.pem" in info or "No such file" in info or "nonexistent" in info
-        assert listener.accepted == 0, "the CA is loaded before anything is dialled"
+        assert listener.accepted == 0, "the CA is loaded before anything is dialed"
 
     def test_without_a_ca_the_test_still_dials_the_given_port(self, listener):
         ok, _info = dbexport.test_connection("127.0.0.1", listener.port, "u", "p", "kea")
@@ -173,7 +173,7 @@ class TestConnectionTestUsesTheSameTlsAsThePool:
         assert listener.accepted >= 1
 
     def test_the_migration_helpers_pass_no_ssl_by_default(self, monkeypatch):
-        """Every migration target keeps the plaintext behaviour it always had."""
+        """Every migration target keeps the plaintext behavior it always had."""
         seen = {}
 
         def fake_connect(**kw):
@@ -227,7 +227,7 @@ class TestResetKeaPools:
         assert dbmod._kea_pool is None
 
     def test_the_next_connection_uses_the_new_settings(self, listener, monkeypatch):
-        """The failure this fixes: a pool built while the config held placeholders kept dialling them."""
+        """The failure this fixes: a pool built while the config held placeholders kept dialing them."""
         monkeypatch.setattr(dbmod, "_kea_pool", self._Pool())  # the stale pool, built against old settings
         monkeypatch.setattr(extensions, "KEA_DB_HOST", "127.0.0.1")
         monkeypatch.setattr(extensions, "KEA_DB_PORT", listener.port)

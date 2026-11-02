@@ -136,7 +136,7 @@ def next_step(state: dict, status_down: dict | None, status_up: dict | None, now
             out["message"] = (
                 f"{a} is down; {b} is serving alone ({sb or '?'}). Do your work on {a} now. "
                 "Cancel no longer applies — once you bring "
-                f"{a} back, Kea re-synchronises on its own; click Back when it is up."
+                f"{a} back, Kea re-synchronizes on its own; click Back when it is up."
             )
         elif sb == "partner-in-maintenance":
             out["tone"] = "ok"

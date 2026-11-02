@@ -312,6 +312,45 @@ _WORD_PAIRS: list[tuple[str, str]] = [
     ("dreamt", "dreamed"),
     ("towards", "toward"),
     ("afterwards", "afterward"),
+    # prefixed forms - one hump each, so each is its own pair (the tree had
+    # ``unrecognised`` 28 times and ``uninitialised`` 23 times when the table
+    # was first run without them)
+    ("unrecognised", "unrecognized"),
+    ("unrecognisable", "unrecognizable"),
+    ("uninitialised", "uninitialized"),
+    ("unauthorised", "unauthorized"),
+    ("unnormalised", "unnormalized"),
+    ("unsanitised", "unsanitized"),
+    ("unoptimised", "unoptimized"),
+    ("unsynchronised", "unsynchronized"),
+    ("unserialisable", "unserializable"),
+    ("unrealised", "unrealized"),
+    ("unutilised", "unutilized"),
+    ("uncategorised", "uncategorized"),
+    ("reinitialise", "reinitialize"),
+    ("reinitialised", "reinitialized"),
+    ("reinitialising", "reinitializing"),
+    ("reorganise", "reorganize"),
+    ("reorganised", "reorganized"),
+    ("reorganising", "reorganizing"),
+    ("reorganisation", "reorganization"),
+    ("resynchronise", "resynchronize"),
+    ("resynchronised", "resynchronized"),
+    ("renormalise", "renormalize"),
+    ("renormalised", "renormalized"),
+    ("relabelled", "relabeled"),
+    ("relabelling", "relabeling"),
+    ("unlabelled", "unlabeled"),
+    ("mislabelled", "mislabeled"),
+    ("mislabelling", "mislabeling"),
+    ("discoloured", "discolored"),
+    ("recolour", "recolor"),
+    ("recoloured", "recolored"),
+    ("unfavourable", "unfavorable"),
+    ("dishonour", "dishonor"),
+    ("dishonoured", "dishonored"),
+    ("uncancelled", "uncanceled"),
+    ("miscategorised", "miscategorized"),
 ]
 
 PAIRS: list[tuple[str, str]] = _WORD_PAIRS + _ise_pairs()
@@ -350,6 +389,8 @@ AMERICAN_TOO = [
     "centered",
     "lightgrey",
     "discolor",
+    "unrecognizable",
+    "uninitialized",
     "practice",
     "license",
     "defensive",
@@ -695,9 +736,10 @@ class TestTheTable:
         assert (
             fix_text("CancelledError") == "CanceledError"
         )  # a hit; the library's name is on ALLOWLIST where it is used
-        assert fix_text("discolour") == "discolour"
+        assert fix_text("discolour") == "discolour"  # not in the table (discoloured is)
         assert fix_text("colourway") == "colourway"
         assert fix_text("Colourway") == "Colourway"
+        assert fix_text("unrecognised") == "unrecognized"  # a prefixed form is its own pair
 
     def test_the_ise_table_is_a_list_of_verbs_not_a_suffix(self):
         assert all(stem.endswith("is") for stem in _ISE_VERBS), "a stem is the verb up to its -ise"

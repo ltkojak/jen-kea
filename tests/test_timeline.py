@@ -437,7 +437,7 @@ class TestTimelineApi:
 
 class TestRecycledAddressIdentity:
     """v5.49.0-beta.5 (Q55-K) - a MAC's timeline must not merge the history of
-    whoever held its address before; an IP's timeline shows both, labelled."""
+    whoever held its address before; an IP's timeline shows both, labeled."""
 
     OLD = "aa:bb:cc:dd:ee:0a"
     NEW = "aa:bb:cc:dd:ee:0b"
@@ -503,7 +503,7 @@ class TestRecycledAddressIdentity:
         finally:
             self._teardown(db)
 
-    def test_ip_timeline_shows_both_labelled(self, db):
+    def test_ip_timeline_shows_both_labeled(self, db):
         from jen.services.timeline import build_timeline
 
         self._seed(db)
@@ -553,7 +553,7 @@ class TestRecycledAddressIdentity:
                 cur.execute("DELETE FROM lease6")
             db.commit()
 
-    def test_randomised_mac_with_a_renamed_hostname_stays_one_history(self, db):
+    def test_randomized_mac_with_a_renamed_hostname_stays_one_history(self, db):
         from jen.services.timeline import build_timeline
 
         _clean(db)

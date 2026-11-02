@@ -717,7 +717,7 @@ class TestAnUnreadableRecoveryRecordIsSetAsideNeverOverwritten:
 
 
 class TestAcknowledgingAnIncidentAboutACertificateRecordsThatJenDoesNotKnow:
-    """Q189 second pass, finding 2: an acknowledged note must not make the live copy the host's pair again. The fact goes to a file first; when Jen cannot write it the acknowledgement is refused."""
+    """Q189 second pass, finding 2: an acknowledged note must not make the live copy the host's pair again. The fact goes to a file first; when Jen cannot write it the acknowledgment is refused."""
 
     def _record(self, category="tls-not-restored"):
         from jen.services import kea_changeset
@@ -747,7 +747,7 @@ class TestAcknowledgingAnIncidentAboutACertificateRecordsThatJenDoesNotKnow:
         assert kea_changeset.recovery_incidents() == [] and kea_tls.is_unknown(1, "dhcp4")
         assert kea_tls.host_material(1, "dhcp4") is None
 
-    def test_an_acknowledgement_that_cannot_leave_the_marker_is_refused(
+    def test_an_acknowledgment_that_cannot_leave_the_marker_is_refused(
         self, logged_in_client, mock_kea, db, monkeypatch
     ):
         from jen.services import kea_changeset, kea_tls
@@ -778,7 +778,7 @@ class TestAcknowledgingAnIncidentAboutACertificateRecordsThatJenDoesNotKnow:
 
 
 class TestAnIncidentJenCannotReadIsKeptAndSaid:
-    """Q190 (AF3): an entry in the recovery record that Jen does not recognise is KEPT - a clean change never clears it, nothing is written over it - and the Servers page says an incident Jen
+    """Q190 (AF3): an entry in the recovery record that Jen does not recognize is KEPT - a clean change never clears it, nothing is written over it - and the Servers page says an incident Jen
     cannot read is on record, to everyone, with the set-aside for a superadmin."""
 
     RAW = '{"incidents": [{}]}'

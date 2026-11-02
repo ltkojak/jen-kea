@@ -107,8 +107,8 @@ def explain_page():
         mac_hex = _hex_identifier(client["mac"])
         lease = _load_lease(mac_hex)
         # v5.68.0-beta.2 (Q135): the client Explain evaluates is the MAC, the lease row's client id and hostname, what Kea's
-        # own log says (for a caller allowed to read it), and what was typed - each input labelled by where it came from.
-        # `auto=0` is the old behaviour: the MAC and what was typed, nothing inferred.
+        # own log says (for a caller allowed to read it), and what was typed - each input labeled by where it came from.
+        # `auto=0` is the old behavior: the MAC and what was typed, nothing inferred.
         auto = request.args.get("auto") != "0"
         log_view = __ctx.read_log(client["mac"], allowed=_may_read_kea_log() and auto)
         # a lease in a subnet the caller may not see contributes nothing: its client id and hostname are that client's.

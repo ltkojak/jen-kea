@@ -348,7 +348,7 @@ class TestAlertLine:
             cur.execute("DELETE FROM alert_log WHERE message LIKE %s", (f"%{IP}%",))
             cur.execute(
                 "INSERT INTO alert_log (channel_type, alert_type, message, status) VALUES "
-                "('telegram', 'zz_marker_alert', %s, 'sent'), ('telegram', 'zz_neighbour_alert', %s, 'sent')",
+                "('telegram', 'zz_marker_alert', %s, 'sent'), ('telegram', 'zz_neighbor_alert', %s, 'sent')",
                 (f"lease {IP} renewed", "lease 10.45.0.55 renewed"),
             )
         db.commit()
@@ -357,7 +357,7 @@ class TestAlertLine:
             # scoped to the client's own subnet sees the alert about their client (type, status, time) - not its message
             restricted_client(client, db, allowed_subnets=[1], role="viewer", username="_client_alert_viewer")
             scoped = client.get(f"/client?q={MAC}").data
-            assert b"zz_marker_alert" in scoped and b"zz_neighbour_alert" not in scoped
+            assert b"zz_marker_alert" in scoped and b"zz_neighbor_alert" not in scoped
             assert f"lease {IP} renewed".encode() not in scoped
             # a caller with no access to the client's subnet gets no client at all, so no alert line either
             nobody = client.application.test_client()
@@ -366,10 +366,10 @@ class TestAlertLine:
             admin = client.application.test_client()
             restricted_client(admin, db, allowed_subnets=None, role="admin", username="_client_alert_admin")
             body = admin.get(f"/client?q={MAC}").data
-            assert b"zz_marker_alert" in body and b"zz_neighbour_alert" not in body
+            assert b"zz_marker_alert" in body and b"zz_neighbor_alert" not in body
         finally:
             with db.cursor() as cur:
-                cur.execute("DELETE FROM alert_log WHERE alert_type IN ('zz_marker_alert', 'zz_neighbour_alert')")
+                cur.execute("DELETE FROM alert_log WHERE alert_type IN ('zz_marker_alert', 'zz_neighbor_alert')")
             db.commit()
 
 

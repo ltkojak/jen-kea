@@ -293,7 +293,7 @@ class TestBoundedPoolAndSingleFlight:
         finally:
             gate.set()
             first.join(5)
-        # and the lock is released afterwards
+        # and the lock is released afterward
         assert dr.reconcile(self.ROWS[:1], lambda n, i: {"forward_ips": [i], "reverse_name": n})[0]["verdict"] == "ok"
 
     def test_threads_never_exceed_the_pool_across_repeated_runs_against_a_hung_resolver(self, monkeypatch):

@@ -100,7 +100,7 @@ class TestSubnetContext:
         monkeypatch.setattr(sc, "dhcp4_config", lambda force=False: None)
         ctx = sc.subnet_context(1, with_notes=False)
         assert ctx["gateways"] == [] and ctx["pools"] == []
-        assert ctx["infrastructure"]["10.0.0.5"] == "kea-server"  # still labelled without Kea
+        assert ctx["infrastructure"]["10.0.0.5"] == "kea-server"  # still labeled without Kea
 
     @pytest.mark.parametrize(
         "pool,expected",

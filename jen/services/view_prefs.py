@@ -5,7 +5,7 @@ v5.70.0-beta.2 (Q206, AV5): the rows-per-page choice of a list page is remembere
 
 Why a cookie and not localStorage like the theme and the time pick (`jen-time-pick`): those are applied by the browser to a page that is already rendered; the page SIZE is decided by
 the server before the HTML exists, and a client-side re-request would show the full list first. The cookie is a display preference - no secret, not HttpOnly, SameSite=Lax, Secure
-when the request is https - and it carries nothing a route authorises on: a restricted account's cookie changes how many of ITS OWN rows a page shows, never which rows.
+when the request is https - and it carries nothing a route authorizes on: a restricted account's cookie changes how many of ITS OWN rows a page shows, never which rows.
 
 Shape: a JSON object `{"leases": "100", "devices": "50"}`, at most 200 bytes. The parser is the whole contract: a value is accepted only from the page's OWN table, anything else
 (junk, oversize, not JSON, not an object, a page it does not know, a number where a string belongs, a value from another page's table) is dropped, and the cookie is rewritten clean.

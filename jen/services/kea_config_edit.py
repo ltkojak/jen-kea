@@ -145,7 +145,7 @@ def add_subnet4(cfg, block, shared_network=None):
     cfg = copy.deepcopy(cfg)
     block = copy.deepcopy(
         block
-    )  # the caller keeps its own object (Q174): editing it afterwards must not edit the returned config
+    )  # the caller keeps its own object (Q174): editing it afterward must not edit the returned config
     new_id = block.get("id")
     d4 = cfg.setdefault("Dhcp4", {})
     if any(s.get("id") == new_id for s in _iter_subnets(cfg, "Dhcp4", "subnet4")):

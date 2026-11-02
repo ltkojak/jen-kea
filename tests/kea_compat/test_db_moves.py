@@ -8,7 +8,7 @@ queries touch — no unique key but the primary key, no foreign key, no lookup t
 the following could ever have failed there.
 
 Everything here runs against throwaway rows of this suite's own (identifiers starting 02:71…, subnets 71/72,
-every option's `formatted_value` starting "q127") and, for migrations, a scratch database initialised from
+every option's `formatted_value` starting "q127") and, for migrations, a scratch database initialized from
 the real one. Nothing is ever sent to the daemon except the one reservation-add that discovers which
 `scope_id` Kea itself gives a host's options.
 
@@ -346,7 +346,7 @@ def test_schema_facts_and_the_scope_kea_gives_a_hosts_options(kea):
     if SCHEMA_OUT:
         with open(SCHEMA_OUT, "w", encoding="utf-8") as f:
             json.dump(facts, f, indent=2, default=str)
-    assert facts["schema_version"], "an initialised Kea database has a schema_version row"
+    assert facts["schema_version"], "an initialized Kea database has a schema_version row"
     assert found, "Kea wrote no dhcp4_options row for the reservation's option"
     scopes = {r["scope_id"] for r in found}
     assert len(scopes) == 1, f"one scope for a host's options, got {scopes}"
@@ -469,7 +469,7 @@ MOVE_TABLES = (
 
 @pytest.fixture
 def scratch():
-    """A scratch database initialised from the real one: every table's real DDL, plus the lookup rows and the
+    """A scratch database initialized from the real one: every table's real DDL, plus the lookup rows and the
     schema_version row — what `kea-admin db-init` leaves, which is what a migration's target must be."""
     name = "kea_q127_target"
     root = _root()
@@ -482,7 +482,7 @@ def scratch():
     root.close()
 
 
-def initialise(name, *, with_data=True):
+def initialize(name, *, with_data=True):
     src, tgt = _connect(), _root(name)
     with tgt.cursor() as cur:
         cur.execute("SET FOREIGN_KEY_CHECKS=0")
@@ -504,7 +504,7 @@ def migrate(name, group="reservations_all"):
     return dbexport.migrate_kea(DB_HOST, DB_PORT, "root", ROOT_PASS, name, group=group)
 
 
-def test_a_migration_into_an_initialised_empty_target_copies_every_row_byte_for_byte(kea, scratch):
+def test_a_migration_into_an_initialized_empty_target_copies_every_row_byte_for_byte(kea, scratch):
     """Q131 — what a reservation move copies is the group's own rows: the hosts, their IPv6 reservations and the
     HOST-SCOPED options. The source also holds a global option and a subnet-scoped one that names a dhcp4_subnet_id
     with no dhcp4_subnet row behind it (what a config-backend source looks like to the target, whose dhcp4_subnet is
@@ -524,7 +524,7 @@ def test_a_migration_into_an_initialised_empty_target_copies_every_row_byte_for_
     finally:
         with kea.cursor() as cur:
             cur.execute("SET FOREIGN_KEY_CHECKS=1")
-    tgt = initialise(scratch)
+    tgt = initialize(scratch)
     results = migrate(scratch)
 
     def move_rows(conn, table):
@@ -557,7 +557,7 @@ def test_a_migration_into_an_initialised_empty_target_copies_every_row_byte_for_
 def test_a_failed_migration_leaves_a_populated_target_byte_for_byte_as_it_was(kea, scratch):
     h = add_host(kea, 9, hostname="q127-source-host")
     add_option(kea, "dhcp4_options", h, 6, bytes([9, 9, 9, 9]), tag="q127-source-opt")
-    tgt = initialise(scratch)
+    tgt = initialize(scratch)
     # the target already has a DIFFERENT reservation under the same host_id: the copy must collide
     add_host(tgt, 99, hostname="q127-target-host", host_id=h)
     before = snapshot(tgt, MOVE_TABLES)
@@ -572,7 +572,7 @@ def test_a_failed_migration_leaves_a_populated_target_byte_for_byte_as_it_was(ke
     tgt.close()
 
 
-def test_a_target_that_is_not_an_initialised_kea_database_is_refused_and_left_empty(kea, scratch):
+def test_a_target_that_is_not_an_initialized_kea_database_is_refused_and_left_empty(kea, scratch):
     add_host(kea, 10)
     refused = False
     try:
@@ -587,7 +587,7 @@ def test_a_target_that_is_not_an_initialised_kea_database_is_refused_and_left_em
 
 def test_a_target_with_an_incompatible_schema_major_is_refused(kea, scratch):
     add_host(kea, 11)
-    tgt = initialise(scratch)
+    tgt = initialize(scratch)
     with tgt.cursor() as cur:
         cur.execute("UPDATE schema_version SET version = version + 1")
     before = snapshot(tgt, MOVE_TABLES)
@@ -659,7 +659,7 @@ def test_jens_ipv6_readers_return_addresses_from_iscs_binary_columns(kea, monkey
 
         found = [r for r in kea6.list_lease6(subnet_id=71) if r["hostname"] == "q130-lease"]
         assert [r["address"] for r in found] == ["2001:db8:71::5"], found
-        # the exact search (INET6_ATON) and a fragment (filtered in Python) both find it; a neighbour does not
+        # the exact search (INET6_ATON) and a fragment (filtered in Python) both find it; a neighbor does not
         assert [r["address"] for r in kea6.list_lease6(search="2001:db8:71::5")] == ["2001:db8:71::5"]
         assert [r["address"] for r in kea6.list_lease6(search="db8:71")] == ["2001:db8:71::5"]
         assert kea6.list_lease6(search="2001:db8:71::50") == []

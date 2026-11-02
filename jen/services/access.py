@@ -126,7 +126,7 @@ def identity_change_needs_superadmin(before: dict, after: dict) -> str:
 
 def _same_origin_path(url) -> str | None:
     """The path (+query) of `url` if it is same-origin (or relative), else
-    None. Used to sanitise `request.referrer` before storing it as a
+    None. Used to sanitize `request.referrer` before storing it as a
     post-reauth redirect target."""
     if not url:
         return None
@@ -324,7 +324,7 @@ def filter_client_view(view: dict, accessible_ids) -> dict:
     caller may see.
 
     A client that moved subnets used to leak through its OLD one: the caller
-    was authorised on a single "subject" subnet and then handed the lease and
+    was authorized on a single "subject" subnet and then handed the lease and
     reservation from ANY subnet. Now every object is judged on ITS OWN subnet:
 
     * `lease` / `reservation` are dropped unless their `subnet_id` is accessible;

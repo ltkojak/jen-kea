@@ -243,7 +243,7 @@ Jen supports optional plugins installable from **Settings → Plugins**.
 | Host Watchdog | Probe chosen hosts (ICMP or TCP) on a schedule; alert when one stops answering and again when it returns. Requires `ping` on the Jen host. | [jen-plugin-watchdog](https://github.com/ltkojak/jen-plugin-watchdog) |
 | Local DNS Sync | Push DHCP names into Pi-hole v6 or AdGuard Home so `nas.lan` resolves without Kea DDNS. A mandatory preview; only records it created are ever touched. | [jen-plugin-dns-sync](https://github.com/ltkojak/jen-plugin-dns-sync) |
 | Switch Port Locator | Which switch port is this MAC on? Polls managed switches over SNMP. Requires `snmpbulkwalk` (package `snmp`). | [jen-plugin-switchport](https://github.com/ltkojak/jen-plugin-switchport) |
-| Wake & Actions | Wake-on-LAN from a lease, reservation or device row, plus a favourites list; rate-limited and audited. | [jen-plugin-wol](https://github.com/ltkojak/jen-plugin-wol) |
+| Wake & Actions | Wake-on-LAN from a lease, reservation or device row, plus a favorites list; rate-limited and audited. | [jen-plugin-wol](https://github.com/ltkojak/jen-plugin-wol) |
 | Presence | Publish tracked devices' online/offline state to Home Assistant, MQTT or any HTTP endpoint. | [jen-plugin-presence](https://github.com/ltkojak/jen-plugin-presence) |
 
 ---

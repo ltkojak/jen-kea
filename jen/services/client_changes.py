@@ -17,7 +17,7 @@ SETTINGS (v5.68.0-beta.11, Q146: one component, `GLOBAL_LABEL`, limited to `GLOB
 reasoning that a global is "not this client's", which is backwards: a global option, lifetime or timer, the reservation modes and
 the host-reservation identifiers are the defaults every client in the service inherits, so they are what changes a client's
 answer most often. Only keys that decide what a client is given are in the component; loggers, control sockets, hooks
-libraries, interfaces and the lease database are not client behaviour and never appear. A change to another client's
+libraries, interfaces and the lease database are not client behavior and never appear. A change to another client's
 reservation in the same subnet or to another pool is NOT in the path and is not shown — the tab says "touches this client", and
 means it. Each hit shows only the lines that moved inside the matching
 element (a unified diff of that element alone, 3 lines of context), the revision's summary, who made it, when, and its
@@ -87,7 +87,7 @@ GLOBAL_KEYS = (
 
 @dataclass(frozen=True)
 class ClientPath:
-    """What decides what one client gets, in ONE service's numbering. Every identifier is already normalised: hex without
+    """What decides what one client gets, in ONE service's numbering. Every identifier is already normalized: hex without
     separators, lowercase; addresses in canonical text; CIDRs canonical."""
 
     service: str  # "dhcp4" | "dhcp6"
@@ -101,7 +101,7 @@ class ClientPath:
         return not (self.subnet_ids or self.cidrs or self.identifiers or self.addresses)
 
 
-# ── normalisation ────────────────────────────────────────────────────────────
+# ── normalization ────────────────────────────────────────────────────────────
 
 
 def _hex(value) -> str:
@@ -331,7 +331,7 @@ _ELEMENT_KINDS = ("reservation", "pool", "class", "subnet", "shared network")
 
 
 def element_matches(label: str, element: str) -> bool:
-    """Is the change labelled `label` ("pool 10.0.0.100 - 10.0.0.200", "subnet 1 (10.0.0.0/24)", "reservation aa:bb:…",
+    """Is the change labeled `label` ("pool 10.0.0.100 - 10.0.0.200", "subnet 1 (10.0.0.0/24)", "reservation aa:bb:…",
     "class voip", "shared network campus", "global reservation …") the config element `element` names? `element` is a whole
     label, or just a kind ("reservation", "pool", …) meaning every element of that kind. Case-insensitive; an empty
     `element` matches everything. (v5.68.0-beta.2, Q135 - an Explain verdict links here filtered to the element it is about.)

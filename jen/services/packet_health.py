@@ -29,7 +29,7 @@ DEFAULT_THRESHOLDS = {
 # kea-compat run's `pkt4-3.2.0.json` artifact (real kea-dhcp4 3.2.0 and
 # 3.3.1 report identical lists; 3.0.3 reports none of these); the labels
 # are plain-English readings of the names, no more. They are shown next to
-# the classic counters and summarised in the Health detail — they do not
+# the classic counters and summarized in the Health detail — they do not
 # change the ok/warn/fail thresholds, which stay on the classic counters.
 DROP_REASON_LABELS = {
     "pkt4-admin-filtered": "Filtered by an administrator rule",

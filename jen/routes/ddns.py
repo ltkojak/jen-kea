@@ -68,7 +68,7 @@ def _ddns_mode(dhcp4_enable_updates: bool | None, hook_loaded: bool | None = Fal
     time and never written back - `d2` when dhcp4 sends updates to D2; else `hook` when a run_script hook is loaded (what it writes is outside Jen's view, and it is not a
     DNS provider); else `provider` when a lookup server is set; else `unknown` when the config could not be read (`dhcp4_enable_updates` None - a failed read is not a
     statement about configuration), else `none`: nothing is configured, and the Status tab says so instead of showing a provider nobody chose (v5.69.0-beta.7, Q176: a
-    fresh install used to read "Provider (technitium)" and tail a log that did not exist). v5.69.0-beta.8 (Q177): an explicit `none` is honoured (it was documented and
+    fresh install used to read "Provider (technitium)" and tail a log that did not exist). v5.69.0-beta.8 (Q177): an explicit `none` is honored (it was documented and
     ignored), and a loaded hook is a mode of its own. Both-on (D2 and the hook) stays `d2`: the two-writers warning is the separate fact."""
     configured = extensions.cfg.get("ddns", "mode", fallback="").strip()
     if configured in MODES:

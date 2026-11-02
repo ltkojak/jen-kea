@@ -210,7 +210,7 @@ class TestInputsBySource:
         assert "the current lease" in page and "the lease&#39;s extended info" in page
         assert "the MAC you asked about" in page
 
-    def test_what_was_typed_is_labelled_typed_and_wins(
+    def test_what_was_typed_is_labeled_typed_and_wins(
         self, logged_in_client, stub_config, mock_kea, lease_with_extras, no_log
     ):
         page = logged_in_client.get(

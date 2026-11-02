@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 tools/build_icon_sprite.py — turn static/icons/src/*.svg (Lucide sources, ISC
-licence, see static/icons/LICENSE) into templates/_icon_sprite.html: ONE hidden
+license, see static/icons/LICENSE) into templates/_icon_sprite.html: ONE hidden
 inline <svg> holding a <symbol id="i-<name>" viewBox="0 0 24 24"> per icon.
 base.html includes it once right after <body>; pages reference an icon with
 <use href="#i-<name>"/> (see jen/services/icons.py). Inline + same-document

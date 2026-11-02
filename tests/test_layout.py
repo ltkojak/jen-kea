@@ -320,7 +320,7 @@ class TestLayoutKv:
 
 
 class TestUninstallPicksTheRightChecker:
-    """v5.67.0-beta.9 (Q121, item d). uninstall.sh needs root, so its behaviour is proved by the install CI job
+    """v5.67.0-beta.9 (Q121, item d). uninstall.sh needs root, so its behavior is proved by the install CI job
     (a 5.66-style updater stub installed, the uninstall run from the tarball); this is the source half: the copy
     beside the script comes first, the installed copy only if it answers `--check-layout --help`, and level 3
     removes the updater and both oneshot units."""

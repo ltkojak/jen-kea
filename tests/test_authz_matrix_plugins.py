@@ -11,7 +11,7 @@ the SAME two subnets and the SAME B markers, run against a second app that has e
 plugin enabled, plus — for the routes that WRITE by id or address — a state check that the
 request did not change a row in subnet B.
 
-The recurring bug this round names: a route authorises on ONE thing (a `subnet_id` the caller
+The recurring bug this round names: a route authorizes on ONE thing (a `subnet_id` the caller
 typed, or nothing at all for a by-id POST) and then acts on ANOTHER (the MAC's real subnet, a
 row in a subnet the caller cannot see); and "no attributable subnet" is read as "allow".
 
@@ -195,7 +195,7 @@ def plugin_data(plugin_app, db):
             (WOL_B, B_MAC, B_NAME, WOL_NULL, N_MAC, NULL_LABEL),
         )
         # WOL_MOVED: stored subnet 1 (A) from when it was added, but M_MAC's CURRENT subnet
-        # (via the devices fallback, Jen's ONE precedence) is 2 (B) - a favourite whose host moved out. The favourite is
+        # (via the devices fallback, Jen's ONE precedence) is 2 (B) - a favorite whose host moved out. The favorite is
         # a STORED object and stays the A caller's to list, edit and delete (v1.1.2); the WAKE is an act on the live host
         # and is refused, because the host is now on a network the caller cannot see.
         cur.execute(
@@ -280,8 +280,8 @@ def _wd_b_untouched(db, ctx):
     return "" if row["enabled"] == 1 else "the subnet-B watchdog target was toggled"
 
 
-def _wol_b_favourite_exists(db, ctx):
-    return "" if _one(db, "SELECT id FROM wol_hosts WHERE id=%s", (WOL_B,)) else "the subnet-B favourite was DELETED"
+def _wol_b_favorite_exists(db, ctx):
+    return "" if _one(db, "SELECT id FROM wol_hosts WHERE id=%s", (WOL_B,)) else "the subnet-B favorite was DELETED"
 
 
 def _no_wake_sent(db, ctx):
@@ -301,7 +301,7 @@ def _pr_b_not_retagged(db, ctx):
     if not row:
         return "the subnet-B tracked device is gone"
     if row["subnet_id"] != 2 or row["label"] != B_NAME:
-        return f"the B device was re-labelled/re-tagged to {row['label']!r} in subnet {row['subnet_id']}"
+        return f"the B device was re-labeled/re-tagged to {row['label']!r} in subnet {row['subnet_id']}"
     return ""
 
 
@@ -331,11 +331,11 @@ def _ds_nothing_created(db, ctx):
 def _wol_b_intact(db, ctx):
     row = _one(db, "SELECT label FROM wol_hosts WHERE id=%s", (WOL_B,))
     if row is None:
-        return "the subnet-B favourite is gone"
+        return "the subnet-B favorite is gone"
     if row["label"] != B_NAME:
-        return f"the subnet-B favourite was re-labelled to {row['label']!r}"
+        return f"the subnet-B favorite was re-labeled to {row['label']!r}"
     if _one(db, "SELECT id FROM wol_hosts WHERE label=%s", ("created-by-matrix",)):
-        return "a favourite was created outside the caller's subnets"
+        return "a favorite was created outside the caller's subnets"
     return ""
 
 
@@ -457,18 +457,18 @@ ROWS = [
     # ── Wake & Actions ───────────────────────────────────────────────────────
     ("wol page", "GET", "/management/wol/", None, UI, {200}, (), None, {}),
     (
-        "wol delete B's favourite",
+        "wol delete B's favorite",
         "POST",
         f"/management/wol/favourites/{WOL_B}/delete",
         None,
         UI,
         _DENY,
         (),
-        _wol_b_favourite_exists,
+        _wol_b_favorite_exists,
         {},
     ),
     (
-        "wol wake B's favourite",
+        "wol wake B's favorite",
         "POST",
         f"/management/wol/favourites/{WOL_B}/wake",
         None,
@@ -479,10 +479,10 @@ ROWS = [
         {},
     ),
     (
-        # v1.1.2 (Q147): a favourite stored under subnet A whose host has since moved to B is the A caller's
+        # v1.1.2 (Q147): a favorite stored under subnet A whose host has since moved to B is the A caller's
         # to list and edit (a stored object, judged on ITS subnet), and NOT theirs to wake: a wake is an act on the
         # live host and goes where the host is now, a network the caller cannot see.
-        "wol wake a favourite whose host moved out of the caller's subnet (stored A, current B)",
+        "wol wake a favorite whose host moved out of the caller's subnet (stored A, current B)",
         "POST",
         f"/management/wol/favourites/{WOL_MOVED}/wake",
         None,
@@ -711,7 +711,7 @@ ROWS = [
         {},
     ),
     (
-        "wol add a favourite for a subnet-B MAC",
+        "wol add a favorite for a subnet-B MAC",
         "POST",
         "/management/wol/favourites/add",
         FormBody(mac=B_MAC, label="created-by-matrix", ip="10.98.1.5", secureon=""),
@@ -1307,7 +1307,7 @@ class TestAnAllowedCallerGetsAnAnswer:
             api_auth._write_hits.clear()
 
 
-# Mutation routes whose behavioural coverage lives in a dedicated test (their bodies need a superadmin
+# Mutation routes whose behavioral coverage lives in a dedicated test (their bodies need a superadmin
 # control the matrix runner has no notion of), mapped to that test.
 COVERED_ELSEWHERE = {
     "/management/presence/sinks/add": "TestPresenceSinksAreSuperadminOnly",
@@ -1336,7 +1336,7 @@ def _rule_regex(rule):
 
 class TestEveryPluginMutationRouteHasARow:
     """v5.65.6 (Q95). The route scanner in tests/test_authz_matrix.py proves a reason was WRITTEN for a
-    plugin route; it says nothing about the route's behaviour, and the IPAM unmanaged-subnet routes were
+    plugin route; it says nothing about the route's behavior, and the IPAM unmanaged-subnet routes were
     filed under "scoped by a subnet id in the URL" while having no subnet id at all. This enumerates every
     POST/PUT/PATCH/DELETE rule under each bundled plugin from the live URL map and fails, naming the
     route, when none of the rows above (or the dedicated test named in COVERED_ELSEWHERE) exercises it.
@@ -1528,7 +1528,7 @@ def _stored_clean(cur):
 @pytest.fixture
 def stored_in_b(plugin_app, db, plugin_data):
     """The control client is in subnet A NOW (a lease there). Everything the three plugins hold for it was stored in subnet B:
-    a favourite and a tracked row saved in B, and a position on a switch addressed in B that is NEWER than the one on a switch in
+    a favorite and a tracked row saved in B, and a position on a switch addressed in B that is NEWER than the one on a switch in
     A. This is the leak direction the first provider releases missed: judged by where the client is now, the A-scoped caller
     could read all of it."""
     with db.cursor() as cur:
@@ -1571,7 +1571,7 @@ class TestAStoredObjectIsJudgedByItsOwnSubnet:
         _caller(pclient, db, role)
         return pclient.get(f"/client?q={A_MAC}").data.decode("utf-8", "replace")
 
-    def test_a_favourite_and_a_tracked_row_saved_in_b_are_not_shown_to_a_caller_scoped_to_a(
+    def test_a_favorite_and_a_tracked_row_saved_in_b_are_not_shown_to_a_caller_scoped_to_a(
         self, pclient, db, stored_in_b
     ):
         body = self._page(pclient, db, "admin_A")

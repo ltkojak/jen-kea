@@ -6,7 +6,7 @@ adds a card of results to /search (templates/search_results.html) after
 the core sections. Registered once per plugin at load time. Since v5.68.0-beta.11 (Q146) a provider is run by `provider_budget`:
 the page stops waiting after BUDGET_SECONDS and shows "unavailable (over 1 s)", and the number of calls outstanding is capped.
 
-Defence in depth (the Q55 rule): even though `fn` is handed the caller's
+Defense in depth (the Q55 rule): even though `fn` is handed the caller's
 own accessible_subnet_ids, run_search_providers() drops any returned row
 whose subnet_id the caller cannot access, and — for a restricted caller —
 any row with subnet_id None, rather than trusting the plugin to have
@@ -59,7 +59,7 @@ def run_search_providers(query: str, accessible_subnet_ids, all_subnets: bool) -
         raw_rows = (result["value"] or []) if not unavailable else []
         if result["state"] == "error":
             logger.error(f"search provider {plugin_id!r} raised: {result['error']}")
-        # v5.65.8 (Q97 j): filter by the caller's subnets FIRST and truncate afterwards. It used to
+        # v5.65.8 (Q97 j): filter by the caller's subnets FIRST and truncate afterward. It used to
         # truncate to MAX_ROWS before the re-filter, so a restricted caller whose rows were 21 and later
         # saw "No results". A malformed row (not a dict) is skipped, not allowed to raise here, outside
         # the provider's own try, where it blanked every provider's card.

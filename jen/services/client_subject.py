@@ -107,7 +107,7 @@ _IPV4_IN_TEXT = re.compile(r"(?<![0-9.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d|/\d)")
 
 
 def identifier_in_text(text: str) -> str:
-    """The client a piece of free text names, as an identifier `/client?q=` accepts: the first MAC in it (normalised to
+    """The client a piece of free text names, as an identifier `/client?q=` accepts: the first MAC in it (normalized to
     `aa:bb:cc:dd:ee:ff`), else the first valid IPv4 address, else "". Pure. (v5.68.0-beta.1, Q134 - the rule the Alerts
     log and the dashboard's alert strip use to offer an Investigate link: an alert row carries no client column, only the
     message Jen rendered, so the message is where the client is named.)"""
@@ -158,7 +158,7 @@ class ClientSubject:
     fetched_at: dict = field(default_factory=dict)
     config_sha: str = ""
     # where `mac` came from for an IPv6 or DUID subject (v5.68.0-beta.1, Q134): "hwaddr" = the hardware address Kea
-    # itself captured on a lease, "duid" = read out of a DUID-LL/DUID-LLT by Jen (an inference, labelled as one),
+    # itself captured on a lease, "duid" = read out of a DUID-LL/DUID-LLT by Jen (an inference, labeled as one),
     # "" = the MAC was typed or there is none
     mac_source: str = ""
 
