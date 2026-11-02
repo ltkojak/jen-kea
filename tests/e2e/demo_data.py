@@ -210,6 +210,19 @@ def featured_client() -> dict:
     return next(lease for lease in active_leases(random.Random(20260921)) if lease["subnet_id"] == 10)
 
 
+def client_classes() -> list[dict]:
+    """The ONE client class the demo dataset's fake Kea config carries (Q209), so the Explain capture
+    (docs/images/explain.png) has a class step to show: it tests the one input the featured client has, its hostname's
+    first word, in the form Jen's own rule builder writes (`kea_classes.build_expression`, so Explain can evaluate it).
+    Only the demo config gets it (tests/e2e/conftest.py::fake_kea); the default dataset's config has no
+    `client-classes`, and the 22 journeys that depend on subnets 1 and 2 never see it."""
+    from jen.services import kea_classes
+
+    first_word = featured_client()["hostname"].split("-", 1)[0]
+    test = kea_classes.build_expression([{"field": "hostname", "op": "starts_with", "value": first_word}])
+    return [{"name": f"{first_word}-devices", "test": test}]
+
+
 def reservations(rng: random.Random | None = None, count: int = 30) -> list[dict]:
     """~30 reservations, spread across subnets in proportion to their lease
     counts, about a dozen carrying a `notes` value."""

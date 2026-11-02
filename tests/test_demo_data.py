@@ -34,3 +34,32 @@ class TestHostnameVendorPairing:
         leased = dict(demo_data.HOSTNAMES)
         for lease in demo_data.active_leases():
             assert lease["vendor"] == leased[lease["hostname"]]
+
+
+class TestTheOneClientClass:
+    """Q209 - the Explain capture needs a class step to show. The demo dataset's fake Kea config carries ONE client class
+    whose test reads the featured client's hostname; the default dataset's config (the 22 journeys) carries none."""
+
+    def test_the_demo_config_gets_exactly_one_class_and_the_default_config_none(self):
+        from tests.e2e._fake_kea_server import TWO_SUBNET_DHCP4, build_dhcp4_config
+
+        classes = demo_data.client_classes()
+        assert len(classes) == 1
+        demo = build_dhcp4_config(demo_data.SUBNETS, demo_data.SUBNET_ROUTERS, client_classes=classes)
+        assert demo["client-classes"] == classes
+        assert "client-classes" not in TWO_SUBNET_DHCP4
+        assert "client-classes" not in build_dhcp4_config(demo_data.SUBNETS, demo_data.SUBNET_ROUTERS)
+
+    def test_the_class_matches_the_featured_client_by_the_hostname_it_has(self):
+        from jen.services import dhcp_explain
+
+        (cls,) = demo_data.client_classes()
+        featured = demo_data.featured_client()
+        missing: set[str] = set()
+        verdict = dhcp_explain.evaluate(
+            dhcp_explain.parse_expression(cls["test"]), {"hostname": featured["hostname"]}, {}, missing
+        )
+        assert verdict is True and not missing
+
+    def test_the_class_is_deterministic(self):
+        assert demo_data.client_classes() == demo_data.client_classes()

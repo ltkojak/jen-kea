@@ -3,7 +3,8 @@
 The README's own [feature matrix](../README.md#what-jen-does) is the
 quick reference — what each area does, and what it needs. This page is
 the full detail behind it, one section per area, with the version each
-capability shipped in.
+capability shipped in. What Jen is for, in five sentences, is the README's
+[Why Jen](../README.md#why-jen) section.
 
 ## Dashboard
 - Live subnet utilization cards with dynamic/reserved breakdown and gateway/DNS display

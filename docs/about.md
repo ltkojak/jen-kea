@@ -9,7 +9,8 @@ daemon's own control socket) and SSH, and presents leases,
 reservations, subnets, DHCP options, and diagnostics through a browser
 UI. It is built for an operator running one to a handful of Kea
 servers — a home network, a lab, or a small business — not a large
-fleet.
+fleet. What Jen is for, in five sentences, is the README's
+[Why Jen](../README.md#why-jen) section.
 
 Jen is free, open-source software, licensed under the GNU General
 Public License v3. The source is at

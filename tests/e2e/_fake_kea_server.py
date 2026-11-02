@@ -22,6 +22,7 @@ def build_dhcp4_config(
     dns: dict | None = None,
     pool_range: dict | None = None,
     valid_lifetime: dict | None = None,
+    client_classes: list | None = None,
 ) -> dict:
     """A Dhcp4 config dict shaped like a real config-get response, built
     from the same subnet dict conftest.py hands to `app_config.write_subnets`
@@ -32,7 +33,9 @@ def build_dhcp4_config(
     has no subnet name). `routers`/`dns`: {id: "a.b.c.d"[,"a.b.c.d"]} — dns
     is optional per subnet. `pool_range`: {id: (low, high)}, default (100,
     200). `valid_lifetime`: {id: seconds} — a per-subnet override; a subnet
-    not in it uses the top-level 3600 default only, unchanged."""
+    not in it uses the top-level 3600 default only, unchanged. `client_classes`
+    (Q209): [{"name", "test"}] written as the config's `client-classes`; None
+    (the default dataset) leaves the config exactly as it was."""
     dns = dns or {}
     pool_range = pool_range or {}
     valid_lifetime = valid_lifetime or {}
@@ -52,13 +55,16 @@ def build_dhcp4_config(
         if sid in valid_lifetime:
             entry["valid-lifetime"] = valid_lifetime[sid]
         subnet4.append(entry)
-    return {
+    config = {
         "valid-lifetime": 3600,
         "renew-timer": 900,
         "rebind-timer": 1800,
         "subnet4": subnet4,
         "hooks-libraries": [],
     }
+    if client_classes:
+        config["client-classes"] = [dict(c) for c in client_classes]
+    return config
 
 
 TWO_SUBNET_DHCP4 = build_dhcp4_config(

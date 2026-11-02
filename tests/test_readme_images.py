@@ -48,8 +48,9 @@ class TestReadmeImagesExistAndAreSmall:
                 over.append((name, p.stat().st_size))
         assert not over, over
 
-    def test_the_readme_references_at_least_the_eight_docs_screenshots(self):
+    def test_the_readme_references_at_least_the_docs_screenshots(self):
         expected = {
+            "explain.png",
             "dashboard.png",
             "leases.png",
             "reservations.png",
@@ -60,6 +61,38 @@ class TestReadmeImagesExistAndAreSmall:
             "phone-more.png",
         }
         assert expected <= _referenced_images()
+
+
+class TestTheReadmeOrder:
+    """Q209 - the first screen after the badges is what makes Jen different, then the install commands: `## Why Jen`, the
+    Investigate capture, the Explain capture, then `## Get started`."""
+
+    def _readme(self) -> str:
+        return README.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    def _section(self) -> str:
+        text = self._readme()
+        start = text.index("## Why Jen\n")
+        return text[start : text.index("\n## ", start + 5)]
+
+    def test_why_jen_comes_before_both_captures_and_they_come_before_get_started(self):
+        text = self._readme()
+        order = [
+            text.index("## Why Jen"),
+            text.index("docs/images/investigate-client.png"),
+            text.index("docs/images/explain.png"),
+            text.index("## Get started"),
+        ]
+        assert order == sorted(order), order
+        assert text.count("docs/images/investigate-client.png") == 1, "the Investigate capture was moved, not copied"
+        assert text.count("docs/images/explain.png") == 1
+
+    def test_why_jen_has_no_bullets_and_at_most_five_sentences(self):
+        section = self._section()
+        assert not re.search(r"^\s*[-*+] ", section, re.M), "## Why Jen is prose: no bullets"
+        prose = section.split("![", 1)[0].replace("## Why Jen", "")
+        sentences = re.split(r"(?<=[.!?]) ", re.sub(r"\s+", " ", prose).strip())
+        assert 1 <= len(sentences) <= 5, (len(sentences), sentences)
 
 
 class TestNoJpgsAndNoOrphans:

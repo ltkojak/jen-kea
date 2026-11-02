@@ -259,6 +259,8 @@ Kea has no dry-run, so this is a reconstruction from the configuration Jen holds
 
 Explain can only decide a client-class test over what it knows about the client. It starts from the MAC and fills in the rest from the best source there is, and the **Inputs used** card on the page lists every input with where it came from, so you can see what an answer rests on:
 
+![The Explain tab for one client: the answer, the inputs with their sources, and each client class with its result](images/explain.png)
+
 | Input | Where Jen gets it |
 |---|---|
 | MAC | the one you asked about |

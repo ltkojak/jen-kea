@@ -15,6 +15,20 @@
 
 ---
 
+## Why Jen
+
+Every row that names a client, such as a lease, a reservation, a device or an alert, opens one [Investigation page](docs/user-guide.md) for that client, with seven tabs (Overview, Explain, Trace, Timeline, DNS, Config and Changes) that all read the same resolved identity. Explain works out the decision Kea makes for that client from Kea's own configuration, the lease and Kea's own log, labels every input with where it came from, and says "undecided" where an input is missing instead of guessing. A timeline per client and an IP map show what happened to an address and where the rest of them are. A fingerprint database of 1,345 manufacturer prefixes turns a bare MAC address into a printer, a phone or a smart TV. Jen's own test suite runs more than 13,000 tests against MariaDB and MySQL on every push, and a weekly run drives it against real Kea 3.0, 3.2 and 3.3 daemons.
+
+![Investigating a client: one page for its lease, reservation, device, last alert and every diagnostic](docs/images/investigate-client.png)
+
+*One page for one client — its lease, reservation and device, the last alert about it, and Explain, Trace, Timeline, DNS, Config and the config changes that touched it, reachable from every row that names a client and from the search box.*
+
+![Explain for one client: the subnet, the reservation check, each client class with its result, and where every input came from](docs/images/explain.png)
+
+*Explain for the same client — the decision Kea makes, step by step, with the class that matched and the source of every input.*
+
+---
+
 ## Get started
 
 ### Try it in ten minutes
@@ -73,10 +87,6 @@ docker compose -f docker-compose.mysql.yml up -d
 ```
 
 ---
-
-![Investigating a client: one page for its lease, reservation, device, last alert and every diagnostic](docs/images/investigate-client.png)
-
-*One page for one client — its lease, reservation and device, the last alert about it, and Explain, Trace, Timeline, DNS, Config and the config changes that touched it, reachable from every row that names a client and from the search box.*
 
 ![Jen dashboard](docs/images/dashboard.png)
 

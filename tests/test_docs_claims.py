@@ -208,3 +208,74 @@ class TestTheGuideSaysWhoWritesDns:
         section = self._ddns_section()
         assert "### DNS provider (lookups)" in section and "(the default)" in section
         assert "Settings → Alerts & Integrations → DDNS" not in _read("docs/admin-guide.md")
+
+
+class TestTheReadmeNumbersAreReal:
+    """Q209 (docs only): every number in the README's `## Why Jen` is read from the thing it counts, so the first screen
+    cannot overstate Jen. The manufacturer count is the fingerprint database's, the Kea versions are the weekly compat run's
+    matrix, the databases are the ones tests.yml starts, and the test count is a FLOOR (it moves every commit): the
+    sentence says "more than N tests" and the collected count must exceed N."""
+
+    def _why(self) -> str:
+        text = _read("README.md").replace("\r\n", "\n")
+        start = text.index("## Why Jen\n")
+        section = text[start : text.index("\n## ", start + 5)]
+        return re.sub(r"\s+", " ", section.split("![", 1)[0])
+
+    def test_the_manufacturer_count_is_the_fingerprint_databases(self):
+        import json
+
+        count = len(json.loads(_read("jen/services/oui_db.json")))
+        # the database is keyed by OUI prefix (44 distinct labels sit on them), so the count is of PREFIXES, and says so
+        assert f"{count:,} manufacturer prefixes" in self._why()
+        assert "manufacturers" not in self._why()
+
+    def test_the_kea_versions_are_the_compat_matrixs(self):
+        matrix = {
+            f"{m.group(1)}.{m.group(2)}"
+            for m in re.finditer(r"- kea: (\d+)\.(\d+)\.\d+", _read(".github/workflows/kea-compat.yml"))
+        }
+        assert len(matrix) >= 2, matrix
+        named = re.search(r"real Kea ((?:\d+\.\d+(?:, | and )?)+)", self._why())
+        assert named, "## Why Jen no longer says which real Kea versions CI runs against"
+        assert set(re.findall(r"\d+\.\d+", named.group(1))) == matrix
+
+    def test_the_databases_are_the_ones_the_workflow_starts(self):
+        # `image: mariadb:10.11` (a service) and `db-image: mysql:8.0` (the pytest matrix) both end in "image: <name>:"
+        started = set(re.findall(r"image:\s*(mariadb|mysql):", _read(".github/workflows/tests.yml")))
+        assert started == {"mariadb", "mysql"}, started
+        named = {name.lower() for name in re.findall(r"MariaDB|MySQL", self._why())}
+        assert named == started, (named, started)
+
+    def test_the_test_count_is_a_floor_the_collected_count_exceeds(self):
+        import subprocess  # nosec B404 - the one pytest this interpreter is running, list args
+        import sys
+
+        why = self._why()
+        floor = re.search(r"more than ([\d,]+) tests", why)
+        assert floor, "## Why Jen states the test count as a floor: 'more than N tests'"
+        for exact in re.finditer(r"(?<![\d,])\d[\d,]* tests", why):
+            assert why[: exact.start()].endswith("more than "), "an exact test count is stale by the next commit"
+        stated = int(floor.group(1).replace(",", ""))
+        out = subprocess.run(  # nosec B603 - fixed argv, no shell
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                "-o",
+                "addopts=",
+                "-p",
+                "no:cacheprovider",
+                "tests",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
+        ).stdout
+        m = re.search(r"(\d+) tests? collected", out)
+        assert m, out[-500:]
+        assert int(m.group(1)) > stated, f"the README says more than {stated:,} tests; pytest collects {m.group(1)}"

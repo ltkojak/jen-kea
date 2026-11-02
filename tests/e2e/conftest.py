@@ -148,6 +148,7 @@ def fake_kea():
             dns=demo_data.SUBNET_DNS,
             pool_range=demo_data.SUBNET_POOL_RANGE,
             valid_lifetime=demo_data.SUBNET_VALID_LIFETIME,
+            client_classes=demo_data.client_classes(),
         )
     server = FakeKeaServer(dhcp4_config=dhcp4_config)
     server.start()

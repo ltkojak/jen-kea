@@ -254,6 +254,71 @@ class TestInvestigationScreenshot:
         _leak_guard(desktop, "investigate-client")
         _save(desktop, "investigate-client")
 
+    def test_explain_tab(self, desktop, base_url):
+        """Q209 - the Explain tab of the same client: the README's second image (docs/images/explain.png). The demo dataset's
+        fake Kea config carries ONE client class (demo_data.client_classes()) whose test reads the featured client's hostname,
+        so the "Client classes" step shows a class decision line. The frame is made as tall as the page needs to show that
+        step: the capture is of the tab, not of whatever the first 1000 pixels happened to hold."""
+        featured = demo_data.featured_client()
+        (cls,) = demo_data.client_classes()
+        desktop.goto(f"{base_url}/client?q={featured['mac']}&tab=explain", wait_until="load")
+        desktop.wait_for_selector("h1", timeout=15000)
+        wanted = {
+            "the answer": "answer",
+            "the inputs": "inputs used",
+            "the class step": "client classes",
+            "the class": cls["name"],
+        }
+        try:
+            _wait_rendered(
+                desktop,
+                "(wanted) => { const t = document.body.innerText.toLowerCase(); "
+                "return Object.values(wanted).every(w => t.includes(w)) && "
+                f"({NO_LOADING_JS}); }}",
+                "explain-tab",
+                arg=wanted,
+            )
+        except AssertionError:
+            seen = desktop.evaluate(
+                "(wanted) => Object.fromEntries(Object.entries(wanted).map(([k, w]) => "
+                "[k, document.body.innerText.toLowerCase().includes(w)]))",
+                wanted,
+            )
+            raise AssertionError(f"explain-tab: the page lacks part of what it should show: {seen}") from None
+        # the Explain tab is the active one: the tab strip marks it with badge-reserved (templates/client.html)
+        active = desktop.evaluate(
+            "() => [...document.querySelectorAll('a.badge-reserved[href*=\"tab=\"]')].map(a => a.getAttribute('href'))"
+        )
+        assert len(active) == 1 and "tab=explain" in active[0], active
+        # the class decision line: step 3's evidence names the class and says it matched
+        line = desktop.evaluate(
+            "(name) => { const li = [...document.querySelectorAll('li.mono')].find(e => e.textContent.trim().startsWith(name + ':')); "
+            "return li ? li.textContent.trim() : null; }",
+            cls["name"],
+        )
+        assert line and line.startswith(f"{cls['name']}: matched"), line
+        # frame the whole of step 3 (the "Client classes" card), whatever the page's height is
+        bottom = desktop.evaluate(
+            "() => { const t = [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('Client classes')); "
+            "if (!t) return null; return Math.ceil(t.closest('.card').getBoundingClientRect().bottom + window.scrollY) + 24; }"
+        )
+        assert bottom and bottom <= 2400, (
+            f"explain-tab: the Client classes step ends at {bottom}px, too far down to frame"
+        )
+        height = max(DESKTOP["height"], bottom)
+        desktop.set_viewport_size({"width": DESKTOP["width"], "height": height})
+        try:
+            desktop.evaluate("() => window.scrollTo(0, 0)")
+            in_frame = desktop.evaluate(
+                "() => { const t = [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('Client classes')); "
+                "return t.closest('.card').getBoundingClientRect().bottom <= window.innerHeight; }"
+            )
+            assert in_frame, "explain-tab: the Client classes step is not inside the frame"
+            _leak_guard(desktop, "explain-tab")
+            _save(desktop, "explain")
+        finally:
+            desktop.set_viewport_size(DESKTOP)
+
 
 class TestSetupWizardScreenshots:
     """v5.67.0 (Q115) — the six /setup steps, feeding Q116's front-door work.
