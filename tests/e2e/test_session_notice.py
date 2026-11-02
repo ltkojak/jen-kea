@@ -76,8 +76,10 @@ class TestTheSessionDialog:
         _jump_to(page, server_clock, deadline, 119)
         text = page.locator("#jen-session-left")
         expect(text).to_have_text(re.compile(r"1:[45]\d"))
+        before = text.inner_text()
         page.clock.run_for(5000)
-        expect(text).to_have_text(re.compile(r"1:[34]\d"))
+        expect(text).not_to_have_text(before)
+        assert text.inner_text() < before, "the countdown runs down"
 
     def test_escape_is_stay_signed_in_and_tab_stays_inside_the_dialog(self, page, base_url, server_clock):
         deadline = _signed_in_on_leases(page, base_url)

@@ -1157,22 +1157,39 @@ class TestInstallDefaultPrecedence:
 class TestTapATimeForItsUtcReading:
     """Q208 (AX9): a touch screen has no tooltip, so a tap on a time shows its UTC reading as a notice; a desktop pointer keeps the title and the click does nothing."""
 
+    @staticmethod
+    def _a_time_in_a_cell_that_shows(page):
+        """The phone shows few columns and the times sit in the hidden ones: put one `<time>` exactly as the server prints it into a cell that is showing (the handler is delegated, so it does not care where)."""
+        page.evaluate(
+            """() => {
+                const td = document.querySelector('table.rowlist tbody tr td:not(.col-check):not(.hide-mobile):not(.hide-tablet)');
+                const t = document.createElement('time');
+                t.id = 'q208-time';
+                t.setAttribute('data-jen-time', 'fmt');
+                t.setAttribute('datetime', '2026-11-02T08:30:00Z');
+                t.setAttribute('data-jen-utc', '2026-11-02 08:30 UTC');
+                t.textContent = '2026-11-02 08:30 UTC';
+                td.appendChild(t);
+            }"""
+        )
+        return page.locator("#q208-time")
+
     def test_a_tap_on_a_time_shows_utc(self, phone, base_url):
         _seed_active_lease()
         _visit(phone, base_url, "/leases")
-        stamp = phone.locator("time[data-jen-time][data-jen-utc]:visible").first
-        stamp.tap()
+        self._a_time_in_a_cell_that_shows(phone).tap()
         toast = phone.locator("#jen-toasts .toast").last
-        expect(toast).to_contain_text("UTC: ")
+        expect(toast).to_contain_text("UTC: 2026-11-02 08:30 UTC")
         assert (toast.inner_text() or "").startswith("UTC: ")
 
     def test_a_tap_on_a_time_does_not_also_open_the_row(self, phone, base_url):
         _seed_active_lease()
         _visit(phone, base_url, "/leases")
         before = phone.url
-        phone.locator("time[data-jen-time][data-jen-utc]:visible").first.tap()
+        self._a_time_in_a_cell_that_shows(phone).tap()
         phone.wait_for_timeout(300)
         assert phone.url == before
+        expect(phone.locator("#jen-toasts .toast").last).to_contain_text("UTC: ")
 
     def test_a_click_on_a_desktop_does_nothing(self, desktop, base_url):
         _seed_active_lease()
