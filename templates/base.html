@@ -2202,7 +2202,7 @@ function sortTable(table, col, th) {
 
     // AX2 - jenSessionWatch. The server says when the idle session ends (X-Jen-Session-Expires on every response, data-session-expires on the body for the first paint).
     // Two minutes before, a dialog offers "Stay signed in" (POST /session/touch); at the deadline the page goes to the sign-in page itself and comes back to where it was.
-    // A deadline only ever moves forward here: a late reply that carries an older one is ignored, and another tab's touch arrives through the storage event.
+    // A deadline only ever moves forward here: a late reply that carries an older one is ignored, and a touch from a second tab arrives through the storage event.
     var SESSION_KEY = 'jen-session-expires';
     var CSRF = {{ csrf_token()|tojson }};
     var expires = 0, lead = 120, warnTimer = null, tickTimer = null, opener = null, skew = 0, leaving = false;
