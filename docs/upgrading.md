@@ -10,6 +10,20 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## The idle notice follows the server's clock, a page that refreshes itself no longer holds a session open, and a printed Settings page is whole
+
+One step (5.70.0-beta.5). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step: no restart beyond the upgrade's own, and `static/css/print.css` is a new static file the upgrade installs with the rest.
+
+**The "Still there?" dialog opens at the right moment whatever your computer's clock says.** A browser that was two minutes slow never showed it, and one that was fast could freeze its tab; the countdown now follows Jen's own clock. A session timeout that an administrator shortens, or switches off, reaches a page that is already open, so a person is not signed out unannounced and a page is not sent to the sign-in form with a live session. The password-change screen a new account is held on now carries the same dialog.
+
+**Health Center, HA maintenance and a Trace watch no longer keep you signed in.** Each refreshes itself on a timer, and until now every refresh counted as activity, so an open tab held a session open for ever. They no longer count; the dashboard's refresh already did not.
+
+**A printed Settings page is whole.** A portrait printout used to fold every card but one; it now prints all of them. The print rules are one file, linked from every page (the sign-in page included).
+
+**A mistake in a form lands under the field of the form it came from**, and a long list of mistakes is held to a size the browser's session cookie can carry. A list's column heading marks the order the rows are in even when the address names a column that does not exist.
+
+A box that installed 5.70.0-beta.4 keeps a 28-byte file, `var/branding/logo.png`, that nothing reads; it can be deleted.
+
 ## Sorting and paging in place, a warning before your session ends, errors under their field, and a few small things
 
 One step (5.70.0-beta.4). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step.
