@@ -16,7 +16,7 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">History</span>
-        <span class="u-865c33">{{ result.rows|length }} entr{{ 'y' if result.rows|length == 1 else 'ies' }}</span>
+        <span class="u-865c33">{{ result.rows|length|plural('entry', 'entries') }}</span>
     </div>
     {% if result.rows %}
     <div id="tl-rows" style="display:flex;flex-direction:column;gap:2px;">

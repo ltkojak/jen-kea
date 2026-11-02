@@ -36,6 +36,7 @@ from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
 from jen.services.csv_safe import safe_row as _safe_row
+from jen.services.forms import flash_field
 from jen.services.leases_sql import active_lease4
 
 logger = logging.getLogger(__name__)
@@ -412,8 +413,12 @@ def add_reservation_post():
     # v5.66.0-beta.8 (Q110) — every failure path below re-renders the form with everything the
     # operator typed instead of a blank redirect; HTTP 400 in place of the old 302.
     def _refuse(*errors):
+        # an error is a message, or (field, message) when it belongs to one input of the form (Q208, AX4)
         for e in errors:
-            flash(e, "error")
+            if isinstance(e, tuple):
+                flash_field(*e)
+            else:
+                flash(e, "error")
         prefill = {
             "ip": ip,
             "mac": mac,
@@ -431,23 +436,23 @@ def add_reservation_post():
 
     # No fallback to subnet 1 — an untouched or empty select is refused, never silently defaulted.
     if not raw_subnet:
-        return _refuse("Choose a subnet.")
+        return _refuse(("subnet_id", "Choose a subnet."))
     try:
         subnet_id = int(raw_subnet)
     except ValueError:
-        return _refuse("Invalid subnet.")
+        return _refuse(("subnet_id", "Invalid subnet."))
     if subnet_id not in subnet_map:
-        return _refuse("Subnet not found.")
+        return _refuse(("subnet_id", "Subnet not found."))
 
     errors = []
     if not __auth.valid_ip(ip):
-        errors.append(f"Invalid IP: {ip}")
+        errors.append(("ip", f"Invalid IP: {ip}"))
     if not __auth.valid_mac(mac):
-        errors.append(f"Invalid MAC: {mac}")
+        errors.append(("mac", f"Invalid MAC: {mac}"))
     if hostname and not __auth.valid_hostname(hostname):
-        errors.append(f"Invalid hostname: {hostname}")
+        errors.append(("hostname", f"Invalid hostname: {hostname}"))
     if dns_override and not __auth.valid_dns(dns_override):
-        errors.append(f"Invalid DNS: {dns_override}")
+        errors.append(("dns_override", f"Invalid DNS: {dns_override}"))
     if not errors:
         # v5.66.0-beta.8 (Q110) — verified against Kea's own host_cmds source
         # (validateHostForSubnet4): reservation-add refuses an ip-address outside the named
@@ -460,7 +465,7 @@ def add_reservation_post():
             if actual_subnet_id is not None and current_user.can_access_subnet(actual_subnet_id):
                 actual_info = extensions.SUBNET_MAP[actual_subnet_id]
                 msg += f" — it belongs to {actual_info['name']} ({actual_info['cidr']})"
-            errors.append(msg)
+            errors.append(("ip", msg))
     if errors:
         return _refuse(*errors)
 

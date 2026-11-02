@@ -23,7 +23,7 @@
     {% if config_unavailable %}
     <div class="alert alert-error">Could not read kea-dhcp4.conf from the active server — check SSH configuration in Settings → Kea.</div>
     {% else %}
-    <form method="POST" action="/ddns/naming/save"{% if hook_loaded and not ddns_block.get('enable-updates') %} data-confirm="{{ two_writers_sentence }} Save anyway?"{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/ddns/naming/save"{% if hook_loaded and not ddns_block.get('enable-updates') %} data-confirm="{{ two_writers_sentence }} Save anyway?"{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>
@@ -36,21 +36,21 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-server-ip">D2 server IP</label>
-                <input id="f-server-ip" type="text" name="server-ip" value="{{ ddns_block.get('server-ip', '127.0.0.1') }}">
-                <div class="form-hint">Where dhcp4 sends update requests — almost always D2 on the same host.</div>
+                <input id="f-server-ip" type="text" name="server-ip" value="{{ ddns_block.get('server-ip', '127.0.0.1') }}" aria-describedby="f-server-ip-hint">
+                <div class="form-hint" id="f-server-ip-hint">Where dhcp4 sends update requests — almost always D2 on the same host.</div>
             </div>
             <div class="form-group">
                 <label for="f-server-port">D2 server port</label>
-                <input id="f-server-port" type="text" name="server-port" value="{{ ddns_block.get('server-port', 53001) }}">
-                <div class="form-hint">D2's listening port — Kea's default is 53001.</div>
+                <input id="f-server-port" type="text" name="server-port" value="{{ ddns_block.get('server-port', 53001) }}" aria-describedby="f-server-port-hint">
+                <div class="form-hint" id="f-server-port-hint">D2's listening port — Kea's default is 53001.</div>
             </div>
             <div class="form-group">
                 <label for="f-ncr-protocol">NCR protocol</label>
-                <select id="f-ncr-protocol" name="ncr-protocol">
+                <select id="f-ncr-protocol" name="ncr-protocol" aria-describedby="f-ncr-protocol-hint">
                     <option value="UDP" {% if ddns_block.get('ncr-protocol', 'UDP') == 'UDP' %}selected{% endif %}>UDP</option>
                     <option value="TCP" {% if ddns_block.get('ncr-protocol') == 'TCP' %}selected{% endif %}>TCP</option>
                 </select>
-                <div class="form-hint">How dhcp4 talks to D2 — UDP unless you have a specific reason to pick TCP.</div>
+                <div class="form-hint" id="f-ncr-protocol-hint">How dhcp4 talks to D2 — UDP unless you have a specific reason to pick TCP.</div>
             </div>
         </div>
 
@@ -82,23 +82,23 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-ddns-replace-client-name">Replace client-supplied name</label>
-                <select id="f-ddns-replace-client-name" name="ddns-replace-client-name">
+                <select id="f-ddns-replace-client-name" name="ddns-replace-client-name" aria-describedby="f-ddns-replace-client-name-hint">
                     <option value="never" {% if naming.get('ddns-replace-client-name', 'never') == 'never' %}selected{% endif %}>Never</option>
                     <option value="always" {% if naming.get('ddns-replace-client-name') == 'always' %}selected{% endif %}>Always</option>
                     <option value="when-present" {% if naming.get('ddns-replace-client-name') == 'when-present' %}selected{% endif %}>When present</option>
                     <option value="when-not-present" {% if naming.get('ddns-replace-client-name') == 'when-not-present' %}selected{% endif %}>When not present</option>
                 </select>
-                <div class="form-hint">Whether Kea's own generated name replaces a hostname the client offered.</div>
+                <div class="form-hint" id="f-ddns-replace-client-name-hint">Whether Kea's own generated name replaces a hostname the client offered.</div>
             </div>
             <div class="form-group">
                 <label for="f-ddns-generated-prefix">Generated name prefix</label>
-                <input id="f-ddns-generated-prefix" type="text" name="ddns-generated-prefix" value="{{ naming.get('ddns-generated-prefix', 'myhost') }}">
-                <div class="form-hint">Used when no usable client hostname exists — becomes <span class="mono">prefix-10-0-0-5</span>.</div>
+                <input id="f-ddns-generated-prefix" type="text" name="ddns-generated-prefix" value="{{ naming.get('ddns-generated-prefix', 'myhost') }}" aria-describedby="f-ddns-generated-prefix-hint">
+                <div class="form-hint" id="f-ddns-generated-prefix-hint">Used when no usable client hostname exists — becomes <span class="mono">prefix-10-0-0-5</span>.</div>
             </div>
             <div class="form-group">
                 <label for="f-ddns-qualifying-suffix">Qualifying suffix</label>
-                <input id="f-ddns-qualifying-suffix" type="text" name="ddns-qualifying-suffix" value="{{ naming.get('ddns-qualifying-suffix', '') }}" placeholder="example.com">
-                <div class="form-hint">Domain appended to build the FQDN — blank means the client must supply a fully-qualified name itself.</div>
+                <input id="f-ddns-qualifying-suffix" type="text" name="ddns-qualifying-suffix" value="{{ naming.get('ddns-qualifying-suffix', '') }}" placeholder="example.com" aria-describedby="f-ddns-qualifying-suffix-hint">
+                <div class="form-hint" id="f-ddns-qualifying-suffix-hint">Domain appended to build the FQDN — blank means the client must supply a fully-qualified name itself.</div>
             </div>
         </div>
         <div class="form-row">
@@ -111,25 +111,25 @@
             </div>
             <div class="form-group">
                 <label for="f-ddns-conflict-resolution-mode">Conflict resolution</label>
-                <select id="f-ddns-conflict-resolution-mode" name="ddns-conflict-resolution-mode">
+                <select id="f-ddns-conflict-resolution-mode" name="ddns-conflict-resolution-mode" aria-describedby="f-ddns-conflict-resolution-mode-hint">
                     <option value="check-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode', 'check-with-dhcid') == 'check-with-dhcid' %}selected{% endif %}>Check with DHCID</option>
                     <option value="no-check-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'no-check-with-dhcid' %}selected{% endif %}>No check with DHCID</option>
                     <option value="check-exists-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'check-exists-with-dhcid' %}selected{% endif %}>Check exists with DHCID</option>
                     <option value="no-check-without-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'no-check-without-dhcid' %}selected{% endif %}>No check without DHCID</option>
                 </select>
-                <div class="form-hint">How D2 decides whether an existing record belongs to this client before overwriting it (RFC 4703).</div>
+                <div class="form-hint" id="f-ddns-conflict-resolution-mode-hint">How D2 decides whether an existing record belongs to this client before overwriting it (RFC 4703).</div>
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label for="f-hostname-char-set">Hostname character set</label>
-                <input id="f-hostname-char-set" type="text" name="hostname-char-set" value="{{ naming.get('hostname-char-set', '[^A-Za-z0-9.-]') }}">
-                <div class="form-hint">Regex of characters to replace in a client-supplied hostname — Kea's own syntax, free text.</div>
+                <input id="f-hostname-char-set" type="text" name="hostname-char-set" value="{{ naming.get('hostname-char-set', '[^A-Za-z0-9.-]') }}" aria-describedby="f-hostname-char-set-hint">
+                <div class="form-hint" id="f-hostname-char-set-hint">Regex of characters to replace in a client-supplied hostname — Kea's own syntax, free text.</div>
             </div>
             <div class="form-group">
                 <label for="f-hostname-char-replacement">Replacement character</label>
-                <input id="f-hostname-char-replacement" type="text" name="hostname-char-replacement" value="{{ naming.get('hostname-char-replacement', 'x') }}">
-                <div class="form-hint">What a disallowed character becomes — blank deletes it instead.</div>
+                <input id="f-hostname-char-replacement" type="text" name="hostname-char-replacement" value="{{ naming.get('hostname-char-replacement', 'x') }}" aria-describedby="f-hostname-char-replacement-hint">
+                <div class="form-hint" id="f-hostname-char-replacement-hint">What a disallowed character becomes — blank deletes it instead.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save DDNS Naming</button>
@@ -174,8 +174,8 @@
         <input type="hidden" name="direction" value="forward">
         <div class="form-row">
             <div class="form-group">
-                <label>Zone name</label>
-                <input type="text" name="name" placeholder="example.com." required>
+                <label for="f-zone-forward">Zone name</label>
+                <input id="f-zone-forward" type="text" name="name" placeholder="example.com." required>
             </div>
             <div class="form-group">
                 <label>TSIG key (optional)</label>
@@ -223,10 +223,10 @@
         <input type="hidden" name="direction" value="reverse">
         <div class="form-row">
             <div class="form-group">
-                <label>Zone name</label>
-                <input type="text" name="name" placeholder="1.168.192.in-addr.arpa." required>
+                <label for="f-zone-reverse">Zone name</label>
+                <input id="f-zone-reverse" type="text" name="name" placeholder="1.168.192.in-addr.arpa." required{% if reverse_zone_hints %} aria-describedby="f-zone-reverse-hint"{% endif %}>
                 {% if reverse_zone_hints %}
-                <div class="form-hint">Suggested from your subnets: {% for h in reverse_zone_hints %}<span class="mono">{{ h }}</span>{% if not loop.last %}, {% endif %}{% endfor %} (classless /25–/30 networks need a hand-named zone).</div>
+                <div class="form-hint" id="f-zone-reverse-hint">Suggested from your subnets: {% for h in reverse_zone_hints %}<span class="mono">{{ h }}</span>{% if not loop.last %}, {% endif %}{% endfor %} (classless /25–/30 networks need a hand-named zone).</div>
                 {% endif %}
             </div>
             <div class="form-group">
@@ -285,8 +285,8 @@
             </div>
             <div class="form-group">
                 <label for="f-secret">Secret</label>
-                <input id="f-secret" type="password" name="secret" placeholder="base64 key material" required>
-                <div class="form-hint">Write-only — never shown again after saving.</div>
+                <input id="f-secret" type="password" name="secret" placeholder="base64 key material" required aria-describedby="f-secret-hint">
+                <div class="form-hint" id="f-secret-hint">Write-only — never shown again after saving.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary btn-sm">Add TSIG Key</button>
@@ -411,7 +411,7 @@
         </td></tr>
         {% if log_message %}<tr><td class="stat-label">Detail</td><td class="u-2bb516">{{ log_message }}</td></tr>{% endif %}
         <tr><td class="stat-label">Showing</td><td>Last 200 lines</td></tr>
-        <tr><td class="stat-label">Entries</td><td>{{ lines|length }}</td></tr>
+        <tr><td class="stat-label">Entries</td><td>{{ lines|length|number }}</td></tr>
     </table>
 </div>
 

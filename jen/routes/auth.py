@@ -16,6 +16,7 @@ import jen.services.auth as __auth
 import jen.services.mfa as __mfa
 import jen.services.oidc as __oidc
 import jen.services.passkeys as __passkeys
+import jen.services.session_timeout as __session_timeout
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("auth", __name__)
@@ -327,6 +328,16 @@ def logout():
     logout_user()
     session.clear()
     return redirect(url_for("auth.login"))
+
+
+@bp.route("/session/touch", methods=["POST"])
+@login_required
+def session_touch():
+    """v5.70.0-beta.4 (Q208, AX2): 'Stay signed in'. Moves `session["last_active"]` to now and nothing else, and answers when the session now ends (epoch seconds, or null when the
+    idle timeout is off). POST only and CSRF-checked like every POST; an anonymous caller never reaches it (login_required), and the timeout middleware has already signed out a session
+    that was past its deadline before this view runs."""
+    session["last_active"] = _now_iso()
+    return {"ok": True, "expires_at": __session_timeout.expires_at(session, current_user)}
 
 
 @bp.route("/auth/reauth", methods=["GET", "POST"])

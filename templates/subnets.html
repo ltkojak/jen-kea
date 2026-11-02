@@ -54,6 +54,18 @@ document.addEventListener('keydown', function(e) {
     closeToneMenus(null);
     if (b) b.focus();
 });
+// Q208 (AX10): the first-time hint. Shown until it is dismissed once in this browser; a private window or blocked storage shows it each visit.
+document.addEventListener('DOMContentLoaded', function() {
+    var hint = document.getElementById('tone-hint');
+    if (!hint) return;
+    var seen = false;
+    try { seen = localStorage.getItem('jen-tone-hint') === 'seen'; } catch (e) { /* private mode */ }
+    if (!seen) hint.hidden = false;
+    var close = hint.querySelector('.alert-close');
+    if (close) close.addEventListener('click', function() {
+        try { localStorage.setItem('jen-tone-hint', 'seen'); } catch (e) { /* private mode */ }
+    });
+});
 function editNote(id) {
     document.getElementById('note-display-' + id).style.display = 'none';
     document.getElementById('note-edit-' + id).style.display = 'block';
@@ -122,6 +134,11 @@ document.addEventListener('click', function(e) {
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
 {% endif %}
 
+{# Q208 (AX10): the badge on a card is the color picker and only its tooltip said so. Administrators only (a viewer's badge is not a control), and only when a card renders; the script at the head
+   of this page un-hides it unless this browser has already dismissed it (localStorage 'jen-tone-hint'). A hint waits to be read: no data-autofade. #}
+{% if subnets and current_user.role in ('superadmin','admin') %}
+<div class="alert alert-info alert-flash" id="tone-hint" role="note" hidden><span class="alert-text">{{ icon("info") }} Click a subnet's name on its card to choose its badge color - the badge is the picker.</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+{% endif %}
 {% set grp = namespace(cur=false) %}
 {% for s in subnets %}
 {% if s.shared_network != grp.cur %}
@@ -200,11 +217,11 @@ document.addEventListener('click', function(e) {
     <div class="subnet-usage u-87c136">
         <div class="stat-label">Usage</div>
         <div class="u-9aa3cd">
-            Active: {{ u.active }}
+            Active: {{ u.active|number }}
             · Pool:
             {% if u.pool_used is none %}<span class="muted">unavailable</span>
             {% elif not u.pool_size %}<span class="muted">no pool</span>
-            {% else %}{{ u.pool_used }} of {{ u.pool_size }} ({{ u.pct }}%){% endif %}
+            {% else %}{{ u.pool_used|number }} of {{ u.pool_size|number }} ({{ u.pct }}%){% endif %}
         </div>
         {% if u.pool_size and u.pool_used is not none %}
         <progress class="pool-use usage-bar usage-{{ u.level }}" max="100" value="{{ [u.pct, 100]|min }}" aria-label="Pool use {{ u.pct }} percent"></progress>
@@ -318,7 +335,7 @@ document.addEventListener('click', function(e) {
         <div class="u-b62e37">
             <div>
                 <div class="stat-label">Active Leases</div>
-                <div class="u-9aa3cd">{{ s6.active }}</div>
+                <div class="u-9aa3cd">{{ s6.active|number }}</div>
             </div>
             <div>
                 <div class="stat-label">Reservations</div>
@@ -380,7 +397,7 @@ document.addEventListener('click', function(e) {
     <div class="u-b62e37">
         <div>
             <div class="stat-label">Active Leases</div>
-            <div class="u-9aa3cd">{{ s6.active }}</div>
+            <div class="u-9aa3cd">{{ s6.active|number }}</div>
         </div>
         <div>
             <div class="stat-label">Reservations</div>

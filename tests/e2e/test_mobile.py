@@ -1152,3 +1152,30 @@ class TestInstallDefaultPrecedence:
             assert page.evaluate("localStorage.getItem('jen-theme')") is None
         finally:
             ctx.close()
+
+
+class TestTapATimeForItsUtcReading:
+    """Q208 (AX9): a touch screen has no tooltip, so a tap on a time shows its UTC reading as a notice; a desktop pointer keeps the title and the click does nothing."""
+
+    def test_a_tap_on_a_time_shows_utc(self, phone, base_url):
+        _seed_active_lease()
+        _visit(phone, base_url, "/leases")
+        stamp = phone.locator("time[data-jen-time][data-jen-utc]").first
+        stamp.tap()
+        toast = phone.locator("#jen-toasts .toast").last
+        expect(toast).to_contain_text("UTC: ")
+        assert (toast.inner_text() or "").startswith("UTC: ")
+
+    def test_a_tap_on_a_time_does_not_also_open_the_row(self, phone, base_url):
+        _seed_active_lease()
+        _visit(phone, base_url, "/leases")
+        before = phone.url
+        phone.locator("time[data-jen-time][data-jen-utc]").first.tap()
+        phone.wait_for_timeout(300)
+        assert phone.url == before
+
+    def test_a_click_on_a_desktop_does_nothing(self, desktop, base_url):
+        _seed_active_lease()
+        _visit(desktop, base_url, "/leases")
+        desktop.locator("time[data-jen-time][data-jen-utc]").first.click()
+        expect(desktop.locator("#jen-toasts .toast")).to_have_count(0)

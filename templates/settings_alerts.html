@@ -14,30 +14,30 @@
 <!-- Global alert settings -->
 <div class="card" id="al-global">
     <div class="card-header"><span class="card-title">{{ icon("settings") }} Global Alert Settings</span></div>
-    <form method="POST" action="/settings/alerts/save-global"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/alerts/save-global"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="f-alert_threshold_pct">Subnet Utilization Threshold %</label>
-                <input id="f-alert_threshold_pct" type="number" name="alert_threshold_pct" value="{{ threshold_pct }}" min="1" max="100" class="u-d579dc">
-                <div class="form-hint">Alert when dynamic leases exceed this % of pool</div>
+                <input id="f-alert_threshold_pct" type="number" name="alert_threshold_pct" value="{{ threshold_pct }}" min="1" max="100" class="u-d579dc" aria-describedby="f-alert_threshold_pct-hint">
+                <div class="form-hint" id="f-alert_threshold_pct-hint">Alert when dynamic leases exceed this % of pool</div>
             </div>
             <div class="form-group">
                 <label for="f-pool_exhaustion_free">Pool Exhaustion Warning (free addresses)</label>
-                <input id="f-pool_exhaustion_free" type="number" name="pool_exhaustion_free" value="{{ pool_exhaustion_free }}" min="1" class="u-d579dc">
-                <div class="form-hint">Alert when fewer than this many addresses remain free</div>
+                <input id="f-pool_exhaustion_free" type="number" name="pool_exhaustion_free" value="{{ pool_exhaustion_free }}" min="1" class="u-d579dc" aria-describedby="f-pool_exhaustion_free-hint">
+                <div class="form-hint" id="f-pool_exhaustion_free-hint">Alert when fewer than this many addresses remain free</div>
             </div>
             <div class="form-group">
                 <label for="f-summary_time">Daily Summary Time</label>
-                <input id="f-summary_time" type="time" name="summary_time" value="{{ summary_time }}" class="u-7a96d9">
-                <div class="form-hint">Time to send the daily summary, in UTC (HH:MM)</div>
+                <input id="f-summary_time" type="time" name="summary_time" value="{{ summary_time }}" class="u-7a96d9" aria-describedby="f-summary_time-hint">
+                <div class="form-hint" id="f-summary_time-hint">Time to send the daily summary, in UTC (HH:MM)</div>
             </div>
             <div class="form-group">
                 <label for="f-reserved_lease_mode">Reserved Device Notifications</label>
-                <select id="f-reserved_lease_mode" name="reserved_lease_mode" style="max-width:220px;">
+                <select id="f-reserved_lease_mode" name="reserved_lease_mode" style="max-width:220px;" aria-describedby="f-reserved_lease_mode-hint">
                     <option value="always" {% if reserved_lease_mode == 'always' %}selected{% endif %}>Every time it comes online</option>
                     <option value="once" {% if reserved_lease_mode == 'once' %}selected{% endif %}>Only the first time ever</option>
                 </select>
-                <div class="form-hint">Applies to "Reserved device's lease goes active" alerts</div>
+                <div class="form-hint" id="f-reserved_lease_mode-hint">Applies to "Reserved device's lease goes active" alerts</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save Global Settings</button>
@@ -151,7 +151,7 @@ var JEN_CHANNELS = {
             <span class="al-tpl-first">{{ tpl.split('\\n')[0] | striptags }}</span>
         </summary>
         <div class="al-tpl-body">
-            <form method="POST" action="/settings/alerts/save-template"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <form data-guard-unsaved method="POST" action="/settings/alerts/save-template"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="alert_type" value="{{ atype }}">
                 <textarea name="template_text" rows="3" aria-label="{{ label }} message template" class="al-tpl-text">{{ tpl }}</textarea>
                 <div class="al-tpl-actions">
@@ -182,7 +182,7 @@ var JEN_CHANNELS = {
             <span class="al-tpl-first">{{ tpl.split('\\n')[0] | striptags }}</span>
         </summary>
         <div class="al-tpl-body">
-            <form method="POST" action="/settings/alerts/save-template"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <form data-guard-unsaved method="POST" action="/settings/alerts/save-template"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="alert_type" value="{{ atype }}">
                 <textarea name="template_text" rows="3" aria-label="{{ label }} message template" class="al-tpl-text">{{ tpl }}</textarea>
                 <div class="al-tpl-actions">
@@ -204,7 +204,7 @@ var JEN_CHANNELS = {
 <div id="channelModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 20px;">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px;width:560px;max-width:95vw;">
         <h3 id="modalTitle" class="u-49f14f">Add Alert Channel</h3>
-        <form method="POST" action="/settings/alerts/save-channel" id="channelForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form data-guard-unsaved method="POST" action="/settings/alerts/save-channel" id="channelForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="channel_id" id="channelId">
 
             <div class="form-row">
@@ -323,8 +323,8 @@ var JEN_CHANNELS = {
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-ntfy_url">ntfy Server URL</label>
-                        <input id="f-ntfy_url" type="text" name="ntfy_url" placeholder="https://ntfy.sh">
-                        <div class="form-hint">Use https://ntfy.sh for the public server, or your self-hosted URL</div>
+                        <input id="f-ntfy_url" type="text" name="ntfy_url" placeholder="https://ntfy.sh" aria-describedby="f-ntfy_url-hint">
+                        <div class="form-hint" id="f-ntfy_url-hint">Use https://ntfy.sh for the public server, or your self-hosted URL</div>
                     </div>
                     <div class="form-group">
                         <label for="f-ntfy_topic">Topic</label>
@@ -353,8 +353,8 @@ var JEN_CHANNELS = {
             <div id="fields-discord" style="display:none;">
                 <div class="form-group">
                     <label for="f-discord_webhook">Discord Webhook URL</label>
-                    <input id="f-discord_webhook" type="text" name="discord_webhook" placeholder="https://discord.com/api/webhooks/...">
-                    <div class="form-hint">Server Settings → Integrations → Webhooks → New Webhook → Copy URL</div>
+                    <input id="f-discord_webhook" type="text" name="discord_webhook" placeholder="https://discord.com/api/webhooks/..." aria-describedby="f-discord_webhook-hint">
+                    <div class="form-hint" id="f-discord_webhook-hint">Server Settings → Integrations → Webhooks → New Webhook → Copy URL</div>
                 </div>
             </div>
 
@@ -367,13 +367,13 @@ var JEN_CHANNELS = {
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-pushover_user_key">User Key</label>
-                        <input id="f-pushover_user_key" type="text" name="pushover_user_key" placeholder="Your Pushover user key">
-                        <div class="form-hint">Found on your Pushover dashboard</div>
+                        <input id="f-pushover_user_key" type="text" name="pushover_user_key" placeholder="Your Pushover user key" aria-describedby="f-pushover_user_key-hint">
+                        <div class="form-hint" id="f-pushover_user_key-hint">Found on your Pushover dashboard</div>
                     </div>
                     <div class="form-group">
                         <label for="f-pushover_api_token">API Token</label>
-                        <input id="f-pushover_api_token" type="password" name="pushover_api_token" placeholder="Application API token">
-                        <div class="form-hint">Create an Application at pushover.net to get this</div>
+                        <input id="f-pushover_api_token" type="password" name="pushover_api_token" placeholder="Application API token" aria-describedby="f-pushover_api_token-hint">
+                        <div class="form-hint" id="f-pushover_api_token-hint">Create an Application at pushover.net to get this</div>
                     </div>
                 </div>
             </div>
@@ -440,7 +440,7 @@ var JEN_CHANNELS = {
     {% if not can_grant_all_subnets %}
     <p class="u-42b3ef">The scrape lists every subnet by name, CIDR and counts, so its token and its open-access switch are for an account that may see every subnet. Yours is limited to some, so they are not shown here.</p>
     {% else %}
-    <form method="POST" action="{{ url_for('settings.save_metrics_settings') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="{{ url_for('settings.save_metrics_settings') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Metrics Token <span class="u-5d8d64">(leave blank for no token)</span></label>
             <div style="display:flex;gap:8px;max-width:460px;">

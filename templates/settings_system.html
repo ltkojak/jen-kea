@@ -144,8 +144,8 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-http_port">HTTP Port{% if ssl_configured %} <span class="u-5d8d64">(redirect only)</span>{% endif %}</label>
-                <input id="f-http_port" type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" class="u-21e8bb">
-                <div class="form-hint">Default: 5050</div>
+                <input id="f-http_port" type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" class="u-21e8bb" aria-describedby="f-http_port-hint">
+                <div class="form-hint" id="f-http_port-hint">Default: 5050</div>
             </div>
             {% if ssl_configured %}
             <div class="form-group">
@@ -162,8 +162,8 @@
             {% endif %}
             <div class="form-group">
                 <label for="f-threads">Worker Threads</label>
-                <input id="f-threads" type="number" name="threads" value="{{ worker_threads }}" min="1" max="64" class="u-21e8bb">
-                <div class="form-hint">Concurrent requests (gunicorn <code>--threads</code>). Default: 8.</div>
+                <input id="f-threads" type="number" name="threads" value="{{ worker_threads }}" min="1" max="64" class="u-21e8bb" aria-describedby="f-threads-hint">
+                <div class="form-hint" id="f-threads-hint">Concurrent requests (gunicorn <code>--threads</code>). Default: 8.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary u-8a77e5">Save &amp; Restart</button>
@@ -230,8 +230,8 @@
             <div class="form-group">
                 <label for="f-audit_retention_days">Keep audit log entries for (days)</label>
                 <input id="f-audit_retention_days" type="number" name="audit_retention_days"
-                       value="{{ audit_retention_days }}" min="0" max="3650">
-                <div class="form-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count }}</strong> entries — <a href="/settings/logs">view</a>.</div>
+                       value="{{ audit_retention_days }}" min="0" max="3650" aria-describedby="f-audit_retention_days-hint">
+                <div class="form-hint" id="f-audit_retention_days-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count|number }}</strong> entries — <a href="/settings/logs">view</a>.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>
@@ -248,8 +248,8 @@
             <div class="form-group">
                 <label for="f-config_revision_keep">Revisions to keep per server / service</label>
                 <input id="f-config_revision_keep" type="number" name="config_revision_keep"
-                       value="{{ config_revision_keep }}" min="1" max="1000">
-                <div class="form-hint">Every Kea config Jen writes is saved so you can diff and restore it (Servers → Config history). Older revisions beyond this count are pruned.</div>
+                       value="{{ config_revision_keep }}" min="1" max="1000" aria-describedby="f-config_revision_keep-hint">
+                <div class="form-hint" id="f-config_revision_keep-hint">Every Kea config Jen writes is saved so you can diff and restore it (Servers → Config history). Older revisions beyond this count are pruned.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>

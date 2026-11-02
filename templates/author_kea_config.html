@@ -40,18 +40,18 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 
 <div class="form-hint u-fdf33f" id="author-draft-note" hidden>{{ icon("info") }} This form was restored from a draft kept in this browser tab (nothing is stored on the server). <a href="#" id="discard-draft">Discard draft</a></div>
 <div class="card u-48a0d2">
-    <form method="POST" id="author-kea-form" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" id="author-kea-form" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label for="f-interfaces">Interfaces</label>
             <input type="text" name="interfaces" id="f-interfaces"
                    value="{{ (detected.interfaces or autodetected_interfaces)|join(', ') }}"
-                   placeholder="eth0" class="u-72126d">
-            <div class="form-hint">Comma-separated interface names Kea should listen on.</div>
+                   placeholder="eth0" class="u-72126d" aria-describedby="f-interfaces-hint">
+            <div class="form-hint" id="f-interfaces-hint">Comma-separated interface names Kea should listen on.</div>
         </div>
         <div class="form-group">
             <label for="f-socket">{{ 'Unix control socket path' if direct_mode else 'Control Socket Path' }}</label>
-            <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" class="u-72126d">
-            <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the control socket for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
+            <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" class="u-72126d" aria-describedby="f-socket-hint">
+            <div class="form-hint" id="f-socket-hint">{% if direct_mode %}The local unix socket (kept alongside the control socket for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
         </div>
         {% if direct_mode %}
         {% for c in bind_candidates %}
@@ -113,8 +113,8 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 
         <div class="form-group">
             <label for="f-subnets">Subnets to include</label>
-            <textarea name="subnets" id="f-subnets" rows="5" class="u-bca09b" placeholder="1 = LAN, 192.168.1.0/24">{{ subnet_lines }}</textarea>
-            <div class="form-hint">
+            <textarea name="subnets" id="f-subnets" rows="5" class="u-bca09b" placeholder="1 = LAN, 192.168.1.0/24" aria-describedby="f-subnets-hint">{{ subnet_lines }}</textarea>
+            <div class="form-hint" id="f-subnets-hint">
                 One per line: <code>id = name, cidr{{ ', paired_v4_subnet_id' if service == 'dhcp6' else '' }}</code>{% if service == 'dhcp6' %} — the paired id is optional{% endif %}.
                 {% if has_existing_subnets %}Pre-filled from Jen's existing subnets — edit or add more below.{% else %}Nothing in Jen yet for this protocol — define at least one here; it'll be saved to Jen automatically once the config is written.{% endif %}
                 Each gets a full-range pool by default, narrowed later via Subnets → Edit.
@@ -188,6 +188,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
     if (discard) discard.addEventListener('click', function(ev) {
         ev.preventDefault();
         try { sessionStorage.removeItem(key); } catch (e) { /* ignore */ }
+        window.jenLeaving = true;   // discarding the draft is the deliberate leave: no unsaved-changes prompt
         window.location.reload();
     });
 })();

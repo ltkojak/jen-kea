@@ -18,13 +18,13 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label for="f-conf_file">dhcpd.conf</label>
-            <input id="f-conf_file" type="file" name="conf_file" accept=".conf,text/plain" required class="u-046678">
-            <div class="form-hint">IPv4 (<code>dhcpd.conf</code>), up to 5 MB. A <code>dhcpd6.conf</code> is not imported.</div>
+            <input id="f-conf_file" type="file" name="conf_file" accept=".conf,text/plain" required class="u-046678" aria-describedby="f-conf_file-hint">
+            <div class="form-hint" id="f-conf_file-hint">IPv4 (<code>dhcpd.conf</code>), up to 5 MB. A <code>dhcpd6.conf</code> is not imported.</div>
         </div>
         <div class="form-group">
             <label for="f-leases_file">dhcpd.leases (optional)</label>
-            <input id="f-leases_file" type="file" name="leases_file" accept=".leases,text/plain" class="u-046678">
-            <div class="form-hint">Only counted on the review page. Kea starts with an empty lease database.</div>
+            <input id="f-leases_file" type="file" name="leases_file" accept=".leases,text/plain" class="u-046678" aria-describedby="f-leases_file-hint">
+            <div class="form-hint" id="f-leases_file-hint">Only counted on the review page. Kea starts with an empty lease database.</div>
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("upload") }} Upload &amp; Review</button>
     </form>

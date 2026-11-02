@@ -29,6 +29,7 @@ import jen.models.user as __user
 from jen.routes.settings import bp
 from jen.services import theme as _theme
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.forms import flash_field
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +63,10 @@ def save_theme_default():
 @login_required
 @_superadmin_required
 def save_theme_custom():
-    result, errors = _theme.validate_palette(request.form)
+    result, errors = _theme.validate_palette_fields(request.form)
     if errors:
-        for e in errors:
-            flash(e, "error")
+        for field, message in errors:
+            flash_field(field, message)
         return _back()
     __user.set_global_setting("theme_custom", json.dumps(result))
     __user.audit("SAVE_THEME_CUSTOM", "settings", f"Custom theme palette saved by {current_user.username}")

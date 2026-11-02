@@ -10,7 +10,7 @@
 
 <div class="card u-d53a7a">
     <h3 class="u-d46224">Download a recovery bundle</h3>
-    <p id="recovery-done-note"{% if not recovery.fresh %} hidden{% endif %}>{{ icon('circle-check') }} <span id="recovery-done-text">Downloaded {{ recovery.size }} bytes at {{ recovery.at }}{% if recovery.excluded_audit_history %} (audit history excluded){% endif %}.</span></p>
+    <p id="recovery-done-note"{% if not recovery.fresh %} hidden{% endif %}>{{ icon('circle-check') }} <span id="recovery-done-text">Downloaded {{ recovery.size|number }} bytes at {{ recovery.at }}{% if recovery.excluded_audit_history %} (audit history excluded){% endif %}.</span></p>
     <form id="recovery-bundle-form" method="POST" action="/settings/databases/recovery-bundle" autocomplete="off" data-download data-initial-at="{{ recovery.at }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="next" value="setup">

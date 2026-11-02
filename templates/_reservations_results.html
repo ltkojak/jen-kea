@@ -14,10 +14,10 @@
 <table class="sortable rowlist">
     <thead><tr>
         <th class="col-check"><input type="checkbox" id="selectAll"></th>
-        <th><a href="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th class="hide-mobile"><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th{% if sort=='ip' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-get="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-target="#reservations-results" hx-push-url="true" class="th-link">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th{% if sort=='hostname' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-get="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-target="#reservations-results" hx-push-url="true" class="th-link">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-mobile"{% if sort=='mac' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-get="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-target="#reservations-results" hx-push-url="true" class="th-link">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th{% if sort=='subnet' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-get="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" hx-target="#reservations-results" hx-push-url="true" class="th-link">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th>Status</th>
         <th class="hide-tablet">DNS Override</th>
         <th class="hide-tablet">Notes</th>
@@ -51,12 +51,12 @@
 {% if pages > 1 %}
 <div class="pagination">
     {% set base = '&subnet=' ~ (subnet_filter|urlencode) ~ '&search=' ~ (search|urlencode) ~ '&sort=' ~ sort ~ '&dir=' ~ direction ~ '&per_page=' ~ per_page ~ '&status=' ~ (status_filter|urlencode) %}
-    {% if page > 1 %}<a href="?page={{ page-1 }}{{ base }}">‹ Prev</a>{% endif %}
+    {% if page > 1 %}<a href="?page={{ page-1 }}{{ base }}" hx-get="?page={{ page-1 }}{{ base }}" hx-target="#reservations-results" hx-swap="innerHTML show:top" hx-push-url="true">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
-    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}<a href="?page={{ p }}{{ base }}">{{ p }}</a>
+    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}<a href="?page={{ p }}{{ base }}" hx-get="?page={{ p }}{{ base }}" hx-target="#reservations-results" hx-swap="innerHTML show:top" hx-push-url="true">{{ p }}</a>
     {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
     {% endfor %}
-    {% if page < pages %}<a href="?page={{ page+1 }}{{ base }}">Next ›</a>{% endif %}
+    {% if page < pages %}<a href="?page={{ page+1 }}{{ base }}" hx-get="?page={{ page+1 }}{{ base }}" hx-target="#reservations-results" hx-swap="innerHTML show:top" hx-push-url="true">Next ›</a>{% endif %}
 </div>
 {% endif %}

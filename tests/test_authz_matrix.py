@@ -1237,3 +1237,34 @@ class TestTheListSummariesAndEmptyStatesNameNoHiddenSubnet:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (A_MAC_HEX,))
             db.commit()
+
+
+class TestSearchMarksAndSwapLinksNameNoHiddenSubnet:
+    """Q208 (AX1, AX6): the sort and page links and the search page's `<mark>` print what the same routes already return, so a caller scoped to A reads nothing of B through them. The
+    unrestricted caller's body DOES carry B, so the absence from the scoped body is a fact about the scope and not about a branch that never ran."""
+
+    HX = {"HX-Request": "true"}
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    @pytest.mark.parametrize("query", ["secret", "zz", "10.77", "deadbeef", "shared"])
+    def test_a_search_names_nothing_of_b_with_or_without_marks(self, client, db, seeded, role, query):
+        _caller(client, db, role)
+        body = client.get(f"/search?q={query}&list=1").data.decode()
+        assert_no_marker(body, ignore=(query,))
+
+    @pytest.mark.parametrize("query", ["secret-host-b", "10.77.0.77"])
+    def test_the_unrestricted_caller_does_get_b_marked(self, client, db, seeded, query):
+        _caller(client, db, "admin_all")
+        body = client.get(f"/search?q={query}&list=1").data.decode()
+        assert "<mark>" in body and query in body
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    @pytest.mark.parametrize("page", ["/leases", "/devices", "/reservations"])
+    def test_page_links_and_sort_links_carry_no_hidden_subnet(self, client, db, seeded, role, page):
+        _caller(client, db, role)
+        for query in ("subnet=2&per_page=1", "sort=subnet&dir=asc&per_page=1&page=1", "search=secret&per_page=1"):
+            body = client.get(f"{page}?{query}", headers=self.HX).data.decode()
+            links = re.findall(r'(?:href|hx-get)="([^"]*)"', body)
+            for link in links:
+                assert_no_marker(link, ignore=("secret",))
+            assert_no_marker(body, ignore=("secret",))

@@ -16,12 +16,12 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label for="f-down">Server to take down</label>
-            <select id="f-down" name="down" class="u-4a724c">
+            <select id="f-down" name="down" class="u-4a724c" aria-describedby="f-down-hint">
                 {% for s in servers %}
                 <option value="{{ s.id }}" {% if s.id == preselect %}selected{% endif %}>{{ s.name }}{% if s.role %} ({{ s.role }}){% endif %}</option>
                 {% endfor %}
             </select>
-            <div class="form-hint">Jen finds this server's partner from both servers' own HA configs and runs the preflight checks. Nothing is sent to Kea until you click Start handover.</div>
+            <div class="form-hint" id="f-down-hint">Jen finds this server's partner from both servers' own HA configs and runs the preflight checks. Nothing is sent to Kea until you click Start handover.</div>
         </div>
         <button type="submit" class="btn btn-primary">Run preflight →</button>
         <a href="{{ url_for('servers.servers') }}" class="btn btn-secondary">Back to Servers</a>

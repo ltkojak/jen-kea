@@ -33,6 +33,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import diagnostic_surface
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.forms import flash_field
 
 logger = logging.getLogger(__name__)
 
@@ -504,45 +505,48 @@ def save_infra_kea():
     api_client_key = request.form.get("api_client_key", "").strip()
 
     if not api_url:
-        flash("API URL is required.", "error")
+        flash_field("api_url", "API URL is required.")
         return redirect(url_for("settings.settings_kea"))
     if connection_mode not in ("ca", "direct"):
         flash("Connection mode must be 'ca' or 'direct'.", "error")
         return redirect(url_for("settings.settings_kea"))
     # v5.10.2 — validate against the mode being SAVED, not the current global.
     if __auth.userinfo_sentence(api_url):
-        flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (AF2, CRED-005)
+        flash_field("api_url", __auth.userinfo_sentence(api_url))  # Q190 (AF2, CRED-005)
         return redirect(url_for("settings.settings_kea"))
     if not _unchanged_url(api_url, extensions.KEA_API_URL) and __auth.dns_name_sentence(
         api_url, require_port=(connection_mode == "direct")
     ):
-        flash(
-            __auth.dns_name_sentence(api_url, require_port=True), "error"
+        flash_field(
+            "api_url", __auth.dns_name_sentence(api_url, require_port=True)
         )  # Q197 (AM2); a CHANGED address only (second pass F1)
         return redirect(url_for("settings.settings_kea"))
     if not __auth.valid_api_url(api_url, require_port=(connection_mode == "direct")):
         # (Q199 AO4: which PART is wrong - a fullwidth host used to be told its port was missing)
         specific = __auth.url_refusal_sentence(api_url, require_port=(connection_mode == "direct"))
         if specific:
-            flash(specific, "error")
+            flash_field("api_url", specific)
         elif connection_mode == "direct":
-            flash(
+            flash_field(
+                "api_url",
                 "In direct mode the API URL must include an explicit port (e.g. http://kea:8004) — "
                 "a daemon control socket is never on 80/443.",
-                "error",
             )
         else:
-            flash("API URL must be a valid http:// or https:// URL.", "error")
+            flash_field("api_url", "API URL must be a valid http:// or https:// URL.")
         return redirect(url_for("settings.settings_kea"))
     if api_ca and not __auth.usable_file(api_ca):
-        flash(__auth.unusable_file_message("CA bundle", api_ca), "error")
+        flash_field("api_ca", __auth.unusable_file_message("CA bundle", api_ca))
         return redirect(url_for("settings.settings_kea"))
     if bool(api_client_cert) != bool(api_client_key):
-        flash("Set both the client certificate and key, or neither.", "error")
+        flash_field("api_client_cert", "Set both the client certificate and key, or neither.")
         return redirect(url_for("settings.settings_kea"))
     for label, path in (("client certificate", api_client_cert), ("client key", api_client_key)):
         if path and not __auth.usable_file(path):
-            flash(__auth.unusable_file_message(f"client {label}", path), "error")
+            flash_field(
+                "api_client_cert" if label == "client certificate" else "api_client_key",
+                __auth.unusable_file_message(f"client {label}", path),
+            )
             return redirect(url_for("settings.settings_kea"))
     # v5.10.3 — isfile() is a stat(); it says nothing about whether the pair
     # actually loads, matches, or is readable by www-data. Check for real
@@ -674,24 +678,25 @@ def save_infra_kea6():
     db_name = request.form.get("db_name", "").strip()
 
     if api_url and __auth.userinfo_sentence(api_url):
-        flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
+        flash_field("kea6_api_url", __auth.userinfo_sentence(api_url))  # Q190 (CRED-005)
         return redirect(url_for("settings.settings_kea"))
     if (
         api_url
         and not _unchanged_url(api_url, extensions.KEA6_API_URL)
         and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct())
     ):
-        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2); a CHANGED address only
+        flash_field(
+            "kea6_api_url", __auth.dns_name_sentence(api_url, require_port=True)
+        )  # Q197 (AM2); a CHANGED address only
         return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
-            flash(
-                "The Kea6 API URL must be a valid http(s):// URL with an explicit port "
-                "in direct mode (e.g. http://kea:8006).",
-                "error",
+            flash_field(
+                "kea6_api_url",
+                "The Kea6 API URL must be a valid http(s):// URL with an explicit port in direct mode (e.g. http://kea:8006).",
             )
         else:
-            flash("The Kea6 API URL must be a valid http:// or https:// URL.", "error")
+            flash_field("kea6_api_url", "The Kea6 API URL must be a valid http:// or https:// URL.")
         return redirect(url_for("settings.settings_kea"))
 
     # CRED-002 (Q178): a saved password stays with the endpoint it was typed for; a password INHERITED from the Kea API (no own one, or "Inherit" ticked) stays with the
@@ -847,24 +852,25 @@ def save_infra_d2():
     no_api_pass = request.form.get("no_api_pass", "") == "1"  # Q180 second pass: an explicit "no authentication"
 
     if api_url and __auth.userinfo_sentence(api_url):
-        flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
+        flash_field("d2_api_url", __auth.userinfo_sentence(api_url))  # Q190 (CRED-005)
         return redirect(url_for("settings.settings_kea"))
     if (
         api_url
         and not _unchanged_url(api_url, extensions.D2_API_URL)
         and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct())
     ):
-        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2); a CHANGED address only
+        flash_field(
+            "d2_api_url", __auth.dns_name_sentence(api_url, require_port=True)
+        )  # Q197 (AM2); a CHANGED address only
         return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
-            flash(
-                "The D2 API URL must be a valid http(s):// URL with an explicit port "
-                "in direct mode (e.g. http://kea:53001).",
-                "error",
+            flash_field(
+                "d2_api_url",
+                "The D2 API URL must be a valid http(s):// URL with an explicit port in direct mode (e.g. http://kea:53001).",
             )
         else:
-            flash("The D2 API URL must be a valid http:// or https:// URL.", "error")
+            flash_field("d2_api_url", "The D2 API URL must be a valid http:// or https:// URL.")
         return redirect(url_for("settings.settings_kea"))
 
     # CRED-002 (Q178): D2's own saved password stays with D2's endpoint; the password it INHERITS from the Kea API (no own one, or "Inherit" ticked) stays with the Kea API's host
@@ -4507,26 +4513,26 @@ def save_infra_ssh():
     kea_conf = request.form.get("kea_conf", "").strip()
     dhcp4_log_path = request.form.get("dhcp4_log_path", "").strip()
     if host and not _ssh_host_unchanged(host, 1) and not __auth.valid_ssh_target(host):
-        flash(
+        flash_field(
+            "host",
             "Invalid SSH host — must be a valid hostname or IP address."
             + (f" {__auth.ssh_target_problem(host)}." if __auth.ssh_target_problem(host) else ""),
-            "error",
         )
         return redirect(url_for("settings.settings_kea"))
     if user and not __auth.valid_unix_username(user):
-        flash("Invalid SSH user — must be a valid unix username.", "error")
+        flash_field("ssh_user", "Invalid SSH user — must be a valid unix username.")
         return redirect(url_for("settings.settings_kea"))
     if kea_conf and not __auth.valid_remote_path(kea_conf):
-        flash("Invalid Kea config path — must be an absolute path with no special characters.", "error")
+        flash_field("kea_conf", "Invalid Kea config path — must be an absolute path with no special characters.")
         return redirect(url_for("settings.settings_kea"))
     if kea_conf and not kea_conf.endswith(".conf"):
-        flash(f"Invalid Kea config path — the file name must end in .conf: {kea_conf}", "error")
+        flash_field("kea_conf", f"Invalid Kea config path — the file name must end in .conf: {kea_conf}")
         return redirect(url_for("settings.settings_kea"))
     if dhcp4_log_path and not __auth.valid_log_path(dhcp4_log_path):
         # v5.69.0-beta.6 (Q175): the rule the Kea host's helper applies to a log it reads - a path outside /var/log would only be refused there
-        flash(
+        flash_field(
+            "dhcp4_log_path",
             "Invalid Kea log path — it must be an absolute path to a .log file under /var/log (for example /var/log/kea/kea-dhcp4.log), with no special characters.",
-            "error",
         )
         return redirect(url_for("settings.settings_kea"))
     if not host:
@@ -5150,7 +5156,7 @@ def save_infra_ddns():
     # (v5.69.0-beta.7, Q176: the card lives on Settings -> Kea -> DDNS, so every way out of this route lands back on that section)
     home = url_for("settings.settings_kea", _anchor="kea-ddns")
     if log_path and not __auth.valid_log_path(log_path):
-        flash("Invalid log path — must be an absolute path to a .log file under /var/log.", "error")
+        flash_field("log_path", "Invalid log path — must be an absolute path to a .log file under /var/log.")
         return redirect(home)
     if dns_provider not in DDNS_PROVIDERS:
         flash("Unknown DNS provider.", "error")
@@ -5240,18 +5246,19 @@ def save_ha_settings():
         # the same rules as the extra servers' names (the second pass, Q172, finding 7): one short line, and not a name another server already has - the primary renamed to
         # an extra server's name was the duplicate state `Target.key` survives, and it locked the extra-servers form out ("two servers are named ...")
         if "\n" in server_name or "\r" in server_name or len(server_name) > 100:
-            flash("Refused: a server name is one line of at most 100 characters.", "error")
+            flash_field("server_name", "Refused: a server name is one line of at most 100 characters.")
             return redirect(url_for("settings.settings_kea"))
         taken = {str(s.get("name", "")).strip().casefold() for s in extensions.KEA_SERVERS if s.get("id") != 1}
         if server_name.casefold() in taken:
-            flash(
-                f'Refused: another server is already named "{server_name}" - every server needs its own name.', "error"
+            flash_field(
+                "server_name",
+                f'Refused: another server is already named "{server_name}" - every server needs its own name.',
             )
             return redirect(url_for("settings.settings_kea"))
     items = []
     if ha_mode not in ("hot-standby", "load-balancing", "passive-backup", ""):
         # "saved" was flashed whatever was written (v5.69.0-beta.5, Q174): a mode that is none of the four refuses the whole form, with or without a valid name beside it
-        flash("Refused: HA mode must be hot-standby, load-balancing, passive-backup or blank.", "error")
+        flash_field("ha_mode", "Refused: HA mode must be hot-standby, load-balancing, passive-backup or blank.")
         return redirect(url_for("settings.settings_kea"))
     items.append(("kea", "ha_mode", ha_mode))
     if server_name:

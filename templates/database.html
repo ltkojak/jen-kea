@@ -21,7 +21,7 @@
     {% if not can_edit_db %}
     <p class="u-ec76a1">Host <code>{{ conn.jen_db_host }}</code>, database <code>{{ conn.jen_db_name }}</code>. Only a superadmin changes where Jen keeps its own data.</p>
     {% else %}
-    <form method="POST" action="/settings/infrastructure/save-jen-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-jen-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.jen_db_host }}"></div>
             <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.jen_db_user }}"></div>
@@ -39,7 +39,7 @@
     {% if not can_edit_db %}
     <p class="u-ec76a1">Host <code>{{ conn.kea_db_host }}</code>, database <code>{{ conn.kea_db_name }}</code>. Only a superadmin changes where Jen reads Kea's data.</p>
     {% else %}
-    <form method="POST" action="/settings/infrastructure/save-kea-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-kea-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.kea_db_host }}"></div>
             <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.kea_db_user }}"></div>
@@ -174,8 +174,8 @@
     <form method="POST" action="/database/import/inspect" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label for="f-file">Export File</label>
-            <input id="f-file" type="file" name="file" accept=".json,.json.gz,.gz" required class="u-046678">
-            <div class="form-hint">Must be a file exported from Jen's Database page. Files from other tools are not supported.</div>
+            <input id="f-file" type="file" name="file" accept=".json,.json.gz,.gz" required class="u-046678" aria-describedby="f-file-hint">
+            <div class="form-hint" id="f-file-hint">Must be a file exported from Jen's Database page. Files from other tools are not supported.</div>
         </div>
         <button type="submit" class="btn btn-secondary u-8a77e5">{{ icon("search") }} Inspect File &amp; Continue</button>
     </form>
@@ -270,7 +270,7 @@
         <br>Last run: <strong>{{ schedule.last_run }}</strong> — {{ schedule.last_status or 'no status' }}
         {% endif %}
     </p>
-    <form method="POST" action="/database/schedule"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/database/schedule"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:14px;">
                 <input type="checkbox" name="enabled" {% if schedule and schedule.enabled %}checked{% endif %}>

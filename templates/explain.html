@@ -29,9 +29,9 @@
             </div>
             <div class="form-group u-116966">
                 <label for="f-user_class">User class (option 77)</label>
-                <input id="f-user_class" type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE">
+                <input id="f-user_class" type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE" aria-describedby="f-user_class-hint">
                 <input type="text" name="user_class_bytes" class="mono" value="{{ client.user_class_bytes }}" placeholder="as sent, hex (08:69:50:58:45) - optional">
-                <div class="form-hint">Kea compares the bytes the client sent. A client sends the bare string or, like Windows, one length byte then the string; give the bytes when you know them.</div>
+                <div class="form-hint" id="f-user_class-hint">Kea compares the bytes the client sent. A client sends the bare string or, like Windows, one length byte then the string; give the bytes when you know them.</div>
             </div>
             <div class="form-group u-116966">
                 <label for="f-hostname">Hostname (option 12)</label>

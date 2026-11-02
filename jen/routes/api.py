@@ -25,6 +25,7 @@ from jen.services.api_auth import RATE_LIMIT_MESSAGE, json_object_body, write_ra
 from jen.services.api_auth import api_auth as _api_auth
 from jen.services.api_auth import key_subnet_ids as _api_key_subnet_ids
 from jen.services.fingerprint import get_device_info_map
+from jen.services.forms import flash_field
 from jen.services.kea import (
     all_cached_kea_health,
     cached_active_server,
@@ -1062,7 +1063,7 @@ def api_keys_create():
         return redirect(url_for("dashboard.dashboard"))
     name = request.form.get("name", "").strip()[:100]
     if not name:
-        flash("Key name is required.", "error")
+        flash_field("name", "Key name is required.")
         return redirect(url_for("api.api_keys"))
 
     # Scope: chosen independently per-key at creation time, not inherited
@@ -1086,7 +1087,7 @@ def api_keys_create():
         allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
         ids = [int(s) for s in subnet_ids_raw if s.isdigit() and int(s) in allowed]
         if not ids:
-            flash("Select at least one subnet this key should have access to.", "error")
+            flash_field("subnet_ids", "Select at least one subnet this key should have access to.")
             return redirect(url_for("api.api_keys"))
         subnet_access = _json.dumps(ids)
 

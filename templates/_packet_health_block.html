@@ -18,12 +18,12 @@
     {% if ph.sparkline and ph.sparkline|length > 1 %}<canvas id="ph-chart-{{ s.server.id }}" height="50"></canvas>{% endif %}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px 8px;font-size:11px;margin-top:8px;">
         {% for n in ph.named %}
-        <div><div class="stat-label">{{ n.label }}</div><div class="mono">{% if n.key in ('pkt4-nak-sent', 'pkt4-receive-drop') and n.total %}<a href="/problems?server={{ s.server.id }}" title="Which clients? Open the Problems list for this server">{{ n.total }}</a>{% else %}{{ n.total }}{% endif %}</div></div>
+        <div><div class="stat-label">{{ n.label }}</div><div class="mono">{% if n.key in ('pkt4-nak-sent', 'pkt4-receive-drop') and n.total %}<a href="/problems?server={{ s.server.id }}" title="Which clients? Open the Problems list for this server">{{ n.total|number }}</a>{% else %}{{ n.total|number }}{% endif %}</div></div>
         {% endfor %}
     </div>
     {% if ph.other_counters %}
     <details class="u-fe7b49">
-        <summary class="u-c5c798">All counters ({{ ph.other_counters|length }})</summary>
+        <summary class="u-c5c798">All counters ({{ ph.other_counters|length|number }})</summary>
         <table style="width:100%;font-size:11px;margin-top:4px;">
         {% for key, value in ph.other_counters %}
             <tr><td class="mono">{{ key }}</td><td class="mono" style="text-align:right;">{{ value }}</td></tr>

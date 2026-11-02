@@ -21,8 +21,8 @@
 <div class="card u-49f14f">
     <div class="card-header"><span class="card-title">{{ icon("clipboard-list") }} dhcpd.leases</span></div>
     <p style="font-size:13px;margin:0;">
-        <strong>{{ leases.active }}</strong> active lease(s) in the file — <strong>{{ leases.in_ranges }}</strong> inside
-        the ranges being imported, <strong>{{ leases.reserved }}</strong> on an address that becomes a reservation.
+        <strong>{{ leases.active|number }}</strong> active lease(s) in the file — <strong>{{ leases.in_ranges|number }}</strong> inside
+        the ranges being imported, <strong>{{ leases.reserved|number }}</strong> on an address that becomes a reservation.
     </p>
     <div class="form-hint">Leases are never imported: Kea starts with an empty lease database and clients pick
         up new leases as they renew (at most one lease time). Reservations keep their fixed addresses.</div>
@@ -48,7 +48,7 @@
         <div class="card-header"><h3>Client classes</h3></div>
         <label class="u-fcdcd0">
             <input type="checkbox" name="classes" value="1" checked>
-            Create {{ global_class_count }} client class(es) declared in the {{ src.file }}
+            Create {{ global_class_count|number }} client class(es) declared in the {{ src.file }}
             ({% for c in plan.global_classes %}{{ c.name }}{% if not loop.last %}, {% endif %}{% endfor %})
         </label>
         <div class="form-hint">Classes a pool refers to are created regardless (the pool guard needs them).</div>
@@ -86,11 +86,11 @@
                     <td><input type="number" name="id_{{ row.scope.scope_id }}" value="{{ row.suggested_id }}" style="width:80px;"></td>
                     <td><input type="text" name="name_{{ row.scope.scope_id }}" value="{{ row.suggested_name }}" style="width:140px;"></td>
                     <td class="mono">{{ row.cidr }}</td>
-                    <td>{{ row.pool_count }}</td>
+                    <td>{{ row.pool_count|number }}</td>
                     <td>{{ row.scope.lease_seconds }}s</td>
-                    <td>{{ row.option_count }}</td>
-                    <td>{{ row.reservation_count }}</td>
-                    <td>{{ row.policy_importable }} / {{ row.policy_total }}</td>
+                    <td>{{ row.option_count|number }}</td>
+                    <td>{{ row.reservation_count|number }}</td>
+                    <td>{{ row.policy_importable|number }} / {{ row.policy_total|number }}</td>
                     <td>{{ row.scope.superscope_name or '—' }}</td>
                 </tr>
                 {% endfor %}

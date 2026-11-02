@@ -22,7 +22,7 @@
 <form method="POST" action="{{ url_for('database.kea_identifiers_repair') }}" data-confirm="Rewrite the selected values in Kea's tables?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {% if damaged %}
 <div class="card">
-    <div class="card-header"><h3>{{ damaged|length }} of {{ total|plural('reservation') }} need repair</h3></div>
+    <div class="card-header"><h3>{{ damaged|length|number }} of {{ total|plural('reservation') }} need repair</h3></div>
     <table class="table">
         <thead><tr><th></th><th>Host</th><th>Address</th><th>Type</th><th>Stored now (text)</th><th>Will become (bytes)</th></tr></thead>
         <tbody>

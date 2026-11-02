@@ -19,8 +19,8 @@
             </div>
             <div class="form-group">
                 <label for="f-duid">DUID *</label>
-                <input id="f-duid" type="text" name="duid" placeholder="00:03:00:01:aa:bb:cc:dd:ee:ff" value="{{ prefill.duid if prefill else '' }}" required>
-                <div class="form-hint">Hex, with or without colons — Jen normalizes it.</div>
+                <input id="f-duid" type="text" name="duid" placeholder="00:03:00:01:aa:bb:cc:dd:ee:ff" value="{{ prefill.duid if prefill else '' }}" required aria-describedby="f-duid-hint">
+                <div class="form-hint" id="f-duid-hint">Hex, with or without colons — Jen normalizes it.</div>
             </div>
         </div>
         <div class="form-group">

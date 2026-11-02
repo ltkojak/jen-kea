@@ -16,7 +16,7 @@
 </div>
 {% endif %}
 
-<form id="class-form" method="POST" action="{{ url_for('subnets.dhcp_class_save') }}"
+<form data-guard-unsaved id="class-form" method="POST" action="{{ url_for('subnets.dhcp_class_save') }}"
       hx-post="{{ url_for('subnets.dhcp_class_preview') }}" hx-target="#class-preview" hx-swap="innerHTML"
       hx-trigger="change, keyup delay:500ms changed">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -677,6 +677,9 @@ def lab_world(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(infra, "_daemon_creds", lambda server, service, url="": CRED)
     monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
     monkeypatch.setattr(infra, "flash", lambda text, style="message": lab.flashes.append((style, str(text))))
+    monkeypatch.setattr(
+        infra, "flash_field", lambda field, message: lab.flashes.append(("error", str(message)))
+    )  # Q208: a field error is the same sentence, kept per field
     monkeypatch.setattr(infra.__dict__["__user"], "audit", lambda *a, **k: lab.audits.append(a))
     monkeypatch.setattr(
         "jen.services.capabilities.for_server", lambda sid, probe_kea=True: types.SimpleNamespace(tls=True)
@@ -1466,6 +1469,9 @@ class TestTheInvariantsBite:
         monkeypatch.setattr(kea_tls, "commit_rotation", half)
         monkeypatch.setattr(kea_changeset, "record_attention", lambda *a, **k: True)  # the incidents are lost
         monkeypatch.setattr(infra, "flash", lambda text, style="message": None)  # ... and so is the sentence
+        monkeypatch.setattr(
+            infra, "flash_field", lambda field, message: None
+        )  # Q208: a field error is the same sentence, kept per field
         _rotate()
         assert not kea_tls.ca_consistent()
         _bites(lab, "T2")
@@ -4560,6 +4566,9 @@ class TestTheStaleRecords:
         app.secret_key = "x"
         monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
         monkeypatch.setattr(infra, "flash", lambda text, style="message": lab.flashes.append((style, str(text))))
+        monkeypatch.setattr(
+            infra, "flash_field", lambda field, message: lab.flashes.append(("error", str(message)))
+        )  # Q208: a field error is the same sentence, kept per field
         with app.test_request_context(method="POST"):
             inspect.unwrap(infra.forget_stale_kea_records)()
         assert "Forgot Jen's own copy of 1 certificate" in lab.texts() and "77-dhcp4" in lab.texts()
@@ -4925,6 +4934,9 @@ class TestStaleIsAFactAboutTheDaemon:
         self._park_server_2(lab)
         monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
         monkeypatch.setattr(infra, "flash", lambda text, style="message": lab.flashes.append((style, str(text))))
+        monkeypatch.setattr(
+            infra, "flash_field", lambda field, message: lab.flashes.append(("error", str(message)))
+        )  # Q208: a field error is the same sentence, kept per field
         monkeypatch.setattr(infra.__dict__["__user"], "audit", lambda *a, **k: None)
         app = flask.Flask(__name__)
         app.secret_key = "x"
@@ -4949,6 +4961,9 @@ class TestStaleIsAFactAboutTheDaemon:
         assert report["forgotten"] == [] and "PermissionError" in report["unreadable"], report
         monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
         monkeypatch.setattr(infra, "flash", lambda text, style="message": lab.flashes.append((style, str(text))))
+        monkeypatch.setattr(
+            infra, "flash_field", lambda field, message: lab.flashes.append(("error", str(message)))
+        )  # Q208: a field error is the same sentence, kept per field
         app = flask.Flask(__name__)
         app.secret_key = "x"
         with app.test_request_context(method="POST"):

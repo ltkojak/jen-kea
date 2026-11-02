@@ -9,71 +9,71 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} This creates a brand new subnet in <code>kea-dhcp4.conf</code> and restarts the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.</div>
 
 <div class="card u-48a0d2">
-    <form method="POST" id="add-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" id="add-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <div class="form-row">
             <div class="form-group">
                 <label for="f-id">Subnet ID</label>
-                <input type="number" name="subnet_id" id="f-id" value="{{ suggested_id }}" min="1" class="u-72126d">
-                <div class="form-hint">Next available: <code class="u-f045bb">{{ suggested_id }}</code> &nbsp;·&nbsp; Must be unique across all subnets in Kea</div>
+                <input type="number" name="subnet_id" id="f-id" value="{{ suggested_id }}" min="1" class="u-72126d" aria-describedby="f-id-hint">
+                <div class="form-hint" id="f-id-hint">Next available: <code class="u-f045bb">{{ suggested_id }}</code> &nbsp;·&nbsp; Must be unique across all subnets in Kea</div>
             </div>
             <div class="form-group">
                 <label for="f-name">Friendly Name</label>
-                <input type="text" name="name" id="f-name" placeholder="e.g. Guest WiFi" maxlength="50">
-                <div class="form-hint">Shown throughout Jen instead of the raw subnet ID</div>
+                <input type="text" name="name" id="f-name" placeholder="e.g. Guest WiFi" maxlength="50" aria-describedby="f-name-hint">
+                <div class="form-hint" id="f-name-hint">Shown throughout Jen instead of the raw subnet ID</div>
             </div>
         </div>
 
         <div class="form-group">
             <label for="f-cidr">CIDR</label>
-            <input type="text" name="cidr" id="f-cidr" placeholder="e.g. 10.10.80.0/24" class="u-72126d">
-            <div class="form-hint">The full network range for this subnet</div>
+            <input type="text" name="cidr" id="f-cidr" placeholder="e.g. 10.10.80.0/24" class="u-72126d" aria-describedby="f-cidr-hint">
+            <div class="form-hint" id="f-cidr-hint">The full network range for this subnet</div>
         </div>
 
         <div class="form-group">
             <label for="f-pool">Address Pool</label>
-            <input type="text" name="pool" id="f-pool" placeholder="e.g. 10.10.80.50-10.10.80.250" class="u-72126d">
-            <div class="form-hint">Must fall within the CIDR above &nbsp;·&nbsp; Format: start–end</div>
+            <input type="text" name="pool" id="f-pool" placeholder="e.g. 10.10.80.50-10.10.80.250" class="u-72126d" aria-describedby="f-pool-hint">
+            <div class="form-hint" id="f-pool-hint">Must fall within the CIDR above &nbsp;·&nbsp; Format: start–end</div>
         </div>
 
         <div class="form-row">
             <div class="form-group">
                 <label for="f-lifetime">Valid Lifetime (seconds)</label>
-                <input type="number" name="valid_lifetime" id="f-lifetime" placeholder="e.g. 86400" min="60">
-                <div class="form-hint">Optional — leave blank to use Kea's global default</div>
+                <input type="number" name="valid_lifetime" id="f-lifetime" placeholder="e.g. 86400" min="60" aria-describedby="f-lifetime-hint">
+                <div class="form-hint" id="f-lifetime-hint">Optional — leave blank to use Kea's global default</div>
             </div>
             <div class="form-group">
                 <label for="f-renew">Renew Timer / T1 (seconds)</label>
-                <input type="number" name="renew_timer" id="f-renew" placeholder="e.g. 43200" min="0">
-                <div class="form-hint">Optional &nbsp;·&nbsp; Typically ½ of valid lifetime</div>
+                <input type="number" name="renew_timer" id="f-renew" placeholder="e.g. 43200" min="0" aria-describedby="f-renew-hint">
+                <div class="form-hint" id="f-renew-hint">Optional &nbsp;·&nbsp; Typically ½ of valid lifetime</div>
             </div>
             <div class="form-group">
                 <label for="f-rebind">Rebind Timer / T2 (seconds)</label>
-                <input type="number" name="rebind_timer" id="f-rebind" placeholder="e.g. 75600" min="0">
-                <div class="form-hint">Optional &nbsp;·&nbsp; Typically ⅞ of valid lifetime</div>
+                <input type="number" name="rebind_timer" id="f-rebind" placeholder="e.g. 75600" min="0" aria-describedby="f-rebind-hint">
+                <div class="form-hint" id="f-rebind-hint">Optional &nbsp;·&nbsp; Typically ⅞ of valid lifetime</div>
             </div>
         </div>
 
         <div class="form-row">
             <div class="form-group">
                 <label for="f-routers">Router / Gateway</label>
-                <input type="text" name="routers" id="f-routers" placeholder="e.g. 10.10.80.1" class="u-72126d">
-                <div class="form-hint">Optional</div>
+                <input type="text" name="routers" id="f-routers" placeholder="e.g. 10.10.80.1" class="u-72126d" aria-describedby="f-routers-hint">
+                <div class="form-hint" id="f-routers-hint">Optional</div>
             </div>
             <div class="form-group">
                 <label for="f-dns">DNS Servers</label>
-                <input type="text" name="dns_servers" id="f-dns" placeholder="e.g. 9.9.9.9,1.1.1.1" class="u-72126d">
-                <div class="form-hint">Optional &nbsp;·&nbsp; Comma-separated</div>
+                <input type="text" name="dns_servers" id="f-dns" placeholder="e.g. 9.9.9.9,1.1.1.1" class="u-72126d" aria-describedby="f-dns-hint">
+                <div class="form-hint" id="f-dns-hint">Optional &nbsp;·&nbsp; Comma-separated</div>
             </div>
         </div>
 
         <div class="form-group">
             <label for="f-network">Shared Network</label>
-            <select name="shared_network" id="f-network">
+            <select name="shared_network" id="f-network" aria-describedby="f-network-hint">
                 <option value="">— none (top-level subnet) —</option>
                 {% for n in shared_networks %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
             </select>
-            <div class="form-hint">Optional. Subnets in one shared network share pool space and client classification.</div>
+            <div class="form-hint" id="f-network-hint">Optional. Subnets in one shared network share pool space and client classification.</div>
         </div>
 
         <div class="u-acb4b5">

@@ -5,6 +5,7 @@ Q205 (v5.70.0-beta.1): the text filters. Pure - no database, no Flask app: `jen/
 `py -m pytest --noconftest tests/test_template_filters.py`.
 """
 
+import pathlib
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -157,3 +158,126 @@ class TestPlural:
                 if re.search(r"\{\{[^}]*\}\}\s+[A-Za-z-]+\(s\)", line) and "active lease(s)" not in line:
                     offenders.append(f"{path.name}:{n}")
         assert not offenders, offenders
+
+
+class TestNumber:
+    """Q208 (AX5): a count carries thousands separators, always the US grouping."""
+
+    @pytest.mark.parametrize(
+        ("n", "expected"),
+        [
+            (1234567, "1,234,567"),
+            (999, "999"),
+            (1000, "1,000"),
+            (0, "0"),
+            ("12000", "12,000"),
+            (None, "0"),
+            ("x", "0"),
+            (3.9, "3"),
+            (-1234, "-1,234"),
+        ],
+    )
+    def test_number(self, n, expected):
+        assert reltime.number(n) == expected
+
+    def test_plural_groups_the_count_and_still_agrees(self):
+        assert reltime.plural(12000, "lease") == "12,000 leases"
+        assert reltime.plural(1000, "entry", "entries") == "1,000 entries"
+        assert reltime.plural(1, "lease") == "1 lease"
+
+    def test_the_filter_is_registered_beside_plural(self):
+        import pathlib
+
+        text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
+        assert '_reltime.number, "number"' in text and '_reltime.plural, "plural"' in text
+
+
+class TestNoBareCountInATemplate:
+    """The grep of the item: every `{{ ... }}` whose expression names a count, a total, an active/free/used/size or the leases goes through `|number` or `|plural`. The ones that do not are
+    reviewed here WITH their reason - an id, a timestamp, a percentage, a macro call, a form value or text - and the list is the test's: a new bare count fails until it is converted or argued."""
+
+    GREP = re.compile(r"\{\{ [^}]*(count|total|active|free|used|size|leases)\b[^}]*\}\}")
+    # (template, a fragment of the expression) -> why it is not a count to group
+    REVIEWED = {
+        ("_device_badge.html", "device_badge("): "a macro call: `size='sm'` is the badge's size, not a number printed",
+        ("_device_rows.html", "empty_state("): "a macro call carrying a sentence",
+        ("_lease_rows.html", "empty_state("): "a macro call carrying a sentence",
+        ("_ip_version_control.html", "ip_version_control("): "a macro call (the word `leases` is a URL)",
+        ("leases.html", "ip_version_control("): "a macro call (the word `leases` is a URL)",
+        ("api_keys.html", "last_used"): "a timestamp through |utcfmt",
+        ("client.html", "fetched_at"): "a timestamp through |utcfmt",
+        ("mfa_enroll.html", "last_used"): "a timestamp through |utcdate",
+        ("mfa_trusted_devices.html", "last_used"): "a timestamp through |utcfmt",
+        ("ipmap.html", "used[ip]"): "a lookup in the map of addresses in use: a type or a hostname, not a count",
+        (
+            "database.html",
+            "schedule.keep_count",
+        ): "the value of an <input type=number>: a grouped value would not parse",
+        (
+            "setup_recovery.html",
+            "schedule.keep_count",
+        ): "the value of an <input type=number>: a grouped value would not parse",
+        (
+            "settings_alerts.html",
+            "pool_exhaustion_free",
+        ): "the value of an <input type=number>: a grouped value would not parse",
+        ("reports.html", "pool_used / s.pool_size * 100"): "a percentage",
+        ("settings_kea.html", "kea_ca.refused"): "a list of sentences joined with '; '",
+    }
+
+    def _hits(self):
+        import pathlib
+
+        out = []
+        for path in sorted(pathlib.Path("templates").glob("*.html")):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for m in self.GREP.finditer(line):
+                    out.append((path.name, n, m.group(0)))
+        return out
+
+    def test_every_count_the_grep_finds_is_grouped_or_reviewed(self):
+        bare = []
+        for name, n, expr in self._hits():
+            if "|number" in expr or "|plural" in expr or "csrf" in expr:
+                continue
+            if any(name == t and fragment in expr for (t, fragment) in self.REVIEWED):
+                continue
+            bare.append(f"{name}:{n}: {expr[:100]}")
+        assert not bare, "a count printed without |number or |plural:\n  " + "\n  ".join(bare)
+
+    def test_the_reviewed_list_is_live(self):
+        hits = self._hits()
+        for template, fragment in self.REVIEWED:
+            assert any(name == template and fragment in expr for name, _n, expr in hits), (template, fragment)
+
+    def test_the_grep_finds_what_it_is_for(self):
+        assert (
+            self.GREP.search("{{ s.active }}")
+            and self.GREP.search("{{ total }}")
+            and not self.GREP.search("{{ s.name }}")
+        )
+
+    def test_the_dashboards_placeholder_survives_the_filter(self):
+        text = pathlib.Path("templates/dashboard.html").read_text(encoding="utf-8")
+        assert "s.active|number if s.active is number else s.active" in text, (
+            "the skeleton prints an ellipsis until the first refresh: |number would turn it into 0"
+        )
+
+
+class TestTheDashboardScriptGroups:
+    def test_every_count_the_refresh_writes_is_grouped_with_the_us_locale(self):
+        text = pathlib.Path("templates/dashboard.html").read_text(encoding="utf-8")
+        for needle in (
+            "activeEl.textContent = Number(s.active || 0).toLocaleString('en-US')",
+            "active6El.textContent = Number(s6.active || 0).toLocaleString('en-US')",
+            "ta.textContent = Number(totalActive).toLocaleString('en-US')",
+            "td.textContent = Number(totalDynamic).toLocaleString('en-US')",
+            "tr.textContent = Number(totalReserved).toLocaleString('en-US')",
+        ):
+            assert needle in text, needle
+
+    def test_no_stat_value_is_written_with_a_bare_number(self):
+        text = pathlib.Path("templates/dashboard.html").read_text(encoding="utf-8")
+        assert not re.search(
+            r"(activeEl|active6El|ta|td|tr)\.textContent = (s6?\.active|total(Active|Dynamic|Reserved));", text
+        )

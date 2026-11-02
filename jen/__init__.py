@@ -22,6 +22,7 @@ from jen.config import ConfigChangeRefused, app_config, ssl_configured
 from jen.models.user import User, get_global_setting
 from jen.services import csp as csp_svc
 from jen.services import csrf as csrf_svc
+from jen.services import session_timeout as session_timeout_svc
 from jen.services.runtime import deployment
 
 logger = logging.getLogger(__name__)
@@ -199,6 +200,7 @@ def create_app() -> Flask:
     # v5.70.0-beta.1 (Q205, AU3) - the four time filters emit a `<time>` element whose TEXT is the UTC wording they always printed (jen/services/timefmt.py); the browser rewriter in
     # base.html shows it in the reader's zone when they pick local. AU9/AU10: `duration_short` and `plural` are the other two shared text filters.
     from jen.services import reltime as _reltime
+    from jen.services import text as _text
     from jen.services import timefmt as _timefmt
 
     app.add_template_filter(_timefmt.fmt_filter, "utcfmt")
@@ -207,6 +209,8 @@ def create_app() -> Flask:
     app.add_template_filter(_timefmt.time_filter, "utctime")
     app.add_template_filter(_reltime.duration_short, "duration_short")
     app.add_template_filter(_reltime.plural, "plural")
+    app.add_template_filter(_reltime.number, "number")  # Q208 (AX5): a count with thousands separators
+    app.add_template_filter(_text.mark_match, "mark")  # Q208 (AX6): what a search matched
     app.add_template_filter(
         _reltime.relative_time, "reltext"
     )  # (the relative phrase as plain text: a `title=` attribute, never a <time> element)
@@ -459,11 +463,8 @@ def create_app() -> Flask:
         # Skip static assets entirely
         if request.path.startswith("/static/"):
             return
-        if get_global_setting("session_timeout_enabled", "true") == "false":
-            session["last_active"] = datetime.now(timezone.utc).isoformat()
-            return
-        timeout = current_user.session_timeout or int(get_global_setting("session_timeout_minutes", "60"))
-        if int(timeout) == 0:
+        # v5.70.0-beta.4 (Q208, AX2): the deadline is defined once (jen/services/session_timeout.py) and the same number goes to the browser (X-Jen-Session-Expires, below)
+        if session_timeout_svc.timeout_minutes(current_user) is None:
             session["last_active"] = datetime.now(timezone.utc).isoformat()
             return
         now = datetime.now(timezone.utc)
@@ -471,16 +472,49 @@ def create_app() -> Flask:
         if not last:
             session["last_active"] = now.isoformat()
         else:
-            try:
-                elapsed = (now - datetime.fromisoformat(last)).total_seconds() / 60
-                if elapsed > int(timeout):
-                    logout_user()
-                    flash("Session expired. Please log in again.", "error")
-                    return redirect(url_for("auth.login"))
-            except Exception:
-                pass
+            when = session_timeout_svc.deadline(session, current_user)
+            if when is not None and now > when:
+                # the browser's script goes to the sign-in page itself at the deadline; a request that still arrives past it (another tab, a stale form) is sent there too, and a GET
+                # comes back to the page it asked for (the form data of a POST is gone either way, so a POST carries no `next`)
+                logout_user()
+                flash("Session expired. Please log in again.", "error")
+                return redirect(
+                    session_timeout_svc.login_redirect_location(
+                        url_for("auth.login"), request.method, request.full_path, request.args.get("next", "")
+                    )
+                )
             if not request.path.startswith("/api/") and request.path != "/metrics":
                 session["last_active"] = now.isoformat()
+
+    @app.after_request
+    def _announce_session_deadline(response):
+        """v5.70.0-beta.4 (Q208, AX2): every response to a signed-in person says when the idle session ends (epoch seconds), so the page can warn two minutes ahead. Never on
+        /static/, never when the timeout is off, and an error in working it out is never a reason to fail the response."""
+        try:
+            if request.path.startswith("/static/") or not current_user.is_authenticated:
+                return response
+            expires = session_timeout_svc.expires_at(session, current_user)
+            if expires is not None:
+                response.headers["X-Jen-Session-Expires"] = str(expires)
+        except Exception:  # a header is a convenience; the page is served without it
+            pass
+        return response
+
+    @app.context_processor
+    def inject_page_chrome():
+        """What `templates/base.html` needs beyond the theme: the session deadline for the first paint (`<body data-session-expires>`, Q208 AX2), the pending field errors (AX4,
+        popped only when the flash block renders) and the print-only line's timestamp (AX8)."""
+        from jen.services import forms as _forms
+        from jen.services import timefmt as _tf
+
+        out = {"session_expires": None, "take_field_errors": _forms.take_field_errors, "print_stamp": ""}
+        try:
+            if current_user.is_authenticated:
+                out["session_expires"] = session_timeout_svc.expires_at(session, current_user)
+                out["print_stamp"] = _tf.fmt_filter(datetime.now(timezone.utc))
+        except Exception:  # the first paint without them still arms from the next response's header
+            pass
+        return out
 
     @app.before_request
     def redirect_to_https():

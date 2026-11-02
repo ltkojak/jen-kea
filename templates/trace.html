@@ -22,8 +22,8 @@
             </div>
             <div class="form-group u-116966">
                 <label for="f-lines">Log lines to scan</label>
-                <input id="f-lines" type="number" name="lines" value="{{ lines }}" min="50" max="1000">
-                <div class="form-hint">Max 1000 — the helper's tail limit.</div>
+                <input id="f-lines" type="number" name="lines" value="{{ lines }}" min="50" max="1000" aria-describedby="f-lines-hint">
+                <div class="form-hint" id="f-lines-hint">Max 1000 — the helper's tail limit.</div>
             </div>
         </div>
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">

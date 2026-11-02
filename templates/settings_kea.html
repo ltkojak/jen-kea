@@ -19,21 +19,21 @@
             <div class="form-row">
                 <div class="form-group">
                     <label for="f-scheme">Scheme</label>
-                    <select id="f-scheme" name="scheme">
+                    <select id="f-scheme" name="scheme" aria-describedby="f-scheme-hint">
                         <option value="https" {% if not tls_ok %}disabled{% endif %}>https — mutual TLS with Jen's CA (recommended){% if not tls_ok %} — needs jen-kea-helper v4{% endif %}</option>
                         <option value="http" {% if not tls_ok %}selected{% endif %}>http — plain, basic-auth only</option>
                     </select>
-                    <div class="form-hint">{% if tls_ok %}https: Jen's own CA issues a server certificate, pushes it to <code>/etc/kea/tls/{{ service }}/</code> on the host, and presents its client certificate — the daemon accepts nothing else.{% else %}https needs the v4 host helper — bring this server's helper up to date from the SSH card, then come back.{% endif %}</div>
+                    <div class="form-hint" id="f-scheme-hint">{% if tls_ok %}https: Jen's own CA issues a server certificate, pushes it to <code>/etc/kea/tls/{{ service }}/</code> on the host, and presents its client certificate — the daemon accepts nothing else.{% else %}https needs the v4 host helper — bring this server's helper up to date from the SSH card, then come back.{% endif %}</div>
                 </div>
                 <div class="form-group">
                     <label for="f-address">Bind address</label>
-                    <input id="f-address" type="text" name="address" value="{{ bind_default }}" placeholder="management IP of this host">
-                    <div class="form-hint">The IP {{ daemon }} listens on — its management address, never 0.0.0.0. Firewall this port to the Jen host.</div>
+                    <input id="f-address" type="text" name="address" value="{{ bind_default }}" placeholder="management IP of this host" aria-describedby="f-address-hint">
+                    <div class="form-hint" id="f-address-hint">The IP {{ daemon }} listens on — its management address, never 0.0.0.0. Firewall this port to the Jen host.</div>
                 </div>
                 <div class="form-group">
                     <label for="f-port">Port</label>
-                    <input id="f-port" type="text" name="port" value="{{ default_port }}">
-                    <div class="form-hint">Never the Control Agent's :8000.</div>
+                    <input id="f-port" type="text" name="port" value="{{ default_port }}" aria-describedby="f-port-hint">
+                    <div class="form-hint" id="f-port-hint">Never the Control Agent's :8000.</div>
                 </div>
                 <div class="form-group">
                     <label>API username</label>
@@ -125,7 +125,7 @@
         <div id="probe-kea-results" class="u-b20d1a"></div>
     </div>
     {% else %}
-    <form method="POST" action="/settings/infrastructure/save-kea" id="kea-api-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-kea" id="kea-api-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="kea-connection-mode">Connection Mode</label>
@@ -138,8 +138,8 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label id="kea-url-label" for="kea-url-input">Control Agent URL</label>
-                <input type="text" name="api_url" value="{{ infra.kea_api_url|no_userinfo }}" placeholder="http://YOUR-KEA-SERVER:8000" id="kea-url-input">
+                <label id="kea-url-label" for="f-api_url">Control Agent URL</label>
+                <input type="text" name="api_url" value="{{ infra.kea_api_url|no_userinfo }}" placeholder="http://YOUR-KEA-SERVER:8000" id="f-api_url">
             </div>
             <div class="form-group">
                 <label>API Username</label>
@@ -154,8 +154,8 @@
         <div class="form-row" id="kea-tls-row">
             <div class="form-group">
                 <label for="f-api_ca">CA bundle path (optional)</label>
-                <input id="f-api_ca" type="text" name="api_ca" value="{{ infra.kea_api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem">
-                <div class="form-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
+                <input id="f-api_ca" type="text" name="api_ca" value="{{ infra.kea_api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem" aria-describedby="f-api_ca-hint">
+                <div class="form-hint" id="f-api_ca-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
             </div>
             <div class="form-group">
                 <label>Verify TLS</label>
@@ -173,8 +173,8 @@
             </div>
             <div class="form-group">
                 <label for="f-api_client_key">Client key</label>
-                <input id="f-api_client_key" type="text" name="api_client_key" value="{{ infra.kea_api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key">
-                <div class="form-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>{{ jen_layout.config_dir }}/ssl/</code>.</div>
+                <input id="f-api_client_key" type="text" name="api_client_key" value="{{ infra.kea_api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key" aria-describedby="f-api_client_key-hint">
+                <div class="form-hint" id="f-api_client_key-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>{{ jen_layout.config_dir }}/ssl/</code>.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save Kea API</button>
@@ -278,7 +278,7 @@
     </div>
     <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
     {% else %}
-    <form method="POST" action="/settings/infrastructure/save-ssh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-ssh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="f-host">Kea server</label>
@@ -286,7 +286,7 @@
             </div>
             <div class="form-group">
                 <label>SSH Username</label>
-                <input type="text" name="user" value="{{ infra.ssh_user }}">
+                <input id="f-ssh_user" type="text" name="user" value="{{ infra.ssh_user }}">
             </div>
             <div class="form-group">
                 <label for="f-kea_conf">Kea Config Path</label>
@@ -397,22 +397,22 @@
         — <a href="/health-center">Health Center → Kea 3.2 readiness</a>
     </div>
     {% endif %}
-    <form method="POST" action="/settings/infrastructure/save-ha"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-ha"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="f-server_name">Primary Server Name</label>
-                <input id="f-server_name" type="text" name="server_name" value="{{ infra.server_name }}" placeholder="Kea Server 1">
-                <div class="form-hint">Friendly name shown in the UI and alerts</div>
+                <input id="f-server_name" type="text" name="server_name" value="{{ infra.server_name }}" placeholder="Kea Server 1" aria-describedby="f-server_name-hint">
+                <div class="form-hint" id="f-server_name-hint">Friendly name shown in the UI and alerts</div>
             </div>
             <div class="form-group">
                 <label for="f-ha_mode">HA Mode</label>
-                <select id="f-ha_mode" name="ha_mode">
+                <select id="f-ha_mode" name="ha_mode" aria-describedby="f-ha_mode-hint">
                     <option value="" {% if not infra.ha_mode %}selected{% endif %}>Standalone (no HA)</option>
                     <option value="hot-standby" {% if infra.ha_mode == 'hot-standby' %}selected{% endif %}>Hot Standby — primary active, standby takes over on failure</option>
                     <option value="load-balancing" {% if infra.ha_mode == 'load-balancing' %}selected{% endif %}>Load Balancing — both nodes share the load</option>
                     <option value="passive-backup" {% if infra.ha_mode == 'passive-backup' %}selected{% endif %}>Passive Backup — primary active, backup receives updates only</option>
                 </select>
-                <div class="form-hint">Must match the ha-mode in kea-dhcp4.conf. Jen targets the active node for config-get and edits.</div>
+                <div class="form-hint" id="f-ha_mode-hint">Must match the ha-mode in kea-dhcp4.conf. Jen targets the active node for config-get and edits.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save HA Settings</button>
@@ -529,7 +529,7 @@
         {% endfor %}
         <button type="button" class="btn btn-sm btn-secondary u-da12f2" id="add-server-row-btn">+ Add Server</button>
         <br>
-        <form method="POST" action="/settings/infrastructure/save-extra-servers" id="extraServersForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-extra-servers" id="extraServersForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div id="extra-servers-hidden"></div>
             <button type="submit" class="btn btn-primary" id="save-extra-servers-btn">Save Additional Servers</button>
         </form>
@@ -572,11 +572,11 @@
         {% if infra.kea_connection_mode == 'direct' and not infra.d2_api_url %}
         <div class="alert alert-warning">{{ icon("triangle-alert") }} Jen is in <code>direct</code> mode, but no D2 control socket URL is set — D2 status/config on the DDNS page will show errors until you set the API URL below.</div>
         {% endif %}
-        <form method="POST" action="/settings/infrastructure/save-d2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-d2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-row">
                 <div class="form-group">
                     <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp-ddns control socket URL{% else %}API URL{% endif %}</label>
-                    <input type="text" name="api_url" value="{{ infra.d2_api_url|no_userinfo }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:53001{% else %}{{ infra.kea_api_url|no_userinfo }} (inherited){% endif %}">
+                    <input id="f-d2_api_url" type="text" name="api_url" value="{{ infra.d2_api_url|no_userinfo }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:53001{% else %}{{ infra.kea_api_url|no_userinfo }} (inherited){% endif %}">
                 </div>
                 <div class="form-group">
                     <label>API Username</label>
@@ -603,12 +603,12 @@
         <div class="card-header"><span class="card-title">{{ icon("search") }} DNS provider (lookups)</span>
             <span class="u-865c33">Powers the <a href="/ddns">Network → DDNS</a> page</span>
         </div>
-        <form method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-row">
                 <div class="form-group">
                     <label for="f-log_path">Log File Path</label>
-                    <input id="f-log_path" type="text" name="log_path" value="{{ infra.ddns_log }}">
-                    <div class="form-hint">The DDNS log on the Kea server (D2's, or your own hook script's) — read through the Kea host helper</div>
+                    <input id="f-log_path" type="text" name="log_path" value="{{ infra.ddns_log }}" aria-describedby="f-log_path-hint">
+                    <div class="form-hint" id="f-log_path-hint">The DDNS log on the Kea server (D2's, or your own hook script's) — read through the Kea host helper</div>
                 </div>
                 <div class="form-group">
                     <label for="dnsProvider">DNS provider</label>
@@ -631,8 +631,8 @@
                     </div>
                     <div class="form-group">
                         <label for="f-api_token_technitium">API Token</label>
-                        <input id="f-api_token_technitium" type="password" name="api_token_technitium" placeholder="{{ '(unchanged)' if infra.dns_provider == 'technitium' and infra.ddns_token_set else '(not set)' }}" autocomplete="new-password">
-                        <div class="form-hint">{% if infra.dns_provider == 'technitium' and infra.ddns_token_set %}Leave blank to keep the saved token{% else %}Enter this provider's token - a different provider's is never reused{% endif %}</div>
+                        <input id="f-api_token_technitium" type="password" name="api_token_technitium" placeholder="{{ '(unchanged)' if infra.dns_provider == 'technitium' and infra.ddns_token_set else '(not set)' }}" autocomplete="new-password" aria-describedby="f-api_token_technitium-hint">
+                        <div class="form-hint" id="f-api_token_technitium-hint">{% if infra.dns_provider == 'technitium' and infra.ddns_token_set %}Leave blank to keep the saved token{% else %}Enter this provider's token - a different provider's is never reused{% endif %}</div>
                     </div>
                     <div class="form-group">
                         <label for="f-forward_zone">Forward Zone</label>
@@ -645,13 +645,13 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-api_url_pihole">Pi-hole URL</label>
-                        <input id="f-api_url_pihole" type="text" name="api_url_pihole" value="{{ (infra.ddns_url|no_userinfo) if infra.dns_provider == 'pihole' else '' }}" placeholder="http://pi.hole">
-                        <div class="form-hint">Supports Pi-hole v5 and v6</div>
+                        <input id="f-api_url_pihole" type="text" name="api_url_pihole" value="{{ (infra.ddns_url|no_userinfo) if infra.dns_provider == 'pihole' else '' }}" placeholder="http://pi.hole" aria-describedby="f-api_url_pihole-hint">
+                        <div class="form-hint" id="f-api_url_pihole-hint">Supports Pi-hole v5 and v6</div>
                     </div>
                     <div class="form-group">
                         <label for="f-api_token_pihole">Password / API Token</label>
-                        <input id="f-api_token_pihole" type="password" name="api_token_pihole" placeholder="{{ '(unchanged)' if infra.dns_provider == 'pihole' and infra.ddns_token_set else '(not set)' }}" autocomplete="new-password">
-                        <div class="form-hint">Pi-hole web password (v5) or API token (v6)</div>
+                        <input id="f-api_token_pihole" type="password" name="api_token_pihole" placeholder="{{ '(unchanged)' if infra.dns_provider == 'pihole' and infra.ddns_token_set else '(not set)' }}" autocomplete="new-password" aria-describedby="f-api_token_pihole-hint">
+                        <div class="form-hint" id="f-api_token_pihole-hint">Pi-hole web password (v5) or API token (v6)</div>
                     </div>
                 </div>
             </div>
@@ -743,11 +743,11 @@
     {% if current_user.role != 'superadmin' %}
     <p class="u-ec76a1">Only a superadmin changes where Jen reads Kea's IPv6 data.</p>
     {% else %}
-    <form method="POST" action="/settings/infrastructure/save-kea6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-kea6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp6 control socket URL{% else %}API URL{% endif %}</label>
-                <input type="text" name="api_url" value="{{ infra.kea6_api_url|no_userinfo }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:8006{% else %}{{ infra.kea_api_url|no_userinfo }} (inherited){% endif %}">
+                <input id="f-kea6_api_url" type="text" name="api_url" value="{{ infra.kea6_api_url|no_userinfo }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:8006{% else %}{{ infra.kea_api_url|no_userinfo }} (inherited){% endif %}">
             </div>
             <div class="form-group">
                 <label>API Username</label>
@@ -775,8 +775,8 @@
             </div>
             <div class="form-group">
                 <label for="f-db_pass">DB Password</label>
-                <input id="f-db_pass" type="password" name="db_pass" placeholder="(kept unless changed)">
-                {% if 'kea6_db' in infra.shared_copies %}<div class="form-hint">Password: <strong>shared copy</strong> - a copy of the Kea database's, made once; it does not follow a later change of it.</div>{% endif %}
+                <input id="f-db_pass" type="password" name="db_pass" placeholder="(kept unless changed)" aria-describedby="f-db_pass-hint">
+                {% if 'kea6_db' in infra.shared_copies %}<div class="form-hint" id="f-db_pass-hint">Password: <strong>shared copy</strong> - a copy of the Kea database's, made once; it does not follow a later change of it.</div>{% endif %}
                 <div class="u-6125e5">
                     <label><input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741"> Inherit the Kea DB password</label>
                     <label><input type="checkbox" name="no_db_pass" value="1" class="u-30e741"> No password</label>
@@ -932,7 +932,7 @@ function serializeServers() {
     var sel = document.getElementById('kea-connection-mode');
     if (!sel) return;
     var label = document.getElementById('kea-url-label');
-    var input = document.getElementById('kea-url-input');
+    var input = document.getElementById('f-api_url');
     var hint = document.getElementById('kea-mode-hint');
     function sync() {
         if (sel.value === 'direct') {

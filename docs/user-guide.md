@@ -151,6 +151,8 @@ The Leases page shows all active dynamic leases — devices that received an IP 
 
 **Show History** — toggle to show expired leases instead of active ones. Useful for seeing what was on your network recently.
 
+**Sorting and paging** — click a column heading to sort, or a page number to move on: the table changes where it is, without reloading the page, and Back returns to the previous sort. The heading the list is sorted by is announced to screen readers; Ctrl-click (or Cmd-click) a heading to open that sort in a new tab. Devices and Reservations work the same way.
+
 ### Converting a Lease to a Reservation
 
 Click the **📌** button next to any lease to convert it to a static reservation. This pre-fills the IP, MAC, and hostname from the lease. You can optionally set a DNS override at this step.
@@ -535,6 +537,22 @@ The log is paginated — 50 entries per page.
 Click the palette icon in the top right navigation bar (or **Theme** in the phone's More sheet) to pick a look: Dark, Light, High contrast, Phosphor, Slate (cool blue), Ember (warm), Retro (the early-nineties desktop), or Custom once an install has defined one. Your pick is saved in your browser and persists between sessions — it never affects what anyone else sees. It's a preference of that browser, not of your Jen account: if two people share a browser, they share the pick.
 
 At the top of the menu, **Install default (\<name\>)** switches back to whatever the install's superadmin has set as the default look (Settings → Appearance → Theme), for anyone who hasn't picked one for themselves. A checkmark shows which one is currently active — on a preset only if you've actually chosen it, on **Install default** otherwise.
+
+---
+
+## Staying signed in, unsaved edits, passwords and printing
+
+**The session notice.** Jen signs you out after a period of inactivity (set by an administrator under Settings → Access & Security, or per user). Two minutes before that, a dialog says "You will be signed out in 1:59 for inactivity." — choose **Stay signed in** to carry on, or **Sign out now**. If another tab of Jen keeps the session alive, the dialog closes by itself. If nobody answers, Jen takes you to the sign-in page and, after you sign in, back to the page you were on.
+
+**Unsaved edits.** On the long forms — Settings → Kea, Alerts, Access & Security, the custom palette under Appearance, Databases, DDNS naming, a DHCP class, Add and Edit subnet, Add reservation and the Kea config author — your browser asks before you leave the page with changes you have not saved. Saving never asks, and a form you have not changed never asks.
+
+**A mistake in a form** is printed under the field it belongs to, in red, and the field takes focus. A problem with the whole form, or with a Kea host, is a notice at the top of the page.
+
+**Show password.** Every password field has a **Show password** button beside it; press it to see what you typed and press it again to hide it.
+
+**Printing.** Print any page from the browser's Print command: the menu, filters, buttons and page numbers are left out, the columns a phone would hide are included, and a line at the top says where and when the page was printed.
+
+**Times on a touch screen.** Jen shows times in your browser's zone; tap a time on a phone or tablet to see its UTC reading.
 
 ---
 

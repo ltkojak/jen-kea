@@ -10,6 +10,20 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## Sorting and paging in place, a warning before your session ends, errors under their field, and a few small things
+
+One step (5.70.0-beta.4). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step.
+
+**Sorting and paging on Leases, Devices and Reservations no longer reload the page.** A click on a column heading or a page number swaps the results where they are and keeps your place; the address bar still changes, so Back works, and a click with Ctrl or Cmd (or the middle button) opens the sorted view in a new tab as before. The heading the list is sorted by is announced to screen readers.
+
+**You are told two minutes before an idle session ends.** A dialog says "You will be signed out in 1:59 for inactivity" with **Stay signed in** and **Sign out now**; any other tab or request that keeps the session alive closes it by itself. If nobody answers, the page goes to the sign-in page and brings you back to the page you were on after you sign in. This uses one new address, `POST /session/touch`, which moves the session's last-active time and nothing else; it needs a signed-in session and the usual form token.
+
+**A long settings form warns before you leave it half-edited** (Settings → Kea, Alerts, Access & Security, Appearance's custom palette, Databases, DDNS naming, a DHCP class, Add and Edit subnet, Add reservation and the Kea config author). Saving, signing out from the dialog above, and leaving without a change never ask.
+
+**A mistake in a form is printed under the field it belongs to**, the field takes focus, and a screen reader hears the message with the field. A message about the whole form or about a Kea host is still a notice at the top. Every hint under a field is now tied to its input.
+
+**Counts have thousands separators** ("12,000 active leases", the dashboard cards, Reports, the IP map, Search). **A search result marks what matched.** **Every password field has a Show password button.** **A page prints without its menu and buttons**, with the columns a phone hides, and a line saying where and when it was printed. **On a touch screen, tapping a time shows its UTC reading.** **Subnets says, once per browser, that the badge on a card is the color picker.**
+
 ## American spelling throughout
 
 One step (5.70.0-beta.3). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step.

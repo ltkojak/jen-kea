@@ -31,14 +31,25 @@ def duration_short(seconds) -> str:
     return f"{hours} h" + (f" {minutes} min" if minutes else "")
 
 
+def number(count) -> str:
+    """A count with thousands separators, "12,345" (Q208, AX5). Always the US grouping, whatever the reader's locale: the product is written in American English and a count keeps one shape.
+    A value that is not a whole number reads as 0, the same coercion `plural` makes. The `|number` filter."""
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        n = 0
+    return f"{n:,}"
+
+
 def plural(count, singular, plural_form=None) -> str:
-    """ "1 lease", "145 leases", "0 leases" (Q205, AU10): the count and the noun that agrees with it. `plural_form` for a noun that does not take an s (`entry` -> `entries`). The `|plural` filter."""
+    """ "1 lease", "145 leases", "0 leases", "12,000 leases" (Q205, AU10; grouped in Q208): the count and the noun that agrees with it. `plural_form` for a noun that does not take an s
+    (`entry` -> `entries`). The `|plural` filter."""
     try:
         n = int(count)
     except (TypeError, ValueError):
         n = 0
     word = singular if n == 1 else (plural_form or singular + "s")
-    return f"{n} {word}"
+    return f"{n:,} {word}"
 
 
 def relative_time(value, now=None):

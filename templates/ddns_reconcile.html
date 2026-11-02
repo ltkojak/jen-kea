@@ -22,8 +22,8 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-limit">Limit</label>
-                <input id="f-limit" type="number" name="limit" value="{{ limit }}" min="1" max="1000" class="u-bbc1fe">
-                <div class="form-hint">Max 1000 — each name is a live DNS lookup.</div>
+                <input id="f-limit" type="number" name="limit" value="{{ limit }}" min="1" max="1000" class="u-bbc1fe" aria-describedby="f-limit-hint">
+                <div class="form-hint" id="f-limit-hint">Max 1000 — each name is a live DNS lookup.</div>
             </div>
             <div class="form-group u-ffd20f">
                 <button type="submit" class="btn btn-primary">Run</button>
@@ -33,9 +33,9 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">Results — {{ total }} checked</span></div>
+    <div class="card-header"><span class="card-title">Results — {{ total|number }} checked</span></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
-        <a href="?limit={{ limit }}" class="badge" style="{% if not verdict_filter %}background:var(--primary);color:white;{% endif %}">All ({{ total }})</a>
+        <a href="?limit={{ limit }}" class="badge" style="{% if not verdict_filter %}background:var(--primary);color:white;{% endif %}">All ({{ total|number }})</a>
         {% for v in verdicts %}
         <a href="?limit={{ limit }}&verdict={{ v }}"
            class="badge"

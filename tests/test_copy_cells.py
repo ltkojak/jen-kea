@@ -142,6 +142,24 @@ class TestTheMacro:
         assert self.render("{{ copy_cell(v) }}", v=empty) == ""
         assert self.render("{{ copy_cell(v) or '—' }}", v=empty) == "—"
 
+    # Q208 (AX6): the optional third argument `display` is the text SHOWN; the value copied stays the raw one
+    def test_display_is_the_shown_text_and_data_copy_stays_raw(self):
+        from markupsafe import Markup
+
+        out = self.render("{{ copy_cell(v, None, d) }}", v="aa:bb:cc", d=Markup("aa:<mark>bb</mark>:cc"))
+        assert (
+            out
+            == '<button type="button" class="copy mono" data-copy="aa:bb:cc" title="Copy aa:bb:cc">aa:<mark>bb</mark>:cc</button>'
+        )
+        assert "<mark>" not in out.split(">", 1)[0], "the attribute side of the button carries no mark"
+
+    def test_data_copy_never_contains_a_mark_even_when_the_value_is_one(self):
+        from markupsafe import Markup
+
+        out = self.render("{{ copy_cell(v, None, d) }}", v="<mark>x</mark>", d=Markup("<mark>shown</mark>"))
+        attribute = out.split('data-copy="', 1)[1].split('"', 1)[0]
+        assert "<mark>" not in attribute and attribute == "&lt;mark&gt;x&lt;/mark&gt;"
+
 
 class Buttons(HTMLParser):
     """The text nodes of a page, split into those inside a [data-copy] button and those outside."""

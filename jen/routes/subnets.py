@@ -36,6 +36,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import assert_subnet_access as _assert_subnet_access
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.forms import flash_field
 from jen.services.leases_sql import ACTIVE_LEASE4
 
 logger = logging.getLogger(__name__)
@@ -436,53 +437,53 @@ def add_subnet_post():
         flash("Invalid shared network name.", "error")
         return redirect(url_for("subnets.add_subnet"))
     if not new_id or not new_id.isdigit() or int(new_id) <= 0:
-        flash("Subnet ID must be a positive whole number.", "error")
+        flash_field("id", "Subnet ID must be a positive whole number.")
         return redirect(url_for("subnets.add_subnet"))
     new_id = int(new_id)
 
     if new_id in extensions.SUBNET_MAP or new_id in _get_kea_subnet_ids():
-        flash(f"Subnet ID {new_id} is already in use.", "error")
+        flash_field("id", f"Subnet ID {new_id} is already in use.")
         return redirect(url_for("subnets.add_subnet"))
 
     name_reason = __config.invalid_subnet_name_reason(new_name)
     if name_reason:
-        flash(name_reason, "error")
+        flash_field("name", name_reason)
         return redirect(url_for("subnets.add_subnet"))
 
     try:
         network = ipaddress.IPv4Network(new_cidr, strict=True)
     except Exception:
-        flash(f"Invalid CIDR: {new_cidr} — e.g. 10.10.80.0/24", "error")
+        flash_field("cidr", f"Invalid CIDR: {new_cidr} — e.g. 10.10.80.0/24")
         return redirect(url_for("subnets.add_subnet"))
 
     # Check for CIDR overlap against every subnet Jen already knows about
     overlap = _overlap_message(network, new_cidr)
     if overlap:
-        flash(overlap, "error")
+        flash_field("cidr", overlap)
         return redirect(url_for("subnets.add_subnet"))
 
     if not new_pool or not re.match(r"^\d+\.\d+\.\d+\.\d+\s*-\s*\d+\.\d+\.\d+\.\d+$", new_pool):
-        flash("Pool range is required — format: start–end e.g. 10.10.80.50-10.10.80.250", "error")
+        flash_field("pool", "Pool range is required — format: start–end e.g. 10.10.80.50-10.10.80.250")
         return redirect(url_for("subnets.add_subnet"))
 
     pool_start, pool_end = [p.strip() for p in new_pool.split("-")]
     if not _valid_ip(pool_start) or not _valid_ip(pool_end):
-        flash("Pool start/end must be valid IP addresses.", "error")
+        flash_field("pool", "Pool start/end must be valid IP addresses.")
         return redirect(url_for("subnets.add_subnet"))
     if ipaddress.IPv4Address(pool_start) not in network or ipaddress.IPv4Address(pool_end) not in network:
-        flash(f"Pool range must fall within the CIDR {new_cidr}.", "error")
+        flash_field("pool", f"Pool range must fall within the CIDR {new_cidr}.")
         return redirect(url_for("subnets.add_subnet"))
 
     if routers:
         bad = [ip for ip in routers.split(",") if not _valid_ip(ip)]
         if bad:
-            flash(f"Invalid router IP(s): {', '.join(bad)}", "error")
+            flash_field("routers", f"Invalid router IP(s): {', '.join(bad)}")
             return redirect(url_for("subnets.add_subnet"))
 
     if dns:
         bad = [ip for ip in dns.split(",") if not _valid_ip(ip)]
         if bad:
-            flash(f"Invalid DNS server IP(s): {', '.join(bad)}", "error")
+            flash_field("dns", f"Invalid DNS server IP(s): {', '.join(bad)}")
             return redirect(url_for("subnets.add_subnet"))
 
     for t, label in [(lifetime, "Valid Lifetime"), (renew, "Renew Timer"), (rebind, "Rebind Timer")]:

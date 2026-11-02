@@ -95,7 +95,7 @@
         </p>
 
         <div class="form-row" id="theme-custom-layout">
-            <form method="POST" action="/settings/theme/custom" id="theme-custom-form">
+            <form data-guard-unsaved method="POST" action="/settings/theme/custom" id="theme-custom-form">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-row">
                     {% set field_labels = {
@@ -108,27 +108,27 @@
                     <div class="form-group" data-theme-field="{{ name }}">
                         <label>{{ label }}</label>
                         <div class="flex items-center gap-1">
-                            <input type="color" class="theme-color-picker" data-pairs="{{ name }}_hex"
+                            <input type="color" class="theme-color-picker" data-pairs="{{ name }}"
                                    value="{{ start[name] }}" style="width:36px;height:32px;padding:2px;cursor:pointer;flex-shrink:0;">
-                            <input type="text" name="{{ name }}" id="theme-field-{{ name }}_hex" class="theme-color-hex u-97445a"
+                            <input type="text" name="{{ name }}" id="f-{{ name }}" class="theme-color-hex u-97445a"
                                    value="{{ start[name] }}" maxlength="7" placeholder="#000000">
                         </div>
                     </div>
                     {% endfor %}
                     <div class="form-group">
-                        <label for="theme-field-radius">Corner Radius</label>
-                        <input type="number" name="radius" id="theme-field-radius" min="0" max="16"
+                        <label for="f-radius">Corner Radius</label>
+                        <input type="number" name="radius" id="f-radius" min="0" max="16"
                                value="{{ theme_custom.radius if theme_custom else theme_all_presets['dark'].radius }}" class="u-97445a">
                     </div>
                 </div>
 
                 <div class="flex items-center gap-2 wrap mt-3">
                     <label class="u-fbdb05">
-                        <input type="checkbox" name="mono_ui" id="theme-field-mono_ui" value="on"
+                        <input type="checkbox" name="mono_ui" id="f-mono_ui" value="on"
                                {% if (theme_custom.mono_ui if theme_custom else theme_all_presets['dark'].mono_ui) %}checked{% endif %}>
                         Monospace UI on desktop
                     </label>
-                    <span class="form-hint">Start from:</span>
+                    <span class="muted">Start from:</span>
                     {% for tid, tname in theme_presets %}
                     {% if tid != 'custom' %}
                     <button type="button" class="btn btn-secondary btn-sm theme-start-from" data-preset-id="{{ tid }}">{{ tname }}</button>
@@ -196,8 +196,8 @@
     <form method="POST" action="/settings/upload-favicon" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label for="f-favicon">Upload Favicon</label>
-            <input id="f-favicon" type="file" name="favicon" accept=".ico,.png">
-            <div class="form-hint">.ico or .png — 32x32 or 64x64 recommended. Survives upgrades.</div>
+            <input id="f-favicon" type="file" name="favicon" accept=".ico,.png" aria-describedby="f-favicon-hint">
+            <div class="form-hint" id="f-favicon-hint">.ico or .png — 32x32 or 64x64 recommended. Survives upgrades.</div>
         </div>
         <button type="submit" class="btn btn-primary">Upload</button>
     </form>
@@ -327,7 +327,7 @@ function themePaletteWarnings(tokens) {
     const warningsBox = document.getElementById('theme-warnings');
 
     function hexField(name) {
-        return document.getElementById('theme-field-' + name + '_hex');
+        return document.getElementById('f-' + name);
     }
     function currentTokens() {
         const tokens = {};
@@ -341,7 +341,7 @@ function themePaletteWarnings(tokens) {
             const norm = themeNormalizeHex(tokens[name]);
             if (norm) style += '--' + name.replace('_', '-') + ':' + norm + ';';
         });
-        const radius = document.getElementById('theme-field-radius').value;
+        const radius = document.getElementById('f-radius').value;
         if (radius !== '') style += '--radius:' + radius + 'px;';
         preview.setAttribute('style', style);
 
@@ -357,12 +357,12 @@ function themePaletteWarnings(tokens) {
         }
     }
 
-    form.querySelectorAll('.theme-color-hex, #theme-field-radius, #theme-field-mono_ui').forEach((el) => {
+    form.querySelectorAll('.theme-color-hex, #f-radius, #f-mono_ui').forEach((el) => {
         el.addEventListener('input', updatePreview);
     });
     form.querySelectorAll('.theme-color-picker').forEach((picker) => {
         picker.addEventListener('input', () => {
-            const hex = document.getElementById('theme-field-' + picker.dataset.pairs);
+            const hex = document.getElementById('f-' + picker.dataset.pairs);
             hex.value = picker.value;
             updatePreview();
         });
@@ -371,7 +371,7 @@ function themePaletteWarnings(tokens) {
         hex.addEventListener('input', () => {
             const norm = themeNormalizeHex(hex.value);
             if (!norm) return;
-            const pairKey = hex.id.replace('theme-field-', '');
+            const pairKey = hex.id.replace('f-', '');
             const picker = form.querySelector('.theme-color-picker[data-pairs="' + pairKey + '"]');
             if (picker) picker.value = norm;
         });
@@ -382,11 +382,11 @@ function themePaletteWarnings(tokens) {
             if (!preset) return;
             THEME_TOKEN_NAMES.forEach((name) => {
                 hexField(name).value = preset.tokens[name];
-                const picker = form.querySelector('.theme-color-picker[data-pairs="' + name + '_hex"]');
+                const picker = form.querySelector('.theme-color-picker[data-pairs="' + name + '"]');
                 if (picker) picker.value = preset.tokens[name];
             });
-            document.getElementById('theme-field-radius').value = preset.radius;
-            document.getElementById('theme-field-mono_ui').checked = preset.mono_ui;
+            document.getElementById('f-radius').value = preset.radius;
+            document.getElementById('f-mono_ui').checked = preset.mono_ui;
             updatePreview();
         });
     });

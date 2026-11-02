@@ -61,6 +61,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     window.jenFetch = function(url, opts) {
         start();
         return fetch(url, opts).then(function(resp) {
+            // Q208 (AX2): every response to a signed-in person carries when the idle session ends; jenSessionWatch (defined at the foot of the page) re-arms from it
+            try { var ends = resp.headers.get('X-Jen-Session-Expires'); if (ends && window.jenSessionWatch) window.jenSessionWatch.ingest(ends); } catch (e) { /* no header API */ }
             if (resp.status === 401 && !reauthing) {
                 resp.clone().json().then(function(d) {
                     if (d && d.reauth && !reauthing) { reauthing = true; window.location.assign(d.reauth); }
@@ -440,6 +442,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .alert-warning { background: color-mix(in srgb, var(--warning) 18%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
         /* v5.70.0-beta.2 (Q206, AV1/AV2): a flash can be dismissed; a toast is the same alert made small and fixed. Both leave through `.leaving`; with prefers-reduced-motion the script removes them at once. */
         .alert-flash { display: flex; align-items: flex-start; gap: 12px; }
+        .alert-flash[hidden] { display: none; }
         .alert-flash .alert-text, .toast .alert-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
         .alert-close { background: none; border: 0; padding: 0 2px; margin: 0; font: inherit; font-size: 18px; line-height: 1; color: inherit; cursor: pointer; opacity: .7; }
         .alert-close:hover, .alert-close:focus-visible { opacity: 1; }
@@ -471,6 +474,28 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .copy.copied { color: var(--success); }
         .copy-sink { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
         .results-summary { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); }
+        /* v5.70.0-beta.4 (Q208): what a search matched (AX6) - no theme has a soft accent token, so the highlight is the warning color mixed into whatever the surface is */
+        mark { background: color-mix(in srgb, var(--warning) 35%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+        /* AX4: an error printed under its field */
+        .field-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
+        input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); }
+        /* AX2: the idle-session notice shares the prompt dialog's overlay and card; it sits above the confirmation dialog */
+        #jen-session-overlay { z-index: 10001; }
+        .jen-dialog p { font-size: 14px; line-height: 1.5; margin-bottom: 20px; }
+        .jen-dialog-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+        /* AX8: a page prints without its chrome */
+        .print-only { display: none; }
+        @page { margin: 12mm; }
+        @media print {
+            .nav, .section-tabs-wrap, .filter-bar, .pagination, .btn, #jen-toasts, #jen-toasts-alert, .toast-stack, .alert-close, #kb-modal, #jen-confirm-overlay, #jen-prompt-overlay,
+            #jen-session-overlay, .pw-toggle, .tone-menu, .tabbar, .sheet, .sheet-backdrop, .skip-link, #jen-progress { display: none !important; }
+            .hide-mobile, .hide-tablet { display: table-cell !important; }
+            table.rowlist { width: 100%; font-size: 10pt; }
+            details > *:not(summary) { display: block; }
+            a[href]::after { content: none !important; }
+            .print-only { display: block; margin-bottom: 8px; font-size: 10pt; }
+            body { background: #fff; color: #000; }
+        }
 
         /* Utilization bar */
         .util-bar { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
@@ -849,7 +874,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
          inline block so its equal-precedence rules win. -->
     <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
 </head>
-<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}" hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <a href="#main" class="skip-link">Skip to content</a>
 <div id="jen-progress"></div>
 {% include "_icon_sprite.html" %}
@@ -875,7 +900,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         {% if getting_started_pill %}
         <a href="/getting-started" class="nav-link gs-pill" title="The first-hour checklist"
            style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;white-space:nowrap;">
-            {{ icon("rocket") }} Getting started ({{ getting_started_pill.done }}/{{ getting_started_pill.total }})
+            {{ icon("rocket") }} Getting started ({{ getting_started_pill.done|number }}/{{ getting_started_pill.total|number }})
         </a>
         {% endif %}
         <span class="kea-status" id="kea-indicator" title="Kea status"></span>
@@ -1022,6 +1047,10 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         <a href="/settings/kea#kea-ssh">Settings &rarr; Kea &rarr; SSH</a>.
     </div>
     {% endif %}
+    {# Q208 (AX4): an error that names ONE field is printed as an alert carrying data-field; the script at the foot of the page moves it under its input, and without script it IS a flash. They come first. #}
+    {% for field, message in (take_field_errors() if take_field_errors is defined else []) %}
+    <div class="alert alert-error alert-flash" role="alert" data-field="{{ field }}"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+    {% endfor %}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% for category, message in messages %}
@@ -1039,6 +1068,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     {% if nav.in_settings and request.endpoint != 'settings.settings' %}
     <a href="/settings" class="settings-back">‹ All settings</a>
     {% endif %}
+    {% if current_user.is_authenticated %}<p class="print-only">Printed from Jen · {{ request.host }} · {{ print_stamp|default('') }}</p>{% endif %}
     {% block content %}{% endblock %}
 </div>
 </main>
@@ -1061,7 +1091,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         <input type="text" name="q" placeholder="Search…" autocomplete="off" aria-label="Search">
     </form>
     {% if getting_started_pill %}
-    <div class="sheet-list"><a class="full" href="/getting-started">{{ icon("rocket") }} Getting started ({{ getting_started_pill.done }}/{{ getting_started_pill.total }})</a></div>
+    <div class="sheet-list"><a class="full" href="/getting-started">{{ icon("rocket") }} Getting started ({{ getting_started_pill.done|number }}/{{ getting_started_pill.total|number }})</a></div>
     {% endif %}
     {% for g in nav.sheet %}
     <div class="sheet-group-label">{{ g.label }}</div>
@@ -1270,6 +1300,16 @@ window.jenTime = (function() {
         });
     });
     document.addEventListener('htmx:afterSwap', function(e) { apply(e.detail && e.detail.target ? e.detail.target : (e.target || document)); });
+    // Q208 (AX9): a touch screen has no hover, so the UTC reading that `title` carries for a pointer is shown as a notice when a time is tapped. One delegated listener, coarse pointers only;
+    // a time inside a link or a button leaves the click to them.
+    if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+        document.addEventListener('click', function(e) {
+            var el = e.target.closest ? e.target.closest('time[data-jen-time]') : null;
+            if (!el || el.closest('a, button')) return;
+            var utc = el.getAttribute('data-jen-utc');
+            if (utc && window.jenToast) window.jenToast('UTC: ' + utc, 'info');
+        });
+    }
     return { mode: mode, format: format, apply: apply, clock: clock };
 })();
 
@@ -1777,7 +1817,9 @@ function sortTable(table, col, th) {
         // a row with a primary link opens it when tapped anywhere that is not itself a control
         if (window.matchMedia('(max-width: 768px)').matches) {
             var tr = e.target.closest('table.rowlist tr');
-            if (tr && !e.target.closest('a, button, input, select, textarea, label, summary, .action-menu, [data-href], [data-confirm]')) {
+            // a tap on a time is that time's own (it shows the UTC reading), not the row's
+            var onTime = window.matchMedia('(pointer: coarse)').matches && e.target.closest('time[data-jen-time]');
+            if (tr && !onTime && !e.target.closest('a, button, input, select, textarea, label, summary, .action-menu, [data-href], [data-confirm]')) {
                 var box = tr.querySelector('.row-checkbox');
                 var menu = tr.querySelector('.action-menu-toggle');
                 if (document.body.classList.contains('select-mode') && box) {
@@ -1836,6 +1878,16 @@ function sortTable(table, col, th) {
         <div class="jen-dialog-actions">
             <button type="button" id="jen-prompt-cancel" class="btn btn-secondary">Cancel</button>
             <button type="button" id="jen-prompt-ok" class="btn btn-primary">OK</button>
+        </div>
+    </div>
+</div>
+<div id="jen-session-overlay" class="jen-dialog-overlay" role="alertdialog" aria-modal="true" aria-labelledby="jen-session-title" aria-describedby="jen-session-text" hidden>
+    <div class="jen-dialog">
+        <div id="jen-session-title" class="jen-dialog-title">Still there?</div>
+        <p id="jen-session-text">You will be signed out in <span id="jen-session-left">2:00</span> for inactivity.</p>
+        <div class="jen-dialog-actions">
+            <button type="button" id="jen-session-out" class="btn btn-secondary">Sign out now</button>
+            <button type="button" id="jen-session-stay" class="btn btn-primary">Stay signed in</button>
         </div>
     </div>
 </div>
@@ -2047,6 +2099,7 @@ function sortTable(table, col, th) {
         jenProgress.start();
     }
     function jenResetFullPageSubmits() {
+        document.querySelectorAll('form[data-submitting]').forEach(function(f) { f.removeAttribute('data-submitting'); });
         document.querySelectorAll('[aria-busy="true"]').forEach(function(el) {
             el.disabled = false;
             el.removeAttribute('aria-busy');
@@ -2135,5 +2188,211 @@ function sortTable(table, col, th) {
     document.addEventListener('htmx:afterSwap', wireDispatch);
 })();
 </script>
+<script nonce="{{ csp_nonce }}">
+// Q208 - the third round of page behavior, in one block: the sort and page links as swaps (AX1), the idle-session notice (AX2), the unsaved-changes warning (AX3) and a field's
+// own error (AX4). The password toggle (AX7) is _password_toggle.html, included below.
+(function() {
+    // AX1 - a header or page link that carries hx-get keeps its href for a new tab: a click with Ctrl, Cmd, Shift or the middle button is the browser's, and htmx never sees it.
+    document.addEventListener('click', function(e) {
+        if (!(e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1)) return;
+        var a = e.target.closest ? e.target.closest('a[hx-get]') : null;
+        if (a) e.stopImmediatePropagation();
+    }, true);
+
+    // AX2 - jenSessionWatch. The server says when the idle session ends (X-Jen-Session-Expires on every response, data-session-expires on the body for the first paint).
+    // Two minutes before, a dialog offers "Stay signed in" (POST /session/touch); at the deadline the page goes to the sign-in page itself and comes back to where it was.
+    // A deadline only ever moves forward here: a late reply that carries an older one is ignored, and another tab's touch arrives through the storage event.
+    var SESSION_KEY = 'jen-session-expires';
+    var CSRF = {{ csrf_token()|tojson }};
+    var expires = 0, lead = 120, warnTimer = null, tickTimer = null, opener = null;
+    var overlay = document.getElementById('jen-session-overlay');
+    var leftEl = document.getElementById('jen-session-left');
+    var stayBtn = document.getElementById('jen-session-stay');
+    var outBtn = document.getElementById('jen-session-out');
+    function nowS() { return Date.now() / 1000; }
+    function dialogOpen() { return !!overlay && !overlay.hidden; }
+    function clockText(sec) { var m = Math.floor(sec / 60), s = sec % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
+    function closeDialog() {
+        if (!dialogOpen()) return;
+        overlay.hidden = true;
+        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+        document.removeEventListener('keydown', onKey, true);
+        if (opener && opener.focus) opener.focus();
+        opener = null;
+    }
+    function goToLogin() {
+        window.jenLeaving = true;
+        window.location.assign('/login?next=' + encodeURIComponent(window.location.pathname + window.location.search));
+    }
+    function signOut() {
+        window.jenLeaving = true;
+        var f = document.createElement('form');
+        f.method = 'POST';
+        f.action = '/logout';
+        var i = document.createElement('input');
+        i.type = 'hidden'; i.name = 'csrf_token'; i.value = CSRF;
+        f.appendChild(i);
+        document.body.appendChild(f);
+        f.submit();
+    }
+    function tick() {
+        var left = Math.ceil(expires - nowS());
+        if (left <= 0) { goToLogin(); return; }
+        if (leftEl) leftEl.textContent = clockText(left);
+    }
+    function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); stay(); return; }
+        if (e.key !== 'Tab') return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        (document.activeElement === stayBtn ? outBtn : stayBtn).focus();
+    }
+    function openDialog() {
+        if (!overlay || dialogOpen()) return;
+        opener = document.activeElement;
+        overlay.hidden = false;
+        tick();
+        tickTimer = setInterval(tick, 1000);
+        document.addEventListener('keydown', onKey, true);
+        stayBtn.focus();
+    }
+    function check() {
+        warnTimer = null;
+        if (!expires) return;
+        var left = expires - nowS();
+        if (left <= 0) { goToLogin(); return; }
+        if (left <= lead) { openDialog(); return; }
+        arm();
+    }
+    function arm() {
+        if (warnTimer) { clearTimeout(warnTimer); warnTimer = null; }
+        if (!expires) return;
+        warnTimer = setTimeout(check, Math.max(0, Math.min((expires - lead) * 1000 - Date.now(), 2147000000)));
+    }
+    function ingest(value, fromStorage) {
+        var n = parseInt(value, 10);
+        if (!n || n <= 0 || n < expires) return;
+        if (n > expires) {
+            expires = n;
+            var span = expires - nowS();
+            lead = span > 240 ? 120 : Math.max(5, Math.floor(span / 2));
+            if (!fromStorage) { try { localStorage.setItem(SESSION_KEY, String(expires)); } catch (err) { /* private mode: the other tabs learn from their own requests */ } }
+        }
+        if (expires - nowS() > lead) closeDialog();
+        arm();
+    }
+    function stay() {
+        stayBtn.disabled = true;
+        window.jenFetch('/session/touch', { method: 'POST', headers: { 'X-CSRFToken': CSRF }, credentials: 'same-origin' }).then(function(r) {
+            if (r.redirected || !/json/.test(r.headers.get('content-type') || '')) { goToLogin(); return null; }
+            return r.json();
+        }).then(function(d) {
+            stayBtn.disabled = false;
+            if (!d) return;
+            if (d.ok && d.expires_at) { closeDialog(); ingest(d.expires_at); }
+            else if (d.ok) { closeDialog(); expires = 0; arm(); }
+        }).catch(function() {
+            stayBtn.disabled = false;
+        });
+    }
+    if (stayBtn) stayBtn.addEventListener('click', stay);
+    if (outBtn) outBtn.addEventListener('click', signOut);
+    window.jenSessionWatch = { ingest: ingest, expires: function() { return expires; } };
+    document.addEventListener('htmx:afterRequest', function(e) {
+        var x = e.detail && e.detail.xhr;
+        var v = x && x.getResponseHeader ? x.getResponseHeader('X-Jen-Session-Expires') : null;
+        if (v) ingest(v);
+    });
+    window.addEventListener('storage', function(e) { if (e.key === SESSION_KEY && e.newValue) ingest(e.newValue, true); });
+    document.addEventListener('visibilitychange', function() { if (!document.hidden && expires) check(); });
+    var firstDeadline = document.body.getAttribute('data-session-expires');
+    if (firstDeadline) ingest(firstDeadline);
+
+    // AX3 - a half-edited form warns before it is left. Only forms marked data-guard-unsaved; the snapshot is the form's own data at load (and again at window load, for a form nobody
+    // has touched yet, because a browser may fill fields after DOMContentLoaded). A form that is being submitted (jenBeginFullPageSubmit) and the idle-session redirect are not blocked.
+    var guardArmed = false;
+    // a script that submits a guarded form with form.submit() fires no submit event (the add and edit subnet pages, the Kea author page): the method itself says the form is being left on purpose
+    var nativeSubmit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = function() {
+        if (this.hasAttribute && this.hasAttribute('data-guard-unsaved') && !this.hasAttribute('data-download')) this.setAttribute('data-submitting', '1');
+        return nativeSubmit.apply(this, arguments);
+    };
+    // an ordinary submit (a click on the button, Enter in a field): the form is being left on purpose. This listener sits on the document, so it runs after the form's own handlers and
+    // htmx's: a submit that something canceled (htmx took it over, a validation message) is not a leave and does not switch the warning off for that form.
+    document.addEventListener('submit', function(e) {
+        var f = e.target;
+        if (e.defaultPrevented || !f || !f.hasAttribute || !f.hasAttribute('data-guard-unsaved') || f.hasAttribute('data-download')) return;
+        f.setAttribute('data-submitting', '1');
+    });
+    function snap(f) { return new URLSearchParams(new FormData(f)).toString(); }
+    function guarded(root) {
+        var scope = root && root.querySelectorAll ? root : document;
+        var list = Array.prototype.slice.call(scope.querySelectorAll('form[data-guard-unsaved]'));
+        if (scope.matches && scope.matches('form[data-guard-unsaved]')) list.push(scope);
+        return list;
+    }
+    function guardInit(root) {
+        guarded(root).forEach(function(f) { if (!f.hasAttribute('data-initial')) f.setAttribute('data-initial', snap(f)); });
+        if (!guardArmed && document.querySelector('form[data-guard-unsaved]')) { guardArmed = true; window.addEventListener('beforeunload', guardLeave); }
+    }
+    function guardLeave(e) {
+        if (window.jenLeaving) return;
+        var dirty = guarded(document).some(function(f) { return f.hasAttribute('data-initial') && !f.hasAttribute('data-submitting') && snap(f) !== f.getAttribute('data-initial'); });
+        if (dirty) { e.preventDefault(); e.returnValue = ''; }
+    }
+    function touched(e) { var f = e.target && e.target.form; if (f && f.hasAttribute && f.hasAttribute('data-guard-unsaved')) f.setAttribute('data-touched', '1'); }
+    document.addEventListener('input', touched, true);
+    document.addEventListener('change', touched, true);
+    document.addEventListener('DOMContentLoaded', function() { guardInit(document); });
+    document.addEventListener('htmx:afterSettle', function(e) { guardInit(e.detail && e.detail.elt ? e.detail.elt : document); });
+    window.addEventListener('load', function() { guarded(document).forEach(function(f) { if (!f.hasAttribute('data-touched')) f.setAttribute('data-initial', snap(f)); }); });
+
+    // AX4 - an error that names one field is moved under it. The server prints each as an alert with data-field (so it is an ordinary flash without script, and stays one when the page has
+    // no such input or the input is not showing); here it becomes the field's own message, tied to the input for assistive technology, and the first one takes focus.
+    function showing(el) { return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+    function describe(input, id, add) {
+        var ids = (input.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean).filter(function(x) { return x !== id; });
+        if (add) ids.push(id);
+        if (ids.length) input.setAttribute('aria-describedby', ids.join(' ')); else input.removeAttribute('aria-describedby');
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        var firstInput = null;
+        document.querySelectorAll('.alert[data-field]').forEach(function(alertEl) {
+            var input = document.getElementById('f-' + (alertEl.getAttribute('data-field') || ''));
+            if (!input || !showing(input)) return;
+            var textEl = alertEl.querySelector('.alert-text');
+            var text = textEl ? textEl.textContent : alertEl.textContent;
+            var id = input.id + '-error';
+            var err = document.getElementById(id);
+            if (err) { err.textContent += ' ' + text; }
+            else {
+                err = document.createElement('div');
+                err.className = 'field-error';
+                err.id = id;
+                err.textContent = text;
+                var after = input;
+                var hint = document.getElementById(input.id + '-hint');
+                if (hint && (input.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING)) after = hint;
+                after.parentNode.insertBefore(err, after.nextSibling);
+            }
+            input.setAttribute('aria-invalid', 'true');
+            describe(input, id, true);
+            alertEl.remove();
+            if (!firstInput) firstInput = input;
+        });
+        if (firstInput) { firstInput.focus(); firstInput.scrollIntoView({ block: 'center' }); }
+    });
+    function clearField(e) {
+        var el = e.target;
+        if (!el || !el.getAttribute || el.getAttribute('aria-invalid') !== 'true') return;
+        el.removeAttribute('aria-invalid');
+        var err = document.getElementById(el.id + '-error');
+        if (err) { describe(el, err.id, false); err.remove(); }
+    }
+    document.addEventListener('input', clearField);
+    document.addEventListener('change', clearField);
+})();
+</script>
+{% include "_password_toggle.html" %}
 </body>
 </html>

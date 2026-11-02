@@ -24,13 +24,13 @@
 {% for subnet_id, s in summary.items() %}
 <div class="stat-card">
     <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
-    <div class="stat-value" style="font-size:28px;">{{ s.current }}</div>
+    <div class="stat-value" style="font-size:28px;">{{ s.current|number }}</div>
     <div class="stat-meta">active leases</div>
     <div style="display:flex;gap:16px;margin-top:8px;font-size:12px;color:var(--text-muted);">
-        {% if s.peak is not none %}<span>Peak pool use ({{ days }}d): <strong class="u-52df2b">{{ s.peak }}</strong></span>{% endif %}
+        {% if s.peak is not none %}<span>Peak pool use ({{ days }}d): <strong class="u-52df2b">{{ s.peak|number }}</strong></span>{% endif %}
         {% if s.pool_size > 0 %}
-        <span>Pool: <strong>{{ s.pool_size }}</strong></span>
-        {% if s.pool_used is not none %}<span>Free: <strong class="u-5a4529">{{ s.pool_size - s.pool_used }}</strong></span>{% endif %}
+        <span>Pool: <strong>{{ s.pool_size|number }}</strong></span>
+        {% if s.pool_used is not none %}<span>Free: <strong class="u-5a4529">{{ (s.pool_size - s.pool_used)|number }}</strong></span>{% endif %}
         {% endif %}
     </div>
     {# v5.68.0-beta.19 (Q154): utilization is the leases INSIDE the pools (the newest snapshot's pool_used), not the subnet's whole active count - a reservation outside every pool is active but uses none of the pool #}
@@ -41,7 +41,7 @@
         </div>
     </div>
     <div class="u-5d9b49">
-        {{ (s.pool_used / s.pool_size * 100)|round|int }}% of the pool used ({{ s.pool_used }} of {{ s.pool_size }})
+        {{ (s.pool_used / s.pool_size * 100)|round|int }}% of the pool used ({{ s.pool_used|number }} of {{ s.pool_size|number }})
     </div>
     {% elif s.pool_size > 0 %}
     <div class="u-5d9b49">Pool use is shown from the first snapshot Jen takes of this subnet.</div>
@@ -49,7 +49,7 @@
     {% set f = forecast.get(subnet_id) %}
     {% if f %}
     <div class="forecast-line" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text-muted);">
-        {% if f.high_water %}Peak <strong>{{ f.high_water.peak }}{% if f.pool_size %}/{{ f.pool_size }}{% endif %}</strong> on {{ f.high_water.on }} ·{% endif %}
+        {% if f.high_water %}Peak <strong>{{ f.high_water.peak|number }}{% if f.pool_size %}/{{ f.pool_size|number }}{% endif %}</strong> on {{ f.high_water.on }} ·{% endif %}
         <span style="{% if f.days_to_90pct is not none and f.days_to_90pct <= 7 %}color:var(--danger);font-weight:600;{% elif f.days_to_90pct is not none and f.days_to_90pct <= 30 %}color:var(--warning);font-weight:600;{% endif %}">{{ f.line }}</span>
     </div>
     {% endif %}
@@ -74,7 +74,7 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">{{ icon("chart-bar") }} {{ h.name }} — {{ h.cidr }}</span>
-        <span class="u-865c33">{{ h.data|length }} data points</span>
+        <span class="u-865c33">{{ h.data|length|number }} data points</span>
     </div>
     <canvas id="chart-{{ subnet_id }}" height="80"></canvas>
     {# v5.67.0-beta.12 (Q124) — no projection is said once, here, in words; the chart then adds no
@@ -96,7 +96,7 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">{{ icon("chart-bar") }} {{ h.name }} — {{ h.cidr }} (IPv6)</span>
-        <span class="u-865c33">{{ h.data|length }} data points</span>
+        <span class="u-865c33">{{ h.data|length|number }} data points</span>
     </div>
     <canvas id="chart6-{{ subnet_id }}" height="80"></canvas>
 </div>
@@ -112,13 +112,13 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-snapshot_interval">Snapshot Interval (minutes)</label>
-                <input id="f-snapshot_interval" type="number" name="snapshot_interval" value="{{ snapshot_interval }}" min="5" max="1440" class="u-bbc1fe">
-                <div class="form-hint">How often to record a data point (5–1440 min)</div>
+                <input id="f-snapshot_interval" type="number" name="snapshot_interval" value="{{ snapshot_interval }}" min="5" max="1440" class="u-bbc1fe" aria-describedby="f-snapshot_interval-hint">
+                <div class="form-hint" id="f-snapshot_interval-hint">How often to record a data point (5–1440 min)</div>
             </div>
             <div class="form-group">
                 <label for="f-retention_days">Retention Period (days)</label>
-                <input id="f-retention_days" type="number" name="retention_days" value="{{ retention_days }}" min="1" max="365" class="u-bbc1fe">
-                <div class="form-hint">How long to keep history (1–365 days)</div>
+                <input id="f-retention_days" type="number" name="retention_days" value="{{ retention_days }}" min="1" max="365" class="u-bbc1fe" aria-describedby="f-retention_days-hint">
+                <div class="form-hint" id="f-retention_days-hint">How long to keep history (1–365 days)</div>
             </div>
             <div class="form-group u-ffd20f">
                 <div class="form-hint">Data points stored: <strong>{{ data_points }}</strong></div>

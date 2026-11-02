@@ -37,7 +37,7 @@
         {% for tbl, count in data_summary.items() %}
         <tr>
             <td><code>{{ tbl }}</code></td>
-            <td>{{ count }}</td>
+            <td>{{ count|number }}</td>
             <td class="u-865c33">
                 {% if meta.database == 'jen' %}
                 {{ jen_tables.get(tbl, '') }}
@@ -77,11 +77,11 @@
         </div>
         <div class="form-group">
             <label for="f-mode">Import Mode</label>
-            <select id="f-mode" name="mode">
+            <select id="f-mode" name="mode" aria-describedby="f-mode-hint">
                 <option value="replace">Replace — clear table then insert (recommended)</option>
                 <option value="merge">Merge — insert only, skip duplicates</option>
             </select>
-            <div class="form-hint">Replace clears each selected table and inserts exactly the rows in the file — a row the database refuses fails the whole import, and the database is then put back from a snapshot taken first. Merge adds only rows whose key is not already there, keeps what exists, and tells you how many it skipped.</div>
+            <div class="form-hint" id="f-mode-hint">Replace clears each selected table and inserts exactly the rows in the file — a row the database refuses fails the whole import, and the database is then put back from a snapshot taken first. Merge adds only rows whose key is not already there, keeps what exists, and tells you how many it skipped.</div>
         </div>
     </div>
 
@@ -91,11 +91,11 @@
         <div class="card-header"><h3>{{ icon("circle", "ico-dot ico-warning") }} Kea Import Options</h3></div>
         <div class="form-group">
             <label for="f-duplicate_mode">Duplicate Handling</label>
-            <select id="f-duplicate_mode" name="duplicate_mode">
+            <select id="f-duplicate_mode" name="duplicate_mode" aria-describedby="f-duplicate_mode-hint">
                 <option value="skip">Skip — keep a reservation that already exists, with its options (safe)</option>
                 <option value="overwrite">Overwrite — update a matching reservation in place and replace the option and IPv6 rows this file carries</option>
             </select>
-            <div class="form-hint">Reservations are matched by identifier, type and subnet — never by their id in the file. "Skip" is safest: it won't alter existing reservations that may have been modified since the export. "Overwrite" updates a matching reservation in place (nothing is deleted and re-created) and leaves any option or IPv6 table the file does not contain alone. A database error other than a duplicate aborts the whole import and rolls it back.</div>
+            <div class="form-hint" id="f-duplicate_mode-hint">Reservations are matched by identifier, type and subnet — never by their id in the file. "Skip" is safest: it won't alter existing reservations that may have been modified since the export. "Overwrite" updates a matching reservation in place (nothing is deleted and re-created) and leaves any option or IPv6 table the file does not contain alone. A database error other than a duplicate aborts the whole import and rolls it back.</div>
         </div>
     </div>
     {% endif %}

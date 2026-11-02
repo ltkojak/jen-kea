@@ -40,6 +40,7 @@ from jen.services import dbexport
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.forms import flash_field
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("database", __name__)
@@ -413,10 +414,10 @@ def recovery_bundle():
     passphrase = request.form.get("passphrase", "")
     confirm = request.form.get("passphrase_confirm", "")
     if len(passphrase) < recovery.MIN_PASSPHRASE_LEN:
-        flash(f"Passphrase must be at least {recovery.MIN_PASSPHRASE_LEN} characters.", "error")
+        flash_field("passphrase", f"Passphrase must be at least {recovery.MIN_PASSPHRASE_LEN} characters.")
         return redirect(_bundle_return_target())
     if passphrase != confirm:
-        flash("Passphrases did not match.", "error")
+        flash_field("passphrase_confirm", "Passphrases did not match.")
         return redirect(_bundle_return_target())
 
     hostname = socket.gethostname() or "jen"

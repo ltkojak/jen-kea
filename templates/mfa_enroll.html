@@ -40,7 +40,7 @@
     <div style="margin-top:16px;display:flex;gap:8px;">
         <a href="/mfa/trusted-devices" class="btn btn-secondary btn-sm">{{ icon("monitor-smartphone") }} Manage Trusted Devices</a>
         {% if backup_count > 0 %}
-        <span style="font-size:13px;color:var(--text-muted);align-self:center;">{{ backup_count }} backup codes remaining</span>
+        <span style="font-size:13px;color:var(--text-muted);align-self:center;">{{ backup_count|number }} backup codes remaining</span>
         {% endif %}
         <form method="POST" action="/mfa/regenerate-backup-codes" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary btn-sm" data-confirm="Regenerate backup codes? Your old codes will be invalidated.">{{ icon("refresh-cw") }} New Backup Codes</button>
@@ -72,8 +72,8 @@
                 </div>
                 <div class="form-group">
                     <label for="f-code">Verification Code</label>
-                    <input id="f-code" type="text" name="code" maxlength="6" inputmode="numeric" placeholder="Enter 6-digit code" autofocus style="letter-spacing:4px;font-size:18px;text-align:center;">
-                    <div class="form-hint">Enter the code shown in your authenticator app to confirm enrollment</div>
+                    <input id="f-code" type="text" name="code" maxlength="6" inputmode="numeric" placeholder="Enter 6-digit code" autofocus style="letter-spacing:4px;font-size:18px;text-align:center;" aria-describedby="f-code-hint">
+                    <div class="form-hint" id="f-code-hint">Enter the code shown in your authenticator app to confirm enrollment</div>
                 </div>
                 <button type="submit" class="btn btn-primary">Enroll Authenticator</button>
             </form>

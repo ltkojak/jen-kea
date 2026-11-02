@@ -31,14 +31,14 @@
             {% else %}background:rgba(255,255,255,.08);color:var(--text-muted);{% endif %}">{{ f.severity }}</span>
         <div class="u-59eddc">
             <div class="u-eed0f8">
-                {{ f.title }}{% if f.count > 1 %} <span style="font-weight:400;color:var(--text-muted);">· {{ f.count }}</span>{% endif %}
+                {{ f.title }}{% if f.count > 1 %} <span style="font-weight:400;color:var(--text-muted);">· {{ f.count|number }}</span>{% endif %}
                 {% if f.count == 1 %}<span style="font-weight:400;color:var(--text-muted);font-size:12px;">— {{ f.entries[0].where }}</span>{% endif %}
             </div>
             {% if f.count == 1 %}
             <div style="font-size:13px;margin-top:2px;">{{ f.entries[0].detail }}</div>
             {% else %}
             <details class="u-96ad60">
-                <summary class="u-91cb28">Show all {{ f.count }}</summary>
+                <summary class="u-91cb28">Show all {{ f.count|number }}</summary>
                 <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;">
                     {% for it in f.entries %}<li><span class="mono">{{ it.where }}</span> — {{ it.detail }}</li>{% endfor %}
                 </ul>

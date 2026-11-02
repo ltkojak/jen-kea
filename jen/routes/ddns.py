@@ -39,6 +39,7 @@ from jen.services.access import add_subnet_restriction as _add_subnet_restrictio
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import diagnostic_surface
 from jen.services.csv_safe import safe_row as _safe_row
+from jen.services.forms import flash_field
 from jen.services.leases_sql import NOT_ACTIVE_LEASE4, active_lease4
 
 logger = logging.getLogger(__name__)
@@ -734,7 +735,7 @@ def ddns_d2_domain_add():
         flash("Invalid direction.", "error")
         return redirect(url_for("ddns.ddns", tab="d2config"))
     if not __auth.valid_ddns_zone_name(name):
-        flash("Zone name must be fully-qualified with a trailing dot, e.g. example.com.", "error")
+        flash_field(f"zone-{direction}", "Zone name must be fully-qualified with a trailing dot, e.g. example.com.")
         return redirect(url_for("ddns.ddns", tab="d2config"))
     servers, err = _parse_dns_servers(servers_raw)
     if err:

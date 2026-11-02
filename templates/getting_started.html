@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>{{ icon("rocket", "ico-lg") }} Getting Started</h1>
-    <p>The first hour with Jen — {{ summary.done }}/{{ summary.total }} done.</p>
+    <p>The first hour with Jen — {{ summary.done|number }}/{{ summary.total|number }} done.</p>
 </div>
 
 {% if summary.all_done %}

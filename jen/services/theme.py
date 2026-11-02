@@ -292,14 +292,23 @@ def validate_palette(form: dict) -> tuple[dict, list[str]]:
     a plain dict in a test). Returns `({"tokens", "radius", "mono_ui"}, errors)` —
     every accepted token is a normalized 6-digit hex, `errors` is empty only
     when every field validated. This is the one place a submitted palette is
-    allowed to become CSS; nothing downstream re-validates it."""
-    errors: list[str] = []
+    allowed to become CSS; nothing downstream re-validates it. Each error is a
+    sentence that starts with the field's name (the form of it a log line wants);
+    `validate_palette_fields` is the same check with the field kept apart from the
+    message, which is what the form prints under the input (Q208, AX4)."""
+    result, fields = validate_palette_fields(form)
+    return result, [f"{name.replace('_', ' ')}: {message}" for name, message in fields]
+
+
+def validate_palette_fields(form: dict) -> tuple[dict, list[tuple[str, str]]]:
+    """`validate_palette` with each error as `(field, message)`: `field` is the form field's name (the input's id is `f-<field>`), `message` does not repeat it."""
+    errors: list[tuple[str, str]] = []
     tokens: dict[str, str] = {}
     for name in TOKENS:
         raw = str(form.get(name, "") or "")
         norm = _normalize_hex(raw)
         if norm is None:
-            errors.append(f"{name.replace('_', ' ')}: '{raw}' is not a valid hex color (e.g. #1a1a2a)")
+            errors.append((name, f"'{raw}' is not a valid hex color (e.g. #1a1a2a)"))
         else:
             tokens[name] = norm
     radius_raw = str(form.get("radius", "") or "").strip()
@@ -309,7 +318,7 @@ def validate_palette(form: dict) -> tuple[dict, list[str]]:
         if not (0 <= radius <= 16):
             raise ValueError
     except ValueError:
-        errors.append("radius: must be a whole number from 0 to 16")
+        errors.append(("radius", "Must be a whole number from 0 to 16"))
     mono_ui = str(form.get("mono_ui", "")).strip().lower() in ("1", "true", "on", "yes")
     return {"tokens": tokens, "radius": radius, "mono_ui": mono_ui}, errors
 

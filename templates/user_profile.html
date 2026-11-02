@@ -120,8 +120,8 @@ if (removeAvatarBtn) {
         </div>
         <div class="form-group">
             <label for="f-new_password">New Password</label>
-            <input id="f-new_password" type="password" name="new_password" required minlength="8">
-            <div class="form-hint">Minimum 8 characters</div>
+            <input id="f-new_password" type="password" name="new_password" required minlength="8" aria-describedby="f-new_password-hint">
+            <div class="form-hint" id="f-new_password-hint">Minimum 8 characters</div>
         </div>
         <div class="form-group">
             <label for="f-confirm_password">Confirm New Password</label>

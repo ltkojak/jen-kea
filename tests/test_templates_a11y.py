@@ -33,6 +33,21 @@ class TestBoundedAccessibility:
         for id_ in ("kb-modal", "jen-confirm-overlay", "jen-prompt-overlay"):
             tag = re.search(rf'<div[^>]*id="{id_}"[^>]*>', text).group(0)
             assert 'role="dialog"' in tag and 'aria-modal="true"' in tag, id_
+        # Q208 (AX2): the idle-session notice is an ALERT dialog: it interrupts, and it is named and described
+        tag = re.search(r'<div[^>]*id="jen-session-overlay"[^>]*>', text).group(0)
+        assert (
+            'role="alertdialog"' in tag
+            and 'aria-modal="true"' in tag
+            and 'aria-labelledby="jen-session-title"' in tag
+            and 'aria-describedby="jen-session-text"' in tag
+        )
+        assert (
+            'id="jen-session-title"' in text
+            and 'id="jen-session-text"' in text
+            and 'id="jen-session-stay"' in text
+            and ">Stay signed in</button>" in text
+            and ">Sign out now</button>" in text
+        )
 
     def test_the_confirm_dialog_moves_focus_in_and_gives_it_back(self):
         text = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
@@ -67,6 +82,7 @@ class TestNoReleaseMarkerInEndUserProse:
     REVIEWED = {
         "settings_system.html": "the Updates card names the beta CHANNEL and what it offers",
         "_icon_sprite.html": "SVG path coordinates",
+        "_password_toggle.html": "the show/hide eye icons are inline SVG path coordinates (the standalone sign-in pages have no sprite)",
         "explain.html": "a placeholder naming a DHCP vendor-class string (MSFT 5.0)",
         "settings_alerts.html": "Pi-hole v5 and v6 are that product's versions",
         "settings_kea.html": "the DNS provider card (moved here from settings_alerts.html in Q176) names Pi-hole's versions",

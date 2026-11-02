@@ -42,7 +42,7 @@
             <td data-m="secondary" style="padding:8px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" class="mono" title="{{ r.test }}">
                 {{ r.test or '—' }}
             </td>
-            <td data-m="hide" class="u-e2c960">{{ r.options_count }}</td>
+            <td data-m="hide" class="u-e2c960">{{ r.options_count|number }}</td>
             <td data-m="hide" style="padding:8px;font-size:12px;color:var(--text-muted);">
                 {% if r.next_server or r.server_hostname or r.boot_file_name %}
                     {{ r.next_server or '' }}{% if r.server_hostname %} · {{ r.server_hostname }}{% endif %}{% if r.boot_file_name %} · {{ r.boot_file_name }}{% endif %}

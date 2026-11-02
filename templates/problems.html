@@ -50,7 +50,7 @@
             <td data-m="primary" class="mono">{{ c.mac or c.ip }}{% if c.mac and c.ip %} <span class="muted">{{ c.ip }}</span>{% endif %}</td>
             <td data-m="secondary">
                 {% for k in c.kinds %}
-                <span class="badge badge-dynamic" title="{{ kind_help[k.kind] }}">{{ k.label }}{% if k.count > 1 %} × {{ k.count }}{% endif %}</span>
+                <span class="badge badge-dynamic" title="{{ kind_help[k.kind] }}">{{ k.label }}{% if k.count > 1 %} × {{ k.count|number }}{% endif %}</span>
                 {% endfor %}
                 <div class="u-865c33">{{ c.kinds[0].detail }}</div>
             </td>

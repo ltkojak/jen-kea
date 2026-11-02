@@ -14,8 +14,8 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-api_url">Kea API URL</label>
-                <input id="f-api_url" type="text" name="api_url" value="{{ api_url|no_userinfo }}" placeholder="http://your-kea-server:8000" required>
-                <div class="form-hint">The Control Agent, or a daemon's own control socket — Jen tries both.</div>
+                <input id="f-api_url" type="text" name="api_url" value="{{ api_url|no_userinfo }}" placeholder="http://your-kea-server:8000" required aria-describedby="f-api_url-hint">
+                <div class="form-hint" id="f-api_url-hint">The Control Agent, or a daemon's own control socket — Jen tries both.</div>
             </div>
         </div>
         <div class="form-row">
@@ -33,8 +33,8 @@
             <div class="form-row">
                 <div class="form-group">
                     <label for="f-api_ca">CA bundle path (optional)</label>
-                    <input id="f-api_ca" type="text" name="api_ca" value="{{ api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem">
-                    <div class="form-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
+                    <input id="f-api_ca" type="text" name="api_ca" value="{{ api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem" aria-describedby="f-api_ca-hint">
+                    <div class="form-hint" id="f-api_ca-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
                 </div>
                 <div class="form-group">
                     <label>Verify TLS</label>
@@ -52,8 +52,8 @@
                 </div>
                 <div class="form-group">
                     <label for="f-api_client_key">Client key</label>
-                    <input id="f-api_client_key" type="text" name="api_client_key" value="{{ api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key">
-                    <div class="form-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>{{ jen_layout.config_dir }}/ssl/</code>.</div>
+                    <input id="f-api_client_key" type="text" name="api_client_key" value="{{ api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key" aria-describedby="f-api_client_key-hint">
+                    <div class="form-hint" id="f-api_client_key-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>{{ jen_layout.config_dir }}/ssl/</code>.</div>
                 </div>
             </div>
         </details>
@@ -85,8 +85,8 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-kea_db_ssl_ca">Database CA bundle (optional)</label>
-                <input id="f-kea_db_ssl_ca" type="text" name="kea_db_ssl_ca" value="{{ kea_db_ssl_ca or '' }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-db-ca.pem">
-                <div class="form-hint">A file on the Jen host. Set it to connect to Kea's database over TLS, verified against this CA; empty means a plain connection. It is saved as <code>[kea_db] ssl_ca</code> and used for the test below, so a database that requires TLS can be reached from here.</div>
+                <input id="f-kea_db_ssl_ca" type="text" name="kea_db_ssl_ca" value="{{ kea_db_ssl_ca or '' }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-db-ca.pem" aria-describedby="f-kea_db_ssl_ca-hint">
+                <div class="form-hint" id="f-kea_db_ssl_ca-hint">A file on the Jen host. Set it to connect to Kea's database over TLS, verified against this CA; empty means a plain connection. It is saved as <code>[kea_db] ssl_ca</code> and used for the test below, so a database that requires TLS can be reached from here.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Test &amp; Connect</button>

@@ -18,6 +18,7 @@ from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
 from jen.services.alerts import ALERT_TYPE_LABELS, DEFAULT_TEMPLATES, GLYPH_LEGEND, PLUGIN_ALERT_TYPES
+from jen.services.forms import flash_field
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def save_alert_channel():
         subnet_scope = json.dumps(ids) if ids else None
 
     if not channel_name:
-        flash("Channel name is required.", "error")
+        flash_field("channel_name", "Channel name is required.")
         return redirect(url_for("settings.settings_alerts"))
 
     # Build config based on type
@@ -367,14 +368,14 @@ def save_alert_global():
     # v5.69.0-beta.3 (Q172, item 3): the summary time is HH:MM in UTC. "7am" used to be saved and silently never matched, so the summary never came; a refusal is audited
     # like a save (the setting decides whether an alert is ever sent)
     if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", summary_time):
-        flash("The daily summary time must be HH:MM in UTC, for example 07:00.", "error")
+        flash_field("summary_time", "The daily summary time must be HH:MM in UTC, for example 07:00.")
         __user.audit("SAVE_ALERT_GLOBAL_REFUSED", "settings", f"daily summary time {summary_time[:20]!r} is not HH:MM")
         return redirect(url_for("settings.settings_alerts"))
     if not pool_free.isdigit() or int(pool_free) < 1:
-        flash("Pool exhaustion threshold must be a positive number.", "error")
+        flash_field("pool_exhaustion_free", "Pool exhaustion threshold must be a positive number.")
         return redirect(url_for("settings.settings_alerts"))
     if not threshold.isdigit() or not (1 <= int(threshold) <= 100):
-        flash("Utilization threshold must be between 1 and 100.", "error")
+        flash_field("alert_threshold_pct", "Utilization threshold must be between 1 and 100.")
         return redirect(url_for("settings.settings_alerts"))
     if reserved_lease_mode not in ("always", "once"):
         reserved_lease_mode = "always"

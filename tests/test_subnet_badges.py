@@ -306,3 +306,46 @@ class TestTheRoute:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM lease4 WHERE address=INET_ATON('10.99.0.77')")
             db.commit()
+
+
+class TestTheHint:
+    """Q208 (AX10): the first-time hint that the badge is the picker. Administrators only, only when a card renders, hidden until the page's script finds this browser has not dismissed it."""
+
+    def test_the_admin_page_has_the_hint_hidden_with_its_close_button(self, logged_in_client, mock_kea):
+        page = logged_in_client.get("/subnets").data.decode()
+        m = re.search(
+            r'<div class="alert alert-info alert-flash" id="tone-hint" role="note" hidden>(.*?)</div>', page, re.S
+        )
+        assert m, "the hint is on the administrator's page"
+        assert "Click a subnet's name on its card to choose its badge color - the badge is the picker." in m.group(
+            1
+        ) or "Click a subnet&#39;s name" in m.group(1)
+        assert 'class="alert-close" aria-label="Dismiss"' in m.group(1)
+        assert "data-autofade" not in m.group(0), "a hint waits to be read"
+
+    def test_the_script_un_hides_it_unless_this_browser_dismissed_it(self, logged_in_client, mock_kea):
+        page = logged_in_client.get("/subnets").data.decode()
+        assert "localStorage.getItem('jen-tone-hint') === 'seen'" in page
+        assert "localStorage.setItem('jen-tone-hint', 'seen')" in page
+        assert page.count("try { seen = localStorage") == 1 and "private mode" in page
+
+    def test_a_viewer_has_no_hint(self, client, db, mock_kea):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=None, role="viewer", username="hint_viewer")
+        page = client.get("/subnets").data.decode()
+        assert 'id="tone-hint"' not in page
+
+    def test_a_page_with_no_subnet_has_none(self, logged_in_client, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {})
+        page = logged_in_client.get("/subnets").data.decode()
+        assert 'id="tone-hint"' not in page
+
+    def test_the_template_names_the_store_and_puts_the_hint_in_the_admin_branch_only(self):
+        text = pathlib.Path("templates/subnets.html").read_text(encoding="utf-8")
+        assert (
+            "localStorage.getItem('jen-tone-hint')" in text and "localStorage.setItem('jen-tone-hint', 'seen')" in text
+        )
+        assert "{% if subnets and current_user.role in ('superadmin','admin') %}" in text

@@ -20,6 +20,7 @@ import jen.services.mfa as __mfa
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.forms import flash_field
 from jen.services.leases_sql import ACTIVE_LEASE4
 
 logger = logging.getLogger(__name__)
@@ -276,13 +277,13 @@ def add_user():
         timeout_val = int(timeout_raw)
 
     if not username:
-        flash("Username is required.", "error")
+        flash_field("username", "Username is required.")
         return redirect(url_for("users.users"))
     if not __auth.valid_username(username):
-        flash("Username may only contain letters, numbers, underscores, hyphens, and dots.", "error")
+        flash_field("username", "Username may only contain letters, numbers, underscores, hyphens, and dots.")
         return redirect(url_for("users.users"))
     if len(password) < 8:
-        flash("Password must be at least 8 characters.", "error")
+        flash_field("password", "Password must be at least 8 characters.")
         return redirect(url_for("users.users"))
     if role not in ("superadmin", "admin", "viewer"):
         flash("Invalid role.", "error")
@@ -392,10 +393,10 @@ def change_password():
     # v5.69.0-beta.2 (Q171): a failure goes back to the profile this form lives on - the Users page is superadmin-only, so a viewer or admin got "SuperAdmin access
     # required" and never saw why their change was refused.
     if new_pw != confirm_pw:
-        flash("New passwords do not match.", "error")
+        flash_field("confirm_password", "New passwords do not match.")
         return redirect(url_for("users.user_profile"))
     if len(new_pw) < 8:
-        flash("New password must be at least 8 characters.", "error")
+        flash_field("new_password", "New password must be at least 8 characters.")
         return redirect(url_for("users.user_profile"))
 
     try:
@@ -404,7 +405,7 @@ def change_password():
                 cur.execute("SELECT id, password FROM users WHERE id=%s", (current_user.id,))
                 row = cur.fetchone()
                 if not row or not __user.verify_password(row["password"], current_pw):
-                    flash("Current password is incorrect.", "error")
+                    flash_field("current_password", "Current password is incorrect.")
                     return redirect(url_for("users.user_profile"))
                 # token_version moves in the same statement, and `load_user` ends every OTHER session whose password fingerprint is no longer the row's
                 cur.execute(

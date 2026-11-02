@@ -284,3 +284,52 @@ class TestAV6TheFilteredEmptyState:
         page.get_by_role("link", name="Clear filters").click()
         expect(page.locator("tr", has_text=HOST)).to_have_count(1)
         assert "search=" not in page.url
+
+
+class TestAX10TheBadgeIsThePickerHint:
+    """Q208 (AX10): the first visit to Subnets says the badge is the color picker; dismissing it is remembered by this browser."""
+
+    @staticmethod
+    def _forget(page, base_url):
+        page.goto(f"{base_url}/subnets")
+        page.evaluate("localStorage.removeItem('jen-tone-hint')")
+
+    def test_first_visit_shows_it_dismiss_hides_it_and_a_reload_keeps_it_hidden(self, logged_in_page, base_url):
+        page = logged_in_page
+        self._forget(page, base_url)
+        page.goto(f"{base_url}/subnets")
+        hint = page.locator("#tone-hint")
+        expect(hint).to_be_visible()
+        expect(hint).to_contain_text("Click a subnet's name on its card to choose its badge color")
+        hint.get_by_role("button", name="Dismiss").click()
+        expect(hint).to_be_hidden()
+        page.reload()
+        expect(page.locator("#tone-hint")).to_be_hidden()
+        assert page.evaluate("localStorage.getItem('jen-tone-hint')") == "seen"
+
+    def test_another_browser_sees_it_again(self, logged_in_page, base_url):
+        page = logged_in_page
+        self._forget(page, base_url)
+        page.goto(f"{base_url}/subnets")
+        expect(page.locator("#tone-hint")).to_be_visible()
+
+
+class TestAX1SortAndPageLinksSwapInPlace:
+    def test_a_header_click_keeps_the_page_and_pushes_the_url(self, logged_in_page, base_url, polish_lease):
+        page = logged_in_page
+        page.goto(f"{base_url}/leases")
+        page.evaluate("window.__stay = 'same document'")
+        page.locator("th a.th-link", has_text="Hostname").click()
+        page.wait_for_url("**sort=hostname**")
+        assert page.evaluate("window.__stay") == "same document", "a sort link must not reload the page"
+        expect(page.locator("th[aria-sort]")).to_have_count(1)
+        page.go_back()
+        page.wait_for_load_state("load")
+
+    def test_a_modified_click_is_the_browsers_own(self, logged_in_page, base_url, polish_lease):
+        page = logged_in_page
+        page.goto(f"{base_url}/leases")
+        with page.context.expect_page() as popup:
+            page.locator("th a.th-link", has_text="Hostname").click(modifiers=["Control"])
+        assert "sort=hostname" in popup.value.url
+        popup.value.close()

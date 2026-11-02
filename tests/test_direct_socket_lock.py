@@ -156,6 +156,9 @@ def wire(monkeypatch, caplog):
     }  # (direct mode: Jen dials the daemon's own socket; the saved Control Agent is :8000)
     monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
     monkeypatch.setattr(infra, "flash", lambda text, style="message": log["flashes"].append((style, str(text))))
+    monkeypatch.setattr(
+        infra, "flash_field", lambda field, message: log["flashes"].append(("error", str(message)))
+    )  # Q208: a field error is the same sentence, kept per field
     monkeypatch.setattr(infra, "_server_by_id", lambda sid: server)
     monkeypatch.setattr(infra, "_daemon_creds", lambda s, svc, url="": ("u", "p"))
     monkeypatch.setattr(infra, "_probe_after_restart", lambda *a, **k: ("Kea 3.0.3", None))
@@ -2169,6 +2172,9 @@ class TestQ198TheSetupAndTheFormsAfterTheRecordsChange:
 
     def _extra_servers_post(self, monkeypatch, flashes, **fields):
         monkeypatch.setattr(infra, "flash", lambda text, style="message": flashes.append(str(text)))
+        monkeypatch.setattr(
+            infra, "flash_field", lambda field, message: flashes.append(str(message))
+        )  # Q208: a field error is the same sentence, kept per field
         monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
         monkeypatch.setattr("jen.services.capabilities.is_direct", lambda: True)
         app = flask.Flask(__name__)

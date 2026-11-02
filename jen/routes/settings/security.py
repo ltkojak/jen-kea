@@ -21,6 +21,7 @@ from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.forms import flash_field
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def save_session_settings():
         enabled = "true"
 
     if not timeout.isdigit() or not (0 <= int(timeout) <= 1440):
-        flash("Session timeout must be between 0 and 1440 minutes (0 = never).", "error")
+        flash_field("timeout_minutes", "Session timeout must be between 0 and 1440 minutes (0 = never).")
         return redirect(url_for("settings.settings_security"))
 
     __user.set_global_setting("session_timeout_minutes", timeout)
@@ -60,10 +61,10 @@ def save_rate_limit():
     mode = request.form.get("mode", "both").strip()
 
     if not max_attempts.isdigit() or int(max_attempts) < 0:
-        flash("Max attempts must be 0 or a positive number.", "error")
+        flash_field("max_attempts", "Max attempts must be 0 or a positive number.")
         return redirect(url_for("settings.settings_security"))
     if not lockout_minutes.isdigit() or int(lockout_minutes) < 0:
-        flash("Lockout duration must be 0 or a positive number.", "error")
+        flash_field("lockout_minutes", "Lockout duration must be 0 or a positive number.")
         return redirect(url_for("settings.settings_security"))
     if mode not in ("ip", "username", "both", "off"):
         flash("Invalid lockout mode.", "error")
@@ -239,23 +240,22 @@ def save_oidc():
 
     if enabled:
         if not __auth.valid_oidc_issuer(issuer):
-            flash(
-                "The issuer must be an https:// URL (http:// is only allowed for a local "
-                "127.0.0.1/localhost test IdP).",
-                "error",
+            flash_field(
+                "issuer",
+                "The issuer must be an https:// URL (http:// is only allowed for a local 127.0.0.1/localhost test IdP).",
             )
             return redirect(url_for("settings.settings_security"))
         if not client_id:
-            flash("A client ID is required to enable single sign-on.", "error")
+            flash_field("client_id", "A client ID is required to enable single sign-on.")
             return redirect(url_for("settings.settings_security"))
     if default_role not in ("superadmin", "admin", "viewer", "none"):
-        flash("Default role must be superadmin, admin, viewer, or none.", "error")
+        flash_field("default_role", "Default role must be superadmin, admin, viewer, or none.")
         return redirect(url_for("settings.settings_security"))
     if role_map and not __oidc.parse_role_map(role_map):
-        flash("Role mapping could not be parsed — check the format (role=value;role=value,value).", "error")
+        flash_field("role_map", "Role mapping could not be parsed — check the format (role=value;role=value,value).")
         return redirect(url_for("settings.settings_security"))
     if subnet_map_default not in ("none", "all"):
-        flash("Subnet mapping default must be none or all.", "error")
+        flash_field("subnet_map_default", "Subnet mapping default must be none or all.")
         return redirect(url_for("settings.settings_security"))
     if subnet_map and not __oidc.parse_subnet_map(subnet_map):
         flash(

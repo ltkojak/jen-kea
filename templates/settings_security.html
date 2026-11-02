@@ -61,15 +61,15 @@
         Let users log in through an external identity provider (Authentik, Keycloak, Entra ID, Okta…),
         with roles mapped from a claim. Local accounts keep working either way.
     </p>
-    <form method="POST" action="/settings/save-oidc"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/save-oidc"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label><input type="checkbox" name="enabled" value="1" class="u-30e741" {% if oidc.enabled %}checked{% endif %}> Enable single sign-on</label>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label for="f-issuer">Issuer URL</label>
-                <input id="f-issuer" type="text" name="issuer" value="{{ oidc.issuer }}" placeholder="https://idp.example.com/application/o/jen/" class="u-046678">
-                <div class="form-hint">Discovery is read from &lt;issuer&gt;/.well-known/openid-configuration. Must be https:// (http:// only for a local 127.0.0.1/localhost test IdP).</div>
+                <input id="f-issuer" type="text" name="issuer" value="{{ oidc.issuer }}" placeholder="https://idp.example.com/application/o/jen/" class="u-046678" aria-describedby="f-issuer-hint">
+                <div class="form-hint" id="f-issuer-hint">Discovery is read from &lt;issuer&gt;/.well-known/openid-configuration. Must be https:// (http:// only for a local 127.0.0.1/localhost test IdP).</div>
             </div>
             <div class="form-group">
                 <label for="f-client_id">Client ID</label>
@@ -96,19 +96,19 @@
         </div>
         <div class="form-group">
             <label for="f-role_map">Role Mapping</label>
-            <input id="f-role_map" type="text" name="role_map" value="{{ oidc.role_map }}" placeholder="superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer" class="u-046678">
-            <div class="form-hint">Kea role → claim value(s), <code>;</code>-separated pairs; each right side may be a <code>,</code>-separated list.</div>
+            <input id="f-role_map" type="text" name="role_map" value="{{ oidc.role_map }}" placeholder="superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer" class="u-046678" aria-describedby="f-role_map-hint">
+            <div class="form-hint" id="f-role_map-hint">Kea role → claim value(s), <code>;</code>-separated pairs; each right side may be a <code>,</code>-separated list.</div>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label for="f-default_role">Default Role</label>
-                <select id="f-default_role" name="default_role" class="u-046678">
+                <select id="f-default_role" name="default_role" class="u-046678" aria-describedby="f-default_role-hint">
                     <option value="viewer" {% if oidc.default_role == 'viewer' %}selected{% endif %}>Viewer</option>
                     <option value="admin" {% if oidc.default_role == 'admin' %}selected{% endif %}>Admin</option>
                     <option value="superadmin" {% if oidc.default_role == 'superadmin' %}selected{% endif %}>SuperAdmin</option>
                     <option value="none" {% if oidc.default_role == 'none' %}selected{% endif %}>None — deny unmapped users</option>
                 </select>
-                <div class="form-hint">Used when a user's groups match nothing in the mapping above.</div>
+                <div class="form-hint" id="f-default_role-hint">Used when a user's groups match nothing in the mapping above.</div>
             </div>
             <div class="form-group">
                 <label for="f-button_label">Button Label</label>
@@ -116,8 +116,8 @@
             </div>
             <div class="form-group">
                 <label for="f-redirect_uri">Redirect URI</label>
-                <input id="f-redirect_uri" type="text" name="redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="(auto-detected)" class="u-046678">
-                <div class="form-hint">Leave blank unless Jen is behind a proxy that changes the external URL.</div>
+                <input id="f-redirect_uri" type="text" name="redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="(auto-detected)" class="u-046678" aria-describedby="f-redirect_uri-hint">
+                <div class="form-hint" id="f-redirect_uri-hint">Leave blank unless Jen is behind a proxy that changes the external URL.</div>
             </div>
         </div>
         <div class="form-group">
@@ -128,11 +128,11 @@
         </div>
         <div class="form-group">
             <label for="f-subnet_map_default">When no group matches the Subnet Mapping</label>
-            <select id="f-subnet_map_default" name="subnet_map_default" class="u-046678">
+            <select id="f-subnet_map_default" name="subnet_map_default" class="u-046678" aria-describedby="f-subnet_map_default-hint">
                 <option value="none" {% if oidc.subnet_map_default == 'none' %}selected{% endif %}>Restrict to nothing (recommended — deliberately fail closed)</option>
                 <option value="all" {% if oidc.subnet_map_default == 'all' %}selected{% endif %}>Leave unrestricted</option>
             </select>
-            <div class="form-hint">Only matters once Subnet Mapping above is non-blank.</div>
+            <div class="form-hint" id="f-subnet_map_default-hint">Only matters once Subnet Mapping above is non-blank.</div>
         </div>
         <div class="form-group">
             <label><input type="checkbox" name="auto_create" value="1" class="u-30e741" {% if oidc.auto_create %}checked{% endif %}> Automatically create an account on first SSO login</label>
@@ -153,20 +153,20 @@
         {% if session.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>
         {% else %}<span class="badge u-9741b3">Disabled</span>{% endif %}
     </div>
-    <form method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="f-timeout_enabled">Enable Session Timeout</label>
-                <select id="f-timeout_enabled" name="timeout_enabled" style="max-width:180px;">
+                <select id="f-timeout_enabled" name="timeout_enabled" style="max-width:180px;" aria-describedby="f-timeout_enabled-hint">
                     <option value="true" {% if session.enabled == 'true' %}selected{% endif %}>Enabled</option>
                     <option value="false" {% if session.enabled == 'false' %}selected{% endif %}>Disabled</option>
                 </select>
-                <div class="form-hint">Disabled = sessions never expire</div>
+                <div class="form-hint" id="f-timeout_enabled-hint">Disabled = sessions never expire</div>
             </div>
             <div class="form-group">
                 <label for="f-timeout_minutes">Timeout Duration (minutes)</label>
-                <input id="f-timeout_minutes" type="number" name="timeout_minutes" value="{{ session.timeout }}" min="0" max="1440" class="u-7a96d9">
-                <div class="form-hint">0 = never expire. Per-user overrides are set on the Users tab.</div>
+                <input id="f-timeout_minutes" type="number" name="timeout_minutes" value="{{ session.timeout }}" min="0" max="1440" class="u-7a96d9" aria-describedby="f-timeout_minutes-hint">
+                <div class="form-hint" id="f-timeout_minutes-hint">0 = never expire. Per-user overrides are set on the Users tab.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save</button>
@@ -183,17 +183,17 @@
         <span class="badge badge-reserved">Enabled</span>
         {% endif %}
     </div>
-    <form method="POST" action="/settings/save-rate-limit"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form data-guard-unsaved method="POST" action="/settings/save-rate-limit"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="f-max_attempts">Max Failed Attempts</label>
-                <input id="f-max_attempts" type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100">
-                <div class="form-hint">0 = disabled</div>
+                <input id="f-max_attempts" type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100" aria-describedby="f-max_attempts-hint">
+                <div class="form-hint" id="f-max_attempts-hint">0 = disabled</div>
             </div>
             <div class="form-group">
                 <label for="f-lockout_minutes">Lockout Duration (minutes)</label>
-                <input id="f-lockout_minutes" type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440">
-                <div class="form-hint">0 = permanent until admin clears</div>
+                <input id="f-lockout_minutes" type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440" aria-describedby="f-lockout_minutes-hint">
+                <div class="form-hint" id="f-lockout_minutes-hint">0 = permanent until admin clears</div>
             </div>
             <div class="form-group">
                 <label for="f-mode">Lockout Mode</label>
@@ -240,9 +240,9 @@
     <form method="POST" action="/settings/upload-cert" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="u-f0aa70">{% if ssl_configured %}Replace current certificate:{% else %}Upload certificate to enable HTTPS:{% endif %}</div>
         <div class="form-row">
-            <div class="form-group"><label for="f-certificate">Certificate *</label><input id="f-certificate" type="file" name="certificate" accept=".crt,.pem" required><div class="form-hint">certificate.crt</div></div>
-            <div class="form-group"><label for="f-private_key">Private Key *</label><input id="f-private_key" type="file" name="private_key" accept=".key,.pem" required><div class="form-hint">private.key</div></div>
-            <div class="form-group"><label for="f-ca_bundle">CA Bundle</label><input id="f-ca_bundle" type="file" name="ca_bundle" accept=".crt,.pem"><div class="form-hint">ca_bundle.crt — required for ZeroSSL</div></div>
+            <div class="form-group"><label for="f-certificate">Certificate *</label><input id="f-certificate" type="file" name="certificate" accept=".crt,.pem" required aria-describedby="f-certificate-hint"><div class="form-hint" id="f-certificate-hint">certificate.crt</div></div>
+            <div class="form-group"><label for="f-private_key">Private Key *</label><input id="f-private_key" type="file" name="private_key" accept=".key,.pem" required aria-describedby="f-private_key-hint"><div class="form-hint" id="f-private_key-hint">private.key</div></div>
+            <div class="form-group"><label for="f-ca_bundle">CA Bundle</label><input id="f-ca_bundle" type="file" name="ca_bundle" accept=".crt,.pem" aria-describedby="f-ca_bundle-hint"><div class="form-hint" id="f-ca_bundle-hint">ca_bundle.crt — required for ZeroSSL</div></div>
         </div>
         <button type="submit" class="btn btn-primary">{% if ssl_configured %}{{ icon("refresh-cw") }} Replace Certificate{% else %}{{ icon("lock") }} Enable HTTPS{% endif %}</button>
     </form>
