@@ -7,6 +7,7 @@ One definition of the deadline (`jen/services/session_timeout.py`) serves the mi
 The first class is pure (`py -m pytest --noconftest tests/test_session_notice.py::TestDeadline`); the rest run against the app.
 """
 
+import pathlib
 import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
@@ -78,6 +79,13 @@ class TestTheHeader:
         minutes = int(get_global_setting("session_timeout_minutes", "60"))
         assert header == int((self._last(logged_in_client) + timedelta(minutes=minutes)).timestamp())
 
+    def test_the_servers_own_clock_travels_with_the_deadline(self, logged_in_client):
+        """SP-3: the page counts down against the SERVER's now, so a browser clock that is wrong changes nothing."""
+        r = logged_in_client.get("/leases")
+        assert abs(int(r.headers["X-Jen-Session-Now"]) - int(datetime.now(timezone.utc).timestamp())) < 30
+        m = re.search(r'<body[^>]*\bdata-session-now="(\d+)"', r.data.decode())
+        assert m and abs(int(m.group(1)) - int(r.headers["X-Jen-Session-Now"])) < 5
+
     def test_the_body_attribute_equals_the_header(self, logged_in_client):
         r = logged_in_client.get("/leases")
         m = re.search(r'<body[^>]*\bdata-session-expires="(\d+)"', r.data.decode())
@@ -123,9 +131,20 @@ class TestTouch:
             last = datetime.fromisoformat(sess["last_active"])
         assert (datetime.now(timezone.utc) - last).total_seconds() < 30
         assert body["expires_at"] == st.expires_at({"last_active": last.isoformat()}, _User())
+        assert abs(body["now"] - int(datetime.now(timezone.utc).timestamp())) < 30
 
     def test_a_get_is_405(self, logged_in_client):
         assert logged_in_client.get("/session/touch").status_code == 405
+
+    def test_a_405_does_not_move_last_active_either(self, logged_in_client):
+        """SP-2: the middleware leaves last_active alone for this path - the view is its one writer, so a request the routing or CSRF then refuses cannot extend the session."""
+        stale = _iso(30)
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        for method in ("get", "head"):
+            assert getattr(logged_in_client, method)("/session/touch").status_code == 405
+        with logged_in_client.session_transaction() as sess:
+            assert sess["last_active"] == stale
 
     def test_without_the_csrf_token_it_is_refused_like_every_post(self, logged_in_csrf_client):  # noqa: F811
         c = logged_in_csrf_client
@@ -270,6 +289,15 @@ class TestMiddlewareUnchanged:
             _invalidate_settings_cache()
 
 
+class TestTheTouchPathIsNotTouchedByTheMiddleware:
+    def test_the_path_list(self):
+        assert st.NO_TOUCH_PATHS == ("/session/touch",)
+
+    def test_the_middleware_names_it_in_both_branches(self):
+        text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
+        assert text.count("session_timeout_svc.NO_TOUCH_PATHS") == 2
+
+
 class TestTheReturnAddress:
     """`login_redirect_location`: a GET of an ordinary page comes back to itself; nothing that would loop, land a person on JSON, or leave this host is ever a `next`."""
 
@@ -310,6 +338,12 @@ class TestTheReturnAddress:
         """The dialog's script goes to /login?next=<page> at the deadline; the server already ended the session, so ITS request is the expired one - and its `next` must survive."""
         assert st.login_redirect_location("/login", "GET", "/login?next=x", next_arg) == expected
 
+    def test_a_very_long_path_carries_no_next(self):
+        """SP-13: percent-encoding grows a path ~1.7x; a sign-in request line past the server's limit is a 400, not a page."""
+        long = "/leases?search=" + "a" * (st.MAX_NEXT + 50)
+        assert st.login_redirect_location("/login", "GET", long) == "/login"
+        assert st.login_redirect_location("/login", "GET", "/leases?search=" + "a" * 100).startswith("/login?next=")
+
     def test_whatever_it_builds_the_sign_in_page_accepts_back(self):
         from urllib.parse import parse_qs, urlsplit
 
@@ -319,3 +353,28 @@ class TestTheReturnAddress:
             location = st.login_redirect_location("/login", "GET", path)
             back = parse_qs(urlsplit(location).query)["next"][0]
             assert _safe_next(back) == path
+
+
+class TestTheDialogScript:
+    """Source pins for the second pass's client-side fixes (SP-3, SP-6, SP-7); the behavior itself is tests/e2e/test_session_notice.py."""
+
+    BASE = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+
+    def test_time_is_counted_against_the_servers_clock(self):
+        assert "function nowS() { return Date.now() / 1000 + skew; }" in self.BASE
+        assert "if (sn > 0) skew = sn - Date.now() / 1000;" in self.BASE
+        assert "X-Jen-Session-Now" in self.BASE and "data-session-now" in self.BASE
+
+    def test_leaving_happens_once_and_stops_the_timers(self):
+        block = self.BASE[self.BASE.index("function goToLogin()") : self.BASE.index("function signOut()")]
+        assert (
+            "if (leaving) return;" in block
+            and "clearTimeout(warnTimer)" in block
+            and "clearInterval(tickTimer)" in block
+        )
+
+    def test_only_a_redirect_means_the_session_ended(self):
+        block = self.BASE[self.BASE.index("function stay()") : self.BASE.index("if (stayBtn) stayBtn.addEventListener")]
+        assert block.count("goToLogin()") == 1 and "if (r.redirected) { goToLogin(); return null; }" in block
+        assert "r.status === 403" in block and block.count("stayFailed(") >= 4
+        assert 'id="jen-session-failed"' in self.BASE

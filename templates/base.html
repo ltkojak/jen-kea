@@ -62,7 +62,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         start();
         return fetch(url, opts).then(function(resp) {
             // Q208 (AX2): every response to a signed-in person carries when the idle session ends; jenSessionWatch (defined at the foot of the page) re-arms from it
-            try { var ends = resp.headers.get('X-Jen-Session-Expires'); if (ends && window.jenSessionWatch) window.jenSessionWatch.ingest(ends); } catch (e) { /* no header API */ }
+            try { var ends = resp.headers.get('X-Jen-Session-Expires'); if (ends && window.jenSessionWatch) window.jenSessionWatch.ingest(ends, false, resp.headers.get('X-Jen-Session-Now')); } catch (e) { /* no header API */ }
             if (resp.status === 401 && !reauthing) {
                 resp.clone().json().then(function(d) {
                     if (d && d.reauth && !reauthing) { reauthing = true; window.location.assign(d.reauth); }
@@ -669,14 +669,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         body.sheet-open { overflow: hidden; }
 
         /* ── iPad (769–1024px) ── */
-        @media (max-width: 1024px) and (min-width: 769px) {
+        @media screen and (max-width: 1024px) and (min-width: 769px) {
             .hide-tablet { display: none !important; }
             .container { padding: 16px; }
             .stat-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
         /* ── Mobile (≤768px) ── */
-        @media (max-width: 768px) {
+        @media screen and (max-width: 768px) {
             /* Dashboard page header — controls sit below the title (Q57) as
                one row, not stacked (Q68c: dash-refresh-label/#last-updated
                are already hidden at this width by dashboard.html's own
@@ -797,7 +797,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         /* the DHCP options page's level picker beside its table (v5.69.0-beta.4, Q173: it had no phone rule, so the table kept ~100px) */
         .dhcp-opt-grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
 
-        @media (max-width: 768px) {
+        @media screen and (max-width: 768px) {
             .dhcp-opt-grid { grid-template-columns: minmax(0, 1fr); }
             /* rowlist — one markup, two lines: primary/badge cells, then secondary cells joined with · */
             table.rowlist, table.rowlist tbody { display: block; width: 100%; }
@@ -860,7 +860,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         }
 
         /* ── Extra small (≤480px) ── */
-        @media (max-width: 480px) {
+        @media screen and (max-width: 480px) {
             .stat-grid { grid-template-columns: 1fr; }
             .btn { width: 100%; justify-content: center; }
             .btn-sm { width: auto; }
@@ -874,7 +874,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
          inline block so its equal-precedence rules win. -->
     <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
 </head>
-<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <a href="#main" class="skip-link">Skip to content</a>
 <div id="jen-progress"></div>
 {% include "_icon_sprite.html" %}
@@ -1885,6 +1885,7 @@ function sortTable(table, col, th) {
     <div class="jen-dialog">
         <div id="jen-session-title" class="jen-dialog-title">Still there?</div>
         <p id="jen-session-text">You will be signed out in <span id="jen-session-left">2:00</span> for inactivity.</p>
+        <p id="jen-session-failed" class="field-note" role="alert" hidden></p>
         <div class="jen-dialog-actions">
             <button type="button" id="jen-session-out" class="btn btn-secondary">Sign out now</button>
             <button type="button" id="jen-session-stay" class="btn btn-primary">Stay signed in</button>
@@ -2204,12 +2205,13 @@ function sortTable(table, col, th) {
     // A deadline only ever moves forward here: a late reply that carries an older one is ignored, and another tab's touch arrives through the storage event.
     var SESSION_KEY = 'jen-session-expires';
     var CSRF = {{ csrf_token()|tojson }};
-    var expires = 0, lead = 120, warnTimer = null, tickTimer = null, opener = null;
+    var expires = 0, lead = 120, warnTimer = null, tickTimer = null, opener = null, skew = 0, leaving = false;
     var overlay = document.getElementById('jen-session-overlay');
     var leftEl = document.getElementById('jen-session-left');
     var stayBtn = document.getElementById('jen-session-stay');
     var outBtn = document.getElementById('jen-session-out');
-    function nowS() { return Date.now() / 1000; }
+    // time is counted against the SERVER's clock: skew is (the server's now) minus (this browser's now) as of the last reply, so a browser whose clock is wrong changes nothing
+    function nowS() { return Date.now() / 1000 + skew; }
     function dialogOpen() { return !!overlay && !overlay.hidden; }
     function clockText(sec) { var m = Math.floor(sec / 60), s = sec % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
     function closeDialog() {
@@ -2221,6 +2223,10 @@ function sortTable(table, col, th) {
         opener = null;
     }
     function goToLogin() {
+        if (leaving) return;
+        leaving = true;
+        if (warnTimer) { clearTimeout(warnTimer); warnTimer = null; }
+        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
         window.jenLeaving = true;
         window.location.assign('/login?next=' + encodeURIComponent(window.location.pathname + window.location.search));
     }
@@ -2269,8 +2275,10 @@ function sortTable(table, col, th) {
         if (!expires) return;
         warnTimer = setTimeout(check, Math.max(0, Math.min((expires - lead) * 1000 - Date.now(), 2147000000)));
     }
-    function ingest(value, fromStorage) {
+    function ingest(value, fromStorage, serverNow) {
         var n = parseInt(value, 10);
+        var sn = parseInt(serverNow, 10);
+        if (sn > 0) skew = sn - Date.now() / 1000;
         if (!n || n <= 0 || n < expires) return;
         if (n > expires) {
             expires = n;
@@ -2281,18 +2289,29 @@ function sortTable(table, col, th) {
         if (expires - nowS() > lead) closeDialog();
         arm();
     }
+    // only a REDIRECT means the session has ended (the middleware sent the request to the sign-in page); a refusal or a failure of the touch itself - an expired form token, a proxy's 502, a network
+            // error - leaves the dialog open and says so, because the session may well be alive and the person can try again
+    var failedEl = document.getElementById('jen-session-failed');
+    function stayFailed(text) {
+        stayBtn.disabled = false;
+        if (failedEl) { failedEl.textContent = text; failedEl.hidden = false; }
+    }
     function stay() {
         stayBtn.disabled = true;
+        if (failedEl) failedEl.hidden = true;
         window.jenFetch('/session/touch', { method: 'POST', headers: { 'X-CSRFToken': CSRF }, credentials: 'same-origin' }).then(function(r) {
-            if (r.redirected || !/json/.test(r.headers.get('content-type') || '')) { goToLogin(); return null; }
+            if (r.redirected) { goToLogin(); return null; }
+            if (r.status === 403) { stayFailed('Could not renew the session - reload the page and try again.'); return null; }
+            if (!r.ok || !/json/.test(r.headers.get('content-type') || '')) { stayFailed('Could not renew the session - try again.'); return null; }
             return r.json();
         }).then(function(d) {
-            stayBtn.disabled = false;
             if (!d) return;
-            if (d.ok && d.expires_at) { closeDialog(); ingest(d.expires_at); }
-            else if (d.ok) { closeDialog(); expires = 0; arm(); }
-        }).catch(function() {
             stayBtn.disabled = false;
+            if (d.ok && d.expires_at) { closeDialog(); ingest(d.expires_at, false, d.now); }
+            else if (d.ok) { closeDialog(); expires = 0; arm(); }
+            else stayFailed('Could not renew the session - try again.');
+        }).catch(function() {
+            stayFailed('Could not reach Jen - try again.');
         });
     }
     if (stayBtn) stayBtn.addEventListener('click', stay);
@@ -2301,12 +2320,12 @@ function sortTable(table, col, th) {
     document.addEventListener('htmx:afterRequest', function(e) {
         var x = e.detail && e.detail.xhr;
         var v = x && x.getResponseHeader ? x.getResponseHeader('X-Jen-Session-Expires') : null;
-        if (v) ingest(v);
+        if (v) ingest(v, false, x.getResponseHeader('X-Jen-Session-Now'));
     });
     window.addEventListener('storage', function(e) { if (e.key === SESSION_KEY && e.newValue) ingest(e.newValue, true); });
     document.addEventListener('visibilitychange', function() { if (!document.hidden && expires) check(); });
     var firstDeadline = document.body.getAttribute('data-session-expires');
-    if (firstDeadline) ingest(firstDeadline);
+    if (firstDeadline) ingest(firstDeadline, false, document.body.getAttribute('data-session-now'));
 
     // AX3 - a half-edited form warns before it is left. Only forms marked data-guard-unsaved; the snapshot is the form's own data at load (and again at window load, for a form nobody
     // has touched yet, because a browser may fill fields after DOMContentLoaded). A form that is being submitted (jenBeginFullPageSubmit) and the idle-session redirect are not blocked.

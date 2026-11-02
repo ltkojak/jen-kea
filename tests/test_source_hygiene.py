@@ -99,7 +99,7 @@ def test_an_htmx_partial_never_queues_a_flash():
                 if (
                     isinstance(n, ast.Call)
                     and isinstance(n.func, ast.Name)
-                    and n.func.id == "flash"
+                    and n.func.id in ("flash", "flash_field")
                     and id(n) not in inside_nested
                 ):
                     key = f"{p.as_posix()}::{fn.name}"

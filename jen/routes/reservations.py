@@ -248,7 +248,7 @@ def reservations():
         # Q206 (AV4, AV6): the subnet's name is the filter's own, looked up in the caller's OWN map (view_prefs.subnet_filter_name)
         "subnet_filter_name": __view_prefs.subnet_filter_name(subnet_filter, accessible_subnet_map),
     }
-    if request.headers.get("HX-Request") == "true":
+    if request.headers.get("HX-Request") == "true" and request.headers.get("HX-History-Restore-Request") != "true":
         # v4.4.6 fix: previously hand-built just the <tr> rows HTML,
         # leaving the sort-link headers and pagination (rendered outside
         # the htmx swap target) stuck on stale subnet/search/per_page
@@ -317,7 +317,7 @@ def _reservations_v6():
         "subnet6_map": visible6,
         "view_mode": "v6",
     }
-    if request.headers.get("HX-Request") == "true":
+    if request.headers.get("HX-Request") == "true" and request.headers.get("HX-History-Restore-Request") != "true":
         return render_template("_reservations6_results.html", **template_vars), 200
     return render_template("reservations.html", **template_vars)
 

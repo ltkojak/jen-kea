@@ -19,7 +19,7 @@
 {% endif %}
 
 <div class="card">
-    <div class="card-header"><span class="card-title">{{ icon("search-code") }} What Kea logged — {{ total_events }} line{{ '' if total_events == 1 else 's' }}</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("search-code") }} What Kea logged — {{ total_events|plural('line') }}</span></div>
     {% if not groups %}
     <div style="text-align:center;padding:24px;color:var(--text-muted);">No lines in the scanned window name {{ mac }}. The client may not have talked to this server recently, or the lines are older than the window.</div>
     {% endif %}

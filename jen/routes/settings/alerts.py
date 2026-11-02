@@ -131,7 +131,7 @@ def save_alert_channel():
         subnet_scope = json.dumps(ids) if ids else None
 
     if not channel_name:
-        flash_field("channel_name", "Channel name is required.")
+        flash("Channel name is required.", "error")
         return redirect(url_for("settings.settings_alerts"))
 
     # Build config based on type

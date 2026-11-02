@@ -78,8 +78,22 @@ def login_redirect_location(login_url, method, full_path, next_arg=""):
         return login_url + "?next=" + quote(kept, safe="") if kept else login_url
     if method != "GET" or path.startswith(NO_RETURN_PREFIXES) or not path.startswith("/") or path.startswith("//"):
         return login_url
-    return login_url + "?next=" + quote(path, safe="")
+    encoded = quote(path, safe="")
+    if len(encoded) > MAX_NEXT:
+        return login_url
+    return login_url + "?next=" + encoded
+
+
+#: paths whose own view writes `last_active`; the middleware does not touch the session for them (a refused request must not extend it)
+NO_TOUCH_PATHS = ("/session/touch",)
+
+#: a `next` longer than this (encoded) is dropped: the sign-in request would otherwise outgrow a server's request-line limit and the person would get a 400 instead of the page
+MAX_NEXT = 1500
 
 
 def now():
     return datetime.now(timezone.utc)
+
+
+def now_epoch():
+    return int(now().timestamp())

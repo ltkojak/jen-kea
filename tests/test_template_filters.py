@@ -196,7 +196,10 @@ class TestNoBareCountInATemplate:
     """The grep of the item: every `{{ ... }}` whose expression names a count, a total, an active/free/used/size or the leases goes through `|number` or `|plural`. The ones that do not are
     reviewed here WITH their reason - an id, a timestamp, a percentage, a macro call, a form value or text - and the list is the test's: a new bare count fails until it is converted or argued."""
 
-    GREP = re.compile(r"\{\{ [^}]*(count|total|active|free|used|size|leases)\b[^}]*\}\}")
+    # (second pass, SP-9: `reserved`, `dynamic`, `events` and the health summary's `ok|warn|fail|skip` are counts the first grep could not see)
+    GREP = re.compile(
+        r"\{\{ [^}]*(count|total|active|free|used|size|leases|reserved|dynamic|events|summary\.(?:ok|warn|fail|skip))\b[^}]*\}\}"
+    )
     # (template, a fragment of the expression) -> why it is not a count to group
     REVIEWED = {
         ("_device_badge.html", "device_badge("): "a macro call: `size='sm'` is the badge's size, not a number printed",
@@ -223,6 +226,10 @@ class TestNoBareCountInATemplate:
         ): "the value of an <input type=number>: a grouped value would not parse",
         ("reports.html", "pool_used / s.pool_size * 100"): "a percentage",
         ("settings_kea.html", "kea_ca.refused"): "a list of sentences joined with '; '",
+        (
+            "_leases6_results.html",
+            "badge-reserved",
+        ): "a CSS class name (`badge-dynamic` / `badge-reserved`), not a count",
     }
 
     def _hits(self):

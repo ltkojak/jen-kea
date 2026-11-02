@@ -1,9 +1,9 @@
 <div class="hc-summary u-2b583d">
     <span>checked <strong>{{ checked_at.strftime('%H:%M:%S') }} UTC</strong></span>
-    <span><strong>{{ summary.ok }}</strong> ok</span>
-    <span><strong>{{ summary.warn }}</strong> warn</span>
-    <span><strong>{{ summary.fail }}</strong> fail</span>
-    {% if summary.skip %}<span><strong>{{ summary.skip }}</strong> skipped</span>{% endif %}
+    <span><strong>{{ summary.ok|number }}</strong> ok</span>
+    <span><strong>{{ summary.warn|number }}</strong> warn</span>
+    <span><strong>{{ summary.fail|number }}</strong> fail</span>
+    {% if summary.skip %}<span><strong>{{ summary.skip|number }}</strong> skipped</span>{% endif %}
 </div>
 
 {% for group_id, group_label, checks in grouped %}

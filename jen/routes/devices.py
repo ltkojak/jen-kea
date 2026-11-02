@@ -241,7 +241,7 @@ def devices():
         # Q206 (AV4, AV6): the subnet's name is the filter's own, looked up in the caller's OWN map (view_prefs.subnet_filter_name)
         "subnet_filter_name": __view_prefs.subnet_filter_name(subnet_filter, accessible_subnet_map),
     }
-    if request.headers.get("HX-Request") == "true":
+    if request.headers.get("HX-Request") == "true" and request.headers.get("HX-History-Restore-Request") != "true":
         # v4.4.6 fix: same class of bug fixed in leases.py/reservations.py
         # — headers and pagination live outside the old #devices-table-body
         # swap target and were going stale on every htmx-driven filter
@@ -303,7 +303,7 @@ def _devices_v6():
         "subnet6_map": visible6,
         "view_mode": "v6",
     }
-    if request.headers.get("HX-Request") == "true":
+    if request.headers.get("HX-Request") == "true" and request.headers.get("HX-History-Restore-Request") != "true":
         return render_template("_devices6_results.html", **template_vars), 200
     return render_template("devices.html", **template_vars)
 

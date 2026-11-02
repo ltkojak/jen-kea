@@ -27,7 +27,6 @@ GUARDED = {
     "settings_alerts.html": [
         "/settings/alerts/save-global",
         "/settings/alerts/save-template",
-        "/settings/alerts/save-channel",
         "save_metrics_settings",
     ],
     "ddns.html": ["/ddns/naming/save"],
@@ -46,6 +45,7 @@ GUARDED = {
 }
 # named in the entry and NOT guarded, with the reason (a deviation, reported)
 NOT_GUARDED_BY_DEVIATION = {
+    "settings_alerts.html (save-channel)": "the channel form is filled by the page's own script when a channel is edited (second pass, SP-8): the snapshot taken at load is not the form the person is looking at",
     "servers.html": "no editable form: its 21 `input` tags are CSRF fields and one checkbox group of a one-click HA action; there is nothing to half-edit",
 }
 # the forms that must never carry it

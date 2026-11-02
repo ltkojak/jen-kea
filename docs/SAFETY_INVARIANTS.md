@@ -872,6 +872,41 @@ before the replacement), and the kind chips count only what is open now.
 - `tests/test_client_problems_db.py::TestTheInboxShowsOnlyTheReplacementsRecentPast`
 - `tests/test_problems_generation_source.py::TestEveryStatementCarriesTheGeneration`
 
+## The browser surface (Q208)
+
+### SESSION-001 - The idle deadline is one function, and the only request that moves it on purpose is a signed-in, CSRF-checked POST
+**Rule.** `session_timeout.deadline(session, user)` is the one definition of when an idle session ends: the timeout middleware, the `X-Jen-Session-Expires` header, the body attribute and `POST /session/touch` all read it. The touch
+endpoint is `@login_required`, POST only and CSRF-checked like every POST, writes `session["last_active"]` and nothing else, and is never reachable by an anonymous or cross-site request; a missing, unreadable or naive `last_active` is
+None, never "expired". An expired GET is sent to the sign-in page with `next=` only for an ordinary page - never for a POST, the sign-in and sign-out pages, `/api/`, `/metrics`, `/static/` or the session endpoints - and the sign-in page's
+`_safe_next` is the only parser of it.
+**Established.** Q208 (AX2).
+**Enforced at.** `jen/services/session_timeout.py` (`deadline`, `login_redirect_location`), the `check_session_timeout` middleware in `jen/__init__.py`, and `jen/routes/auth.py::session_touch`.
+**Tests.**
+- `tests/test_session_notice.py::TestDeadline`
+- `tests/test_session_notice.py::TestTouch`
+- `tests/test_session_notice.py::TestTheRedirectCarriesNext`
+- `tests/test_session_notice.py::TestTheReturnAddress`
+- `tests/test_session_notice.py::TestMiddlewareUnchanged`
+
+### FIELD-001 - A field error's name is validated before it can reach an id lookup, and its message is only ever escaped text
+**Rule.** `forms.flash_field(field, message)` stores a field error only when `field` fully matches `[a-z0-9_\-\[\]]{1,64}` (`fullmatch`, so a trailing newline is not a name); any other name, and any overflow past 20, is an ordinary
+flash. The message is cut to 300 characters, reaches the page through `{{ message }}` (autoescaped) and reaches the DOM through `textContent`; the script finds the input with `getElementById('f-' + name)`, never a selector built from the name.
+**Established.** Q208 (AX4; the name test written for it found that the entry's own `^...$` accepts a trailing newline, so the check is `fullmatch`).
+**Enforced at.** `jen/services/forms.py` (`flash_field`, `take_field_errors`) and the flash block of `templates/base.html`.
+**Tests.**
+- `tests/test_field_errors.py::TestFlashField`
+- `tests/test_field_errors.py::TestTheMarkupEscapes`
+- `tests/test_field_errors.py::TestAFieldNameThatIsNotAFieldNameIsAFlash`
+
+### MARK-001 - A search mark is applied to escaped text, so the only markup in the output is the mark
+**Rule.** `text.mark_match(text, q)` escapes every piece of `text` and `q` and wraps matches in `<mark>`; a client-supplied hostname that is itself markup is printed as text with or without a match, the marks are always balanced, and
+`copy_cell`'s `data-copy` is the raw value (never a mark).
+**Established.** Q208 (AX6).
+**Enforced at.** `jen/services/text.py::mark_match` and `templates/_copy.html::copy_cell`.
+**Tests.**
+- `tests/test_search_mark.py::TestMarkMatch`
+- `tests/test_search_mark.py::TestTheMacro`
+
 ## Retired ids
 
 An id that is retired stays here, with the reason, so it is never given to a different rule. (None yet.)

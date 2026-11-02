@@ -337,7 +337,11 @@ def session_touch():
     idle timeout is off). POST only and CSRF-checked like every POST; an anonymous caller never reaches it (login_required), and the timeout middleware has already signed out a session
     that was past its deadline before this view runs."""
     session["last_active"] = _now_iso()
-    return {"ok": True, "expires_at": __session_timeout.expires_at(session, current_user)}
+    return {
+        "ok": True,
+        "expires_at": __session_timeout.expires_at(session, current_user),
+        "now": __session_timeout.now_epoch(),
+    }
 
 
 @bp.route("/auth/reauth", methods=["GET", "POST"])

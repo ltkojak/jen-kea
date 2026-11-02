@@ -204,7 +204,7 @@ def leases():
         "reserved_count": len(reserved_visible),
         "minutes_applied": minutes_applied,
     }
-    if request.headers.get("HX-Request") == "true":
+    if request.headers.get("HX-Request") == "true" and request.headers.get("HX-History-Restore-Request") != "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the
         # <tbody> contents), leaving the sort-link headers and pagination
         # controls — both rendered outside the htmx swap target — stuck
@@ -279,7 +279,7 @@ def _leases_v6():
         "subnet6_map": visible6,
         "view_mode": "v6",
     }
-    if request.headers.get("HX-Request") == "true":
+    if request.headers.get("HX-Request") == "true" and request.headers.get("HX-History-Restore-Request") != "true":
         return render_template("_leases6_results.html", **template_vars), 200
     return render_template("leases.html", **template_vars)
 

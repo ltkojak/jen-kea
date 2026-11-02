@@ -465,7 +465,8 @@ def create_app() -> Flask:
             return
         # v5.70.0-beta.4 (Q208, AX2): the deadline is defined once (jen/services/session_timeout.py) and the same number goes to the browser (X-Jen-Session-Expires, below)
         if session_timeout_svc.timeout_minutes(current_user) is None:
-            session["last_active"] = datetime.now(timezone.utc).isoformat()
+            if request.path not in session_timeout_svc.NO_TOUCH_PATHS:
+                session["last_active"] = datetime.now(timezone.utc).isoformat()
             return
         now = datetime.now(timezone.utc)
         last = session.get("last_active")
@@ -483,7 +484,12 @@ def create_app() -> Flask:
                         url_for("auth.login"), request.method, request.full_path, request.args.get("next", "")
                     )
                 )
-            if not request.path.startswith("/api/") and request.path != "/metrics":
+            # /session/touch is the one writer of last_active for its own path: a request to it that CSRF or routing then refuses must not have extended the session
+            if (
+                not request.path.startswith("/api/")
+                and request.path != "/metrics"
+                and request.path not in session_timeout_svc.NO_TOUCH_PATHS
+            ):
                 session["last_active"] = now.isoformat()
 
     @app.after_request
@@ -496,6 +502,8 @@ def create_app() -> Flask:
             expires = session_timeout_svc.expires_at(session, current_user)
             if expires is not None:
                 response.headers["X-Jen-Session-Expires"] = str(expires)
+                # the server's own clock beside it: the page counts down against THIS, so a client clock that is wrong changes nothing
+                response.headers["X-Jen-Session-Now"] = str(session_timeout_svc.now_epoch())
         except Exception:  # a header is a convenience; the page is served without it
             pass
         return response
@@ -507,10 +515,16 @@ def create_app() -> Flask:
         from jen.services import forms as _forms
         from jen.services import timefmt as _tf
 
-        out = {"session_expires": None, "take_field_errors": _forms.take_field_errors, "print_stamp": ""}
+        out = {
+            "session_expires": None,
+            "session_now": None,
+            "take_field_errors": _forms.take_field_errors,
+            "print_stamp": "",
+        }
         try:
             if current_user.is_authenticated:
                 out["session_expires"] = session_timeout_svc.expires_at(session, current_user)
+                out["session_now"] = session_timeout_svc.now_epoch()
                 out["print_stamp"] = _tf.fmt_filter(datetime.now(timezone.utc))
         except Exception:  # the first paint without them still arms from the next response's header
             pass

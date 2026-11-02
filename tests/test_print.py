@@ -66,6 +66,18 @@ class TestThePrintSheet:
         assert "@page { margin: 12mm; }" in BASE
 
 
+class TestPrintIsNotAPhone:
+    """SP-1: a portrait A4 or Letter page is 703-725 CSS px wide, and a `(max-width: 768px)` block matches it - the phone layout (and its `.hide-mobile { display: none !important }`, which comes
+    later than the print rule and ties it) applied to a printout. The phone and tablet blocks are SCREEN layouts."""
+
+    def test_every_width_block_of_base_names_the_screen(self):
+        offenders = [m.group(0) for m in re.finditer(r"@media\s*\(max-width[^{]*\{", BASE)]
+        assert not offenders, offenders
+
+    def test_the_phone_blocks_are_still_there(self):
+        assert "@media screen and (max-width: 768px) {" in BASE and "@media screen and (max-width: 480px) {" in BASE
+
+
 class TestThePrintOnlyLine:
     def test_it_is_hidden_on_screen_and_shown_in_print(self):
         assert re.search(r"\n\s*\.print-only \{ display: none; \}", BASE)

@@ -137,6 +137,25 @@ class TestSortAndPageLinksSwap:
         assert "Hostname ↑" in html
 
 
+class TestAHistoryRestoreGetsTheFullPage:
+    """SP-5: htmx's history restore (Back, cache miss) sends HX-Request AND HX-History-Restore-Request and swaps the answer in as the whole page - a bare partial would replace the body."""
+
+    RESTORE = {"HX-Request": "true", "HX-History-Restore-Request": "true"}
+
+    @pytest.mark.parametrize(("path", "target", "col"), PAGES)
+    def test_it_is_a_document(self, logged_in_client, three_rows, path, target, col):
+        html = logged_in_client.get(f"{path}?sort={col}&dir=desc&per_page=1&page=2", headers=self.RESTORE).data.decode()
+        assert "<html" in html and "<nav" in html and f'id="{target[1:]}"' in html
+
+    @pytest.mark.parametrize(("path", "target", "col"), PAGES)
+    def test_an_ordinary_swap_is_still_the_partial(self, logged_in_client, three_rows, path, target, col):
+        assert "<html" not in logged_in_client.get(f"{path}?per_page=1&page=2", headers=HX).data.decode()
+
+    @pytest.mark.parametrize("path", ["/leases?view=v6", "/devices?view=v6", "/reservations?view=v6"])
+    def test_the_v6_views_too(self, logged_in_client, ipv6_flag_on, path):
+        assert "<html" in logged_in_client.get(path, headers=self.RESTORE).data.decode()
+
+
 class TestTheFallbackIsUnchanged:
     """The href assertions of tests/test_leases.py, tests/test_devices_page.py and tests/test_reservations.py are untouched: the links still carry the exact `?sort=...` and `?page=...` text."""
 
