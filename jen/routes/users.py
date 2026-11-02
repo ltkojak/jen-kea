@@ -17,6 +17,7 @@ import jen.services.auth as __auth
 import jen.services.client_subject as __client_subject
 import jen.services.kea as __kea
 import jen.services.mfa as __mfa
+import jen.services.session_timeout as __session_timeout
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
@@ -273,8 +274,8 @@ def add_user():
             return users(), 400
         subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
     timeout_val = None
-    if timeout_raw and timeout_raw.isdigit() and 1 <= int(timeout_raw) <= 1440:
-        timeout_val = int(timeout_raw)
+    if timeout_raw and (__session_timeout.parse_minutes(timeout_raw) or 0) >= 1:
+        timeout_val = __session_timeout.parse_minutes(timeout_raw)
 
     if not username:
         flash_field("username", "Username is required.")
@@ -427,10 +428,10 @@ def change_password():
 @_superadmin_required
 def set_user_timeout(user_id):
     timeout = request.form.get("timeout", "").strip()
-    if timeout and (not timeout.isdigit() or not (1 <= int(timeout) <= 1440)):
+    if timeout and (__session_timeout.parse_minutes(timeout) or 0) < 1:
         flash("Timeout must be between 1 and 1440 minutes, or blank for global default.", "error")
         return redirect(url_for("users.users"))
-    timeout_val = int(timeout) if timeout.isdigit() else None
+    timeout_val = __session_timeout.parse_minutes(timeout) if timeout else None
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -599,10 +600,10 @@ def edit_user(user_id):
     # Validate timeout
     timeout_val = None
     if timeout_raw:
-        if not timeout_raw.isdigit() or not (1 <= int(timeout_raw) <= 1440):
+        if (__session_timeout.parse_minutes(timeout_raw) or 0) < 1:
             flash("Timeout must be 1–1440 minutes.", "error")
             return redirect(url_for("users.users"))
-        timeout_val = int(timeout_raw)
+        timeout_val = __session_timeout.parse_minutes(timeout_raw)
 
     # Validate password if provided
     if new_pw:

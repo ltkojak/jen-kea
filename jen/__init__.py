@@ -468,15 +468,16 @@ def create_app() -> Flask:
             session["login_id"] = session_timeout_svc.new_login_id()
         # v5.70.0-beta.4 (Q208, AX2): the deadline is defined once (jen/services/session_timeout.py) and the same number goes to the browser (X-Jen-Session-Expires, below)
         # v5.70.0-beta.5 (Q210, AZ3): a request marked X-Jen-Poll: 1 only refreshes a view and never moves `last_active`, in any branch below (the bootstrap included)
-        poll = session_timeout_svc.is_poll(request.headers)
+        # session_timeout.extends() is the ONE definition, asked in all three branches (second pass 5)
+        extends = session_timeout_svc.extends(request.path, request.headers, request.args)
         if session_timeout_svc.timeout_minutes(current_user) is None:
-            if request.path not in session_timeout_svc.NO_TOUCH_PATHS and not poll:
+            if extends:
                 session["last_active"] = datetime.now(timezone.utc).isoformat()
             return
         now = datetime.now(timezone.utc)
         last = session.get("last_active")
         if not last:
-            if request.path not in session_timeout_svc.NO_TOUCH_PATHS and not poll:
+            if extends:
                 session["last_active"] = now.isoformat()
         else:
             when = session_timeout_svc.deadline(session, current_user)
@@ -492,7 +493,7 @@ def create_app() -> Flask:
                 )
             # /session/touch is the one writer of last_active for its own path: a request to it that CSRF or routing then refuses must not have extended the session; /api/, /metrics
             # and a request that says it only refreshes a view (X-Jen-Poll: 1) do not extend it either - session_timeout.extends() is the one definition
-            if session_timeout_svc.extends(request.path, request.headers):
+            if extends:
                 session["last_active"] = now.isoformat()
 
     @app.after_request
@@ -508,6 +509,10 @@ def create_app() -> Flask:
                 response.headers["X-Jen-Session-Expires"] = str(said)
                 # the server's own clock beside it: the page counts down against THIS (a client clock that is wrong changes nothing), and orders replies by it (Q210, AZ9 a)
                 response.headers["X-Jen-Session-Now"] = str(session_timeout_svc.now_epoch())
+                # the session state the deadline was computed from: the browser orders replies by THIS (Q210, second pass 1)
+                active = session_timeout_svc.active_epoch(session)
+                if active is not None:
+                    response.headers["X-Jen-Session-Active"] = str(active)
         except Exception:  # a header is a convenience; the page is served without it
             pass
         return response
@@ -523,6 +528,7 @@ def create_app() -> Flask:
             "session_expires": None,
             "session_now": None,
             "session_login": "",
+            "session_active": "",
             "take_field_errors": _forms.take_field_errors,
             "print_stamp": "",
         }
@@ -532,6 +538,7 @@ def create_app() -> Flask:
                 out["session_expires"] = session_timeout_svc.announcement(session, current_user)
                 out["session_now"] = session_timeout_svc.now_epoch()
                 out["session_login"] = session.get("login_id") or ""
+                out["session_active"] = session_timeout_svc.active_epoch(session) or ""
                 out["print_stamp"] = _tf.fmt_filter(datetime.now(timezone.utc))
         except Exception:  # the first paint without them still arms from the next response's header
             pass

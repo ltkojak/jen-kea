@@ -13,18 +13,7 @@
     </div>
 </div>
 {% if session_watch_standalone is defined and session_watch_standalone %}
-<style>
-    .jen-dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10001; display: flex; align-items: center; justify-content: center; }
-    .jen-dialog-overlay[hidden] { display: none; }
-    .jen-dialog { background: var(--surface, #101820); border: 1px solid var(--border, #1c2733); border-radius: var(--radius, 8px); padding: 24px; max-width: 400px; width: 90%; box-shadow: 0 16px 48px rgba(0,0,0,.5); color: #e0e0e0; }
-    .jen-dialog-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-    .jen-dialog p { font-size: 14px; line-height: 1.5; margin-bottom: 20px; }
-    .jen-dialog .field-note { color: #f0808a; font-size: 13px; }
-    .jen-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
-    .jen-dialog .btn { border: 1px solid #223040; border-radius: 6px; padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: #0d151d; color: #e0e0e0; }
-    .jen-dialog .btn-primary { background: #00b4d8; border-color: #00b4d8; color: #fff; }
-    .jen-dialog .btn:disabled { opacity: .6; cursor: default; }
-</style>
+<link rel="stylesheet" href="/static/css/session-watch.css?v={{ jen_version }}">
 {% endif %}
 <script nonce="{{ csp_nonce }}">
 // AX2 + Q210 - jenSessionWatch. The server says when the idle session ends (X-Jen-Session-Expires on every response, data-session-expires on the body for the first paint) and what time it is
@@ -38,7 +27,7 @@
     var MAX_TIMER = 2147000000;
     var MAX_AHEAD = 31622400;
     var expires = 0, lead = 120, warnTimer = null, armedMs = null, tickTimer = null, opener = null, leaving = false;
-    var lastServerNow = 0, anchored = false, anchorServer = 0, anchorPerf = 0;
+    var lastServerNow = 0, lastActive = 0, anchored = false, anchorServer = 0, anchorPerf = 0;
     var SESSION_KEY = KEY_PREFIX + (document.body.getAttribute('data-session-login') || '');
     var overlay = document.getElementById('jen-session-overlay');
     var leftEl = document.getElementById('jen-session-left');
@@ -49,6 +38,7 @@
     function nowS() { return anchorServer + (performance.now() - anchorPerf) / 1000; }
     function dialogOpen() { return !!overlay && !overlay.hidden; }
     function clockText(sec) { var m = Math.floor(sec / 60), s = sec % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
+    function store(text) { try { localStorage.setItem(SESSION_KEY, text); } catch (err) { /* private mode: each tab learns from its own requests */ } }
     function forget() { try { localStorage.removeItem(SESSION_KEY); } catch (err) { /* private mode: nothing was stored */ } }
     function stopWarn() { if (warnTimer) { clearTimeout(warnTimer); warnTimer = null; } armedMs = null; }
     function closeDialog() {
@@ -62,6 +52,7 @@
     function goToLogin() {
         if (leaving) return;
         leaving = true;
+        forget();
         stopWarn();
         if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
         window.jenLeaving = true;
@@ -116,30 +107,36 @@
         armedMs = Math.max(0, Math.min((expires - lead - nowS()) * 1000, 2147000000));
         warnTimer = setTimeout(check, armedMs);
     }
-    // value: an epoch second, or the word "off"; serverNow: the server's clock when it said so. A value with no clock beside it, or from a reply older than one already taken (a late response,
-    // an old storage value), is ignored. A reply is authoritative in both directions; a value from a second tab only ever moves the deadline forward.
-    function ingest(value, fromStorage, serverNow) {
+    // value: an epoch second, or the word "off"; serverNow: the server's clock when it said so; active: the session state (the epoch second of last_active) the deadline was computed from.
+    // A value with no clock beside it, from a reply older than one already taken, or computed from an OLDER session state than one already taken (a slow reply built from the cookie before a touch,
+    // which the server's clock cannot tell from a newer one), is ignored. A reply is authoritative in both directions - a timeout cut or switched off keeps last_active and moves the deadline;
+    // a value from a second tab only ever moves the deadline forward, and only a whole number of seconds that lies in the server's future and within a year is a deadline.
+    function ingest(value, fromStorage, serverNow, active) {
         var sn = parseInt(serverNow, 10);
         if (!(sn > 0) || sn < lastServerNow) return;
+        var ac = parseInt(active, 10) || 0;
+        if (ac > 0 && ac < lastActive) return;
         var off = value === 'off';
+        if (!off && !/^[0-9]{1,12}$/.test(String(value))) return;
         var n = off ? 0 : parseInt(value, 10);
-        if (off ? fromStorage : !(n > 0)) return;
-        if (!off && n > sn + MAX_AHEAD) return;
-        if (fromStorage && n <= expires) return;
+        if (!off && (!(n > sn) || n > sn + MAX_AHEAD)) return;
+        if (fromStorage && (off ? !expires : n <= expires)) return;
         lastServerNow = sn;
+        if (ac > lastActive) lastActive = ac;
         if (!fromStorage || !anchored) { anchorServer = sn; anchorPerf = performance.now(); anchored = true; }
         if (off) {
             expires = 0;
             stopWarn();
             closeDialog();
-            forget();
+            // a second tab learns it from this value (a removal tells it nothing); sign-out and the deadline navigation remove the key
+            if (!fromStorage) store('off:' + sn + ':' + lastActive);
             return;
         }
         if (n !== expires) {
             expires = n;
             var span = expires - nowS();
             lead = span > 240 ? 120 : Math.max(5, Math.floor(span / 2));
-            if (!fromStorage) { try { localStorage.setItem(SESSION_KEY, expires + ':' + sn); } catch (err) { /* private mode: each tab learns from its own requests */ } }
+            if (!fromStorage) store(expires + ':' + sn + ':' + lastActive);
         }
         if (expires - nowS() > lead) closeDialog();
         arm();
@@ -166,8 +163,8 @@
         }).then(function(d) {
             if (!d) return;
             stayBtn.disabled = false;
-            if (d.ok && d.expires_at) { closeDialog(); ingest(d.expires_at, false, d.now); arm(); }
-            else if (d.ok) { closeDialog(); ingest('off', false, d.now); }
+            if (d.ok && d.expires_at) { closeDialog(); ingest(d.expires_at, false, d.now, d.active); arm(); }
+            else if (d.ok) { closeDialog(); ingest('off', false, d.now, d.active); }
             else stayFailed('Could not renew the session - try again.');
         }).catch(function() {
             stayFailed('Could not reach Jen - try again.');
@@ -184,14 +181,14 @@
     document.addEventListener('htmx:afterRequest', function(e) {
         var x = e.detail && e.detail.xhr;
         var v = x && x.getResponseHeader ? x.getResponseHeader('X-Jen-Session-Expires') : null;
-        if (v) ingest(v, false, x.getResponseHeader('X-Jen-Session-Now'));
+        if (v) ingest(v, false, x.getResponseHeader('X-Jen-Session-Now'), x.getResponseHeader('X-Jen-Session-Active'));
     });
     // a value written by a tab of THIS sign-in is `<deadline>:<its server clock>`; a key that names a different sign-in means this one is over, so its leftover is dropped
     window.addEventListener('storage', function(e) {
         if (!e.key || e.key.indexOf(KEY_PREFIX) !== 0 || !e.newValue) return;
         if (e.key !== SESSION_KEY) { forget(); return; }
         var parts = String(e.newValue).split(':');
-        ingest(parts[0], true, parts[1]);
+        ingest(parts[0], true, parts[1], parts[2]);
     });
     // signing out through the page's own form ends the sign-in: its key goes with it
     document.addEventListener('submit', function(e) {
@@ -200,6 +197,6 @@
     }, true);
     document.addEventListener('visibilitychange', function() { if (!document.hidden && expires) check(); });
     var firstDeadline = document.body.getAttribute('data-session-expires');
-    if (firstDeadline) ingest(firstDeadline, false, document.body.getAttribute('data-session-now'));
+    if (firstDeadline) ingest(firstDeadline, false, document.body.getAttribute('data-session-now'), document.body.getAttribute('data-session-active'));
 })();
 </script>

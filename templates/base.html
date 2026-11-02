@@ -62,7 +62,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         start();
         return fetch(url, opts).then(function(resp) {
             // Q208 (AX2): every response to a signed-in person carries when the idle session ends; jenSessionWatch (templates/_session_watch.html) re-arms from it - and a value is taken only with the server's clock beside it (Q210, AZ9 a)
-            try { var ends = resp.headers.get('X-Jen-Session-Expires'); if (ends && window.jenSessionWatch) window.jenSessionWatch.ingest(ends, false, resp.headers.get('X-Jen-Session-Now')); } catch (e) { /* no header API */ }
+            try { var ends = resp.headers.get('X-Jen-Session-Expires'); if (ends && window.jenSessionWatch) window.jenSessionWatch.ingest(ends, false, resp.headers.get('X-Jen-Session-Now'), resp.headers.get('X-Jen-Session-Active')); } catch (e) { /* no header API */ }
             if (resp.status === 401 && !reauthing) {
                 resp.clone().json().then(function(d) {
                     if (d && d.reauth && !reauthing) { reauthing = true; window.location.assign(d.reauth); }
@@ -864,7 +864,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
     <link rel="stylesheet" href="/static/css/print.css?v={{ jen_version }}" media="print">
 </head>
-<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}" data-session-login="{{ session_login }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}" data-session-login="{{ session_login }}" data-session-active="{{ session_active }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <a href="#main" class="skip-link">Skip to content</a>
 <div id="jen-progress"></div>
 {% include "_icon_sprite.html" %}
@@ -2273,6 +2273,16 @@ function sortTable(table, col, th) {
     }
     document.addEventListener('input', clearField);
     document.addEventListener('change', clearField);
+
+    // Q210 (second pass 8): Chrome keeps the content of a CLOSED <details> out of the print layout whatever its display says, so printing opens every one and puts it back afterward
+    var printOpened = [];
+    window.addEventListener('beforeprint', function() { document.querySelectorAll('details:not([open])').forEach(function(d) { d.setAttribute('open', ''); printOpened.push(d); }); });
+    window.addEventListener('afterprint', function() { printOpened.forEach(function(d) { d.removeAttribute('open'); }); printOpened = []; });
+    // a page that reloads itself marks the reload with ?_poll=1 (a navigation cannot carry a header, and the idle timeout must not count it); once loaded, the address is the page's own again
+    try {
+        var pollUrl = new URL(window.location.href);
+        if (pollUrl.searchParams.get('_poll') === '1') { pollUrl.searchParams.delete('_poll'); window.history.replaceState(null, '', pollUrl.pathname + pollUrl.search + pollUrl.hash); }
+    } catch (err) { /* an old browser: the marker stays in the address, harmlessly */ }
 })();
 </script>
 {% include "_password_toggle.html" %}

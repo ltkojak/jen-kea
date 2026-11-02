@@ -157,7 +157,7 @@ class TestPresetsPinned:
 
     def test_phosphor_gets_a_desktop_only_mono_ui_rule(self):
         css = theme.render_css("phosphor", **{k: v for k, v in theme.PRESETS["phosphor"].items() if k != "name"})
-        assert '@media (min-width:769px){:root[data-theme="phosphor"]{--font-ui:var(--font-mono);}}' in css
+        assert '@media screen and (min-width:769px){:root[data-theme="phosphor"]{--font-ui:var(--font-mono);}}' in css
 
     def test_non_mono_presets_have_no_font_ui_override(self):
         for tid in ("dark", "light", "contrast", "slate", "ember", "retro"):

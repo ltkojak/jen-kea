@@ -117,6 +117,20 @@ class TestPrintIsNotAPhone:
         assert scanned > 100, "the walk found too few files to be the whole tree"
         assert not offenders, offenders
 
+    def test_the_python_that_emits_css_names_the_screen_too(self):
+        """Second pass 9: jen/services/theme.py writes an `@media (min-width:769px)` block into the page; the tree walk read only .html, .css and .js."""
+        offenders = []
+        for p in sorted(pathlib.Path("jen").rglob("*.py")):
+            for m in re.finditer(r"@media([^{]*)\{", p.read_text(encoding="utf-8")):
+                if self.WIDTH.search(m.group(1)) and not re.search(r"\bscreen\b", m.group(1)):
+                    offenders.append(f"{p.as_posix()}: {m.group(0).strip()}")
+        assert not offenders, offenders
+
+    def test_a_closed_details_prints_open(self):
+        """Second pass 8: Chrome keeps the content of a closed <details> out of layout whatever `display` says, so print.css's own rule cannot show it: the page opens them for print and closes them after."""
+        assert "window.addEventListener('beforeprint'" in BASE and "details:not([open])" in BASE
+        assert "window.addEventListener('afterprint'" in BASE
+
     def test_the_phone_blocks_are_still_there(self):
         assert "@media screen and (max-width: 768px) {" in BASE and "@media screen and (max-width: 480px) {" in BASE
         assert "@media screen and (max-width: 768px) {" in pathlib.Path("templates/_card_toc.html").read_text(

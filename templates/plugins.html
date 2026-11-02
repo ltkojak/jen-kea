@@ -265,7 +265,7 @@
     var attempts = 0;
     var poll = setInterval(function() {
         attempts++;
-        jenFetch('/settings/plugins/install-status/' + encodeURIComponent(pluginId), { cache: 'no-store' })
+        jenFetch('/settings/plugins/install-status/' + encodeURIComponent(pluginId), { cache: 'no-store', headers: { 'X-Jen-Poll': '1' } })
             .then(function(r) { return r.ok ? r.json() : {}; })
             .catch(function() { return {}; })
             .then(function(s) {

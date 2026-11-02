@@ -96,7 +96,7 @@
     }
     function poll() {
         tries += 1;
-        jenFetch('/setup/recovery/status', {credentials: 'same-origin', headers: {'Accept': 'application/json'}})
+        jenFetch('/setup/recovery/status', {credentials: 'same-origin', headers: {'Accept': 'application/json', 'X-Jen-Poll': '1'}})
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (status) {
                 if (status && status.fresh && status.at && status.at !== knownAt) {

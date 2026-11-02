@@ -68,7 +68,6 @@ def devices():
         "subnet": "d.last_subnet_id",
         "first_seen": "d.first_seen",
         "last_seen": "d.last_seen",
-        "status": "d.last_seen",
     }
     # Q210 (AZ6 a): the EFFECTIVE sort reaches the template, so ?sort=bogus (or an empty or mistyped one) marks the default column the rows are really ordered by
     sort = sort if sort in sort_map else "last_seen"

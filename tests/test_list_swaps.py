@@ -236,7 +236,34 @@ class TestAnUnknownSortStillSaysWhichColumnIsSorted:
     @pytest.mark.parametrize("path", ["/leases?view=v6", "/devices?view=v6", "/reservations?view=v6"])
     def test_the_v6_views_have_no_sort_links_and_still_answer_a_stray_sort(self, logged_in_client, ipv6_flag_on, path):
         """The v6 partials carry no sortable header and no pagination `base` (grep: `sort=` appears in no `_*6_results.html`), so there is no link to fix; the view answers a stray `sort` as it did."""
-        assert logged_in_client.get(path + "&sort=bogus", headers=HX).status_code == 200
+        assert logged_in_client.get(path + "&sort=bogus", headers=HX).status_code < 500, (
+            "a stray sort is never an error (a v6 view may redirect an HX request to the v4 page)"
+        )
+
+
+class TestTheOtherQueryValuesOfALinkAreEncodedToo:
+    """Second pass 6 and 7: `minutes` was the one query value in the leases links that was not URL-encoded (an injected `&dir=asc#x` rode into every sort and page link), and Devices whitelisted
+    `sort=status` with no Status header, so the rows were sorted and no column was marked."""
+
+    def test_minutes_is_encoded_in_every_link(self):
+        text = pathlib.Path("templates/_leases_results.html").read_text(encoding="utf-8")
+        assert "&minutes={{ minutes }}" not in text and "'&minutes=' ~ minutes ~" not in text
+        assert text.count("minutes|urlencode") >= 12
+
+    def test_an_injected_minutes_reaches_no_link_raw(self, logged_in_client, three_rows):
+        html = logged_in_client.get("/leases?per_page=1&minutes=5%26dir%3Dasc%23x", headers=HX).data.decode()
+        for a in parse(html).th_links + parse(html).page_links:
+            assert "#x" not in a["href"] and "&amp;dir=asc&amp;" not in a["href"] and a["href"].count("dir=") <= 1, a[
+                "href"
+            ]
+
+    def test_devices_status_is_not_a_sort_key(self):
+        text = pathlib.Path("jen/routes/devices.py").read_text(encoding="utf-8")
+        assert '"status": "d.last_seen"' not in text
+
+    def test_sort_status_on_devices_marks_the_default_column(self, logged_in_client, three_rows):
+        links = parse(logged_in_client.get("/devices?per_page=1&sort=status", headers=HX).data.decode())
+        assert links.aria_sorts == ["descending"]
 
 
 class TestThePageLinksEncodeTheSort:

@@ -273,7 +273,7 @@ def render_css(
     decls = "".join(f"{CSS_VARS[name]}:{tokens[name]};" for name in TOKENS)
     css = f':root[data-theme="{theme_id}"]{{color-scheme:{color_scheme};{decls}--radius:{radius}px;}}'
     if mono_ui:
-        css += f'@media (min-width:769px){{:root[data-theme="{theme_id}"]{{--font-ui:var(--font-mono);}}}}'
+        css += f'@media screen and (min-width:769px){{:root[data-theme="{theme_id}"]{{--font-ui:var(--font-mono);}}}}'
     css += extra_css
     return css
 

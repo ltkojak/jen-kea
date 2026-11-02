@@ -16,6 +16,7 @@ import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.oidc as __oidc
 import jen.services.runtime as __runtime
+import jen.services.session_timeout as __session_timeout
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
@@ -35,9 +36,11 @@ def save_session_settings():
     if enabled not in ("true", "false"):
         enabled = "true"
 
-    if not timeout.isdigit() or not (0 <= int(timeout) <= 1440):
+    minutes = __session_timeout.parse_minutes(timeout)
+    if minutes is None:
         flash_field("timeout_minutes", "Session timeout must be between 0 and 1440 minutes (0 = never).")
         return redirect(url_for("settings.settings_security"))
+    timeout = str(minutes)  # the canonical text: `00005` is stored as 5, and what is stored is what the reader applies
 
     __user.set_global_setting("session_timeout_minutes", timeout)
     __user.set_global_setting("session_timeout_enabled", enabled)

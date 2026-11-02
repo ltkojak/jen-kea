@@ -425,7 +425,11 @@ setInterval(function() {
         (overlay && overlay.style.display !== 'none') ||
         document.body.classList.contains('sheet-open') ||
         /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
-    if (!busy) location.reload();
+    if (!busy) {
+        // Q210: this reload is a refresh, not activity - the marker lets the server leave the idle clock alone (a navigation cannot carry the X-Jen-Poll header)
+        try { var u = new URL(location.href); u.searchParams.set('_poll', '1'); history.replaceState(null, '', u.pathname + u.search + u.hash); } catch (e) { /* the reload still happens */ }
+        location.reload();
+    }
 }, 30000);
 {% if packet_health_sparklines %}
 </script>

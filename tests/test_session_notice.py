@@ -351,10 +351,15 @@ class TestTheTouchPathIsNotTouchedByTheMiddleware:
         assert st.NO_TOUCH_PATHS == ("/session/touch",)
 
     def test_the_middleware_names_it_in_every_branch(self):
-        """The two branches that write `last_active` outright name the path list; the third (an ordinary request) asks `extends()`, which names it once for all callers (Q210, AZ3)."""
+        """Q210 (AZ3, second pass 5): all three branches that can write `last_active` ask `extends()`, the one definition (it names the touch path, `/api/`, `/metrics` and the poll marker)."""
         text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
-        assert text.count("session_timeout_svc.NO_TOUCH_PATHS") == 2
-        assert "session_timeout_svc.extends(request.path, request.headers)" in text
+        assert text.count("session_timeout_svc.NO_TOUCH_PATHS") == 0, (
+            "no branch names the list itself any more: extends() does, once"
+        )
+        assert (
+            text.count("if extends:") == 3
+            and "session_timeout_svc.extends(request.path, request.headers, request.args)" in text
+        )
 
 
 class TestTheReturnAddress:
@@ -452,17 +457,23 @@ class TestTheDialogScript:
 
     def test_a_reply_is_authoritative_in_both_directions_and_off_is_a_word(self):
         block = self.WATCH[self.WATCH.index("function ingest(") : self.WATCH.index("function stayFailed(")]
-        assert "if (fromStorage && n <= expires) return;" in block, (
+        assert "if (fromStorage && (off ? !expires : n <= expires)) return;" in block, (
             "a value from another tab only ever moves the deadline forward"
         )
         assert "if (n !== expires) {" in block and "expires = n;" in block, "a reply moves it either way"
         off = block[block.index("if (off) {") : block.index("if (n !== expires)")]
-        for step in ("expires = 0;", "stopWarn();", "closeDialog();", "forget();"):
+        for step in ("expires = 0;", "stopWarn();", "closeDialog();", "store('off:' + sn + ':' + lastActive);"):
             assert step in off, step
         assert "value === 'off'" in block
 
     def test_an_absurd_deadline_is_ignored(self):
-        assert "var MAX_AHEAD = 31622400;" in self.WATCH and "if (!off && n > sn + MAX_AHEAD) return;" in self.WATCH
+        assert (
+            "var MAX_AHEAD = 31622400;" in self.WATCH
+            and "if (!off && (!(n > sn) || n > sn + MAX_AHEAD)) return;" in self.WATCH
+        )
+        assert "if (!off && !/^[0-9]{1,12}$/.test(String(value))) return;" in self.WATCH, (
+            "digits only: parseInt would read 12abc as 12"
+        )
 
     def test_leaving_happens_once_and_stops_the_timers(self):
         block = self.WATCH[self.WATCH.index("function goToLogin()") : self.WATCH.index("function signOut()")]
@@ -493,7 +504,9 @@ class TestTheDialogScript:
         assert "KEY_PREFIX + (document.body.getAttribute('data-session-login') || '')" in self.WATCH
         sign_out = self.WATCH[self.WATCH.index("function signOut()") : self.WATCH.index("function tick()")]
         assert "forget();" in sign_out
-        assert "expires + ':' + sn" in self.WATCH, "a stored value carries both numbers"
+        assert "expires + ':' + sn + ':' + lastActive" in self.WATCH, (
+            "a stored value carries the deadline, the server's clock and the session state"
+        )
 
     def test_the_hooks_the_browser_tests_drive(self):
         assert "window.jenSessionWatch = {" in self.WATCH
@@ -553,6 +566,45 @@ class TestAPollNeverExtends:
         r = app.test_client().get("/health-center/data?partial=1", headers={"X-Jen-Poll": "1"})
         assert r.status_code == 302 and urlsplit(r.headers["Location"]).path == "/login"
 
+    def test_health_centers_poll_without_the_header_does_extend(self, logged_in_client):
+        """The control for the row above: the same URL, no marker, moves it (the header is what makes the difference)."""
+        stale = _iso(10)
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        assert logged_in_client.get("/health-center/data?partial=1").status_code == 200
+        with logged_in_client.session_transaction() as sess:
+            assert sess["last_active"] != stale
+
+    def test_a_reload_that_marks_itself_does_not_extend_either(self, logged_in_client):
+        """Second pass 3: the Servers page reloads itself every 30 s, and a navigation cannot carry a header - `?_poll=1` is the same marker for it."""
+        stale = _iso(10)
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        logged_in_client.get("/leases?_poll=1")
+        with logged_in_client.session_transaction() as sess:
+            assert sess["last_active"] == stale
+        assert "_poll" in pathlib.Path("templates/servers.html").read_text(encoding="utf-8")
+        assert "searchParams.delete('_poll')" in pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+
+    def test_the_bounded_pollers_send_the_marker_too(self):
+        for name in (
+            "templates/plugins.html",
+            "templates/settings_system.html",
+            "templates/setup_recovery.html",
+            "plugins/network-discovery/templates/network_discovery/index.html",
+        ):
+            assert "X-Jen-Poll" in pathlib.Path(name).read_text(encoding="utf-8"), name
+
+    def test_with_the_timeout_off_the_api_poll_does_not_write_it_either(self, logged_in_client):
+        """Second pass 5: the timeout-off and no-last_active branches used to name the touch path and the marker themselves and forgot /api/."""
+        stale = _iso(10)
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        with _timeout_set(session_timeout_enabled="false"):
+            logged_in_client.get("/api/stats")
+            with logged_in_client.session_transaction() as sess:
+                assert sess["last_active"] == stale
+
     def test_a_poll_past_the_deadline_is_signed_out_like_any_request(self, logged_in_client):
         with logged_in_client.session_transaction() as sess:
             sess["last_active"] = _iso(24 * 60)
@@ -563,8 +615,9 @@ class TestAPollNeverExtends:
 
     def test_the_middleware_has_one_definition_of_what_extends(self):
         text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
-        assert "session_timeout_svc.extends(request.path, request.headers)" in text
+        assert "session_timeout_svc.extends(request.path, request.headers, request.args)" in text
         assert st.extends("/leases", {}) and not st.extends("/leases", {"X-Jen-Poll": "1"})
+        assert not st.extends("/servers", {}, {"_poll": "1"}) and st.extends("/servers", {}, {"_poll": "0"})
         assert (
             not st.extends("/api/stats", {}) and not st.extends("/metrics", {}) and not st.extends("/session/touch", {})
         )
@@ -608,12 +661,16 @@ class TestTheBootstrapSkipsTheSamePaths:
 class TestTheSettingIsReadOnce:
     """Q210 (AZ4, Y6): the global timeout is read through ONE coercion. A hand-edited row that is not a whole number of minutes from 0 to 1440 reads as 60 and is logged once per process."""
 
-    @pytest.mark.parametrize("bad", ["x", "", "60.5", "1e3", "9" * 20, "-5", "1441", " 5", "５", None])
+    @pytest.mark.parametrize(
+        "bad", ["x", "", "60.5", "1e3", "9" * 20, "-5", "1441", " 5", "\uff15", "\u0665", "\u00b2", "1234567", None]
+    )
     def test_a_value_that_is_not_a_whole_number_of_minutes_reads_as_the_default(self, monkeypatch, bad):
         _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes=bad)
         assert st.timeout_minutes(_User()) == 60
 
-    @pytest.mark.parametrize(("good", "expected"), [("0", None), ("1", 1), ("1440", 1440), ("45", 45), (45, 45)])
+    @pytest.mark.parametrize(
+        ("good", "expected"), [("0", None), ("1", 1), ("1440", 1440), ("45", 45), (45, 45), ("00005", 5)]
+    )
     def test_a_whole_number_in_range_is_taken_as_it_is(self, monkeypatch, good, expected):
         _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes=good)
         assert st.timeout_minutes(_User()) == expected
@@ -623,6 +680,27 @@ class TestTheSettingIsReadOnce:
         assert st.timeout_minutes(_User(session_timeout=10)) == 10
         assert st.timeout_minutes(_User(session_timeout=99999)) == 45, "out of range: the global applies"
         assert st.timeout_minutes(_User(session_timeout=0)) == 45, "0 is 'use the global' for a user, as it always was"
+
+    def test_the_writers_call_the_one_parser(self):
+        """Second pass 2: the writers said `isdigit()` (which accepts full-width and Arabic-Indic digits, and 500s on `\u00b2`), the reader said ASCII - an administrator typing `\uff15` was told it was saved and got 60
+        minutes. One parser, `session_timeout.parse_minutes`, in all four writers."""
+        for name in ("jen/routes/settings/security.py", "jen/routes/users.py"):
+            text = pathlib.Path(name).read_text(encoding="utf-8")
+            assert "__session_timeout.parse_minutes(" in text, name
+            assert "timeout.isdigit()" not in text and "timeout_raw.isdigit()" not in text, name
+
+    @pytest.mark.parametrize(
+        ("typed", "stored"), [("\uff15", None), ("\u0665", None), ("\u00b2", None), ("00005", "5"), ("30", "30")]
+    )
+    def test_the_session_form_stores_what_the_reader_applies(self, logged_in_client, typed, stored):
+        with _timeout_set(session_timeout_minutes="60"):
+            r = logged_in_client.post(
+                "/settings/save-session", data={"timeout_minutes": typed, "timeout_enabled": "true"}
+            )
+            assert r.status_code == 302, "a refusal or a save, never a 500"
+            from jen.models.user import get_global_setting
+
+            assert get_global_setting("session_timeout_minutes", "60") == (stored or "60")
 
     def test_it_is_logged_once_per_process_and_cut_to_forty_characters(self, monkeypatch, caplog):
         st._warned.clear()
@@ -668,6 +746,26 @@ class TestEveryDeadlineCarriesNow:
         assert r.status_code == 200
         assert re.fullmatch(r"\d+", str(r.get_json()["now"])) and re.fullmatch(r"\d+", r.headers["X-Jen-Session-Now"])
         assert r.headers["X-Jen-Session-Expires"] == str(r.get_json()["expires_at"])
+
+    def test_every_deadline_also_carries_the_session_state_it_was_computed_from(self, logged_in_client):
+        """Second pass 1: the clock orders replies SENT, not the cookie they were built from; `X-Jen-Session-Active` (the epoch second of last_active) orders the state."""
+        r = logged_in_client.get("/leases")
+        with logged_in_client.session_transaction() as sess:
+            last = int(datetime.fromisoformat(sess["last_active"]).timestamp())
+        assert r.headers["X-Jen-Session-Active"] == str(last)
+        m = re.search(r'<body[^>]*\bdata-session-active="(\d+)"', r.data.decode())
+        assert m and m.group(1) == str(last)
+
+    def test_the_touch_answer_carries_it_too(self, app, logged_in_csrf_client):  # noqa: F811
+        c = logged_in_csrf_client
+        r = c.post("/session/touch", headers={"X-CSRFToken": _valid_token_for(app, c)})
+        assert re.fullmatch(r"\d+", str(r.get_json()["active"])) and r.headers["X-Jen-Session-Active"] == str(
+            r.get_json()["active"]
+        )
+
+    def test_the_script_ignores_a_reply_built_from_an_older_session_state(self):
+        text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
+        assert "if (ac > 0 && ac < lastActive) return;" in text and "if (ac > lastActive) lastActive = ac;" in text
 
     def test_the_script_ignores_a_deadline_that_arrives_without_it(self):
         text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
@@ -749,6 +847,12 @@ class TestTheForcedChangeScreenHasTheNotice:
         text = pathlib.Path("templates/force_password_change.html").read_text(encoding="utf-8")
         assert '{% include "_session_watch.html" %}' in text
         assert "data-session-expires" in text and "data-session-now" in text and "data-session-login" in text
+
+    def test_the_standalone_dialog_is_styled_by_a_static_file_not_inline_hex(self):
+        """tests/test_theme.py's hex wall is about templates: the standalone page's dialog colors live in static/css/session-watch.css, which the include links only for that page."""
+        watch = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
+        assert "/static/css/session-watch.css" in watch and "<style" not in watch
+        assert ".jen-dialog-overlay" in pathlib.Path("static/css/session-watch.css").read_text(encoding="utf-8")
 
     def test_the_gate_names_the_touch_endpoint(self):
         text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")

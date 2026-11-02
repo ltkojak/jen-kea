@@ -26,17 +26,21 @@ OFF = "off"
 
 #: the request header a page that refreshes ITSELF sends (a health poll, a watch): it may only ever STOP an extension of the session, never cause one (Q210, AZ3)
 POLL_HEADER = "X-Jen-Poll"
+#: the same marker as a query argument, for a page that reloads itself (a navigation cannot carry a header); base.html strips it from the address once the page has loaded
+POLL_ARG = "_poll"
 
 #: the longest idle timeout the settings accept, in minutes (the writers refuse more; the reader treats more as unreadable)
 MAX_MINUTES = 1440
 DEFAULT_MINUTES = 60
 
-_WHOLE = re.compile(r"[0-9]{1,4}")
+#: ASCII digits only (a full-width or Arabic-Indic digit is not one, though `str.isdigit()` says it is), up to six characters so a zero-padded `00005` is still 5
+_WHOLE = re.compile(r"[0-9]{1,6}")
 _warned = set()
 
 
-def _whole_minutes(raw):
-    """`raw` as a whole number of minutes in 0..1440, or None when it is not one (`x`, "", `60.5`, `1e3`, a 20-digit string, `-5`, a bool)."""
+def parse_minutes(raw):
+    """`raw` as a whole number of minutes in 0..1440, or None when it is not one (`x`, "", `60.5`, `1e3`, a 20-digit string, `-5`, a full-width digit, a bool). The ONE parser: the reader below and
+    every writer of the setting (Settings -> Access & Security, Users add, edit and set-timeout) call it, so what a writer accepts is exactly what the reader applies (Q210, second pass 2)."""
     if isinstance(raw, bool):
         return None
     if isinstance(raw, int):
@@ -51,7 +55,7 @@ def _global_minutes():
     """The global `session_timeout_minutes` setting through the one coercion. A hand-edited row that is not a whole number of minutes in 0..1440 reads as 60 (the default) and is logged
     once per process: the three writers already refuse such a value, so this is the reader's guard - a bad row must never be a 500 on every request, `/logout` included."""
     raw = get_global_setting("session_timeout_minutes", str(DEFAULT_MINUTES))
-    minutes = _whole_minutes(raw)
+    minutes = parse_minutes(raw)
     if minutes is None:
         key = repr(raw)[:40]
         if key not in _warned:
@@ -70,7 +74,7 @@ def timeout_minutes(user):
     """The idle timeout in minutes for `user`, or None when the timeout is off (the global switch, or a timeout of 0)."""
     if get_global_setting("session_timeout_enabled", "true") == "false":
         return None
-    own = _whole_minutes(getattr(user, "session_timeout", None))
+    own = parse_minutes(getattr(user, "session_timeout", None))
     timeout = own or _global_minutes()
     if timeout == 0:
         return None
@@ -95,6 +99,21 @@ def deadline(session, user):
         return None
 
 
+def active_epoch(session):
+    """`session["last_active"]` as whole epoch seconds, or None when it is missing, unreadable, naive or unrepresentable. It is the ORDERING KEY of a deadline: the browser keeps the highest it has
+    seen and ignores a reply computed from an older session state (a reply is stamped with the server's clock when it is SENT, which says nothing about which cookie it was built from)."""
+    last = session.get("last_active")
+    if not last:
+        return None
+    try:
+        moment = datetime.fromisoformat(last)
+        if moment.tzinfo is None:
+            return None
+        return int(moment.timestamp())
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 def expires_at(session, user):
     """`deadline()` as whole epoch seconds (what the header, the body attribute and /session/touch carry), or None."""
     when = deadline(session, user)
@@ -112,15 +131,16 @@ def announcement(session, user):
     return expires_at(session, user)
 
 
-def is_poll(headers):
-    """True when the request says it only refreshes a view (`X-Jen-Poll: 1`). The header can only stop an extension of the session, so a forged one is the forger's own loss."""
-    return headers.get(POLL_HEADER) == "1"
+def is_poll(headers, args=None):
+    """True when the request says it only refreshes a view: `X-Jen-Poll: 1`, or `?_poll=1` for the one kind of request that cannot carry a header (a page that reloads itself: a navigation). It can only
+    stop an extension of the session, so a forged one is the forger's own loss."""
+    return headers.get(POLL_HEADER) == "1" or (args is not None and args.get(POLL_ARG) == "1")
 
 
-def extends(path, headers):
+def extends(path, headers, args=None):
     """Whether an authenticated request to `path` moves `last_active` - the ONE definition. Not `/api/` (the dashboard's poll), `/metrics`, `/session/touch` (its own writer: a request it
     refuses must not have extended the session) or a request marked `X-Jen-Poll: 1`. The one request that moves it on purpose is a CSRF-checked POST to `/session/touch`."""
-    return not (path.startswith("/api/") or path == "/metrics" or path in NO_TOUCH_PATHS or is_poll(headers))
+    return not (path.startswith("/api/") or path == "/metrics" or path in NO_TOUCH_PATHS or is_poll(headers, args))
 
 
 def new_login_id():

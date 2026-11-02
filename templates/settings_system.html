@@ -358,7 +358,7 @@ if (updateForm && updateForm.tagName === 'FORM') {
         // v5.8.4 — ask systemd how jen-update.service is doing before
         // asking Jen what version it is, so a crash before the restart is
         // reported as a failure instead of "still reports vX".
-        jenFetch('/settings/infrastructure/update-status', { cache: 'no-store' })
+        jenFetch('/settings/infrastructure/update-status', { cache: 'no-store', headers: { 'X-Jen-Poll': '1' } })
             .then(function(r) { return r.ok ? r.json() : {}; })
             .catch(function() { return {}; })
             .then(function(s) {

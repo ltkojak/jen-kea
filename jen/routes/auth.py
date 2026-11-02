@@ -341,6 +341,7 @@ def session_touch():
         "ok": True,
         "expires_at": __session_timeout.expires_at(session, current_user),
         "now": __session_timeout.now_epoch(),
+        "active": __session_timeout.active_epoch(session),
     }
 
 

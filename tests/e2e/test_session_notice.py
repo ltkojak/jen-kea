@@ -240,6 +240,28 @@ class TestTheDeadlineIsTheServersWord:
             "two replies from one second: the later arrival is taken"
         )
 
+    def test_a_slow_reply_built_from_an_older_session_state_is_ignored(self, page, base_url):
+        """Second pass 1: the server's clock orders replies SENT, the session state they were computed from orders what they SAY. A reply stamped later but built from the cookie before a touch must not pull
+        the extended deadline back (it closed the dialog and then walked a live session to the sign-in form)."""
+        _signed_in_on_leases(page, base_url)
+        st = page.evaluate("window.jenSessionWatch.state()")
+        d, s = st["expires"], st["lastServerNow"]
+        a = int(
+            page.locator("body").get_attribute("data-session-active")
+        )  # the session state the first deadline came from
+        page.evaluate(
+            f"window.jenSessionWatch.ingest({d + 3600}, false, {s + 2}, {a + 50})"
+        )  # the touch: a newer state
+        assert page.evaluate("window.jenSessionWatch.expires()") == d + 3600
+        page.evaluate(
+            f"window.jenSessionWatch.ingest({d}, false, {s + 8}, {a})"
+        )  # the slow reply: later clock, OLDER state
+        assert page.evaluate("window.jenSessionWatch.expires()") == d + 3600
+        page.evaluate(
+            f"window.jenSessionWatch.ingest({d + 600}, false, {s + 9}, {a + 50})"
+        )  # the same state, a cut timeout: both directions still move
+        assert page.evaluate("window.jenSessionWatch.expires()") == d + 600
+
     def test_a_deadline_with_no_clock_beside_it_is_ignored(self, page, base_url):
         _signed_in_on_leases(page, base_url)
         d = page.evaluate("window.jenSessionWatch.expires()")
@@ -271,7 +293,10 @@ class TestTheDeadlineIsTheServersWord:
         page.evaluate(f"window.jenSessionWatch.ingest('off', false, {s})")
         st = page.evaluate("window.jenSessionWatch.state()")
         assert st["expires"] == 0 and st["armed"] is None and st["open"] is False
-        assert page.evaluate(f"localStorage.getItem('jen-session-expires:{login_id}')") is None
+        stored = page.evaluate(f"localStorage.getItem('jen-session-expires:{login_id}')")
+        assert stored and stored.startswith("off:"), (
+            "a second tab learns `off` from the stored value (a removal tells it nothing); sign-out removes the key"
+        )
         expect(page.locator("#jen-session-overlay")).to_be_hidden()
 
     def test_re_enabled_after_off(self, page, base_url):
@@ -325,6 +350,16 @@ class TestTwoTabsOfOneSignIn:
             token,
         )
         page.wait_for_function("(d) => window.jenSessionWatch.expires() > d", arg=before)
+        second.close()
+
+    def test_a_second_tab_is_told_the_timeout_was_switched_off(self, page, base_url):
+        _signed_in_on_leases(page, base_url)
+        second = page.context.new_page()
+        second.goto(f"{base_url}/leases?subnet=1")
+        page.wait_for_timeout(500)
+        s = second.evaluate("window.jenSessionWatch.state().lastServerNow") + 1
+        second.evaluate(f"window.jenSessionWatch.ingest('off', false, {s})")
+        page.wait_for_function("() => window.jenSessionWatch.expires() === 0")
         second.close()
 
     def test_a_value_written_under_another_sign_ins_key_is_not_read(self, page, base_url):

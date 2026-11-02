@@ -1,0 +1,12 @@
+/* Q210: the idle-session dialog for the one page that is not built on base.html and still holds a signed-in person (force_password_change.html). Linked by templates/_session_watch.html only
+   when that page asks for it; base.html carries these rules in its own stylesheet. */
+.jen-dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10001; display: flex; align-items: center; justify-content: center; }
+.jen-dialog-overlay[hidden] { display: none; }
+.jen-dialog { background: var(--surface, #101820); border: 1px solid var(--border, #1c2733); border-radius: var(--radius, 8px); padding: 24px; max-width: 400px; width: 90%; box-shadow: 0 16px 48px rgba(0,0,0,.5); color: #e0e0e0; }
+.jen-dialog-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.jen-dialog p { font-size: 14px; line-height: 1.5; margin-bottom: 20px; }
+.jen-dialog .field-note { color: #f0808a; font-size: 13px; }
+.jen-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.jen-dialog .btn { border: 1px solid #223040; border-radius: 6px; padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: #0d151d; color: #e0e0e0; }
+.jen-dialog .btn-primary { background: #00b4d8; border-color: #00b4d8; color: #fff; }
+.jen-dialog .btn:disabled { opacity: .6; cursor: default; }
