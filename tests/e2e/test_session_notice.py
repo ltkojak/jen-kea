@@ -85,6 +85,9 @@ def _jump_to(page, server_clock, deadline, remaining):
 def _to_remaining(page, remaining):
     """Move only the BROWSER's clock until `remaining` seconds are left on the server's deadline, whatever the browser's wall clock says (the watch counts on the server's clock, so a browser
     that is behind or ahead is the same page with a different `Date`). Nothing server-side moves: this tests the page."""
+    # the page polls /api/stats every 30 s, and a fast-forward fires that poll: its reply carries the REAL server clock, which (correctly) re-anchors the watch and would undo the jump.
+    # This helper moves only the browser, so the poll is refused for the rest of the test.
+    page.route("**/api/stats*", lambda route: route.abort())
     st = page.evaluate("window.jenSessionWatch.state()")
     jump = st["expires"] - remaining - st["lastServerNow"]
     assert jump > 0
