@@ -1160,7 +1160,7 @@ class TestTapATimeForItsUtcReading:
     def test_a_tap_on_a_time_shows_utc(self, phone, base_url):
         _seed_active_lease()
         _visit(phone, base_url, "/leases")
-        stamp = phone.locator("time[data-jen-time][data-jen-utc]").first
+        stamp = phone.locator("time[data-jen-time][data-jen-utc]:visible").first
         stamp.tap()
         toast = phone.locator("#jen-toasts .toast").last
         expect(toast).to_contain_text("UTC: ")
@@ -1170,12 +1170,12 @@ class TestTapATimeForItsUtcReading:
         _seed_active_lease()
         _visit(phone, base_url, "/leases")
         before = phone.url
-        phone.locator("time[data-jen-time][data-jen-utc]").first.tap()
+        phone.locator("time[data-jen-time][data-jen-utc]:visible").first.tap()
         phone.wait_for_timeout(300)
         assert phone.url == before
 
     def test_a_click_on_a_desktop_does_nothing(self, desktop, base_url):
         _seed_active_lease()
         _visit(desktop, base_url, "/leases")
-        desktop.locator("time[data-jen-time][data-jen-utc]").first.click()
+        desktop.locator("time[data-jen-time][data-jen-utc]:visible").first.click()
         expect(desktop.locator("#jen-toasts .toast")).to_have_count(0)

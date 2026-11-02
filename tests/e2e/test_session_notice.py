@@ -22,6 +22,7 @@ pytestmark = pytest.mark.e2e
 def server_clock(monkeypatch):
     import jen
     import jen.routes.auth as auth
+    import jen.services.session_timeout as session_timeout
 
     class Shifted(datetime):
         offset = timedelta(0)
@@ -32,6 +33,7 @@ def server_clock(monkeypatch):
 
     monkeypatch.setattr(jen, "datetime", Shifted)
     monkeypatch.setattr(auth, "datetime", Shifted)
+    monkeypatch.setattr(session_timeout, "datetime", Shifted)
     yield Shifted
 
 

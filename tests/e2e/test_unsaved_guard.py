@@ -29,7 +29,7 @@ class TestTheUnsavedGuard:
         field = page.locator("#f-server_name")
         field.scroll_into_view_if_needed()
         field.fill("A name I have not saved")
-        page.locator("a.nav-link", has_text="Leases").first.click()
+        page.locator('.nav-links a[href="/leases"]').first.click()
         page.wait_for_timeout(500)
         assert seen == ["beforeunload"], seen
         assert page.url.endswith("/settings/kea") or "/settings/kea" in page.url
@@ -38,7 +38,7 @@ class TestTheUnsavedGuard:
         page = logged_in_page
         page.goto(f"{base_url}/settings/kea")
         seen = _collect(page)
-        page.locator("a.nav-link", has_text="Leases").first.click()
+        page.locator('.nav-links a[href="/leases"]').first.click()
         page.wait_for_url("**/leases**")
         assert seen == []
 
@@ -60,7 +60,7 @@ class TestTheUnsavedGuard:
         original = field.input_value()
         field.fill(original + "x")
         field.fill(original)
-        page.locator("a.nav-link", has_text="Leases").first.click()
+        page.locator('.nav-links a[href="/leases"]').first.click()
         page.wait_for_url("**/leases**")
         assert seen == []
 
@@ -70,7 +70,7 @@ class TestTheUnsavedGuard:
         page.goto(f"{base_url}/leases")
         seen = _collect(page)
         page.fill('input[name="search"]', "typed")
-        page.locator("a.nav-link", has_text="Devices").first.click()
+        page.locator('.section-tabs a[href="/devices"]').first.click()
         page.wait_for_url("**/devices**")
         assert seen == []
 
@@ -79,5 +79,5 @@ class TestTheUnsavedGuard:
         page.goto(f"{base_url}/settings/kea")
         seen = _collect(page)
         page.goto(f"{base_url}/logout")
-        expect(page.locator("form[action='/logout'] button[type=submit]").first).to_be_visible()
+        expect(page.locator("main form[action='/logout'] button[type=submit]")).to_be_visible()
         assert seen == []

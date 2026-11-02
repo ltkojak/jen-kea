@@ -331,5 +331,5 @@ class TestAX1SortAndPageLinksSwapInPlace:
         page.goto(f"{base_url}/leases")
         with page.context.expect_page() as popup:
             page.locator("th a.th-link", has_text="Hostname").click(modifiers=["Control"])
-        assert "sort=hostname" in popup.value.url
+        popup.value.wait_for_url("**sort=hostname**")
         popup.value.close()
