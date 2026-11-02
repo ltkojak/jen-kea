@@ -220,6 +220,11 @@ class TestNoBareCountInATemplate:
         ("_ip_version_control.html", "ip_version_control("): "a macro call (the word `leases` is a URL)",
         ("leases.html", "ip_version_control("): "a macro call (the word `leases` is a URL)",
         ("api_keys.html", "last_used"): "a timestamp through |utcfmt",
+        (
+            "base.html",
+            "session_active",
+        ): "an epoch second in a data attribute (the session state a deadline was computed from), read by script: a grouped value would not parse",
+        ("force_password_change.html", "session_active"): "an epoch second in a data attribute, as on base.html",
         ("client.html", "fetched_at"): "a timestamp through |utcfmt",
         ("mfa_enroll.html", "last_used"): "a timestamp through |utcdate",
         ("mfa_trusted_devices.html", "last_used"): "a timestamp through |utcfmt",
