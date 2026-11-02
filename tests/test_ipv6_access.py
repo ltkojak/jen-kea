@@ -389,7 +389,9 @@ class TestGlobalSearch:
     def test_search_finds_only_visible_v6_leases_and_reservations(self, client, db, world, role):
         c = _as(client, db, role)
         for what in ("lease6-host", "res6-host"):
-            html = c.get(f"/search?q={what}").data.decode()
+            html = (
+                c.get(f"/search?q={what}").data.decode().replace("<mark>", "").replace("</mark>", "")
+            )  # Q208: the matched text is marked
             for sid in V6:
                 assert (f"{what}-s{sid}e" in html) is (sid in _visible_for(role)), f"{role} search {what}-{sid}"
             _assert_only(html, role, rows=False)

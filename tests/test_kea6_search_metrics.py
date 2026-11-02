@@ -51,7 +51,9 @@ class TestGlobalSearchV6:
             _invalidate_settings_cache()
             resp = logged_in_client.get("/search?q=findable")
             assert resp.status_code == 200
-            assert b"findable-host" in resp.data
+            assert b"findable-host" in resp.data.replace(b"<mark>", b"").replace(
+                b"</mark>", b""
+            )  # Q208: the matched text is marked
             assert b"IPv6 Leases" in resp.data
         finally:
             set_global_setting("ipv6_enabled", "false")
@@ -194,7 +196,7 @@ class TestGlobalSearchV6ReservationsFilterBeforeTheyCap:
             _invalidate_settings_cache()
             resp = logged_in_client.get("/search", query_string={"q": q, "list": "1"})
             assert resp.status_code == 200
-            return resp.data
+            return resp.data.replace(b"<mark>", b"").replace(b"</mark>", b"")  # Q208: the matched text is marked
         finally:
             set_global_setting("ipv6_enabled", "false")
 

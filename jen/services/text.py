@@ -22,7 +22,7 @@ def mark_match(text, q) -> Markup:
     s = str(text)
     needle = str(q) if q is not None else ""
     if not needle:
-        return Markup(escape(s))
+        return Markup(escape(s))  # nosec B704 - escape() output
     out = []
     last = 0
     for m in re.finditer(re.escape(needle), s, re.IGNORECASE):
@@ -30,4 +30,4 @@ def mark_match(text, q) -> Markup:
         out.append("<mark>" + str(escape(m.group(0))) + "</mark>")
         last = m.end()
     out.append(str(escape(s[last:])))
-    return Markup("".join(out))
+    return Markup("".join(out))  # nosec B704 - every piece in `out` is escape()d above, the only markup is the <mark> written here

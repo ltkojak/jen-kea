@@ -112,7 +112,9 @@ class TestTheHeader:
         try:
             r = logged_in_client.get("/leases")
             assert "X-Jen-Session-Expires" not in r.headers
-            assert b"data-session-expires" not in r.data
+            assert not re.search(rb"<body[^>]*data-session-expires", r.data), (
+                "(the script that reads the attribute names it too: only the body tag counts)"
+            )
         finally:
             set_global_setting("session_timeout_enabled", "true")
             _invalidate_settings_cache()
@@ -179,8 +181,13 @@ class TestTouch:
         c.post("/session/touch", headers={"X-CSRFToken": _valid_token_for(app, c)})
         with c.session_transaction() as sess:
             after = {k: v for k, v in sess.items() if k != "last_active"}
-        assert {k: v for k, v in after.items() if k != "_csrf_nonce"} == {
-            k: v for k, v in before.items() if k != "_csrf_nonce"
+        ignore = {
+            "_csrf_nonce",
+            "_user_cache",
+            "_fresh",
+        }  # Flask-Login refreshes its own cache and freshness flag on any request
+        assert {k: v for k, v in after.items() if k not in ignore} == {
+            k: v for k, v in before.items() if k not in ignore
         }
 
 

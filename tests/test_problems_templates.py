@@ -10,12 +10,14 @@ import pathlib
 from jinja2 import Environment, FileSystemLoader
 
 from jen.services.icons import icon
+from jen.services.reltime import number
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _render(named):
     env = Environment(loader=FileSystemLoader(str(ROOT / "templates")), autoescape=True)
+    env.filters["number"] = number  # Q208
     env.globals["icon"] = icon
     s = {
         "server": {"id": 7, "name": "kea-a"},

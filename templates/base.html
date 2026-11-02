@@ -2284,7 +2284,7 @@ function sortTable(table, col, th) {
             expires = n;
             var span = expires - nowS();
             lead = span > 240 ? 120 : Math.max(5, Math.floor(span / 2));
-            if (!fromStorage) { try { localStorage.setItem(SESSION_KEY, String(expires)); } catch (err) { /* private mode: the other tabs learn from their own requests */ } }
+            if (!fromStorage) { try { localStorage.setItem(SESSION_KEY, String(expires)); } catch (err) { /* private mode: each tab learns from its own requests */ } }
         }
         if (expires - nowS() > lead) closeDialog();
         arm();

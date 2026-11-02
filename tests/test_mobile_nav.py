@@ -17,6 +17,7 @@ from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
 from jen.routes.settings import nav as navmod
 from jen.services import theme as thememod
 from jen.services.icons import icon, nav_icon
+from jen.services.reltime import number
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN_ITEMS = [
@@ -95,6 +96,7 @@ class TestSheetContents:
 
 def _render(role="admin", endpoint="servers.servers", pill=None):
     env = Environment(loader=ChoiceLoader([DictLoader({}), FileSystemLoader(str(ROOT / "templates"))]))
+    env.filters["number"] = number  # Q208
     env.globals.update(
         icon=icon,
         author_draft_done=lambda: None,
