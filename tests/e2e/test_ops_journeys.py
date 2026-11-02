@@ -215,7 +215,9 @@ class TestTheAuthoredFormSurvivesTheStepUp:
         page.click('form[action$="/auth/reauth"] button[type=submit]')
         page.wait_for_url("**/settings/infrastructure/author-kea/dhcp4", timeout=10000)
         expect(page.locator("#f-interfaces")).to_have_value("eth7")
-        expect(page.locator("#author-draft-note")).to_be_visible()
+        expect(
+            page.locator("[data-author-draft-note]")
+        ).to_be_visible()  # Q210: the note carries no id (a .form-hint with an id must be named by a control; this one describes none)
         # the explicit discard drops the draft
         page.click("#discard-draft")
         page.wait_for_load_state("networkidle")
