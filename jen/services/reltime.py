@@ -36,7 +36,7 @@ def number(count) -> str:
     A value that is not a whole number reads as 0, the same coercion `plural` makes. The `|number` filter."""
     try:
         n = int(count)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: float("inf") (Q210, AZ7)
         n = 0
     return f"{n:,}"
 
@@ -46,7 +46,7 @@ def plural(count, singular, plural_form=None) -> str:
     (`entry` -> `entries`). The `|plural` filter."""
     try:
         n = int(count)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: float("inf") (Q210, AZ7)
         n = 0
     word = singular if n == 1 else (plural_form or singular + "s")
     return f"{n:,} {word}"

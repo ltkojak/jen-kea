@@ -70,7 +70,9 @@ def devices():
         "last_seen": "d.last_seen",
         "status": "d.last_seen",
     }
-    sort_col = sort_map.get(sort, "d.last_seen")
+    # Q210 (AZ6 a): the EFFECTIVE sort reaches the template, so ?sort=bogus (or an empty or mistyped one) marks the default column the rows are really ordered by
+    sort = sort if sort in sort_map else "last_seen"
+    sort_col = sort_map[sort]
     stale_days = __user.get_stale_device_days()
 
     devices_list = []

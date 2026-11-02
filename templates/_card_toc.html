@@ -7,15 +7,17 @@
   v5.56.1 (Q68d) — on the phone, the same `toc` list also drives making
   every card it names collapsible: all but one start collapsed so a
   Settings group page isn't one long scroll. Desktop is untouched — the
-  collapsing CSS only exists inside the ≤768px media query, so the JS
-  below can run unconditionally and just toggle a class.
+  collapsing CSS only exists inside the ≤768px SCREEN media query, so the JS
+  below can run unconditionally and just toggle a class. Q210 (Y2): `screen and` is
+  not decoration - a portrait page prints about 703 px wide, and without it this
+  block hid 17 card bodies of a printed Settings page.
 #}
 {% if toc and toc|length > 2 %}
 <div class="card-toc" aria-label="On this page">
   {% for anchor, label in toc %}<a href="#{{ anchor }}">{{ label }}</a>{% endfor %}
 </div>
 <style>
-@media (max-width: 768px) {
+@media screen and (max-width: 768px) {
   .card[data-collapsible] > .card-header {
     cursor: pointer;
     min-height: var(--tap);

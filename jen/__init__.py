@@ -463,15 +463,21 @@ def create_app() -> Flask:
         # Skip static assets entirely
         if request.path.startswith("/static/"):
             return
+        # v5.70.0-beta.5 (Q210, AZ9 b): a session established before the label existed (an upgrade with a person signed in) gets one now; it is not a write of `last_active`
+        if not session.get("login_id"):
+            session["login_id"] = session_timeout_svc.new_login_id()
         # v5.70.0-beta.4 (Q208, AX2): the deadline is defined once (jen/services/session_timeout.py) and the same number goes to the browser (X-Jen-Session-Expires, below)
+        # v5.70.0-beta.5 (Q210, AZ3): a request marked X-Jen-Poll: 1 only refreshes a view and never moves `last_active`, in any branch below (the bootstrap included)
+        poll = session_timeout_svc.is_poll(request.headers)
         if session_timeout_svc.timeout_minutes(current_user) is None:
-            if request.path not in session_timeout_svc.NO_TOUCH_PATHS:
+            if request.path not in session_timeout_svc.NO_TOUCH_PATHS and not poll:
                 session["last_active"] = datetime.now(timezone.utc).isoformat()
             return
         now = datetime.now(timezone.utc)
         last = session.get("last_active")
         if not last:
-            session["last_active"] = now.isoformat()
+            if request.path not in session_timeout_svc.NO_TOUCH_PATHS and not poll:
+                session["last_active"] = now.isoformat()
         else:
             when = session_timeout_svc.deadline(session, current_user)
             if when is not None and now > when:
@@ -484,25 +490,23 @@ def create_app() -> Flask:
                         url_for("auth.login"), request.method, request.full_path, request.args.get("next", "")
                     )
                 )
-            # /session/touch is the one writer of last_active for its own path: a request to it that CSRF or routing then refuses must not have extended the session
-            if (
-                not request.path.startswith("/api/")
-                and request.path != "/metrics"
-                and request.path not in session_timeout_svc.NO_TOUCH_PATHS
-            ):
+            # /session/touch is the one writer of last_active for its own path: a request to it that CSRF or routing then refuses must not have extended the session; /api/, /metrics
+            # and a request that says it only refreshes a view (X-Jen-Poll: 1) do not extend it either - session_timeout.extends() is the one definition
+            if session_timeout_svc.extends(request.path, request.headers):
                 session["last_active"] = now.isoformat()
 
     @app.after_request
     def _announce_session_deadline(response):
         """v5.70.0-beta.4 (Q208, AX2): every response to a signed-in person says when the idle session ends (epoch seconds), so the page can warn two minutes ahead. Never on
-        /static/, never when the timeout is off, and an error in working it out is never a reason to fail the response."""
+        /static/ or to an anonymous caller, and an error in working it out is never a reason to fail the response. v5.70.0-beta.5 (Q210, AZ1 b): when the person's timeout is OFF the
+        header says `off` - an absence cannot tell a page that the deadline it holds no longer applies."""
         try:
             if request.path.startswith("/static/") or not current_user.is_authenticated:
                 return response
-            expires = session_timeout_svc.expires_at(session, current_user)
-            if expires is not None:
-                response.headers["X-Jen-Session-Expires"] = str(expires)
-                # the server's own clock beside it: the page counts down against THIS, so a client clock that is wrong changes nothing
+            said = session_timeout_svc.announcement(session, current_user)
+            if said is not None:
+                response.headers["X-Jen-Session-Expires"] = str(said)
+                # the server's own clock beside it: the page counts down against THIS (a client clock that is wrong changes nothing), and orders replies by it (Q210, AZ9 a)
                 response.headers["X-Jen-Session-Now"] = str(session_timeout_svc.now_epoch())
         except Exception:  # a header is a convenience; the page is served without it
             pass
@@ -518,13 +522,16 @@ def create_app() -> Flask:
         out = {
             "session_expires": None,
             "session_now": None,
+            "session_login": "",
             "take_field_errors": _forms.take_field_errors,
             "print_stamp": "",
         }
         try:
             if current_user.is_authenticated:
-                out["session_expires"] = session_timeout_svc.expires_at(session, current_user)
+                # an epoch second, or the word "off" when the person's timeout is switched off (Q210, AZ1 b); the sign-in label names the browser's cross-tab key (AZ9 b)
+                out["session_expires"] = session_timeout_svc.announcement(session, current_user)
                 out["session_now"] = session_timeout_svc.now_epoch()
+                out["session_login"] = session.get("login_id") or ""
                 out["print_stamp"] = _tf.fmt_filter(datetime.now(timezone.utc))
         except Exception:  # the first paint without them still arms from the next response's header
             pass
@@ -576,7 +583,13 @@ def create_app() -> Flask:
             return
         if request.path.startswith("/static/") or request.path.startswith("/mfa/"):
             return
-        if request.path in (url_for("auth.force_password_change"), url_for("auth.logout")):
+        # v5.70.0-beta.5 (Q210, AZ1 d): /session/touch too - a person held at this screen may keep their session ("Stay signed in" on the notice the screen now carries); the endpoint writes
+        # `last_active` and nothing else, so it opens nothing the gate protects
+        if request.path in (
+            url_for("auth.force_password_change"),
+            url_for("auth.logout"),
+            url_for("auth.session_touch"),
+        ):
             return
         return redirect(url_for("auth.force_password_change"))
 

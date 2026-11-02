@@ -33,6 +33,7 @@
             .ico { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.125em; flex: none; }
     </style>
     <script nonce="{{ csp_nonce }}">(function(){var s='dark';try{s=localStorage.getItem('jen-theme-pick')==='light'?'light':'dark';}catch(e){}document.documentElement.setAttribute('data-theme',s);})();</script>
+    <link rel="stylesheet" href="/static/css/print.css?v={{ jen_version }}" media="print">
 </head>
 <body>
 {% include "_icon_sprite.html" %}
@@ -42,6 +43,8 @@
     <div class="subtitle">The Kea DHCP Management Console</div>
     <div class="user-badge">{{ icon("lock") }} Verifying: {{ username }}</div>
 
+    {# Q210 (AZ5 a): a pending field error is consumed by the next FULL page whatever it is; this page has no field to put it under, so it prints as a plain flash #}
+    {% for field, message, form_path in (take_field_errors() if take_field_errors is defined else []) %}<div class="alert">{{ message }}</div>{% endfor %}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}{% for cat, msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
     {% endwith %}

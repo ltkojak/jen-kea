@@ -1,0 +1,17 @@
+/* Q210 (AZ2): the print sheet, ONE file. Q208 (AX8) wrote it inside base.html's stylesheet, so the standalone pages (login, forced password change, the error and MFA pages) had none
+   (Y21); base.html and every template that carries its own <html> element now link this file with media="print", AFTER their own <style> block so a rule here wins a tie.
+   The rule it enforces tree-wide (tests/test_print.py::TestPrintIsNotAPhone): the phone and tablet layouts are SCREEN layouts - every @media with a width in templates/ and static/ names `screen`,
+   because a portrait A4 or Letter page is 703-725 CSS px wide and an unqualified `(max-width: 768px)` block matches it. */
+@page { margin: 12mm; }
+@media print {
+    .nav, .section-tabs-wrap, .filter-bar, .pagination, .btn, #jen-toasts, #jen-toasts-alert, .toast-stack, .alert-close, #kb-modal, #jen-confirm-overlay, #jen-prompt-overlay,
+    #jen-session-overlay, .pw-toggle, .tone-menu, .tabbar, .sheet, .sheet-backdrop, .skip-link, #jen-progress { display: none !important; }
+    .hide-mobile, .hide-tablet { display: table-cell !important; }
+    table.rowlist { width: 100%; font-size: 10pt; }
+    details > *:not(summary) { display: block; }
+    a[href]::after { content: none !important; }
+    .print-only { display: block; margin-bottom: 8px; font-size: 10pt; }
+    body { background: #fff !important; color: #000 !important; }
+    /* a collapsed card prints whole, whatever the medium of the block that collapses it */
+    .card[data-collapsible].collapsed > :not(.card-header) { display: block !important; }
+}

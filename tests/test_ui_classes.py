@@ -104,7 +104,7 @@ class TestPhoneCollapse:
         assert not tool.stacks_on_phone("display:flex;gap:8px")
 
     def test_the_css_carries_a_phone_block_for_them(self):
-        assert "@media (max-width:768px){" in CSS
+        assert "@media screen and (max-width:768px){" in CSS
         grids = [c for d, c in MAP.items() if tool.stacks_on_phone(d)]
         assert grids and all(f".{c}.{c}{{grid-template-columns:1fr}}" in CSS for c in grids)
 

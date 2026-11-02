@@ -333,3 +333,39 @@ class TestAX1SortAndPageLinksSwapInPlace:
             page.locator("th a.th-link", has_text="Hostname").click(modifiers=["Control"])
         popup.value.wait_for_url("**sort=hostname**")
         popup.value.close()
+
+
+class TestAZ5AnErrorLandsOnItsOwnForm:
+    """Q210 (AZ5 a, Y9): a field error carries the page its form was on. `f-name` exists on Add Subnet AND on API Keys, so an error raised for one must not be put under the other's input."""
+
+    @staticmethod
+    def _raise_the_error(page, base_url, from_page):
+        """POST the API-key form with no name, as a browser would from `from_page` (the Referer is what the server reads), and stop at the redirect."""
+        page.goto(f"{base_url}/settings/api-keys")
+        token = page.evaluate("JSON.parse(document.body.getAttribute('hx-headers'))['X-CSRFToken']")
+        r = page.context.request.post(
+            f"{base_url}/settings/api-keys/create",
+            form={"name": " "},
+            headers={"X-CSRFToken": token, "Referer": f"{base_url}{from_page}"},
+            max_redirects=0,
+        )
+        assert r.status == 302
+
+    def test_an_error_raised_for_another_form_stays_a_flash_here(self, logged_in_page, base_url):
+        page = logged_in_page
+        self._raise_the_error(page, base_url, "/subnets/add")
+        page.goto(f"{base_url}/settings/api-keys")
+        alert = page.locator('.alert[data-field="name"]')
+        expect(alert).to_have_count(1)
+        expect(alert).to_contain_text("Key name is required.")
+        expect(page.locator("#f-name-error")).to_have_count(0)
+        assert page.locator("#f-name").get_attribute("aria-invalid") is None
+
+    def test_an_error_raised_on_this_page_lands_under_its_input(self, logged_in_page, base_url):
+        page = logged_in_page
+        self._raise_the_error(page, base_url, "/settings/api-keys")
+        page.goto(f"{base_url}/settings/api-keys")
+        expect(page.locator("#f-name-error")).to_be_visible()
+        expect(page.locator("#f-name-error")).to_contain_text("Key name is required.")
+        assert page.locator("#f-name").get_attribute("aria-invalid") == "true"
+        expect(page.locator('.alert[data-field="name"]')).to_have_count(0)

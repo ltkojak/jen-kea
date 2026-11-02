@@ -46,7 +46,7 @@ GUARDED = {
 # named in the entry and NOT guarded, with the reason (a deviation, reported)
 NOT_GUARDED_BY_DEVIATION = {
     "settings_alerts.html (save-channel)": "the channel form is filled by the page's own script when a channel is edited (second pass, SP-8): the snapshot taken at load is not the form the person is looking at",
-    "servers.html": "no editable form: its 21 `input` tags are CSRF fields and one checkbox group of a one-click HA action; there is nothing to half-edit",
+    "servers.html": "no editable form: of its 21 `input` tags 17 are CSRF fields, 3 are hidden ids and one is the per-peer `scopes` checkbox of the one-click Set Scopes action; there is nothing to half-edit",
 }
 # the forms that must never carry it
 LIST_FILTERS = ["leases.html", "devices.html", "reservations.html"]
@@ -115,7 +115,10 @@ class TestOneScript:
         assert re.search(r"hasAttribute\('data-submitting'\)", BASE)
 
     def test_the_idle_redirect_the_session_dialog_and_a_discarded_draft_are_not_blocked(self):
-        assert BASE.count("window.jenLeaving = true") == 2, "the idle redirect and the dialog's own sign-out"
+        watch = (TEMPLATES / "_session_watch.html").read_text(
+            encoding="utf-8"
+        )  # Q210: the notice moved out of base.html, the guard still reads its flag
+        assert watch.count("window.jenLeaving = true") == 2, "the idle redirect and the dialog's own sign-out"
         assert "if (window.jenLeaving) return;" in BASE
         assert "window.jenLeaving = true" in (TEMPLATES / "author_kea_config.html").read_text(encoding="utf-8")
 
@@ -132,3 +135,28 @@ class TestOneScript:
             text = (TEMPLATES / name).read_text(encoding="utf-8")
             callers += [name for _ in re.finditer(r"\.submit\(\)", text)]
         assert set(callers) <= {"add_subnet.html", "edit_subnet.html", "author_kea_config.html"}
+
+
+class TestASwapInsideAnUntouchedFormResnaps:
+    """Q210 (AZ6 c, Y19): the guard took its snapshot once, so a value the SERVER changed through an htmx swap inside a guarded form would read as the person's edit. Latent - none of the eleven guarded forms
+    contains swapped content today - and a line: after a swap settles inside a guarded form nobody has typed in (`data-touched` is set by the person's own input and change events), the snapshot is taken again."""
+
+    def _handler(self):
+        start = BASE.index("document.addEventListener('htmx:afterSettle'")
+        return BASE[start : BASE.index("window.addEventListener('load'", start)]
+
+    def test_the_settle_handler_takes_the_snapshot_again_for_an_untouched_form(self):
+        block = self._handler()
+        assert "el.closest('form[data-guard-unsaved]')" in block
+        assert "!form.hasAttribute('data-touched')" in block
+        assert "form.setAttribute('data-initial', snap(form))" in block
+
+    def test_a_form_the_person_has_typed_in_keeps_the_snapshot_it_has(self):
+        block = self._handler()
+        assert block.index("!form.hasAttribute('data-touched')") < block.index(
+            "form.setAttribute('data-initial', snap(form))"
+        )
+        assert "function touched(e)" in BASE and "setAttribute('data-touched', '1')" in BASE
+
+    def test_the_first_snapshot_still_comes_from_guardinit(self):
+        assert "guardInit(el);" in self._handler()

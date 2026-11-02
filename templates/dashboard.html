@@ -275,15 +275,15 @@
 </div>
 
 <!-- Server status widget -->
-<style>@media (max-width: 767px) { .dash-refresh-label, #last-updated { display: none; } .page-header-controls { width: 100%; } }</style>
+<style>@media screen and (max-width: 767px) { .dash-refresh-label, #last-updated { display: none; } .page-header-controls { width: 100%; } }</style>
 <style>
 /* v5.54.0 (Q61) — panel widths + Arrange mode. Page-specific (dashboard.html only). */
 .dash-widgets { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .dash-widgets > div { flex: 1 1 100%; min-width: 0; }
 .dash-widgets > div.dw-half { flex: 1 1 calc(50% - 8px); }
 .dash-widgets > div.dw-third { flex: 1 1 calc(33.333% - 11px); }
-@media (max-width: 900px) { .dash-widgets > div.dw-third { flex: 1 1 calc(50% - 8px); } }
-@media (max-width: 640px) { .dash-widgets > div.dw-half, .dash-widgets > div.dw-third { flex: 1 1 100%; } }
+@media screen and (max-width: 900px) { .dash-widgets > div.dw-third { flex: 1 1 calc(50% - 8px); } }
+@media screen and (max-width: 640px) { .dash-widgets > div.dw-half, .dash-widgets > div.dw-third { flex: 1 1 100%; } }
 
 .dash-arrange-toolbar { display: none; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; position: sticky; top: 56px; z-index: 90; }
 body.arrange .dash-arrange-toolbar { display: flex; }
@@ -299,7 +299,7 @@ body.arrange #dash-customize, body.arrange #customize-btn { display: none; }
 .dash-arr-controls select { width: auto; font-size: 12px; padding: 3px 6px; }
 body.arrange .dash-widgets > div, body.arrange .stat-card { outline: 1px dashed var(--border); outline-offset: 4px; }
 body.arrange .stat-card[data-hidden="1"] { opacity: 0.45; }
-@media (max-width: 768px) { .dash-arr-controls select.dash-width-picker { display: none; } }
+@media screen and (max-width: 768px) { .dash-arr-controls select.dash-width-picker { display: none; } }
 
 /* Compact subnet cards: name + active count + the utilization bar; the
    secondary detail line, the pct label and the gateway/DNS/v6 extras are

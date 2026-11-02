@@ -38,7 +38,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 <div class="alert alert-warning">{{ icon("triangle-alert") }} No sibling Kea config found and no interfaces could be autodetected — fill in the interface name(s) manually below.</div>
 {% endif %}
 
-<div class="form-hint u-fdf33f" id="author-draft-note" hidden>{{ icon("info") }} This form was restored from a draft kept in this browser tab (nothing is stored on the server). <a href="#" id="discard-draft">Discard draft</a></div>
+<div class="form-hint u-fdf33f" data-author-draft-note role="status" hidden>{{ icon("info") }} This form was restored from a draft kept in this browser tab (nothing is stored on the server). <a href="#" id="discard-draft">Discard draft</a></div>
 <div class="card u-48a0d2">
     <form data-guard-unsaved method="POST" id="author-kea-form" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
@@ -152,7 +152,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
     var form = document.getElementById('author-kea-form');
     if (!form) return;
     var key = 'jen-author-draft-' + {{ service|tojson }};
-    var note = document.getElementById('author-draft-note');
+    var note = document.querySelector('[data-author-draft-note]');
     function kept(el) { return el.name && el.name !== 'csrf_token' && el.name.indexOf('base_sha_') !== 0 && el.type !== 'submit' && el.type !== 'button'; }
     function snapshot() {
         var out = {};

@@ -111,7 +111,7 @@ def render_css(mapping: dict[str, str]) -> str:
         out.append(f".{cls}.{cls}{{{decl}}}")
     phone = [c for d, c in ordered if stacks_on_phone(d)]
     if phone:
-        out.append("@media (max-width:768px){")
+        out.append("@media screen and (max-width:768px){")
         for cls in phone:
             out.append(f".{cls}.{cls}{{grid-template-columns:1fr}}")
         out.append("}")

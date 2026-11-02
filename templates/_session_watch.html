@@ -1,0 +1,205 @@
+{# Q210 (AZ1 d): the idle-session notice - the "Still there?" dialog and the one script that schedules, moves and ends it. included, never returned for an htmx swap (tests/test_csp.py's partial rule is
+   about a swapped partial; this file is a page's own tail, like _password_toggle.html). base.html includes it, and so does the one page that is not built on base.html and still holds a signed-in
+   person (force_password_change.html, which passes `session_watch_standalone` so the dialog is styled without base.html's stylesheet). #}
+<div id="jen-session-overlay" class="jen-dialog-overlay" role="alertdialog" aria-modal="true" aria-labelledby="jen-session-title" aria-describedby="jen-session-text" hidden>
+    <div class="jen-dialog">
+        <div id="jen-session-title" class="jen-dialog-title">Still there?</div>
+        <p id="jen-session-text">You will be signed out in <span id="jen-session-left">2:00</span> for inactivity.</p>
+        <p id="jen-session-failed" class="field-note" role="alert" hidden></p>
+        <div class="jen-dialog-actions">
+            <button type="button" id="jen-session-out" class="btn btn-secondary">Sign out now</button>
+            <button type="button" id="jen-session-stay" class="btn btn-primary">Stay signed in</button>
+        </div>
+    </div>
+</div>
+{% if session_watch_standalone is defined and session_watch_standalone %}
+<style>
+    .jen-dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10001; display: flex; align-items: center; justify-content: center; }
+    .jen-dialog-overlay[hidden] { display: none; }
+    .jen-dialog { background: var(--surface, #101820); border: 1px solid var(--border, #1c2733); border-radius: var(--radius, 8px); padding: 24px; max-width: 400px; width: 90%; box-shadow: 0 16px 48px rgba(0,0,0,.5); color: #e0e0e0; }
+    .jen-dialog-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+    .jen-dialog p { font-size: 14px; line-height: 1.5; margin-bottom: 20px; }
+    .jen-dialog .field-note { color: #f0808a; font-size: 13px; }
+    .jen-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
+    .jen-dialog .btn { border: 1px solid #223040; border-radius: 6px; padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: #0d151d; color: #e0e0e0; }
+    .jen-dialog .btn-primary { background: #00b4d8; border-color: #00b4d8; color: #fff; }
+    .jen-dialog .btn:disabled { opacity: .6; cursor: default; }
+</style>
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+// AX2 + Q210 - jenSessionWatch. The server says when the idle session ends (X-Jen-Session-Expires on every response, data-session-expires on the body for the first paint) and what time it is
+// (X-Jen-Session-Now, data-session-now). Everything below is counted on the SERVER's clock, kept against performance.now() (monotonic: a change of this computer's wall clock while the page is open
+// moves nothing), and EVERY timer is scheduled on that same clock. Two minutes before the deadline a dialog offers "Stay signed in" (POST /session/touch); at the deadline the page goes to the
+// sign-in page itself and comes back to where it was. A deadline that arrives in a response is authoritative in both directions (a timeout cut or switched off reaches an open page; "off" is a
+// word, never an absence), a reply older than one already taken is ignored, and a touch from a second tab arrives through the storage event under a key that belongs to this one sign-in.
+(function() {
+    var KEY_PREFIX = 'jen-session-expires:';
+    var CSRF = {{ csrf_token()|tojson }};
+    var MAX_TIMER = 2147000000;
+    var MAX_AHEAD = 31622400;
+    var expires = 0, lead = 120, warnTimer = null, armedMs = null, tickTimer = null, opener = null, leaving = false;
+    var lastServerNow = 0, anchored = false, anchorServer = 0, anchorPerf = 0;
+    var SESSION_KEY = KEY_PREFIX + (document.body.getAttribute('data-session-login') || '');
+    var overlay = document.getElementById('jen-session-overlay');
+    var leftEl = document.getElementById('jen-session-left');
+    var stayBtn = document.getElementById('jen-session-stay');
+    var outBtn = document.getElementById('jen-session-out');
+    var failedEl = document.getElementById('jen-session-failed');
+    // the server's now, as of the last reply, carried forward by the monotonic clock
+    function nowS() { return anchorServer + (performance.now() - anchorPerf) / 1000; }
+    function dialogOpen() { return !!overlay && !overlay.hidden; }
+    function clockText(sec) { var m = Math.floor(sec / 60), s = sec % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
+    function forget() { try { localStorage.removeItem(SESSION_KEY); } catch (err) { /* private mode: nothing was stored */ } }
+    function stopWarn() { if (warnTimer) { clearTimeout(warnTimer); warnTimer = null; } armedMs = null; }
+    function closeDialog() {
+        if (!dialogOpen()) return;
+        overlay.hidden = true;
+        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+        document.removeEventListener('keydown', onKey, true);
+        if (opener && opener.focus) opener.focus();
+        opener = null;
+    }
+    function goToLogin() {
+        if (leaving) return;
+        leaving = true;
+        stopWarn();
+        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+        window.jenLeaving = true;
+        window.location.assign('/login?next=' + encodeURIComponent(window.location.pathname + window.location.search));
+    }
+    function signOut() {
+        window.jenLeaving = true;
+        forget();
+        var f = document.createElement('form');
+        f.method = 'POST';
+        f.action = '/logout';
+        var i = document.createElement('input');
+        i.type = 'hidden'; i.name = 'csrf_token'; i.value = CSRF;
+        f.appendChild(i);
+        document.body.appendChild(f);
+        f.submit();
+    }
+    function tick() {
+        var left = Math.ceil(expires - nowS());
+        if (left <= 0) { goToLogin(); return; }
+        if (leftEl) leftEl.textContent = clockText(left);
+    }
+    function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); stay(); return; }
+        if (e.key !== 'Tab') return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        (document.activeElement === stayBtn ? outBtn : stayBtn).focus();
+    }
+    function openDialog() {
+        if (!overlay || dialogOpen()) return;
+        opener = document.activeElement;
+        overlay.hidden = false;
+        tick();
+        tickTimer = setInterval(tick, 1000);
+        document.addEventListener('keydown', onKey, true);
+        stayBtn.focus();
+    }
+    // the dialog opens when left <= lead BEFORE the timer is re-armed, so a timer that fires with no time left can never ask for a new one with no delay
+    function check() {
+        warnTimer = null;
+        armedMs = null;
+        if (!expires) return;
+        var left = expires - nowS();
+        if (left <= 0) { goToLogin(); return; }
+        if (left <= lead) { openDialog(); return; }
+        arm();
+    }
+    function arm() {
+        stopWarn();
+        if (!expires) return;
+        armedMs = Math.max(0, Math.min((expires - lead - nowS()) * 1000, 2147000000));
+        warnTimer = setTimeout(check, armedMs);
+    }
+    // value: an epoch second, or the word "off"; serverNow: the server's clock when it said so. A value with no clock beside it, or from a reply older than one already taken (a late response,
+    // an old storage value), is ignored. A reply is authoritative in both directions; a value from a second tab only ever moves the deadline forward.
+    function ingest(value, fromStorage, serverNow) {
+        var sn = parseInt(serverNow, 10);
+        if (!(sn > 0) || sn < lastServerNow) return;
+        var off = value === 'off';
+        var n = off ? 0 : parseInt(value, 10);
+        if (off ? fromStorage : !(n > 0)) return;
+        if (!off && n > sn + MAX_AHEAD) return;
+        if (fromStorage && n <= expires) return;
+        lastServerNow = sn;
+        if (!fromStorage || !anchored) { anchorServer = sn; anchorPerf = performance.now(); anchored = true; }
+        if (off) {
+            expires = 0;
+            stopWarn();
+            closeDialog();
+            forget();
+            return;
+        }
+        if (n !== expires) {
+            expires = n;
+            var span = expires - nowS();
+            lead = span > 240 ? 120 : Math.max(5, Math.floor(span / 2));
+            if (!fromStorage) { try { localStorage.setItem(SESSION_KEY, expires + ':' + sn); } catch (err) { /* private mode: each tab learns from its own requests */ } }
+        }
+        if (expires - nowS() > lead) closeDialog();
+        arm();
+    }
+    function stayFailed(text) {
+        stayBtn.disabled = false;
+        if (failedEl) { failedEl.textContent = text; failedEl.hidden = false; }
+    }
+    // a redirect is judged by where it went: the sign-in page means the session has ended (the middleware sent the request there); the forced password change, an https redirect and a proxy's
+    // canonical-host redirect are followed. A refusal or a failure of the touch itself - an expired form token, a proxy's 502, a network error - leaves the dialog open and says so, because
+    // the session may well be alive and the person can try again
+    function stay() {
+        stayBtn.disabled = true;
+        if (failedEl) failedEl.hidden = true;
+        (window.jenFetch || window.fetch.bind(window))('/session/touch', { method: 'POST', headers: { 'X-CSRFToken': CSRF }, credentials: 'same-origin' }).then(function(r) {
+            if (r.redirected) {
+                var u = new URL(r.url, location.href);
+                if (u.pathname === '/login') { goToLogin(); } else { window.location.assign(u.href); }
+                return null;
+            }
+            if (r.status === 403) { stayFailed('Could not renew the session - reload the page and try again.'); return null; }
+            if (!r.ok || !/json/.test(r.headers.get('content-type') || '')) { stayFailed('Could not renew the session - try again.'); return null; }
+            return r.json();
+        }).then(function(d) {
+            if (!d) return;
+            stayBtn.disabled = false;
+            if (d.ok && d.expires_at) { closeDialog(); ingest(d.expires_at, false, d.now); arm(); }
+            else if (d.ok) { closeDialog(); ingest('off', false, d.now); }
+            else stayFailed('Could not renew the session - try again.');
+        }).catch(function() {
+            stayFailed('Could not reach Jen - try again.');
+        });
+    }
+    if (stayBtn) stayBtn.addEventListener('click', stay);
+    if (outBtn) outBtn.addEventListener('click', signOut);
+    // the hooks the browser tests drive: state() is read-only, ingest() is the one entry every deadline goes through
+    window.jenSessionWatch = {
+        ingest: ingest,
+        expires: function() { return expires; },
+        state: function() { return { expires: expires, lead: lead, armed: armedMs, open: dialogOpen(), lastServerNow: lastServerNow }; }
+    };
+    document.addEventListener('htmx:afterRequest', function(e) {
+        var x = e.detail && e.detail.xhr;
+        var v = x && x.getResponseHeader ? x.getResponseHeader('X-Jen-Session-Expires') : null;
+        if (v) ingest(v, false, x.getResponseHeader('X-Jen-Session-Now'));
+    });
+    // a value written by a tab of THIS sign-in is `<deadline>:<its server clock>`; a key that names a different sign-in means this one is over, so its leftover is dropped
+    window.addEventListener('storage', function(e) {
+        if (!e.key || e.key.indexOf(KEY_PREFIX) !== 0 || !e.newValue) return;
+        if (e.key !== SESSION_KEY) { forget(); return; }
+        var parts = String(e.newValue).split(':');
+        ingest(parts[0], true, parts[1]);
+    });
+    // signing out through the page's own form ends the sign-in: its key goes with it
+    document.addEventListener('submit', function(e) {
+        var f = e.target;
+        if (f && f.getAttribute && !e.defaultPrevented && /\/logout$/.test(f.getAttribute('action') || '')) forget();
+    }, true);
+    document.addEventListener('visibilitychange', function() { if (!document.hidden && expires) check(); });
+    var firstDeadline = document.body.getAttribute('data-session-expires');
+    if (firstDeadline) ingest(firstDeadline, false, document.body.getAttribute('data-session-now'));
+})();
+</script>

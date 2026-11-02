@@ -3,12 +3,16 @@ tests/test_field_errors.py
 ──────────────────────────
 v5.70.0-beta.4 (Q208, AX4): a validation error that names ONE field is printed under that field, and every hint is tied to its input.
 
-`flash_field(field, message)` (jen/services/forms.py) keeps `[field, message]` in the session; base.html prints each as an alert carrying `data-field`; one script moves it under `#f-<field>`.
+`flash_field(field, message)` (jen/services/forms.py) keeps `[field, message, form_path]` in the session (Q210: the third element is the page the form was on); base.html prints each as an alert
+carrying `data-field` and `data-form`; one script moves it under `#f-<field>` on that page.
 The first classes are pure (`py -m pytest --noconftest tests/test_field_errors.py -k "FlashField or Hint or Conversion or Script"`); the route classes need the app.
 """
 
+import json
 import pathlib
+import random
 import re
+import string
 
 import pytest
 from flask import Flask, get_flashed_messages, session
@@ -30,13 +34,15 @@ def ctx():
 class TestFlashField:
     def test_a_valid_name_is_stored_with_its_message(self, ctx):
         forms.flash_field("api_url", "API URL is required.")
-        assert session["field_errors"] == [["api_url", "API URL is required."]]
+        assert session["field_errors"] == [["api_url", "API URL is required.", ""]], (
+            "no Referer: the page is unknown, so the error may land on any page (the beta.4 reading)"
+        )
         assert get_flashed_messages() == []
 
     @pytest.mark.parametrize("name", ["f[0]", "a-b", "x_1", "kea6_api_url", "zone-forward", "a" * 64])
     def test_every_id_shape_the_templates_use_is_accepted(self, ctx, name):
         forms.flash_field(name, "m")
-        assert session["field_errors"] == [[name, "m"]]
+        assert session["field_errors"] == [[name, "m", ""]]
 
     @pytest.mark.parametrize("name", ["<script>", "../x", "a" * 65, "", "A", "has space", 'q"', "a;b", "x\n", None, 5])
     def test_a_name_that_could_reach_an_id_attribute_unchecked_falls_back_to_a_flash(self, ctx, name):
@@ -57,12 +63,26 @@ class TestFlashField:
     def test_take_pops_once_and_gives_the_same_list_within_a_request(self, ctx):
         forms.flash_field("a", "one")
         first = forms.take_field_errors()
-        assert first == [("a", "one")] and "field_errors" not in session
+        assert first == [("a", "one", "")] and "field_errors" not in session
         assert forms.take_field_errors() == first
 
     def test_take_ignores_a_tampered_entry(self, ctx):
-        session["field_errors"] = [["ok", "fine"], ["<b>", "x"], ["a"], "junk", [1, 2]]
-        assert forms.take_field_errors() == [("ok", "fine")]
+        session["field_errors"] = [
+            ["ok", "fine"],
+            ["<b>", "x"],
+            ["a"],
+            "junk",
+            [1, 2],
+            ["p", "q", "/subnets/add"],
+            ["r", "s", 5],
+            ["t", "u", "/a", "extra"],
+        ]
+        assert forms.take_field_errors() == [("ok", "fine", ""), ("p", "q", "/subnets/add")]
+
+    def test_a_list_beta_4_wrote_is_still_read(self, ctx):
+        """Q210 (AZ5 a): two-element items are the old shape; they read as `form_path == ""`."""
+        session["field_errors"] = [["name", "old shape"]]
+        assert forms.take_field_errors() == [("name", "old shape", "")]
 
 
 class TestTheMarkupEscapes:
@@ -71,21 +91,21 @@ class TestTheMarkupEscapes:
     def test_the_alert_prints_the_message_through_the_escaping_filter(self):
         base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
         m = re.search(
-            r'<div class="alert alert-error alert-flash" role="alert" data-field="\{\{ field \}\}">(.*?)</div>',
+            r'<div class="alert alert-error alert-flash" role="alert" data-field="\{\{ field \}\}" data-form="\{\{ form_path \}\}">(.*?)</div>',
             base,
             re.S,
         )
         assert m, "the data-field alert"
         assert "{{ message }}" in m.group(1) and "|safe" not in m.group(1)
-        assert 'data-field="{{ field }}"' in base
+        assert 'data-field="{{ field }}"' in base and 'data-form="{{ form_path }}"' in base
 
     def test_the_rendered_alert_escapes_a_message_and_a_name(self):
         from jinja2 import Environment, FileSystemLoader
 
         env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
         html = env.from_string(
-            '{% for field, message in errors %}<div data-field="{{ field }}"><span class="alert-text">{{ message }}</span></div>{% endfor %}'
-        ).render(errors=[('x"><script>alert(1)</script>', "<b>bold</b> & <script>x</script>")])
+            '{% for field, message, form_path in errors %}<div data-field="{{ field }}" data-form="{{ form_path }}"><span class="alert-text">{{ message }}</span></div>{% endfor %}'
+        ).render(errors=[('x"><script>alert(1)</script>', "<b>bold</b> & <script>x</script>", '/"><script>y</script>')])
         assert "<script>" not in html and "<b>" not in html
         assert "&lt;b&gt;bold&lt;/b&gt;" in html
 
@@ -158,6 +178,141 @@ class TestAFieldNameThatIsNotAFieldNameIsAFlash:
         assert 'data-field="hostname"' in html
 
 
+class TestAnErrorLandsOnItsOwnForm:
+    """Q210 (AZ5 a, Y9): an error is raised for ONE form, so it carries the path of the page that form was on (the Referer's, when it is this site's) and the script moves it under an input only on that
+    page - fifteen `f-<name>` ids are shared between pages (`f-name` on add_subnet and api_keys), so a stored message could be put under an unrelated input. A full page that has no such input
+    prints a pending error as a plain flash, so one never outlives one full page."""
+
+    @staticmethod
+    def _ctx(referer=None):
+        app = Flask(__name__)
+        app.secret_key = "t"
+        return app.test_request_context(
+            "/", headers={"Referer": referer} if referer else {}, base_url="http://localhost"
+        )
+
+    @pytest.mark.parametrize(
+        ("referer", "expected"),
+        [
+            ("http://localhost/subnets/add", "/subnets/add"),
+            ("http://localhost/subnets/add?x=1#top", "/subnets/add"),
+            ("http://localhost/settings/api-keys", "/settings/api-keys"),
+            ("https://evil.example/subnets/add", ""),
+            ("http://localhost.evil.example/x", ""),
+            ("http://localhost//evil", ""),
+            ("not a url", ""),
+            (None, ""),
+            ("http://localhost/" + "a" * 300, ""),
+        ],
+    )
+    def test_the_form_path_is_the_referers_path_only_when_the_referer_is_this_site(self, referer, expected):
+        with self._ctx(referer):
+            forms.flash_field("name", "m")
+            assert session["field_errors"] == [["name", "m", expected]]
+
+    def test_the_alert_carries_the_form_path_on_every_page_and_the_text_is_never_lost(self, logged_in_client):
+        """Server side: the same alert is printed on both pages with `data-form`, and its text is on the page either way (the script's choice - under an input or left as the flash it already is -
+        is the browser's and is tests/e2e/test_ui_polish.py)."""
+        for page in ("/settings/api-keys", "/settings/appearance"):
+            with logged_in_client.session_transaction() as sess:
+                sess["field_errors"] = [["name", "A name is required.", "/subnets/add"]]
+            html = logged_in_client.get(page).data.decode()
+            assert 'data-field="name" data-form="/subnets/add"' in html and "A name is required." in html, page
+
+    def test_the_two_element_shape_prints_an_empty_form_path_and_lands_on_any_page(self, logged_in_client):
+        with logged_in_client.session_transaction() as sess:
+            sess["field_errors"] = [["name", "an old-shape message"]]
+        assert 'data-field="name" data-form=""' in logged_in_client.get("/settings/api-keys").data.decode()
+
+    def test_the_script_moves_an_error_only_on_the_page_it_was_raised_for(self):
+        base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
+        block = base[base.index("AX4 - an error that names one field is moved under it") :]
+        assert "var formPath = alertEl.getAttribute('data-form');" in block
+        assert "if (formPath && formPath !== window.location.pathname) return;" in block
+        assert block.index("formPath !== window.location.pathname") < block.index("document.getElementById('f-' + ")
+
+    def test_the_sign_in_page_prints_a_pending_error_as_a_flash_and_the_list_is_empty_afterward(self, app):
+        c = app.test_client()
+        with c.session_transaction() as sess:
+            sess["field_errors"] = [["name", "A name is required.", "/subnets/add"]]
+        html = c.get("/login").data.decode()
+        assert "A name is required." in html and "data-field" not in html
+        with c.session_transaction() as sess:
+            assert "field_errors" not in sess
+
+    def test_every_standalone_page_that_prints_flashes_also_prints_the_pending_field_errors(self):
+        """The login page, the forced password change and the second factor are not built on base.html; a field error raised for a form must not wait in the session for the next page that is."""
+        for name in ("login.html", "force_password_change.html", "mfa_challenge.html"):
+            text = (TEMPLATES / name).read_text(encoding="utf-8")
+            assert "get_flashed_messages" in text and "take_field_errors" in text, name
+            assert text.index("take_field_errors") < text.index("get_flashed_messages"), (
+                f"{name}: field errors come first, as on base.html"
+            )
+
+    def test_the_forced_change_screen_prints_a_pending_error_as_a_flash(self, client, db):
+        from tests.test_password_change_enforcement import _client_with_must_change_password
+
+        c, _ = _client_with_must_change_password(client, db, username="q210fielderr1")
+        with c.session_transaction() as sess:
+            sess["field_errors"] = [["name", "A name is required.", "/subnets/add"]]
+        html = c.get("/force-password-change").data.decode()
+        assert "A name is required." in html and "data-field" not in html
+        with c.session_transaction() as sess:
+            assert "field_errors" not in sess
+
+
+class TestTheByteBudget:
+    """Q210 (AZ5 b, Y8): `MAX_FIELD_ERRORS` x `MAX_MESSAGE` is 6,000 characters and the signed session cookie is 4,093 bytes in all; with incompressible messages 16 errors passed it, where a browser may silently
+    drop the whole cookie and sign the person out. The list is held to `MAX_FIELD_BYTES` whatever its count; what does not fit is flashed instead (never lost)."""
+
+    @staticmethod
+    def _messages(n, seed=210):
+        rng = random.Random(seed)
+        return [
+            "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(forms.MAX_MESSAGE))
+            for _ in range(n)
+        ]
+
+    def test_the_first_message_that_would_pass_the_budget_falls_back_to_a_flash(self, ctx):
+        messages = self._messages(forms.MAX_FIELD_ERRORS)
+        item = len(json.dumps(["f00", messages[0], ""]))
+        fits = forms.MAX_FIELD_BYTES // (
+            item + 2
+        )  # n items serialize to n * (item + 2) bytes: the brackets and the n - 1 separators
+        assert 1 <= fits < forms.MAX_FIELD_ERRORS, "the budget, not the count, is what bites here"
+        for n, message in enumerate(messages):
+            forms.flash_field(f"f{n:02d}", message)
+        stored = session["field_errors"]
+        assert len(stored) == fits
+        assert len(json.dumps(stored)) <= forms.MAX_FIELD_BYTES
+        assert [m for _c, m in get_flashed_messages(with_categories=True)] == messages[fits:], (
+            "what did not fit is flashed, in order, and none of it is lost"
+        )
+
+    def test_a_short_message_is_not_held_to_the_incompressible_worst_case(self, ctx):
+        for n in range(forms.MAX_FIELD_ERRORS):
+            forms.flash_field(f"f{n:02d}", f"m{n}")
+        assert len(session["field_errors"]) == forms.MAX_FIELD_ERRORS, (
+            "twenty short errors are well inside the budget: the count cap, as before"
+        )
+
+    def test_the_redirects_cookie_stays_under_the_browsers_limit(self, logged_in_client):
+        """The real route, the real client: the palette form quotes each submitted value, so it is Jen's longest list. Twelve incompressible values."""
+        from jen.services import theme
+
+        rng = random.Random(7)
+        form = {
+            token: "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(400))
+            for token in theme.TOKENS
+        }
+        form["radius"] = "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(400))
+        r = logged_in_client.post("/settings/theme/custom", data=form)
+        assert r.status_code == 302
+        cookies = [v for k, v in r.headers.items() if k.lower() == "set-cookie" and v.startswith("session=")]
+        assert cookies, "the refusal wrote the session"
+        assert all(len(c.split(";", 1)[0]) < 4093 for c in cookies), [len(c.split(";", 1)[0]) for c in cookies]
+
+
 class TestEveryHintIsTied:
     HINT = re.compile(r'<(?:div|small|span|p)\b[^>]*class="[^"]*\bform-hint\b[^"]*"[^>]*>')
     CONTROL = re.compile(r"<(?:input|select|textarea)\b[^>]*>")
@@ -203,6 +358,26 @@ class TestEveryHintIsTied:
                 ctl_id,
                 hint_id.group(1),
             )
+
+    @pytest.mark.parametrize("path", sorted(TEMPLATES.glob("*.html")), ids=lambda p: p.name)
+    def test_a_hint_that_carries_an_id_is_named_by_a_control(self, path):
+        """Q210 (AZ5 c, Y15): the rule beta.4 shipped was keyed on `input` and the `id=\"f-<name>\"` convention, so two script-filled hints beside a `<select>` (`kea-mode-hint`, `edit-role-oidc-hint`)
+        were tied to nothing - the sentence was on screen and never announced. A `.form-hint` with an id must be named by some `aria-describedby` in its template, on an input, a select, a textarea
+        or the group it describes; a note that describes no control carries no id."""
+        text = path.read_text(encoding="utf-8")
+        named = {tok for value in re.findall(r'aria-describedby="([^"]*)"', text) for tok in value.split()}
+        orphans = []
+        for h in self.HINT.finditer(text):
+            hint_id = re.search(r'\bid="([^"{]+)"', h.group(0))
+            if hint_id and hint_id.group(1) not in named:
+                orphans.append(hint_id.group(1))
+        assert not orphans, (path.name, orphans)
+
+    def test_the_two_selects_whose_hints_were_tied_to_nothing_name_them_now(self):
+        kea = (TEMPLATES / "settings_kea.html").read_text(encoding="utf-8")
+        users = (TEMPLATES / "users.html").read_text(encoding="utf-8")
+        assert '<select name="connection_mode" id="kea-connection-mode" aria-describedby="kea-mode-hint">' in kea
+        assert 'id="edit-role" class="u-046678" aria-describedby="edit-role-oidc-hint"' in users
 
     @pytest.mark.parametrize("path", sorted(TEMPLATES.glob("*.html")), ids=lambda p: p.name)
     def test_every_static_aria_describedby_id_exists_in_the_same_template(self, path):

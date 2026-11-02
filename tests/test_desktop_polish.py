@@ -145,8 +145,8 @@ class TestProgressBarMarkup:
 class TestTwoColumnSettings:
     def test_settings_cols_css_exists_at_1280(self):
         css = (TEMPLATES / "base.html").read_text(encoding="utf-8")
-        m = re.search(r"@media \(min-width: 1280px\)\s*\{(.*?)\n        \}", css, re.S)
-        assert m, "no @media (min-width: 1280px) block found"
+        m = re.search(r"@media screen and \(min-width: 1280px\)\s*\{(.*?)\n        \}", css, re.S)
+        assert m, "no @media screen and (min-width: 1280px) block found"
         block = m.group(1)
         assert "columns: 2" in block
         assert ".settings-cols .card { break-inside: avoid; }" in block
@@ -227,8 +227,8 @@ class TestStickyTableHeaders:
         becomes the opt-in .table-wrap--scroll, whose header is static
         since sticky cannot work inside a real scroll container."""
         css = (TEMPLATES / "base.html").read_text(encoding="utf-8")
-        m = re.search(r"@media \(min-width: 769px\)\s*\{(.*?)\n\s*\}\n", css, re.DOTALL)
-        assert m, "no @media (min-width: 769px) block found"
+        m = re.search(r"@media screen and \(min-width: 769px\)\s*\{(.*?)\n\s*\}\n", css, re.DOTALL)
+        assert m, "no @media screen and (min-width: 769px) block found"
         block = m.group(1)
         assert ".table-wrap { overflow-x: visible; }" in block
         assert ".table-wrap--scroll { overflow-x: auto; }" in block

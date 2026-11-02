@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from jen import extensions
 from jen.services import auth as _auth
+from jen.services import session_timeout as _session_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +313,9 @@ def establish_session(row: dict, detail: str) -> None:
     now = datetime.now(timezone.utc).isoformat()
     session["last_active"] = now
     session["auth_at"] = now
+    session["login_id"] = (
+        _session_timeout.new_login_id()
+    )  # Q210, AZ9 b: one label per sign-in (the browser's cross-tab key)
     session["_user_cache"] = {
         "id": user.id,
         "username": user.username,

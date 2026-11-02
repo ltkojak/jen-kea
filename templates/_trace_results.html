@@ -1,4 +1,4 @@
-<div id="trace-results"{% if watching %} hx-get="/tools/trace?mac={{ mac|urlencode }}&server={{ server_id }}&lines={{ lines }}&watch=1&t={{ next_t }}" hx-trigger="every {{ watch_step }}s" hx-target="#trace-results" hx-swap="outerHTML"{% endif %}>
+<div id="trace-results"{% if watching %} hx-get="/tools/trace?mac={{ mac|urlencode }}&server={{ server_id }}&lines={{ lines }}&watch=1&t={{ next_t }}" hx-trigger="every {{ watch_step }}s" hx-headers='{"X-Jen-Poll": "1"}' hx-target="#trace-results" hx-swap="outerHTML"{% endif %}>
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% elif groups is not none %}

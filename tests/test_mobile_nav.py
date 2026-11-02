@@ -224,7 +224,7 @@ class TestTokensAndUtilities:
         assert "env(safe-area-inset-bottom)" in css and "85dvh" in css
 
     def test_the_sheet_never_shows_on_desktop(self):
-        assert "@media (min-width: 769px)" in self._css()
+        assert "@media screen and (min-width: 769px)" in self._css()
 
 
 class TestRealPages:

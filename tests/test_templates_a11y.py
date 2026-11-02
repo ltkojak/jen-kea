@@ -33,7 +33,10 @@ class TestBoundedAccessibility:
         for id_ in ("kb-modal", "jen-confirm-overlay", "jen-prompt-overlay"):
             tag = re.search(rf'<div[^>]*id="{id_}"[^>]*>', text).group(0)
             assert 'role="dialog"' in tag and 'aria-modal="true"' in tag, id_
-        # Q208 (AX2): the idle-session notice is an ALERT dialog: it interrupts, and it is named and described
+        # Q208 (AX2): the idle-session notice is an ALERT dialog: it interrupts, and it is named and described. Q210 (AZ1 d): its markup is templates/_session_watch.html, which base.html and the
+        # forced password change both include - so the dialog is read from there, and base.html must still include it
+        assert '{% include "_session_watch.html" %}' in text
+        text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
         tag = re.search(r'<div[^>]*id="jen-session-overlay"[^>]*>', text).group(0)
         assert (
             'role="alertdialog"' in tag

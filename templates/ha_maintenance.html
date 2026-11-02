@@ -61,7 +61,7 @@
     {% endif %}
 
     <div id="maint-status" hx-get="{{ url_for('servers.ha_maintenance_status') }}?partial=1" hx-target="#maint-status"
-         hx-swap="innerHTML" hx-trigger="every 5s">
+         hx-swap="innerHTML" hx-trigger="every 5s" hx-headers='{"X-Jen-Poll": "1"}'>
         {% include "_ha_maintenance_status.html" %}
     </div>
 </div>

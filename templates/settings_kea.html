@@ -129,7 +129,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="kea-connection-mode">Connection Mode</label>
-                <select name="connection_mode" id="kea-connection-mode">
+                <select name="connection_mode" id="kea-connection-mode" aria-describedby="kea-mode-hint">
                     <option value="ca" {% if infra.kea_connection_mode != 'direct' %}selected{% endif %}>Control Agent — deprecated in Kea 3.0, removed in 3.2</option>
                     <option value="direct" {% if infra.kea_connection_mode == 'direct' %}selected{% endif %}>Direct to daemons — Kea 2.7.2+</option>
                 </select>

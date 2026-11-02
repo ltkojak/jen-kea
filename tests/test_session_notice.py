@@ -1,12 +1,15 @@
 """
 tests/test_session_notice.py
 ────────────────────────────
-v5.70.0-beta.4 (Q208, AX2): the idle sign-out is announced two minutes ahead and comes back to the page.
+v5.70.0-beta.4 (Q208, AX2): the idle sign-out is announced two minutes ahead and comes back to the page. v5.70.0-beta.5 (Q210): the notice is scheduled, moved and ended by the server's clock
+and the server's answer, and a page that only refreshes itself does not keep a session alive.
 
 One definition of the deadline (`jen/services/session_timeout.py`) serves the middleware, the `X-Jen-Session-Expires` header, the `<body data-session-expires>` attribute and `POST /session/touch`.
 The first class is pure (`py -m pytest --noconftest tests/test_session_notice.py::TestDeadline`); the rest run against the app.
 """
 
+import contextlib
+import logging
 import pathlib
 import re
 from datetime import datetime, timedelta, timezone
@@ -35,6 +38,26 @@ def _iso(minutes_ago):
     return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
 
 
+@contextlib.contextmanager
+def _timeout_set(**values):
+    """Global settings for the length of a test (the settings cache dropped on the way in and the way out)."""
+    from jen.models.user import _invalidate_settings_cache, get_global_setting, set_global_setting
+
+    before = {k: get_global_setting(k, None) for k in values}
+    for k, v in values.items():
+        set_global_setting(k, v)
+    _invalidate_settings_cache()
+    try:
+        yield
+    finally:
+        for k, v in before.items():
+            set_global_setting(
+                k,
+                v if v is not None else {"session_timeout_enabled": "true", "session_timeout_minutes": "60"}.get(k, ""),
+            )
+        _invalidate_settings_cache()
+
+
 class TestDeadline:
     def test_off_by_the_global_switch_is_none(self, monkeypatch):
         _settings(monkeypatch, session_timeout_enabled="false", session_timeout_minutes="60")
@@ -57,6 +80,12 @@ class TestDeadline:
         _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes="45")
         last = datetime(2026, 11, 2, 12, 0, 0, tzinfo=timezone.utc)
         assert st.deadline({"last_active": last.isoformat()}, _User(session_timeout=10)) == last + timedelta(minutes=10)
+
+    def test_a_last_active_the_arithmetic_cannot_carry_is_none_never_a_500(self, monkeypatch):
+        """Q210 (Y7): `moment + timedelta(minutes=...)` raises OverflowError for a year-9999 value; beta.3's middleware caught everything there, beta.4 narrowed the catch."""
+        _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes="45")
+        assert st.deadline({"last_active": "9999-12-31T23:59:00+00:00"}, _User()) is None
+        assert st.expires_at({"last_active": "9999-12-31T23:59:00+00:00"}, _User()) is None
 
     @pytest.mark.parametrize("bad", [None, "", "not a date", 5, "2026-11-02T12:00:00"])
     def test_a_missing_unreadable_or_naive_last_active_is_none_never_expired(self, monkeypatch, bad):
@@ -104,20 +133,23 @@ class TestTheHeader:
     def test_static_files_carry_none(self, logged_in_client):
         assert "X-Jen-Session-Expires" not in logged_in_client.get("/static/js/htmx.min.js").headers
 
-    def test_timeout_off_carries_none_and_no_attribute(self, logged_in_client):
-        from jen.models.user import _invalidate_settings_cache, set_global_setting
-
-        set_global_setting("session_timeout_enabled", "false")
-        _invalidate_settings_cache()
-        try:
+    def test_timeout_off_carries_the_word_off_beside_the_servers_clock(self, logged_in_client):
+        """THE ONE Q208 CASE Q210 INVERTS, on purpose (AZ1 b / Y4): beta.4 asserted that a switched-off timeout carries NO header, and an absence cannot tell an open page that the
+        deadline it holds no longer applies - it walked a live session to the sign-in page. "Off" is a word now, and it comes with the server's clock like every deadline."""
+        with _timeout_set(session_timeout_enabled="false"):
             r = logged_in_client.get("/leases")
-            assert "X-Jen-Session-Expires" not in r.headers
-            assert not re.search(rb"<body[^>]*data-session-expires", r.data), (
+            assert r.headers["X-Jen-Session-Expires"] == "off"
+            assert abs(int(r.headers["X-Jen-Session-Now"]) - int(datetime.now(timezone.utc).timestamp())) < 30
+            m = re.search(r'<body[^>]*\bdata-session-expires="([^"]*)"[^>]*\bdata-session-now="(\d+)"', r.data.decode())
+            assert m and m.group(1) == "off", (
                 "(the script that reads the attribute names it too: only the body tag counts)"
             )
-        finally:
-            set_global_setting("session_timeout_enabled", "true")
-            _invalidate_settings_cache()
+
+    def test_anonymous_and_static_carry_none_even_when_the_timeout_is_off(self, app, logged_in_client):
+        with _timeout_set(session_timeout_enabled="false"):
+            assert "X-Jen-Session-Expires" not in logged_in_client.get("/static/js/htmx.min.js").headers
+            anon = app.test_client().get("/login")
+            assert "X-Jen-Session-Expires" not in anon.headers and b"data-session-expires" not in anon.data
 
 
 class TestTouch:
@@ -174,6 +206,15 @@ class TestTouch:
         with csrf_client.session_transaction() as sess:
             assert "last_active" not in sess
 
+    def test_the_answer_says_null_when_the_timeout_is_off(self, app, logged_in_csrf_client):  # noqa: F811
+        """Q210 (AZ1 b): the same state the header says as the word `off` is `expires_at: null` in the body (and `now` still comes with it)."""
+        with _timeout_set(session_timeout_enabled="false"):
+            c = logged_in_csrf_client
+            r = c.post("/session/touch", headers={"X-CSRFToken": _valid_token_for(app, c)})
+            assert r.status_code == 200
+            assert r.get_json()["ok"] is True and r.get_json()["expires_at"] is None
+            assert abs(r.get_json()["now"] - int(datetime.now(timezone.utc).timestamp())) < 30
+
     def test_it_moves_last_active_and_nothing_else(self, app, logged_in_csrf_client):  # noqa: F811
         c = logged_in_csrf_client
         with c.session_transaction() as sess:
@@ -185,7 +226,8 @@ class TestTouch:
             "_csrf_nonce",
             "_user_cache",
             "_fresh",
-        }  # Flask-Login refreshes its own cache and freshness flag on any request
+            "login_id",
+        }  # Flask-Login refreshes its own cache and freshness flag on any request; the middleware labels a session that has no sign-in label yet (Q210, AZ9 b) - once
         assert {k: v for k, v in after.items() if k not in ignore} == {
             k: v for k, v in before.items() if k not in ignore
         }
@@ -223,6 +265,14 @@ class TestTheRedirectCarriesNext:
         assert _safe_next("/leases?subnet=2") == "/leases?subnet=2"
         assert _safe_next("//evil.example") == ""
         assert _safe_next("/\\evil.example") == ""
+
+    def test_the_keep_branch_measures_next_the_way_the_ordinary_branch_does(self):
+        """Q210 (Y5): the sign-in request the browser makes at the deadline carries `next`; a 4,015-character one used to come back as a 4,033-character Location (a request-line overflow).
+        It is dropped like the ordinary branch drops it - the bare sign-in page."""
+        long_next = "/leases?search=" + "a" * 4000
+        assert st.login_redirect_location("/login", "GET", "/login?next=x", long_next) == "/login"
+        short = "/leases?search=" + "a" * 100
+        assert st.login_redirect_location("/login", "GET", "/login?next=x", short).startswith("/login?next=")
 
     def test_a_path_that_looks_like_a_host_is_not_followed_out(self, logged_in_client):
         self._expire(logged_in_client)
@@ -300,9 +350,11 @@ class TestTheTouchPathIsNotTouchedByTheMiddleware:
     def test_the_path_list(self):
         assert st.NO_TOUCH_PATHS == ("/session/touch",)
 
-    def test_the_middleware_names_it_in_both_branches(self):
+    def test_the_middleware_names_it_in_every_branch(self):
+        """The two branches that write `last_active` outright name the path list; the third (an ordinary request) asks `extends()`, which names it once for all callers (Q210, AZ3)."""
         text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
         assert text.count("session_timeout_svc.NO_TOUCH_PATHS") == 2
+        assert "session_timeout_svc.extends(request.path, request.headers)" in text
 
 
 class TestTheReturnAddress:
@@ -363,25 +415,365 @@ class TestTheReturnAddress:
 
 
 class TestTheDialogScript:
-    """Source pins for the second pass's client-side fixes (SP-3, SP-6, SP-7); the behavior itself is tests/e2e/test_session_notice.py."""
+    """Source pins for the client side of the notice (SP-3, SP-6, SP-7 and Q210's Y1, Y4, Y10, Y14 and the reviewer's three additions); the behavior itself is tests/e2e/test_session_notice.py.
+    Q210 moved the script, byte for byte where it did not change, from base.html to templates/_session_watch.html."""
 
     BASE = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+    WATCH = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
+    FORCED = pathlib.Path("templates/force_password_change.html").read_text(encoding="utf-8")
 
-    def test_time_is_counted_against_the_servers_clock(self):
-        assert "function nowS() { return Date.now() / 1000 + skew; }" in self.BASE
-        assert "if (sn > 0) skew = sn - Date.now() / 1000;" in self.BASE
-        assert "X-Jen-Session-Now" in self.BASE and "data-session-now" in self.BASE
+    def test_the_watch_is_one_included_file(self):
+        assert '{% include "_session_watch.html" %}' in self.BASE
+        assert '_session_watch.html" %}' in self.FORCED and "session_watch_standalone=true" in self.FORCED
+        assert "function goToLogin()" not in self.BASE and '<div id="jen-session-overlay"' not in self.BASE
+        assert self.WATCH.count('<script nonce="{{ csp_nonce }}">') == 1
+        assert self.WATCH.count('<div id="jen-session-overlay"') == 1
+        assert "included, never returned for an htmx swap" in self.WATCH
 
-    def test_leaving_happens_once_and_stops_the_timers(self):
-        block = self.BASE[self.BASE.index("function goToLogin()") : self.BASE.index("function signOut()")]
-        assert (
-            "if (leaving) return;" in block
-            and "clearTimeout(warnTimer)" in block
-            and "clearInterval(tickTimer)" in block
+    def test_time_is_counted_against_the_servers_clock_on_a_monotonic_timer(self):
+        """Q208 pinned `Date.now() / 1000 + skew` here. AZ9 (c) moves the watch to the browser's MONOTONIC clock (`performance.now()`, anchored at the server's `now` each reply), so that pin is rewritten:
+        a wall-clock change while the page is open must move nothing, and the wall clock is no longer read at all."""
+        assert "function nowS() { return anchorServer + (performance.now() - anchorPerf) / 1000; }" in self.WATCH
+        assert "Date.now" not in self.WATCH
+        assert "X-Jen-Session-Now" in self.WATCH and "data-session-now" in self.WATCH
+
+    def test_every_timer_is_scheduled_on_that_same_clock(self):
+        """Q208 pinned the existence of `skew` and `nowS` - and the scheduler beside them read the browser's own clock (Y1): a browser behind never reached the dialog, a browser ahead spun a zero-delay timer."""
+        block = self.WATCH[self.WATCH.index("function arm()") : self.WATCH.index("// value: an epoch second")]
+        assert "(expires - lead - nowS()) * 1000" in block and "setTimeout(check, armedMs)" in block
+        assert "(expires - lead) * 1000 - Date.now()" not in self.WATCH
+        check = self.WATCH[self.WATCH.index("function check()") : self.WATCH.index("function arm()")]
+        assert check.index("openDialog(); return;") < check.index("arm();"), (
+            "the dialog opens BEFORE the timer is re-armed, so the spin cannot recur"
         )
 
-    def test_only_a_redirect_means_the_session_ended(self):
-        block = self.BASE[self.BASE.index("function stay()") : self.BASE.index("if (stayBtn) stayBtn.addEventListener")]
-        assert block.count("goToLogin()") == 1 and "if (r.redirected) { goToLogin(); return null; }" in block
+    def test_a_deadline_is_taken_only_with_the_servers_clock_and_never_from_an_older_reply(self):
+        assert "if (!(sn > 0) || sn < lastServerNow) return;" in self.WATCH
+
+    def test_a_reply_is_authoritative_in_both_directions_and_off_is_a_word(self):
+        block = self.WATCH[self.WATCH.index("function ingest(") : self.WATCH.index("function stayFailed(")]
+        assert "if (fromStorage && n <= expires) return;" in block, (
+            "a value from another tab only ever moves the deadline forward"
+        )
+        assert "if (n !== expires) {" in block and "expires = n;" in block, "a reply moves it either way"
+        off = block[block.index("if (off) {") : block.index("if (n !== expires)")]
+        for step in ("expires = 0;", "stopWarn();", "closeDialog();", "forget();"):
+            assert step in off, step
+        assert "value === 'off'" in block
+
+    def test_an_absurd_deadline_is_ignored(self):
+        assert "var MAX_AHEAD = 31622400;" in self.WATCH and "if (!off && n > sn + MAX_AHEAD) return;" in self.WATCH
+
+    def test_leaving_happens_once_and_stops_the_timers(self):
+        block = self.WATCH[self.WATCH.index("function goToLogin()") : self.WATCH.index("function signOut()")]
+        assert "if (leaving) return;" in block and "stopWarn();" in block and "clearInterval(tickTimer)" in block
+
+    def test_a_redirect_is_judged_by_where_it_went(self):
+        """Q208 pinned the literal line `if (r.redirected) { goToLogin(); return null; }`, which is what made Y10 possible: a redirect to the forced password change, to https or to a proxy's canonical
+        host is not the session's end. The pin is rewritten to the rule SP-6's own fix row stated: only a redirect to the sign-in page."""
+        block = self.WATCH[
+            self.WATCH.index("function stay()") : self.WATCH.index("if (stayBtn) stayBtn.addEventListener")
+        ]
+        assert (
+            "if (r.redirected) {" in block
+            and "u.pathname === '/login'" in block
+            and "window.location.assign(u.href)" in block
+        )
+        assert block.count("goToLogin()") == 1
+
+    def test_a_failure_of_the_touch_is_not_an_expiry(self):
+        block = self.WATCH[
+            self.WATCH.index("function stay()") : self.WATCH.index("if (stayBtn) stayBtn.addEventListener")
+        ]
         assert "r.status === 403" in block and block.count("stayFailed(") >= 4
-        assert 'id="jen-session-failed"' in self.BASE
+        assert 'id="jen-session-failed"' in self.WATCH
+
+    def test_the_cross_tab_key_belongs_to_one_sign_in(self):
+        assert "var KEY_PREFIX = 'jen-session-expires:';" in self.WATCH
+        assert "KEY_PREFIX + (document.body.getAttribute('data-session-login') || '')" in self.WATCH
+        sign_out = self.WATCH[self.WATCH.index("function signOut()") : self.WATCH.index("function tick()")]
+        assert "forget();" in sign_out
+        assert "expires + ':' + sn" in self.WATCH, "a stored value carries both numbers"
+
+    def test_the_hooks_the_browser_tests_drive(self):
+        assert "window.jenSessionWatch = {" in self.WATCH
+        for hook in ("ingest: ingest", "expires: function()", "state: function()"):
+            assert hook in self.WATCH, hook
+        assert (
+            "{ expires: expires, lead: lead, armed: armedMs, open: dialogOpen(), lastServerNow: lastServerNow }"
+            in self.WATCH
+        )
+
+
+class TestAPollNeverExtends:
+    """Q210 (AZ3, Y3): a request that only refreshes a view says so with `X-Jen-Poll: 1`, and the middleware never moves `last_active` for it. The header can only STOP an extension."""
+
+    def test_every_self_refreshing_element_carries_the_header(self):
+        found = []
+        for path in sorted(pathlib.Path("templates").rglob("*.html")) + sorted(pathlib.Path("plugins").rglob("*.html")):
+            text = path.read_text(encoding="utf-8")
+            for m in re.finditer(r'<[^<>]*hx-trigger="every [^<>]*>', text):
+                found.append((str(path), '"X-Jen-Poll": "1"' in m.group(0)))
+        assert len(found) >= 3, (
+            f"the three pages that refresh themselves (Health Center, HA maintenance, a Trace watch): {found}"
+        )
+        assert all(ok for _, ok in found), [p for p, ok in found if not ok]
+
+    def test_a_marked_request_leaves_last_active_byte_identical_and_an_unmarked_one_moves_it(self, logged_in_client):
+        stale = _iso(10)
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        assert logged_in_client.get("/leases", headers={"X-Jen-Poll": "1"}).status_code == 200
+        with logged_in_client.session_transaction() as sess:
+            assert sess["last_active"] == stale
+        assert logged_in_client.get("/leases").status_code == 200
+        with logged_in_client.session_transaction() as sess:
+            assert sess["last_active"] != stale
+
+    def test_health_centers_own_poll_does_not_extend_the_session(self, logged_in_client):
+        stale = _iso(10)
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        r = logged_in_client.get("/health-center/data?partial=1", headers={"X-Jen-Poll": "1"})
+        assert r.status_code == 200
+        with logged_in_client.session_transaction() as sess:
+            assert sess["last_active"] == stale
+
+    def test_only_the_exact_value_counts(self, logged_in_client):
+        """'1' is the marker; anything else is an ordinary request and extends (the header is not a switch with a wider meaning)."""
+        for value in ("0", "true", "", "1, 1", "11"):
+            stale = _iso(10)
+            with logged_in_client.session_transaction() as sess:
+                sess["last_active"] = stale
+            logged_in_client.get("/leases", headers={"X-Jen-Poll": value})
+            with logged_in_client.session_transaction() as sess:
+                assert sess["last_active"] != stale, repr(value)
+
+    def test_a_poll_by_an_anonymous_client_is_the_login_redirect(self, app):
+        r = app.test_client().get("/health-center/data?partial=1", headers={"X-Jen-Poll": "1"})
+        assert r.status_code == 302 and urlsplit(r.headers["Location"]).path == "/login"
+
+    def test_a_poll_past_the_deadline_is_signed_out_like_any_request(self, logged_in_client):
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = _iso(24 * 60)
+        r = logged_in_client.get("/leases", headers={"X-Jen-Poll": "1"})
+        assert r.status_code == 302
+        with logged_in_client.session_transaction() as sess:
+            assert "_user_id" not in sess
+
+    def test_the_middleware_has_one_definition_of_what_extends(self):
+        text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
+        assert "session_timeout_svc.extends(request.path, request.headers)" in text
+        assert st.extends("/leases", {}) and not st.extends("/leases", {"X-Jen-Poll": "1"})
+        assert (
+            not st.extends("/api/stats", {}) and not st.extends("/metrics", {}) and not st.extends("/session/touch", {})
+        )
+
+
+class TestTheBootstrapSkipsTheSamePaths:
+    """Y22: a session with no `last_active` is given one by the middleware - except for a poll and the touch path, which are the two requests that must not write it."""
+
+    def _bare(self, client):
+        with client.session_transaction() as sess:
+            sess.pop("last_active", None)
+
+    def test_a_poll_leaves_it_unset(self, logged_in_client):
+        self._bare(logged_in_client)
+        assert logged_in_client.get("/leases", headers={"X-Jen-Poll": "1"}).status_code == 200
+        with logged_in_client.session_transaction() as sess:
+            assert "last_active" not in sess
+
+    def test_the_touch_path_leaves_it_unset(self, logged_in_client):
+        self._bare(logged_in_client)
+        assert logged_in_client.get("/session/touch").status_code == 405
+        with logged_in_client.session_transaction() as sess:
+            assert "last_active" not in sess
+
+    def test_an_ordinary_page_sets_it(self, logged_in_client):
+        self._bare(logged_in_client)
+        assert logged_in_client.get("/leases").status_code == 200
+        with logged_in_client.session_transaction() as sess:
+            assert datetime.fromisoformat(sess["last_active"])
+
+    def test_with_the_timeout_off_a_poll_does_not_write_it_either(self, logged_in_client):
+        stale = _iso(10)
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        with _timeout_set(session_timeout_enabled="false"):
+            logged_in_client.get("/leases", headers={"X-Jen-Poll": "1"})
+            with logged_in_client.session_transaction() as sess:
+                assert sess["last_active"] == stale
+
+
+class TestTheSettingIsReadOnce:
+    """Q210 (AZ4, Y6): the global timeout is read through ONE coercion. A hand-edited row that is not a whole number of minutes from 0 to 1440 reads as 60 and is logged once per process."""
+
+    @pytest.mark.parametrize("bad", ["x", "", "60.5", "1e3", "9" * 20, "-5", "1441", " 5", "５", None])
+    def test_a_value_that_is_not_a_whole_number_of_minutes_reads_as_the_default(self, monkeypatch, bad):
+        _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes=bad)
+        assert st.timeout_minutes(_User()) == 60
+
+    @pytest.mark.parametrize(("good", "expected"), [("0", None), ("1", 1), ("1440", 1440), ("45", 45), (45, 45)])
+    def test_a_whole_number_in_range_is_taken_as_it_is(self, monkeypatch, good, expected):
+        _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes=good)
+        assert st.timeout_minutes(_User()) == expected
+
+    def test_the_users_own_timeout_goes_through_the_same_coercion(self, monkeypatch):
+        _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes="45")
+        assert st.timeout_minutes(_User(session_timeout=10)) == 10
+        assert st.timeout_minutes(_User(session_timeout=99999)) == 45, "out of range: the global applies"
+        assert st.timeout_minutes(_User(session_timeout=0)) == 45, "0 is 'use the global' for a user, as it always was"
+
+    def test_it_is_logged_once_per_process_and_cut_to_forty_characters(self, monkeypatch, caplog):
+        st._warned.clear()
+        _settings(monkeypatch, session_timeout_enabled="true", session_timeout_minutes="x" * 100)
+        with caplog.at_level(logging.WARNING, logger=st.__name__):
+            for _ in range(5):
+                assert st.timeout_minutes(_User()) == 60
+        records = [r for r in caplog.records if r.name == st.__name__]
+        assert len(records) == 1
+        assert "x" * 41 not in records[0].getMessage()
+
+    def test_every_path_still_answers_with_a_hand_edited_row(self, logged_in_client):
+        """Beta.4: `int("x")` in a before_request made every request a 500 - `/logout` included, so the person could not even sign out."""
+        with _timeout_set(session_timeout_minutes="x"):
+            for path in ("/leases", "/login", "/logout", "/api/stats"):
+                assert logged_in_client.get(path).status_code < 500, path
+
+
+class TestEveryDeadlineCarriesNow:
+    """Q210 (AZ9 a): a deadline without the server's clock beside it is useless to the page (it cannot order two replies), so no response carries one without the other."""
+
+    PATHS = ("/leases", "/api/stats", "/no-such-page-q210", "/session/touch")
+
+    def test_no_response_carries_a_deadline_without_the_clock(self, logged_in_client):
+        seen = 0
+        for path in self.PATHS:
+            r = logged_in_client.get(path)
+            if "X-Jen-Session-Expires" in r.headers:
+                seen += 1
+                assert re.fullmatch(r"\d+", r.headers["X-Jen-Session-Now"]), path
+        assert seen >= 2, "the rule would be vacuous if the headers were never sent"
+
+    def test_the_same_holds_when_the_timeout_is_off(self, logged_in_client):
+        with _timeout_set(session_timeout_enabled="false"):
+            for path in self.PATHS:
+                r = logged_in_client.get(path)
+                if "X-Jen-Session-Expires" in r.headers:
+                    assert r.headers["X-Jen-Session-Expires"] == "off" and "X-Jen-Session-Now" in r.headers, path
+
+    def test_the_touch_answer_carries_it_in_the_body_and_the_header(self, app, logged_in_csrf_client):  # noqa: F811
+        c = logged_in_csrf_client
+        r = c.post("/session/touch", headers={"X-CSRFToken": _valid_token_for(app, c)})
+        assert r.status_code == 200
+        assert re.fullmatch(r"\d+", str(r.get_json()["now"])) and re.fullmatch(r"\d+", r.headers["X-Jen-Session-Now"])
+        assert r.headers["X-Jen-Session-Expires"] == str(r.get_json()["expires_at"])
+
+    def test_the_script_ignores_a_deadline_that_arrives_without_it(self):
+        text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
+        assert "if (!(sn > 0) || sn < lastServerNow) return;" in text
+
+
+class TestTheLoginIdIsPerLogin:
+    """Q210 (AZ9 b): `session["login_id"]` is a label for ONE sign-in. It names the browser's cross-tab key, so a different account signing in within one browser profile never reads the old value.
+    It is not a secret (the session cookie is the credential)."""
+
+    ROW = {
+        "id": 1,
+        "username": "admin",
+        "role": "superadmin",
+        "session_timeout": None,
+        "subnet_access": None,
+        "must_change_password": 0,
+        "token_version": 0,
+        "password": "pbkdf2:sha256:x$y$z",
+    }
+
+    def test_two_sign_ins_get_two_labels(self, app):
+        from flask import session
+
+        from jen.services import oidc
+
+        ids = []
+        for _ in range(2):
+            with app.test_request_context():
+                oidc.establish_session(dict(self.ROW), "a test sign-in")
+                ids.append(session["login_id"])
+        assert ids[0] != ids[1] and all(re.fullmatch(r"[0-9a-f]{16}", i) for i in ids)
+
+    def test_a_sign_out_clears_it(self, logged_in_client):
+        logged_in_client.get("/leases")
+        with logged_in_client.session_transaction() as sess:
+            assert sess.get("login_id")
+        logged_in_client.post("/logout")
+        with logged_in_client.session_transaction() as sess:
+            assert "login_id" not in sess
+
+    def test_the_body_attribute_equals_the_sessions_and_is_stable(self, logged_in_client):
+        """A session opened before the label existed (a fixture, an upgrade with a person signed in) is given one by the first request and keeps it."""
+        pages = [logged_in_client.get("/leases").data.decode() for _ in range(2)]
+        with logged_in_client.session_transaction() as sess:
+            mine = sess["login_id"]
+        for page in pages:
+            m = re.search(r'<body[^>]*\bdata-session-login="([0-9a-f]*)"', page)
+            assert m and m.group(1) == mine
+
+    def test_every_place_that_signs_a_person_in_sets_it(self):
+        """Whole tree, not a file list: any function in jen/ that calls `login_user` must also set `login_id` (Q210's own lesson: a definition's fix is a fix to every use)."""
+        import ast
+
+        offenders, sites = [], 0
+        for path in sorted(pathlib.Path("jen").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+                calls = [
+                    c
+                    for c in ast.walk(fn)
+                    if isinstance(c, ast.Call) and getattr(c.func, "id", getattr(c.func, "attr", "")) == "login_user"
+                ]
+                if not calls:
+                    continue
+                sites += 1
+                if "login_id" not in ast.get_source_segment(path.read_text(encoding="utf-8"), fn):
+                    offenders.append(f"{path}:{fn.name}")
+        assert sites >= 3, (
+            "the walk found fewer sign-in sites than exist (establish_session and the two second-factor paths)"
+        )
+        assert not offenders, offenders
+
+
+class TestTheForcedChangeScreenHasTheNotice:
+    """Q210 (AZ1 d, Y10, Y11): the forced password change is not built on base.html, so it carried no idle notice at all; and the gate answered `POST /session/touch` with a redirect to its own form."""
+
+    def test_the_template_includes_the_watch_and_carries_the_attributes(self):
+        text = pathlib.Path("templates/force_password_change.html").read_text(encoding="utf-8")
+        assert '{% include "_session_watch.html" %}' in text
+        assert "data-session-expires" in text and "data-session-now" in text and "data-session-login" in text
+
+    def test_the_gate_names_the_touch_endpoint(self):
+        text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
+        assert 'url_for("auth.session_touch")' in text
+
+    def test_a_flagged_person_gets_the_dialog_and_the_deadline(self, client, db):
+        from tests.test_password_change_enforcement import _client_with_must_change_password
+
+        c, _ = _client_with_must_change_password(client, db, username="q210notice1")
+        r = c.get("/force-password-change")
+        assert r.status_code == 200 and b'id="jen-session-overlay"' in r.data
+        assert re.search(
+            rb'<body[^>]*data-session-expires="\d+"[^>]*data-session-now="\d+"[^>]*data-session-login="[0-9a-f]{16}"',
+            r.data,
+        )
+        assert "X-Jen-Session-Expires" in r.headers
+
+    def test_the_touch_is_a_json_answer_for_them_not_a_redirect(self, client, db):
+        from tests.test_password_change_enforcement import _client_with_must_change_password
+
+        c, _ = _client_with_must_change_password(client, db, username="q210notice2")
+        stale = _iso(30)
+        with c.session_transaction() as sess:
+            sess["last_active"] = stale
+        r = c.post("/session/touch")
+        assert r.status_code == 200 and r.get_json()["ok"] is True and "Location" not in r.headers
+        with c.session_transaction() as sess:
+            assert sess["last_active"] != stale

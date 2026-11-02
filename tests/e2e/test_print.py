@@ -43,3 +43,38 @@ class TestThePrintSheet:
         page.emulate_media(media="print")
         content = page.evaluate("getComputedStyle(document.querySelector('main a[href]'), '::after').content")
         assert content in ("none", "normal", '""')
+
+
+class TestAPortraitPrintoutIsNotAPhone:
+    """Q210 (AZ2, Y2): `_card_toc.html`'s phone block was `@media (max-width: 768px)` with no `screen`, and its script collapses every card but one at any width, so a portrait A4 or Letter printout
+    (703-725 CSS px of content width) of a Settings page lost most of its text: 2,332 characters against 5,786 at 1280 px, 17 card bodies hidden."""
+
+    def _text_and_hidden(self, page):
+        return page.evaluate(
+            """() => ({
+                text: document.body.innerText.length,
+                hidden: [...document.querySelectorAll('.card[data-collapsible]')].filter(card =>
+                    [...card.children].some(el => !el.classList.contains('card-header') && getComputedStyle(el).display === 'none')).length,
+                collapsible: document.querySelectorAll('.card[data-collapsible]').length,
+            })"""
+        )
+
+    def test_a_settings_page_prints_whole_at_portrait_width(self, logged_in_page, base_url):
+        page = logged_in_page
+        page.set_viewport_size({"width": 1280, "height": 900})
+        page.goto(f"{base_url}/settings/kea")
+        page.emulate_media(media="print")
+        wide = self._text_and_hidden(page)
+        page.set_viewport_size({"width": 703, "height": 900})
+        page.wait_for_timeout(300)
+        narrow = self._text_and_hidden(page)
+        assert narrow["collapsible"] >= 3, "the page's own script marked its cards: the check is not vacuous"
+        assert narrow["hidden"] == 0, "no collapsible card body is hidden in print"
+        assert abs(narrow["text"] - wide["text"]) <= wide["text"] * 0.10, (narrow["text"], wide["text"])
+
+    def test_the_same_page_on_a_phone_screen_still_collapses_its_cards(self, logged_in_page, base_url):
+        """The fix is the `screen` qualifier, not the removal of the phone layout: on a 390 px SCREEN the cards but one are still collapsed."""
+        page = logged_in_page
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.goto(f"{base_url}/settings/kea")
+        assert self._text_and_hidden(page)["hidden"] >= 2

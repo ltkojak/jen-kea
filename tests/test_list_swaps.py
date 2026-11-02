@@ -5,8 +5,10 @@ v5.70.0-beta.4 (Q208, AX1): the column headers and the page numbers of Leases, D
 tab, and the thing the older tests pin), and gains `hx-get` with the same URL, the id the page's filter form already targets, and `hx-push-url`. The sorted header says so with `aria-sort`.
 """
 
+import pathlib
 import re
 from html.parser import HTMLParser
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -27,12 +29,14 @@ PAGES = [
 
 
 class _Page(HTMLParser):
-    """Collects `.th-link` anchors, `.pagination a` anchors and every `th[aria-sort]`."""
+    """Collects `.th-link` anchors, `.pagination a` anchors and every `th[aria-sort]` (with the link its header carries)."""
 
     def __init__(self):
         super().__init__()
         self.th_links, self.page_links, self.aria_sorts = [], [], []
+        self.sorted_links = []
         self._in_pagination = 0
+        self._sorted_th = False
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -40,10 +44,15 @@ class _Page(HTMLParser):
             self._in_pagination = 1
         elif tag == "div" and self._in_pagination:
             self._in_pagination += 1
+        if tag == "th":
+            self._sorted_th = "aria-sort" in a
         if tag == "th" and "aria-sort" in a:
             self.aria_sorts.append(a["aria-sort"])
         if tag == "a" and "th-link" in (a.get("class") or "").split():
             self.th_links.append(a)
+            if self._sorted_th:
+                self.sorted_links.append(a)
+                self._sorted_th = False
         elif tag == "a" and self._in_pagination:
             self.page_links.append(a)
 
@@ -196,3 +205,60 @@ class TestAScopedAccountSeesTheSameRowsThroughASortLink:
         _caller(client, db, "admin_all")
         html = client.get(f"{path}?sort=subnet&dir=asc", headers=HX).data.decode()
         assert "ZZ-SECRET-B" in html or "10.77.0." in html
+
+
+class TestAnUnknownSortStillSaysWhichColumnIsSorted:
+    """Q210 (AZ6 a, Y13): the route fell back to its default column for an out-of-range `sort` but handed the RAW string back, so the page rendered no `aria-sort` at all while the rows WERE sorted. The
+    effective sort reaches the template: `?sort=bogus`, an empty one, a mistyped-case one and a SQL-looking one all mark the default column - one `th[aria-sort]`, whatever the address says."""
+
+    DEFAULTS = {
+        "/leases": ("expires", "descending"),
+        "/devices": ("last_seen", "descending"),
+        "/reservations": ("ip", "ascending"),
+    }
+
+    @pytest.mark.parametrize("path", sorted(DEFAULTS))
+    @pytest.mark.parametrize("bad", ["bogus", "", "IP", "l.address", "ip; DROP TABLE x", "a" * 300])
+    def test_exactly_one_header_is_marked_and_it_is_the_default_column(self, logged_in_client, three_rows, path, bad):
+        column, direction = self.DEFAULTS[path]
+        links = parse(logged_in_client.get(f"{path}?per_page=1&sort={bad}", headers=HX).data.decode())
+        assert links.aria_sorts == [direction], (path, bad, links.aria_sorts)
+        assert len(links.sorted_links) == 1
+        assert parse_qs(urlsplit(links.sorted_links[0]["href"]).query)["sort"] == [column]
+
+    @pytest.mark.parametrize("path", sorted(DEFAULTS))
+    def test_a_known_sort_is_untouched(self, logged_in_client, three_rows, path):
+        column = {"/leases": "hostname", "/devices": "device_name", "/reservations": "hostname"}[path]
+        links = parse(logged_in_client.get(f"{path}?per_page=1&sort={column}&dir=asc", headers=HX).data.decode())
+        assert links.aria_sorts == ["ascending"]
+        assert parse_qs(urlsplit(links.sorted_links[0]["href"]).query)["sort"] == [column]
+
+    @pytest.mark.parametrize("path", ["/leases?view=v6", "/devices?view=v6", "/reservations?view=v6"])
+    def test_the_v6_views_have_no_sort_links_and_still_answer_a_stray_sort(self, logged_in_client, ipv6_flag_on, path):
+        """The v6 partials carry no sortable header and no pagination `base` (grep: `sort=` appears in no `_*6_results.html`), so there is no link to fix; the view answers a stray `sort` as it did."""
+        assert logged_in_client.get(path + "&sort=bogus", headers=HX).status_code == 200
+
+
+class TestThePageLinksEncodeTheSort:
+    """Q210 (AZ6 b, Y20): the pagination `base` concatenated the sort and the direction unencoded. Both are encoded now, once, in every page link of the three list pages."""
+
+    SOURCES = ("_leases_results.html", "_devices_results.html", "_reservations_results.html")
+
+    @pytest.mark.parametrize("name", SOURCES)
+    def test_the_base_encodes_both_values(self, name):
+        text = pathlib.Path("templates", name).read_text(encoding="utf-8")
+        assert "'&sort=' ~ (sort|urlencode) ~ '&dir=' ~ (direction|urlencode)" in text, name
+        assert "'&sort=' ~ sort ~" not in text
+
+    @pytest.mark.parametrize("path", sorted(TestAnUnknownSortStillSaysWhichColumnIsSorted.DEFAULTS))
+    def test_a_hostile_value_reaches_no_page_link_raw(self, logged_in_client, three_rows, path):
+        """`sort=a b&c` is not a sort: the effective sort replaces it, so the page links carry the default column encoded once and never the raw text or a stray `&c`."""
+        html = logged_in_client.get(f"{path}?per_page=1&sort=a%20b%26c", headers=HX).data.decode()
+        links = parse(html).page_links
+        assert links, "per_page=1 over three rows must paginate"
+        for a in links:
+            assert "a b" not in a["href"] and "&c" not in a["href"] and "a%20b" not in a["href"], a["href"]
+            assert (
+                parse_qs(urlsplit(a["href"]).query)["sort"][0]
+                == TestAnUnknownSortStillSaysWhichColumnIsSorted.DEFAULTS[path][0]
+            )

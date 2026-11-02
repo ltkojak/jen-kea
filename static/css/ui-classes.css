@@ -230,7 +230,7 @@
 .u-fe7b49.u-fe7b49{margin-top:6px}
 .u-ff2ba4.u-ff2ba4{width:100%;min-height:90px}
 .u-ffd20f.u-ffd20f{align-self:flex-end}
-@media (max-width:768px){
+@media screen and (max-width:768px){
 .u-911b26.u-911b26{grid-template-columns:1fr}
 .u-fdc279.u-fdc279{grid-template-columns:1fr}
 }

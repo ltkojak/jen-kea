@@ -180,6 +180,18 @@ class TestNumber:
     def test_number(self, n, expected):
         assert reltime.number(n) == expected
 
+    def test_an_infinite_float_reads_as_zero_not_as_a_500(self):
+        """Q210 (AZ7, Y12): `int(float("inf"))` raises OverflowError, which neither coercion caught. No template can produce one today (every count is a COUNT(*), a len() or a settings integer), so this is a line."""
+        assert (
+            reltime.number(float("inf")) == "0"
+            and reltime.number(float("-inf")) == "0"
+            and reltime.number(float("nan")) == "0"
+        )
+
+    def test_plural_survives_an_infinite_float_too(self):
+        assert reltime.plural(float("inf"), "lease") == "0 leases"
+        assert reltime.plural(float("inf"), "entry", "entries") == "0 entries"
+
     def test_plural_groups_the_count_and_still_agrees(self):
         assert reltime.plural(12000, "lease") == "12,000 leases"
         assert reltime.plural(1000, "entry", "entries") == "1,000 entries"

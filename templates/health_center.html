@@ -30,7 +30,7 @@
                 hx-swap="innerHTML" hx-disabled-elt="this">Refresh</button>
     </div>
     <div id="health-results" hx-get="/health-center/data?partial=1" hx-target="#health-results"
-         hx-swap="innerHTML" hx-trigger="every 60s">
+         hx-swap="innerHTML" hx-trigger="every 60s" hx-headers='{"X-Jen-Poll": "1"}'>
         {% include "_health_checks.html" %}
     </div>
 </div>

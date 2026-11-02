@@ -514,11 +514,11 @@ class TestReservationsV6View:
         self._insert_host_with_reservations(
             db,
             subnet_id=1,
-            hostname="other",
+            hostname="zq-unlisted-v6-host",
             duid=b"\x00\x03\x00\x01\x99\x88\x77\x66\x55\xaa",
             reservations=[{"address": "2001:db8::2", "prefix_len": 128, "type": 0, "iaid": 1}],
         )
         resp = logged_in_client.get("/reservations?view=v6&search=findme")
         assert resp.status_code == 200
         assert b"findme" in resp.data
-        assert b"other" not in resp.data
+        assert b"zq-unlisted-v6-host" not in resp.data

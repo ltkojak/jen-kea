@@ -524,3 +524,23 @@ class TestSecondPassFixesThatNeedNoDatabase:
             ctx = nav.nav_context("dashboard.dashboard", role)
             labels = [i["label"] for g in ctx["sheet"] for i in g["items"]]
             assert ("Doctor" in labels) is expected, role
+
+
+class TestNoPlaceholderRidesInTheTarball:
+    """Q210 (AZ8 a, Y16): the second-pass fixup of beta.4 added a 28-byte `var/branding/logo.png` by mistake and the tarball shipped it - and the deploy can only add or overwrite, so it landed in every install's content
+    tree and stayed. Nothing under `var/` (the content directory: branding, icons, backups) is ever tracked; it is created and owned at run time."""
+
+    def test_nothing_under_var_is_tracked(self):
+        import subprocess
+
+        try:
+            inside = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True, timeout=30
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pytest.skip("git is not available")
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            pytest.skip("not a checkout (a release tarball has no .git)")
+        tracked = subprocess.run(["git", "ls-files", "var"], capture_output=True, text=True, timeout=30)
+        assert tracked.returncode == 0
+        assert tracked.stdout.split() == [], tracked.stdout

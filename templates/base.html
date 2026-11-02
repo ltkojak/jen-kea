@@ -61,7 +61,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     window.jenFetch = function(url, opts) {
         start();
         return fetch(url, opts).then(function(resp) {
-            // Q208 (AX2): every response to a signed-in person carries when the idle session ends; jenSessionWatch (defined at the foot of the page) re-arms from it
+            // Q208 (AX2): every response to a signed-in person carries when the idle session ends; jenSessionWatch (templates/_session_watch.html) re-arms from it - and a value is taken only with the server's clock beside it (Q210, AZ9 a)
             try { var ends = resp.headers.get('X-Jen-Session-Expires'); if (ends && window.jenSessionWatch) window.jenSessionWatch.ingest(ends, false, resp.headers.get('X-Jen-Session-Now')); } catch (e) { /* no header API */ }
             if (resp.status === 401 && !reauthing) {
                 resp.clone().json().then(function(d) {
@@ -244,7 +244,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            stylesheet `display: none`, which an inline `display: grid` would beat (the section stayed open and the page grew 400 px). */
         .ddns-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; align-items: start; }
         .ddns-pair > .card { margin-bottom: 0; }
-        @media (min-width: 1280px) {
+        @media screen and (min-width: 1280px) {
             .settings-cols { columns: 2; column-gap: var(--sp-5); }
             .settings-cols .card { break-inside: avoid; }
             .settings-cols .card--wide { column-span: all; }
@@ -329,7 +329,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            desktop becomes opt-in via .table-wrap--scroll — since sticky
            cannot work inside a real scroll container, that variant's
            header is static instead. */
-        @media (min-width: 769px) {
+        @media screen and (min-width: 769px) {
             .table-wrap { overflow-x: visible; }
             .table-wrap thead th { position: sticky; top: var(--sticky-top); z-index: 5; }
             .table-wrap thead th:empty { pointer-events: none; }
@@ -483,19 +483,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         #jen-session-overlay { z-index: 10001; }
         .jen-dialog p { font-size: 14px; line-height: 1.5; margin-bottom: 20px; }
         .jen-dialog-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-        /* AX8: a page prints without its chrome */
+        /* AX8: a page prints without its chrome - the print sheet itself is static/css/print.css (Q210, AZ2), linked below with media="print" */
         .print-only { display: none; }
-        @page { margin: 12mm; }
-        @media print {
-            .nav, .section-tabs-wrap, .filter-bar, .pagination, .btn, #jen-toasts, #jen-toasts-alert, .toast-stack, .alert-close, #kb-modal, #jen-confirm-overlay, #jen-prompt-overlay,
-            #jen-session-overlay, .pw-toggle, .tone-menu, .tabbar, .sheet, .sheet-backdrop, .skip-link, #jen-progress { display: none !important; }
-            .hide-mobile, .hide-tablet { display: table-cell !important; }
-            table.rowlist { width: 100%; font-size: 10pt; }
-            details > *:not(summary) { display: block; }
-            a[href]::after { content: none !important; }
-            .print-only { display: block; margin-bottom: 8px; font-size: 10pt; }
-            body { background: #fff; color: #000; }
-        }
 
         /* Utilization bar */
         .util-bar { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
@@ -630,7 +619,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .badge-stale { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
         .badge-duid { font-size: 10px; padding: 1px 6px; background: var(--surface2); color: var(--text-muted); }
         .filter-bar input.w-70 { width: 70px; min-width: 0; }
-        @media (min-width: 769px) { .nw-d { white-space: nowrap; } }
+        @media screen and (min-width: 769px) { .nw-d { white-space: nowrap; } }
         /* ── accordion rows (v5.53.0, Q60): the alert message templates ── */
         .al-tpl-tools { display: flex; gap: var(--sp-2); justify-content: flex-end; margin-bottom: var(--sp-2); }
         .al-tpl-list { display: flex; flex-direction: column; gap: var(--sp-2); }
@@ -855,7 +844,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .chip-row > *, .card-toc > a { flex: none; white-space: nowrap; }
         }
 
-        @media (min-width: 769px) {
+        @media screen and (min-width: 769px) {
             .tabbar, .sheet, .sheet-backdrop { display: none !important; }
         }
 
@@ -873,8 +862,9 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     <!-- v5.53.0 (Q60): the static inline styles, extracted (tools/extract_inline_styles.py). After the
          inline block so its equal-precedence rules win. -->
     <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
+    <link rel="stylesheet" href="/static/css/print.css?v={{ jen_version }}" media="print">
 </head>
-<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}" data-session-login="{{ session_login }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <a href="#main" class="skip-link">Skip to content</a>
 <div id="jen-progress"></div>
 {% include "_icon_sprite.html" %}
@@ -1047,9 +1037,10 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         <a href="/settings/kea#kea-ssh">Settings &rarr; Kea &rarr; SSH</a>.
     </div>
     {% endif %}
-    {# Q208 (AX4): an error that names ONE field is printed as an alert carrying data-field; the script at the foot of the page moves it under its input, and without script it IS a flash. They come first. #}
-    {% for field, message in (take_field_errors() if take_field_errors is defined else []) %}
-    <div class="alert alert-error alert-flash" role="alert" data-field="{{ field }}"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+    {# Q208 (AX4): an error that names ONE field is printed as an alert carrying data-field; the script at the foot of the page moves it under its input, and without script it IS a flash. They come first.
+       Q210 (AZ5): data-form is the path of the page the form was on ("" when unknown); the script moves the error only on that page. #}
+    {% for field, message, form_path in (take_field_errors() if take_field_errors is defined else []) %}
+    <div class="alert alert-error alert-flash" role="alert" data-field="{{ field }}" data-form="{{ form_path }}"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
     {% endfor %}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -1881,17 +1872,7 @@ function sortTable(table, col, th) {
         </div>
     </div>
 </div>
-<div id="jen-session-overlay" class="jen-dialog-overlay" role="alertdialog" aria-modal="true" aria-labelledby="jen-session-title" aria-describedby="jen-session-text" hidden>
-    <div class="jen-dialog">
-        <div id="jen-session-title" class="jen-dialog-title">Still there?</div>
-        <p id="jen-session-text">You will be signed out in <span id="jen-session-left">2:00</span> for inactivity.</p>
-        <p id="jen-session-failed" class="field-note" role="alert" hidden></p>
-        <div class="jen-dialog-actions">
-            <button type="button" id="jen-session-out" class="btn btn-secondary">Sign out now</button>
-            <button type="button" id="jen-session-stay" class="btn btn-primary">Stay signed in</button>
-        </div>
-    </div>
-</div>
+{% include "_session_watch.html" %}
 <div class="toast-stack">
     <div id="jen-toasts" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
     <div id="jen-toasts-alert" class="toast-region" role="alert" aria-atomic="false"></div>
@@ -2190,8 +2171,8 @@ function sortTable(table, col, th) {
 })();
 </script>
 <script nonce="{{ csp_nonce }}">
-// Q208 - the third round of page behavior, in one block: the sort and page links as swaps (AX1), the idle-session notice (AX2), the unsaved-changes warning (AX3) and a field's
-// own error (AX4). The password toggle (AX7) is _password_toggle.html, included below.
+// Q208 - the third round of page behavior, in one block: the sort and page links as swaps (AX1), the unsaved-changes warning (AX3) and a field's own error (AX4). The idle-session
+// notice (AX2) is _session_watch.html and the password toggle (AX7) is _password_toggle.html, both included from this file.
 (function() {
     // AX1 - a header or page link that carries hx-get keeps its href for a new tab: a click with Ctrl, Cmd, Shift or the middle button is the browser's, and htmx never sees it.
     document.addEventListener('click', function(e) {
@@ -2199,133 +2180,6 @@ function sortTable(table, col, th) {
         var a = e.target.closest ? e.target.closest('a[hx-get]') : null;
         if (a) e.stopImmediatePropagation();
     }, true);
-
-    // AX2 - jenSessionWatch. The server says when the idle session ends (X-Jen-Session-Expires on every response, data-session-expires on the body for the first paint).
-    // Two minutes before, a dialog offers "Stay signed in" (POST /session/touch); at the deadline the page goes to the sign-in page itself and comes back to where it was.
-    // A deadline only ever moves forward here: a late reply that carries an older one is ignored, and a touch from a second tab arrives through the storage event.
-    var SESSION_KEY = 'jen-session-expires';
-    var CSRF = {{ csrf_token()|tojson }};
-    var expires = 0, lead = 120, warnTimer = null, tickTimer = null, opener = null, skew = 0, leaving = false;
-    var overlay = document.getElementById('jen-session-overlay');
-    var leftEl = document.getElementById('jen-session-left');
-    var stayBtn = document.getElementById('jen-session-stay');
-    var outBtn = document.getElementById('jen-session-out');
-    // time is counted against the SERVER's clock: skew is (the server's now) minus (this browser's now) as of the last reply, so a browser whose clock is wrong changes nothing
-    function nowS() { return Date.now() / 1000 + skew; }
-    function dialogOpen() { return !!overlay && !overlay.hidden; }
-    function clockText(sec) { var m = Math.floor(sec / 60), s = sec % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
-    function closeDialog() {
-        if (!dialogOpen()) return;
-        overlay.hidden = true;
-        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
-        document.removeEventListener('keydown', onKey, true);
-        if (opener && opener.focus) opener.focus();
-        opener = null;
-    }
-    function goToLogin() {
-        if (leaving) return;
-        leaving = true;
-        if (warnTimer) { clearTimeout(warnTimer); warnTimer = null; }
-        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
-        window.jenLeaving = true;
-        window.location.assign('/login?next=' + encodeURIComponent(window.location.pathname + window.location.search));
-    }
-    function signOut() {
-        window.jenLeaving = true;
-        var f = document.createElement('form');
-        f.method = 'POST';
-        f.action = '/logout';
-        var i = document.createElement('input');
-        i.type = 'hidden'; i.name = 'csrf_token'; i.value = CSRF;
-        f.appendChild(i);
-        document.body.appendChild(f);
-        f.submit();
-    }
-    function tick() {
-        var left = Math.ceil(expires - nowS());
-        if (left <= 0) { goToLogin(); return; }
-        if (leftEl) leftEl.textContent = clockText(left);
-    }
-    function onKey(e) {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); stay(); return; }
-        if (e.key !== 'Tab') return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        (document.activeElement === stayBtn ? outBtn : stayBtn).focus();
-    }
-    function openDialog() {
-        if (!overlay || dialogOpen()) return;
-        opener = document.activeElement;
-        overlay.hidden = false;
-        tick();
-        tickTimer = setInterval(tick, 1000);
-        document.addEventListener('keydown', onKey, true);
-        stayBtn.focus();
-    }
-    function check() {
-        warnTimer = null;
-        if (!expires) return;
-        var left = expires - nowS();
-        if (left <= 0) { goToLogin(); return; }
-        if (left <= lead) { openDialog(); return; }
-        arm();
-    }
-    function arm() {
-        if (warnTimer) { clearTimeout(warnTimer); warnTimer = null; }
-        if (!expires) return;
-        warnTimer = setTimeout(check, Math.max(0, Math.min((expires - lead) * 1000 - Date.now(), 2147000000)));
-    }
-    function ingest(value, fromStorage, serverNow) {
-        var n = parseInt(value, 10);
-        var sn = parseInt(serverNow, 10);
-        if (sn > 0) skew = sn - Date.now() / 1000;
-        if (!n || n <= 0 || n < expires) return;
-        if (n > expires) {
-            expires = n;
-            var span = expires - nowS();
-            lead = span > 240 ? 120 : Math.max(5, Math.floor(span / 2));
-            if (!fromStorage) { try { localStorage.setItem(SESSION_KEY, String(expires)); } catch (err) { /* private mode: each tab learns from its own requests */ } }
-        }
-        if (expires - nowS() > lead) closeDialog();
-        arm();
-    }
-    // only a REDIRECT means the session has ended (the middleware sent the request to the sign-in page); a refusal or a failure of the touch itself - an expired form token, a proxy's 502, a network
-            // error - leaves the dialog open and says so, because the session may well be alive and the person can try again
-    var failedEl = document.getElementById('jen-session-failed');
-    function stayFailed(text) {
-        stayBtn.disabled = false;
-        if (failedEl) { failedEl.textContent = text; failedEl.hidden = false; }
-    }
-    function stay() {
-        stayBtn.disabled = true;
-        if (failedEl) failedEl.hidden = true;
-        window.jenFetch('/session/touch', { method: 'POST', headers: { 'X-CSRFToken': CSRF }, credentials: 'same-origin' }).then(function(r) {
-            if (r.redirected) { goToLogin(); return null; }
-            if (r.status === 403) { stayFailed('Could not renew the session - reload the page and try again.'); return null; }
-            if (!r.ok || !/json/.test(r.headers.get('content-type') || '')) { stayFailed('Could not renew the session - try again.'); return null; }
-            return r.json();
-        }).then(function(d) {
-            if (!d) return;
-            stayBtn.disabled = false;
-            if (d.ok && d.expires_at) { closeDialog(); ingest(d.expires_at, false, d.now); }
-            else if (d.ok) { closeDialog(); expires = 0; arm(); }
-            else stayFailed('Could not renew the session - try again.');
-        }).catch(function() {
-            stayFailed('Could not reach Jen - try again.');
-        });
-    }
-    if (stayBtn) stayBtn.addEventListener('click', stay);
-    if (outBtn) outBtn.addEventListener('click', signOut);
-    window.jenSessionWatch = { ingest: ingest, expires: function() { return expires; } };
-    document.addEventListener('htmx:afterRequest', function(e) {
-        var x = e.detail && e.detail.xhr;
-        var v = x && x.getResponseHeader ? x.getResponseHeader('X-Jen-Session-Expires') : null;
-        if (v) ingest(v, false, x.getResponseHeader('X-Jen-Session-Now'));
-    });
-    window.addEventListener('storage', function(e) { if (e.key === SESSION_KEY && e.newValue) ingest(e.newValue, true); });
-    document.addEventListener('visibilitychange', function() { if (!document.hidden && expires) check(); });
-    var firstDeadline = document.body.getAttribute('data-session-expires');
-    if (firstDeadline) ingest(firstDeadline, false, document.body.getAttribute('data-session-now'));
 
     // AX3 - a half-edited form warns before it is left. Only forms marked data-guard-unsaved; the snapshot is the form's own data at load (and again at window load, for a form nobody
     // has touched yet, because a browser may fill fields after DOMContentLoaded). A form that is being submitted (jenBeginFullPageSubmit) and the idle-session redirect are not blocked.
@@ -2363,7 +2217,13 @@ function sortTable(table, col, th) {
     document.addEventListener('input', touched, true);
     document.addEventListener('change', touched, true);
     document.addEventListener('DOMContentLoaded', function() { guardInit(document); });
-    document.addEventListener('htmx:afterSettle', function(e) { guardInit(e.detail && e.detail.elt ? e.detail.elt : document); });
+    document.addEventListener('htmx:afterSettle', function(e) {
+        var el = e.detail && e.detail.elt ? e.detail.elt : document;
+        guardInit(el);
+        // a swap INSIDE a guarded form nobody has typed in: what the server put there is the form's own state, not an edit (Q210, AZ6 c)
+        var form = el.closest ? el.closest('form[data-guard-unsaved]') : null;
+        if (form && !form.hasAttribute('data-touched')) form.setAttribute('data-initial', snap(form));
+    });
     window.addEventListener('load', function() { guarded(document).forEach(function(f) { if (!f.hasAttribute('data-touched')) f.setAttribute('data-initial', snap(f)); }); });
 
     // AX4 - an error that names one field is moved under it. The server prints each as an alert with data-field (so it is an ordinary flash without script, and stays one when the page has
@@ -2377,6 +2237,9 @@ function sortTable(table, col, th) {
     document.addEventListener('DOMContentLoaded', function() {
         var firstInput = null;
         document.querySelectorAll('.alert[data-field]').forEach(function(alertEl) {
+            // an error raised for ONE form belongs under that form's input: on any page but its own it stays the plain flash it already is (Q210, AZ5 a)
+            var formPath = alertEl.getAttribute('data-form');
+            if (formPath && formPath !== window.location.pathname) return;
             var input = document.getElementById('f-' + (alertEl.getAttribute('data-field') || ''));
             if (!input || !showing(input)) return;
             var textEl = alertEl.querySelector('.alert-text');

@@ -50,7 +50,7 @@
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% set base = '&subnet=' ~ (subnet_filter|urlencode) ~ '&search=' ~ (search|urlencode) ~ '&sort=' ~ sort ~ '&dir=' ~ direction ~ '&per_page=' ~ per_page ~ '&status=' ~ (status_filter|urlencode) %}
+    {% set base = '&subnet=' ~ (subnet_filter|urlencode) ~ '&search=' ~ (search|urlencode) ~ '&sort=' ~ (sort|urlencode) ~ '&dir=' ~ (direction|urlencode) ~ '&per_page=' ~ per_page ~ '&status=' ~ (status_filter|urlencode) %}
     {% if page > 1 %}<a href="?page={{ page-1 }}{{ base }}" hx-get="?page={{ page-1 }}{{ base }}" hx-target="#reservations-results" hx-swap="innerHTML show:top" hx-push-url="true">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>

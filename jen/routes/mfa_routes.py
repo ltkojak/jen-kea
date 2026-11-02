@@ -20,6 +20,7 @@ import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
 import jen.services.oidc as __oidc
 import jen.services.passkeys as __passkeys
+import jen.services.session_timeout as __session_timeout
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
@@ -64,6 +65,9 @@ def _complete_pending_login(user):
     now = datetime.now(timezone.utc).isoformat()
     session["last_active"] = now
     session["auth_at"] = now  # password + first factor just verified
+    session["login_id"] = (
+        __session_timeout.new_login_id()
+    )  # Q210, AZ9 b: one label per sign-in (the browser's cross-tab key)
     __user.audit("LOGIN", "auth", f"User {user.username} logged in (after MFA enrollment)")
 
 
@@ -173,6 +177,9 @@ def _establish_second_factor_session(user):
     _now = datetime.now(timezone.utc).isoformat()
     session["last_active"] = _now
     session["auth_at"] = _now
+    session["login_id"] = (
+        __session_timeout.new_login_id()
+    )  # Q210, AZ9 b: one label per sign-in (the browser's cross-tab key)
     return next_url
 
 

@@ -544,7 +544,7 @@ At the top of the menu, **Install default (\<name\>)** switches back to whatever
 
 ## Staying signed in, unsaved edits, passwords and printing
 
-**The session notice.** Jen signs you out after a period of inactivity (set by an administrator under Settings → Access & Security, or per user). Two minutes before that, a dialog says "You will be signed out in 1:59 for inactivity." — choose **Stay signed in** to carry on, or **Sign out now**. If another tab of Jen keeps the session alive, the dialog closes by itself. If nobody answers, Jen takes you to the sign-in page and, after you sign in, back to the page you were on.
+**The session notice.** Jen signs you out after a period of inactivity (set by an administrator under Settings → Access & Security, or per user). Two minutes before that, a dialog says "You will be signed out in 1:59 for inactivity." — choose **Stay signed in** to carry on, or **Sign out now**. The countdown follows the server's clock, not your computer's, so a computer whose clock is wrong sees the dialog at the right moment; and a page that refreshes itself (Health Center, HA maintenance, a Trace watch) does not count as activity, so leaving one open does not keep you signed in. If another tab of Jen keeps the session alive, the dialog closes by itself. If nobody answers, Jen takes you to the sign-in page and, after you sign in, back to the page you were on.
 
 **Unsaved edits.** On the long forms — Settings → Kea, Alerts, Access & Security, the custom palette under Appearance, Databases, DDNS naming, a DHCP class, Add and Edit subnet, Add reservation and the Kea config author — your browser asks before you leave the page with changes you have not saved. Saving never asks, and a form you have not changed never asks.
 

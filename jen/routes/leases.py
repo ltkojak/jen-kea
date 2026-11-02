@@ -57,7 +57,9 @@ def leases():
         "obtained": "(l.expire - INTERVAL l.valid_lifetime SECOND)",
         "expires": "l.expire",
     }
-    sort_col = sort_map.get(sort, "l.expire")
+    # Q210 (AZ6 a): the EFFECTIVE sort reaches the template, so ?sort=bogus (or an empty or mistyped one) marks the default column the rows are really ordered by
+    sort = sort if sort in sort_map else "expires"
+    sort_col = sort_map[sort]
     # Pagination — default is "all" (no limit). User can opt-in to per-page, and the choice is remembered per browser (Q206, AV5: view_prefs, the `jen_view` cookie).
     per_page_param, remembered = __view_prefs.resolve("leases", request.args, request.cookies)
     try:

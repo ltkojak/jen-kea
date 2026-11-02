@@ -229,6 +229,7 @@
             50% { opacity: 0.8; transform: scale(1.3); }
         }
     </style>
+    <link rel="stylesheet" href="/static/css/print.css?v={{ jen_version }}" media="print">
 </head>
 <body>
     <canvas class="bg-canvas" id="bgCanvas"></canvas>
@@ -250,6 +251,10 @@
 
             <div class="divider"></div>
 
+            {# Q210 (AZ5 a): a pending field error is consumed by the next FULL page whatever it is; this page has no field to put it under, so it prints as a plain flash #}
+            {% for field, message, form_path in (take_field_errors() if take_field_errors is defined else []) %}
+            <div class="alert">{{ message }}</div>
+            {% endfor %}
             {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
             {% for category, message in messages %}

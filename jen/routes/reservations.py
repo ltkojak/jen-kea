@@ -95,7 +95,9 @@ def reservations():
         "mac": "h.dhcp_identifier",
         "subnet": "h.dhcp4_subnet_id",
     }
-    sort_col = sort_map.get(sort, "h.ipv4_address")
+    # Q210 (AZ6 a): the EFFECTIVE sort reaches the template, so ?sort=bogus (or an empty or mistyped one) marks the default column the rows are really ordered by
+    sort = sort if sort in sort_map else "ip"
+    sort_col = sort_map[sort]
     # Pagination — default is "all". User can opt-in via per_page param, and the choice is remembered per browser (Q206, AV5: view_prefs, the `jen_view` cookie).
     per_page_param, remembered = __view_prefs.resolve("reservations", request.args, request.cookies)
     try:

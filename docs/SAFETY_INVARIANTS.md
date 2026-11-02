@@ -875,28 +875,42 @@ before the replacement), and the kind chips count only what is open now.
 ## The browser surface (Q208)
 
 ### SESSION-001 - The idle deadline is one function, and the only request that moves it on purpose is a signed-in, CSRF-checked POST
-**Rule.** `session_timeout.deadline(session, user)` is the one definition of when an idle session ends: the timeout middleware, the `X-Jen-Session-Expires` header, the body attribute and `POST /session/touch` all read it. The touch
-endpoint is `@login_required`, POST only and CSRF-checked like every POST, writes `session["last_active"]` and nothing else, and is never reachable by an anonymous or cross-site request; a missing, unreadable or naive `last_active` is
-None, never "expired". An expired GET is sent to the sign-in page with `next=` only for an ordinary page - never for a POST, the sign-in and sign-out pages, `/api/`, `/metrics`, `/static/` or the session endpoints - and the sign-in page's
+**Rule.** `last_active` moves on every request a signed-in person's browser makes EXCEPT `/api/`, `/metrics`, `/static/`, `/session/touch` (its own writer) and a request marked `X-Jen-Poll: 1` (a page that refreshes itself: Health Center, HA
+maintenance, a Trace watch - `session_timeout.extends()` is the one definition, the bootstrap branch included); the one request that moves it ON PURPOSE is a CSRF-checked POST to `/session/touch`. The poll header can only STOP an extension, never
+cause one, so a forged one is the forger's own loss and it is not a CSRF surface. `session_timeout.deadline(session, user)` is the one definition of when an idle session ends: the timeout middleware, the `X-Jen-Session-Expires` header
+(an epoch second, or the word `off` when the person's timeout is off - never an absence - always beside `X-Jen-Session-Now`), the body attributes and `POST /session/touch` all read it. The touch
+endpoint is `@login_required`, POST only and CSRF-checked like every POST, writes `session["last_active"]` and nothing else, is open to a person held at the forced password change, and is never reachable by an anonymous or cross-site request; a
+missing, unreadable, naive or unrepresentable `last_active` is None, never "expired", and a timeout setting that is not a whole number of minutes from 0 to 1440 reads as 60, never as a 500. The browser takes a deadline only with the server's clock
+beside it, ignores a reply older than one it has taken, counts on a monotonic clock, and keeps its cross-tab value under a key that belongs to one sign-in (`session["login_id"]`, a label and not a secret). An expired GET is sent to the sign-in page with `next=` only for an ordinary page - never for a POST, the sign-in and sign-out pages, `/api/`, `/metrics`, `/static/` or the session endpoints - and the sign-in page's
 `_safe_next` is the only parser of it.
-**Established.** Q208 (AX2).
-**Enforced at.** `jen/services/session_timeout.py` (`deadline`, `login_redirect_location`), the `check_session_timeout` middleware in `jen/__init__.py`, and `jen/routes/auth.py::session_touch`.
+**Established.** Q208 (AX2); Q210 (AZ1-AZ4, AZ9: the poll header, `off`, the server's clock, the one coercion).
+**Enforced at.** `jen/services/session_timeout.py` (`deadline`, `extends`, `announcement`, `login_redirect_location`), the `check_session_timeout` middleware in `jen/__init__.py`, `jen/routes/auth.py::session_touch`, and `templates/_session_watch.html`.
 **Tests.**
 - `tests/test_session_notice.py::TestDeadline`
 - `tests/test_session_notice.py::TestTouch`
 - `tests/test_session_notice.py::TestTheRedirectCarriesNext`
 - `tests/test_session_notice.py::TestTheReturnAddress`
 - `tests/test_session_notice.py::TestMiddlewareUnchanged`
+- `tests/test_session_notice.py::TestAPollNeverExtends`
+- `tests/test_session_notice.py::TestTheBootstrapSkipsTheSamePaths`
+- `tests/test_session_notice.py::TestTheSettingIsReadOnce`
+- `tests/test_session_notice.py::TestEveryDeadlineCarriesNow`
+- `tests/test_session_notice.py::TestTheLoginIdIsPerLogin`
+- `tests/test_session_notice.py::TestTheForcedChangeScreenHasTheNotice`
 
 ### FIELD-001 - A field error's name is validated before it can reach an id lookup, and its message is only ever escaped text
 **Rule.** `forms.flash_field(field, message)` stores a field error only when `field` fully matches `[a-z0-9_\-\[\]]{1,64}` (`fullmatch`, so a trailing newline is not a name); any other name, and any overflow past 20, is an ordinary
-flash. The message is cut to 300 characters, reaches the page through `{{ message }}` (autoescaped) and reaches the DOM through `textContent`; the script finds the input with `getElementById('f-' + name)`, never a selector built from the name.
-**Established.** Q208 (AX4; the name test written for it found that the entry's own `^...$` accepts a trailing newline, so the check is `fullmatch`).
+flash. The serialized list may not pass 2,000 bytes whatever its count (it travels in the 4,093-byte session cookie). Each item carries the path of the page its form was on, and the script moves an error under an input only on that
+page (an item with no path, which beta.4 wrote, may land on any page). A full page that has no such input (the sign-in page, the forced password change, the second factor) prints a pending error as a plain flash, so one never outlives one
+full page. The message is cut to 300 characters, reaches the page through `{{ message }}` (autoescaped) and reaches the DOM through `textContent`; the script finds the input with `getElementById('f-' + name)`, never a selector built from the name.
+**Established.** Q208 (AX4; the name test written for it found that the entry's own `^...$` accepts a trailing newline, so the check is `fullmatch`); Q210 (AZ5: the byte budget and the form path).
 **Enforced at.** `jen/services/forms.py` (`flash_field`, `take_field_errors`) and the flash block of `templates/base.html`.
 **Tests.**
 - `tests/test_field_errors.py::TestFlashField`
 - `tests/test_field_errors.py::TestTheMarkupEscapes`
 - `tests/test_field_errors.py::TestAFieldNameThatIsNotAFieldNameIsAFlash`
+- `tests/test_field_errors.py::TestAnErrorLandsOnItsOwnForm`
+- `tests/test_field_errors.py::TestTheByteBudget`
 
 ### MARK-001 - A search mark is applied to escaped text, so the only markup in the output is the mark
 **Rule.** `text.mark_match(text, q)` escapes every piece of `text` and `q` and wraps matches in `<mark>`; a client-supplied hostname that is itself markup is printed as text with or without a match, the marks are always balanced, and
