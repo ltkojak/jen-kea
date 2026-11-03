@@ -506,6 +506,33 @@ def _compat_server():
     }
 
 
+def _section_of(cfg):
+    return cfg.get("Dhcp4", cfg)
+
+
+def _first_difference(running, candidate, path=""):
+    """Where a candidate Jen sent is NOT carried by what the daemon runs (the first path): the fact a failed row records instead of a guess."""
+    if isinstance(candidate, dict):
+        if not isinstance(running, dict):
+            return f"{path}: not an object"
+        for key, value in candidate.items():
+            if key not in running:
+                return f"{path}/{key}: missing"
+            found = _first_difference(running[key], value, f"{path}/{key}")
+            if found:
+                return found
+        return None
+    if isinstance(candidate, list):
+        if not isinstance(running, list) or len(running) != len(candidate):
+            return f"{path}: list of {len(running) if isinstance(running, list) else '?'} vs {len(candidate)}"
+        for index, (r, c) in enumerate(zip(running, candidate, strict=True)):
+            found = _first_difference(r, c, f"{path}[{index}]")
+            if found:
+                return found
+        return None
+    return None if running == candidate else f"{path}: {running!r} vs {candidate!r}"
+
+
 def test_09_jens_own_transport_round_trip(facts, monkeypatch):
     """Q212 (BB1): `kea_api_config.apply` against the REAL daemon with the product's own `add_subnet4`, then `revert`, then the pending record: Jen "dies" between `config-set` and `config-write` and the next
     read settles the change by content."""
@@ -546,6 +573,7 @@ def test_09_jens_own_transport_round_trip(facts, monkeypatch):
     notes = []
     settled_cfg, settled_digest = api.read(server, "dhcp4", capture=False, notes=notes)
     facts["transport_pending_notes"] = notes
+    facts["transport_pending_first_difference"] = _first_difference(_section_of(settled_cfg), _section_of(candidate))
     facts["transport_pending_finished_the_write"] = 3 in _subnet_ids(_file())
     facts["transport_pending_row_after"] = [
         (r["source"], r["hash_kind"]) for r in store.rows if r["id"] == store.rows[-1]["id"]

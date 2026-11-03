@@ -113,6 +113,9 @@ def _carries(running: object, candidate: object) -> bool:
             and len(running) == len(candidate)
             and all(_carries(r, c) for r, c in zip(running, candidate, strict=True))
         )
+    if isinstance(running, str) and isinstance(candidate, str):
+        # Kea renders a pool "a - b" as "a-b": spacing is formatting, never a value (compat run 41712142556)
+        return running.replace(" ", "") == candidate.replace(" ", "")
     return running == candidate
 
 
