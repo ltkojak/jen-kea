@@ -3829,8 +3829,8 @@ def test_23_a_change_set_over_the_api_and_the_file_undoes_the_api_server_when_th
     Then kea-a's file stops being writable (the stand-in is the file replaced by a directory: a container's root writes through a read-only mode): `config-write` is refused, the `config-set` is undone, the refusal
     is remembered, and the next change to kea-a is needs-hands before any read."""
     before_b = st.kea_command("kea-b", "config-hash-get")["arguments"]["hash"]
-    _objs, proc = st.jen_py(API_AND_FILE_RESTART_FAILS, check=False)
-    result = emitted(proc.stdout)
+    objs, proc = st.jen_py(API_AND_FILE_RESTART_FAILS, check=False)
+    result = emitted(objs)
     assert result is not None and "raised" not in result, (
         f"no usable result from the change set:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     )
@@ -3852,10 +3852,10 @@ def test_23_a_change_set_over_the_api_and_the_file_undoes_the_api_server_when_th
     # the second half: kea-a cannot write its file
     st.sh(st.KEA_A, f"mv {st.KEA_CONF} {st.KEA_CONF}.orig && mkdir {st.KEA_CONF}")
     try:
-        _objs, out = st.jen_py(API_WRITE_REFUSED, check=False)
+        objs2, out = st.jen_py(API_WRITE_REFUSED, check=False)
     finally:
         st.sh(st.KEA_A, f"rmdir {st.KEA_CONF}; mv {st.KEA_CONF}.orig {st.KEA_CONF}", check=False)
-    second_half = emitted(out.stdout)
+    second_half = emitted(objs2)
     assert second_half is not None and "raised" not in second_half, (
         f"no usable result:\n{out.stdout[-1500:]}\n{out.stderr[-1500:]}"
     )
