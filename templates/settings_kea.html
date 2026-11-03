@@ -78,7 +78,7 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. {% if current_user.role == 'superadmin' %}<form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form>{% else %}A superadmin restarts Jen.{% endif %}</div>
 {% endif %}
 
-{% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA'), ('kea-ddns', 'DDNS')] %}
+{% set toc = [('kea-api', 'Control Plane'), ('kea-config-transport', 'How changes reach each server'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA'), ('kea-ddns', 'DDNS')] %}
 {% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
 {% include '_card_toc.html' %}
 
