@@ -27,6 +27,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 @pytest.fixture(autouse=True)
 def _quiet(monkeypatch):
     monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: "")
+    monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
     monkeypatch.setattr(cs, "record_outcome", lambda *a, **k: None)
     monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
     monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.4)
@@ -35,6 +36,11 @@ def _quiet(monkeypatch):
 @pytest.fixture
 def store(monkeypatch):
     return world.install_store(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def probes(monkeypatch):
+    return world.install_probes(monkeypatch)
 
 
 @pytest.fixture
@@ -181,7 +187,9 @@ class TestMixedTargets:
         result = cs.apply_change("dhcp4", lifetime(7200), "x", servers=[api_server(daemon), FILE_SERVER])
         assert result.last_code == "restart-failed"
         assert daemon.running == before and daemon.file == before  # put back live AND in the file
-        assert [r["source"] for r in store.rows if r["source"] == "rollback" and r["hash_kind"] == "kea"] == ["rollback"]
+        assert [r["source"] for r in store.rows if r["source"] == "rollback" and r["hash_kind"] == "kea"] == [
+            "rollback"
+        ]
 
     def test_the_api_targets_write_failure_reverts_the_file_target(self, daemon, helper, store):
         daemon.write_fails = "Unable to open file /etc/kea/kea-dhcp4.conf for writing"

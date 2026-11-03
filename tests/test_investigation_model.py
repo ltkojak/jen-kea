@@ -42,9 +42,11 @@ from jen import extensions
 from jen.config import AppConfig, ConfigChangeRefused, app_config
 from jen.services import explain_context as ctx
 from jen.services import investigation_logging as inv
+from jen.services import kea_api_config as _api
 from jen.services import kea_changeset as _changeset_mod
 from jen.services import kea_config_edit as ed
 from jen.services import kea_host
+from tests import _kea_api_world as _api_world
 from tests._investigation_world import FUTURE, NOW, FakeKea, _cfg
 
 pytest_plugins = ("tests._investigation_world",)
@@ -120,6 +122,9 @@ class Walk:
         "idle": 3,
     }
 
+    #: Q212: how often (of the steps Jen is running) the step is followed by a write to a server over the daemon's own API.
+    API_WRITE_SHARE = float(os.environ.get("JEN_MODEL_API_SHARE", "0.10"))  # 0 takes the API write out of every walk
+
     #: Q165: the HostTimer actor. False is the mutation check of I10 - the walk must go red without the host's timer.
     HOST_TIMER = True
 
@@ -129,6 +134,8 @@ class Walk:
             jen_dead_from  # from this step on Jen does NOTHING (no operation, no sweep): only the hosts' timers run
         )
         self.rng = random.Random(seed)
+        # Q212: the API write is an extra step with a random source of its OWN, so the main stream - and every seed this suite pins - draws exactly what it drew before
+        self.api_rng = random.Random(f"api-{seed}")
         self.world, self.tmp_path = world, tmp_path
         self.log: list[str] = []
         self.step_no = 0
@@ -222,6 +229,10 @@ class Walk:
         self.sync()
         # the wire: every Kea call is answered by the PHYSICAL fake at the address the server names
         monkeypatch.setattr(inv._kea, "kea_command", self._kea_command)
+        _api_world.install_store(
+            monkeypatch
+        )  # Q212: the module records its revisions (a pending row, a `kea` row) in memory
+        _api_world.install_probes(monkeypatch)  # ... and reads the stored probe: every server's operator has consented
         monkeypatch.setattr(kea_host, "service_action", self._service_action)
         monkeypatch.setattr(kea_host, "read_config_versioned", self._read_config)
         monkeypatch.setattr(kea_host, "helper_call", self._helper_call)
@@ -284,11 +295,12 @@ class Walk:
     def ssh_fake(self, server):
         return self.physical.get((server or {}).get("ssh_host"))
 
-    def _kea_command(self, command, server=None, **kw):
+    def _kea_command(self, command, *args, server=None, **kw):
         fake = self.api_fake(server)
         if fake is None:
-            return {"result": 1, "text": "no route to host"}
-        reply = fake.kea_command(command)
+            return {"result": 1, "text": "no route to host", "transport": "connect"}
+        arguments = kw.get("arguments") if kw.get("arguments") is not None else (args[1] if len(args) > 1 else None)
+        reply = fake.kea_command(command, arguments=arguments)
         if command == "config-get" and reply.get("result") == 0:
             self.answered_get.add(fake.host)
         return reply
@@ -304,7 +316,7 @@ class Walk:
             fake._restart_failed = False
         return out
 
-    def _read_config(self, server, service, *, errors=None):
+    def _read_config(self, server, service, *, errors=None, **kw):
         fake = self.ssh_fake(server)
         if fake is None:
             if errors is not None:
@@ -476,6 +488,8 @@ class Walk:
             }
             try:
                 getattr(self, "op_" + self.op)()
+                if self.op != "idle" and self.api_rng.random() < self.API_WRITE_SHARE:
+                    self.op_api_write()
             except InvariantViolated:
                 raise
             except Exception as e:  # an operation must never raise: it is the page's route and the scheduler's job
@@ -1164,6 +1178,71 @@ class Walk:
         if refused and self.applies:
             self.fail("I8", "a refused write reached the wire")
 
+    def op_api_write(self):
+        """Q212 (BB9 d): a change written to a server over the daemon's OWN API (`kea_api_config.apply`) - the second writer of a Kea configuration. The same refusal the file path owes (INV-005) is
+        owed here, and the fault is the one only this path has: the HOST's restore landing between Jen's `config-hash-get` and its `config-set` (Kea has no compare-and-set), so a stale candidate that
+        still carries the marker would put DEBUG 55 back over a resolved session. `restore_window` keeps Jen out of the window and the host keeps verifying after a restore (build 19); I10 and I11
+        are checked after the step like any other."""
+        server = self._pick_server()
+        if server is None:
+            return
+        fake = self.api_fake(server)
+        if fake is None or fake.api_silent or fake.list_unreachable or fake.silent_gets or fake.second is not None:
+            return
+        api_server = {**server, "config_transport": "api"}
+        flavor = self.api_rng.choice(
+            os.environ.get(
+                "JEN_MODEL_API_FLAVORS", "without_marker,keep_marker,old_config,landing_over_the_restore"
+            ).split(",")
+        )  # (the env knob narrows a replay to one flavor)
+        fake.include_hash = True
+        try:
+            cfg, digest, _why = _api._get(api_server, "dhcp4")
+            if cfg is None:
+                self.say(f"api_write on {server['id']}: the daemon did not give its configuration")
+                return
+            if flavor == "without_marker":
+                candidate, _code = ed.clear_investigation_logging(copy.deepcopy(cfg))
+            elif flavor == "old_config":
+                candidate = copy.deepcopy(self.original[fake.host])
+            else:
+                candidate = copy.deepcopy(cfg)
+                candidate["Dhcp4"]["subnet4"] = [{"id": self.api_rng.randint(1, 9), "subnet": "10.1.0.0/24"}]
+            if flavor == "landing_over_the_restore":
+                # the host's timer fires (when it is due) at the moment Jen's `config-set` arrives
+                fake.before_command["config-set"] = lambda f: self._host_timers_for(f)
+            state, everything = self.raw_state()
+            sid_here = str(server["id"])
+            owed = [
+                e
+                for k, e in everything.items()
+                if (k == sid_here and not e.get("removed"))
+                or (k != sid_here and e.get("ssh_host") == server.get("ssh_host") and e.get("ssh_host"))
+            ]
+            entry = next((e for e in owed if e.get("file", "debug") == "debug"), None)
+            erases = bool(entry and not has_marker(candidate))
+            with _changeset_mod.change_lock():
+                res = _api.apply(api_server, "dhcp4", candidate, digest, "walk", before_cfg=cfg)
+            self.say(f"api_write {flavor} on {server['id']}: code={res.get('code')} erases_marker={erases}")
+            if res.get("ok") and (erases or state != "ok"):
+                self.fail(
+                    "I8",
+                    f"an API write ({flavor}) to server {server['id']} that erases the marker (or was made while the record is unreadable) was allowed",
+                )
+        finally:
+            fake.include_hash = False
+            fake.before_command.pop("config-set", None)
+
+    def _host_timers_for(self, fake):
+        """The host's restore, landing NOW - between Jen's `config-hash-get` and its `config-set`: an armed state whose deadline has passed and which the host has not yet restored (its next tick is
+        still ahead of the clock) is restored at the moment Jen's command arrives. Needs nothing of Jen."""
+        state = fake.helper_state
+        if not self.HOST_TIMER or not fake.timer_running or state is None or state["restored_at"] or fake.state_bad:
+            return
+        due = ed._parse_until(state["until"])
+        if due is not None and due <= self.now:
+            fake.host_restore()
+
     def op_views(self):
         from jen.services import health
 
@@ -1497,6 +1576,7 @@ class TestTheWalk:
         "identity_guard": "through the config writer: op:identity (preflight_identity_change and mutate)",
         "endpoint_change_refusal": "the same engine as the writer's guard; driven by tests/test_investigation_logging.py::TestAnEndpointChangeKeepsTheServerIdentity",
         "file_write_refusal": "through kea_host.apply_config: op:file_write",
+        "restore_window": "through kea_api_config.apply: op:api_write (the host's restore landing between hash-get and set)",
         "forget": "op:forget",
         "marker_invalid_text": "through the sweep's full scan and the restore of a damaged marker",
         "by_hand_damaged": "op:views",
@@ -1574,6 +1654,51 @@ class TestTheKeaHostKeepsTheDeadline:
 
     def test_the_grace_is_two_timer_periods_not_a_loophole(self):
         assert Walk.I10_GRACE_S == 120 and Walk.HOST_TIMER is True
+
+
+class TestTheApiWriteCannotLandOverTheHostsRestore:
+    """Q212 (BB9 d): the second writer of a Kea configuration. `op_api_write` follows about one step in ten; its fault is the host's restore landing between Jen's `config-hash-get` and its `config-set`.
+    Two defenses hold I10 and I11 - Jen stays out of the deadline's window (`restore_window`) and the host keeps verifying after a restore (build 19) - and the mutation check takes BOTH away."""
+
+    OUTCOMES = {}
+    RED = []
+
+    @pytest.mark.parametrize("seed", range(24))
+    def test_the_walk_with_api_writes_is_green_and_the_writes_are_both_refused_and_allowed(self, seed, walk_world):
+        walk = walk_world(seed, STEPS)
+        walk.run()
+        for line in walk.log:
+            if "api_write" in line and "code=" in line:
+                code = line.split("code=")[1].split(" ")[0]
+                TestTheApiWriteCannotLandOverTheHostsRestore.OUTCOMES[code] = (
+                    TestTheApiWriteCannotLandOverTheHostsRestore.OUTCOMES.get(code, 0) + 1
+                )
+
+    def test_the_writes_were_real(self):
+        outcomes = TestTheApiWriteCannotLandOverTheHostsRestore.OUTCOMES
+        print(f"MODEL API WRITES over 24 seeds: {outcomes}")
+        assert outcomes.get("ok", 0) >= 20, outcomes
+        assert outcomes.get("guard", 0) + outcomes.get("investigation-on", 0) >= 5, outcomes
+
+    @pytest.mark.parametrize("seed", range(60))
+    def test_i10_is_red_without_the_deadline_defenses(self, seed, walk_world, monkeypatch):
+        """The mutation check: no restore window and a host that does not keep verifying - an API write landing over the host's restore leaves DEBUG 55 past the deadline."""
+        monkeypatch.setattr(inv, "restore_window", lambda server, now=None: "")
+        monkeypatch.setattr(FakeKea, "_reverify", lambda self, st: None)
+        monkeypatch.setattr(Walk, "API_WRITE_SHARE", 0.5)
+        try:
+            walk_world(seed, STEPS).run()
+        except InvariantViolated as red:
+            assert "I10 violated" in str(red) or "I11 violated" in str(red), str(red)[:400]
+            TestTheApiWriteCannotLandOverTheHostsRestore.RED.append(seed)
+
+    def test_without_the_defenses_the_deadline_invariant_goes_red_at_least_once(self):
+        print(
+            f"MODEL API MUTATION: {len(TestTheApiWriteCannotLandOverTheHostsRestore.RED)} of 60 seeds red: {TestTheApiWriteCannotLandOverTheHostsRestore.RED}"
+        )
+        assert TestTheApiWriteCannotLandOverTheHostsRestore.RED, (
+            "the walk never found the API write landing over the restore - its fault does not bite"
+        )
 
 
 class TestSeedsThatCaughtARealDefect:

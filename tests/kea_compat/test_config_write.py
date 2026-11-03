@@ -479,6 +479,159 @@ def test_08_what_config_get_adds_and_accepts(facts):
     assert _hash(), "the daemon does not answer after row 08"
 
 
+DHCP6_NAME = "kea6-compat"
+DHCP6_PORT = 8016
+
+
+def _jens_modules(monkeypatch):
+    """Q212: the product's own transport module against the real daemon. The compat job has no Jen database, so the revision store and the stored probe are the in-memory stand-ins the unit tests use, and
+    the investigation questions (which read Jen's settings) answer "nothing owed"."""
+    from jen.services import kea_api_config as api
+    from tests import _kea_api_world as world
+
+    store = world.install_store(monkeypatch)
+    world.install_probes(monkeypatch)
+    monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: "")
+    monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
+    return api, store
+
+
+def _compat_server():
+    return {
+        "id": 1,
+        "name": "kea-compat",
+        "api_url": os.environ.get("KEA_COMPAT_URL", ""),
+        "api_user": os.environ.get("KEA_COMPAT_USER", ""),
+        "api_pass": os.environ.get("KEA_COMPAT_PASS", ""),
+    }
+
+
+def test_09_jens_own_transport_round_trip(facts, monkeypatch):
+    """Q212 (BB1): `kea_api_config.apply` against the REAL daemon with the product's own `add_subnet4`, then `revert`, then the pending record: Jen "dies" between `config-set` and `config-write` and the next
+    read settles the change by content."""
+    api, store = _jens_modules(monkeypatch)
+    server = _compat_server()
+    cfg, digest = api.read(server, "dhcp4", capture=False)
+    assert cfg is not None and digest
+    block = {
+        "id": 3,
+        "subnet": "10.97.0.0/24",
+        "pools": [{"pool": "10.97.0.100 - 10.97.0.200"}],
+        "relay": {"ip-addresses": ["10.97.0.1"]},
+    }
+    candidate, code = __ed.add_subnet4(copy.deepcopy(cfg), block)
+    assert code == "ok"
+    started = time.monotonic()
+    result = api.apply(server, "dhcp4", candidate, digest, "compat: add subnet 3", before_cfg=cfg)
+    facts["transport_apply"] = {
+        "code": result.get("code"),
+        "detail": (result.get("detail") or "")[:200],
+        "seconds": round(time.monotonic() - started, 2),
+    }
+    assert result["ok"], result
+    assert 3 in _subnet_ids(_get()) and 3 in _subnet_ids(_file())  # live AND persisted
+    facts["transport_apply_digest_is_config_hash_get"] = result["sha256"] == _hash()
+    rows = [(r["source"], r["hash_kind"]) for r in store.rows]
+    facts["transport_revision_rows"] = rows
+    # the way back is the same transport
+    back = api.revert(server, "dhcp4", cfg, result["sha256"], "compat: rollback", before_cfg=candidate)
+    facts["transport_revert"] = {"code": back.get("code"), "detail": (back.get("detail") or "")[:200]}
+    assert back["ok"], back
+    assert 3 not in _subnet_ids(_get()) and 3 not in _subnet_ids(_file())
+    # Jen dies between config-set and config-write: a pending row exists, the daemon runs the change, the file does not carry it
+    now_cfg, now_digest = api.read(server, "dhcp4", capture=False)
+    store.record(1, "dhcp4", candidate, now_digest, "compat: interrupted", hash_kind="kea", source="pending")
+    __real._ok(__kea.kea_command("config-set", arguments=_body(candidate)))
+    assert 3 in _subnet_ids(_get()) and 3 not in _subnet_ids(_file())
+    notes = []
+    settled_cfg, settled_digest = api.read(server, "dhcp4", capture=False, notes=notes)
+    facts["transport_pending_notes"] = notes
+    facts["transport_pending_finished_the_write"] = 3 in _subnet_ids(_file())
+    facts["transport_pending_row_after"] = [
+        (r["source"], r["hash_kind"]) for r in store.rows if r["id"] == store.rows[-1]["id"]
+    ]
+    assert notes and "finished" in notes[0], notes
+    assert 3 in _subnet_ids(_file()) and store.pending(1, "dhcp4") is None
+    # put it back for the rows that follow
+    done = api.revert(server, "dhcp4", cfg, settled_digest, "compat: rollback", before_cfg=settled_cfg)
+    assert done["ok"], done
+
+
+def _dhcp6_config():
+    base = kea_config.build(http_port=DHCP6_PORT)["Dhcp4"]
+    return {
+        "Dhcp6": {
+            "interfaces-config": {"interfaces": ["*"], "service-sockets-require-all": False},
+            "control-sockets": copy.deepcopy(base["control-sockets"]),
+            "lease-database": {"type": "memfile", "persist": False},
+            "valid-lifetime": 4000,
+            "subnet6": [
+                {"id": 1, "subnet": "2001:db8:1::/64", "pools": [{"pool": "2001:db8:1::100 - 2001:db8:1::200"}]}
+            ],
+            "loggers": [{"name": "kea-dhcp6", "output-options": [{"output": "stdout"}], "severity": "INFO"}],
+        }
+    }
+
+
+def test_10_the_same_over_dhcp6(facts, monkeypatch):
+    """Q212 (BB1 f): the same sequence for the v6 daemon the ISC image carries. A daemon that cannot be started here is a recorded fact and a skip - dhcp6 then joins D2 on the file path in this beta."""
+    api, store = _jens_modules(monkeypatch)
+    scratch = tempfile.mkdtemp(prefix="kea6-", dir=os.path.dirname(CONF_DIR))
+    try:
+        os.chmod(scratch, 0o755)
+        conf = os.path.join(scratch, "kea-dhcp6.conf")
+        with open(conf, "w") as fh:
+            json.dump(_dhcp6_config(), fh, indent=2)
+        os.chmod(conf, 0o644)
+        for name in ("jen-api.user", "jen-api.pw"):
+            shutil.copy(os.path.join(CONF_DIR, name), os.path.join(scratch, name))
+            os.chmod(os.path.join(scratch, name), 0o644)
+        __levels._sh("docker", "rm", "-f", DHCP6_NAME, check=False)
+        started = __levels._sh(
+            "docker", "run", "-d", "--name", DHCP6_NAME, "--network", "host", "--tmpfs", "/var/run/kea:rw,mode=750",
+            "-v", f"{scratch}:/etc/kea", "--entrypoint", "kea-dhcp6", __levels.IMAGE, "-c", "/etc/kea/kea-dhcp6.conf",
+            check=False,
+        )  # fmt: skip
+        facts["dhcp6_container_started"] = started.returncode == 0
+        for _ in range(40):
+            if _probe_command("version-get", port=DHCP6_PORT).get("result") == 0:
+                break
+            time.sleep(1)
+        else:
+            facts["dhcp6_started"] = False
+            facts["dhcp6_log_tail"] = (
+                __levels._sh("docker", "logs", DHCP6_NAME, check=False).stderr[-1500:] + started.stderr[-300:]
+            )
+            pytest.skip("kea-dhcp6 did not start in this image: dhcp6 joins D2 on the file path in this beta")
+        facts["dhcp6_started"] = True
+        server = {
+            "id": 1,
+            "name": "kea6-compat",
+            "api_url": "http://127.0.0.1:9/",
+            "api6_url": f"http://127.0.0.1:{DHCP6_PORT}/",
+            "api6_user": os.environ.get("KEA_COMPAT_USER", ""),
+            "api6_pass": os.environ.get("KEA_COMPAT_PASS", ""),
+        }
+        cfg, digest = api.read(server, "dhcp6", capture=False)
+        assert cfg is not None and digest, "config-get over dhcp6 gave no configuration with a digest"
+        candidate = copy.deepcopy(cfg)
+        candidate["Dhcp6"]["valid-lifetime"] = 4100
+        result = api.apply(server, "dhcp6", candidate, digest, "compat: dhcp6 lifetime", before_cfg=cfg)
+        facts["dhcp6_apply"] = {"code": result.get("code"), "detail": (result.get("detail") or "")[:200]}
+        assert result["ok"], result
+        live = _first(__real._ok(__kea.kea_command("config-get", service="dhcp6", server=server)), "hash")[0]
+        facts["dhcp6_apply_digest_is_the_daemons"] = result["sha256"] == live
+        with open(conf) as fh:
+            persisted = json.load(fh)
+        facts["dhcp6_file_carries_the_change"] = persisted["Dhcp6"].get("valid-lifetime") == 4100
+        assert facts["dhcp6_file_carries_the_change"], "config-write did not persist the dhcp6 change"
+        back = api.revert(server, "dhcp6", cfg, result["sha256"], "compat: rollback", before_cfg=candidate)
+        assert back["ok"], back
+    finally:
+        __levels._sh("docker", "rm", "-f", DHCP6_NAME, check=False)
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def test_90_restore_puts_the_original_back(facts):
     """The configuration the job started with goes back into the daemon, into the file, and then the original file's own bytes replace it."""
     assert ORIGINAL is not None, "test_01 did not record the original configuration"

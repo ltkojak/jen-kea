@@ -385,6 +385,7 @@ import jen.routes.settings.alerts  # noqa: E402
 import jen.routes.settings.authoring  # noqa: E402
 import jen.routes.settings.branding  # noqa: E402
 import jen.routes.settings.infrastructure  # noqa: E402
+import jen.routes.settings.kea_transport  # noqa: E402  (Q212: the per-server card's five routes)
 import jen.routes.settings.security  # noqa: E402
 import jen.routes.settings.theme  # noqa: E402
 import jen.routes.settings.updates  # noqa: E402, F401

@@ -156,7 +156,7 @@ Jen is **agentless** — no resident agent runs on your Kea servers. One
 Flask process reaches out to each Kea box over three channels, and the
 only thing it ever puts on a Kea host is the optional
 [Kea host helper](#glossary), a fixed-function script that runs only when
-Jen invokes it over SSH:
+Jen invokes it over SSH (a server changed over the daemon's own API needs no SSH for that):
 
 | Channel | Used for | Direction |
 |---------|----------|-----------|
@@ -269,7 +269,7 @@ own pages, and anything those pages do not say has been left out. Checked on 202
 |---|---|---|
 | Architecture | Agentless — one process connects out to each server | An agent (`stork-agent`) installed on every managed server |
 | Primary focus | Day-to-day **management** of Kea: edit subnets/pools/reservations, manage leases and devices | Monitoring of Kea and BIND 9, plus Kea configuration editing (subnets, shared networks, host reservations, global parameters); ISC's documentation says some configuration capabilities are not yet available |
-| Config changes | Validated SSH push to `kea-dhcp*.conf`, host-side backup, pre-flight across servers, config-history restore | Through Kea's own hook libraries (`subnet_cmds` or `cb_cmds` for subnets); ISC notes that editing a Kea server directly bypasses Stork's locking |
+| Config changes | Over Kea's own API (`config-test` / `config-set` / `config-write`), hash-guarded, no restart - or a validated SSH push for a host whose daemon may not write its file; host-side backup, pre-flight across servers, config-history restore | Through Kea's own hook libraries (`subnet_cmds` or `cb_cmds` for subnets); ISC notes that editing a Kea server directly bypasses Stork's locking |
 | Shape | Kea only; one process, aimed at homelab to small business and a handful of servers | Kea and BIND 9; one Stork server with an agent on each managed machine |
 | Access control | Three roles + per-subnet scoping, local accounts, TOTP/passkey MFA or OpenID Connect SSO | Three groups (`super-admin`/`admin`/`read-only`), local accounts, LDAP through a hook |
 | Database | MySQL / MariaDB | PostgreSQL |

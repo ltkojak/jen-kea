@@ -198,6 +198,12 @@ Check that SSH is running on your Kea server and the host/user in `[kea_ssh]` co
 
 ### Kea host helper (v5.11.0+)
 
+**A change over the API says the daemon may not write its file ("Unable to open file ... for writing").** The daemon runs as an unprivileged account (`_kea` on Debian and Ubuntu) and the file belongs to root. Jen undid the change, remembered the refusal on the server's card and will not plan another change to that server until it is fixed. With SSH: press **Allow the daemon to write its file** on the card (helper build 19, a recent confirmation of your password), then **Check API configuration**. Without SSH: make the file writable by the daemon's account on the host (its group and `g+w` on the file; not the directory), then press **I have fixed it**. **Take the write right back** returns the file to 0640.
+
+**Check API configuration says the file carries an include.** The daemon reports the merged configuration and `config-write` renders one flat file, so Jen does not recommend the API transport while an `<?include "...?>` directive is present; the card names the included file. Keep the server on the file path, or fold the included file into the main file first.
+
+**"the file on <host> carries an edit the daemon has not loaded".** The file on an API server differs from what the daemon runs (someone edited it by hand, or a previous change was not persisted). Restart Kea there so the daemon loads the file, or discard the file's edit from the server's card; Jen will not let `config-write` overwrite it silently.
+
 **Trace says it needs the Kea host helper.** Trace (v5.49.0) is helper-only: it never falls back to the legacy `sudo tail` grant (which cannot serve 1000 lines). Settings → Kea → SSH → **Install helper** (needs the legacy grant present once — see *Legacy grant* in the admin guide), then try again.
 
 Every Kea-side action Jen performs goes through `jen-kea-helper` at
@@ -278,6 +284,8 @@ is authoritative: Jen will not arm over a session it did not start (a second Jen
 Build 17 is required (it verifies the restore from the daemon's own answer); press **Update helper** if Jen says the helper is older.
 
 **"The Kea host helper on <host> must be build 18 or later" when turning investigation logging on (v5.68.0-beta.29).** Investigation logging now needs the helper's self-restore: Jen arms a systemd timer on the Kea host (`jen-kea-investigation.timer`, running `jen-kea-helper --self-restore` as root) so the host puts the logger back at the deadline without Jen. A helper older than build 15 cannot, a host without systemd cannot (the arm answers `timer: none` and Jen reverts the file), and the legacy `sudo python3` path has no such op. Press **Settings → Kea → SSH → Update helper** (from v6 that needs no grant), then try again. Nothing was changed on the host when this is refused. To see what the host holds: `sudo cat /var/lib/jen-kea-helper/investigation-dhcp4.json` (its `last_error` is what the Health row shows); to run its restore by hand: `sudo jen-kea-helper --self-restore --now`; `systemctl list-timers jen-kea-investigation.timer` shows the timer. The legacy-grant fallback has no engine for these ops.
+
+The build-19 ops (`config-write-check`, `allow-config-write`, `deny-config-write`) have no legacy engine: without the helper (or with one older than build 19) the card says to press Update helper.
 
 Legacy grant: the old `python3` = root file is `/etc/sudoers.d/jen-kea`. Jen
 needs it for one run to install the helper, and — below helper v6 — for one

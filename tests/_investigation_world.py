@@ -105,9 +105,35 @@ class FakeKea:
             None  # the host's state file: {"until", "restore", "restored_at", "how", "last_error", "restarts", "jen"}
         )
         self.timer_running = True  # False: the host's timer never fires (the walk's "no HostTimer" case)
+        # Q212: the daemon's own configuration commands (`config-hash-get`, `config-set`, `config-write`), the digest on `config-get`, a hook that runs when a command ARRIVES (the host's
+        # restore landing between Jen's `config-hash-get` and its `config-set`), and whether the host's tick keeps verifying after a restore (build 19)
+        self.include_hash = False
+        self.before_command = {}
+        self.reverify = True
+
+    def digest(self):
+        import hashlib
+        import json
+
+        return hashlib.sha256(json.dumps(self.loaded, sort_keys=True).encode()).hexdigest()
 
     def kea_command(self, command, **kw):
         self.calls.append(command)
+        hook = self.before_command.get(command)
+        if hook is not None:
+            hook(self)
+        if command == "config-hash-get":
+            return {"result": 0, "arguments": {"hash": self.digest()}}
+        if command == "config-set":
+            section = (kw.get("arguments") or {}).get("Dhcp4")
+            if not isinstance(section, dict):
+                return {"result": 1, "text": "missing Dhcp4"}
+            self.loaded = {"Dhcp4": copy.deepcopy(section)}
+            return {"result": 0, "text": "Configuration successful.", "arguments": {"hash": self.digest()}}
+        if command == "config-write":
+            self.file = copy.deepcopy(self.loaded)
+            self.writes += 1
+            return {"result": 0, "text": "Configuration written", "arguments": {"filename": "/etc/kea/kea-dhcp4.conf"}}
         if command == "list-commands":
             if getattr(
                 self, "list_unreachable", False
@@ -135,7 +161,10 @@ class FakeKea:
                 return {"result": 1, "text": "connection refused"}
             if self.second is not None:
                 return {"result": 0, "arguments": copy.deepcopy(self.second)}
-            return {"result": 0, "arguments": copy.deepcopy(self.loaded)}
+            arguments = copy.deepcopy(self.loaded)
+            if self.include_hash:
+                arguments["hash"] = self.digest()
+            return {"result": 0, "arguments": arguments}
         return {"result": 0}
 
     def service_action(self, server, service, action):
@@ -391,11 +420,34 @@ class FakeKea:
             return {"ok": False, "code": "error", "detail": detail}
         return {"ok": True, "code": "ok", "restored": True, "how": how, "signalled": self.signaled, "detail": ""}
 
+    REVERIFY_WINDOW = timedelta(minutes=15)
+
+    def _reverify(self, st):
+        """Build 19 (Q212): until Jen forgets the session or its deadline + 15 minutes, every tick asks again whether the FILE or the RUNNING daemon carries the marker, and restores again when it does -
+        an API write that landed over the host's restore (or a `config-set` with no `config-write`) is put back by the host alone. None when there is nothing to do."""
+        if not self.reverify:
+            return None
+        due = inv._edit._parse_until(st["until"])
+        if due is None or inv._now() > due + self.REVERIFY_WINDOW:
+            return None
+        entry = helper()._logger_entry(self.file)
+        context = (entry or {}).get("user-context")
+        carried = isinstance(context, dict) and "jen-investigation" in context
+        if not carried:
+            carried = self._at_debug()
+        if not carried:
+            return None
+        st.update(restored_at=None, how=None, evidence=None)
+        st["re_restores"] = int(st.get("re_restores") or 0) + 1
+        return self.host_restore()
+
     def host_tick(self):
         """The host's timer firing (`jen-kea-helper --self-restore`): restores when an armed state's `until` has passed. Needs nothing of Jen."""
         st = self.helper_state
-        if not self.timer_running or st is None or st["restored_at"]:
+        if not self.timer_running or st is None:
             return None
+        if st["restored_at"]:
+            return self._reverify(st)
         due = inv._edit._parse_until(st["until"])
         if due is not None and due > inv._now():
             return None

@@ -758,6 +758,50 @@ def _where(name: str) -> str:
     return f"[{name}]"
 
 
+def _check_config_transport(jen_cfg) -> list[Finding]:
+    """Q212 (BB3 a): the `config_transport` key of `[kea]` and every `[kea_server_N]` is exactly `api`, `file` or `off`. Anything else (`API`, `yes`, `ssh`) reads as `off` - a mistake never grants a
+    write path - and the Doctor names it, because the server is then silently not a write target. `file` on a server with no SSH host is named too: it reads as `off`."""
+    if jen_cfg is None:
+        return []
+    import re
+
+    out: list[Finding] = []
+    for section in jen_cfg.sections():
+        if section != "kea" and not re.fullmatch(r"kea_server_\d+", section):
+            continue
+        if not jen_cfg.has_option(section, "config_transport"):
+            continue
+        value = jen_cfg.get(section, "config_transport", fallback="", raw=True).strip()
+        if value in ("api", "file", "off"):
+            ssh_key = "host" if section == "kea" else "ssh_host"
+            ssh_section = "kea_ssh" if section == "kea" else section
+            if value == "file" and not jen_cfg.get(ssh_section, ssh_key, fallback="", raw=True).strip():
+                out.append(
+                    _finding(
+                        "config-transport-file-without-ssh",
+                        "warn",
+                        "The file transport needs an SSH host",
+                        f"[{section}] config_transport is `file`, but this server has no SSH host, so it reads as `off`: changes are not written to it.",
+                        f"[{section}] config_transport",
+                        fix_url="/settings/kea",
+                        why="The file transport replaces the daemon's config file over SSH and restarts it. Add the SSH host, or switch the server to the API transport from its card.",
+                    )
+                )
+            continue
+        out.append(
+            _finding(
+                "config-transport-unrecognized",
+                "warn",
+                "The configuration transport is not a value Jen knows",
+                f"[{section}] config_transport is {value!r}. Jen reads it as `off`: nothing is written to this server. Write exactly `api`, `file` or `off` (lower case), or switch it from the server's card.",
+                f"[{section}] config_transport",
+                fix_url="/settings/kea",
+                why="A value that is not spelled exactly never grants a write path.",
+            )
+        )
+    return out
+
+
 def _check_credential_endpoints(jen_cfg) -> list[Finding]:
     """CRED-004 (v5.69.0-beta.11, Q180): the Doctor reads the same `credentials.resolve` every consumer uses, so what it says is what Jen does. `endpoint-has-no-credential` (warn)
     is an endpoint on a different host from the one whose password it would have inherited: it is sent NOTHING with that password, and the sentence says where to set its own.
@@ -889,6 +933,7 @@ def diagnose(
     out: list[Finding] = []
     out += _check_ha_peer_semantic_diff(ha_configs)
     out += _check_credential_endpoints(jen_config)
+    out += _check_config_transport(jen_config)
     if not dhcp4_cfg:
         out.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 3))
         return out

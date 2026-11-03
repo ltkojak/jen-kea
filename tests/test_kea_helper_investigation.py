@@ -512,7 +512,7 @@ class TestDisarm:
             "signalled": True,
             "detail": "",
             "helper_version": 7,
-            "helper_build": 18,
+            "helper_build": 19,
         }
         assert host.config() == _config(at_debug=False, marker=False)
         assert host.signals and host.signals[0][0] == 4242
@@ -694,7 +694,7 @@ class TestSelfRestore:
             "restored": [],
             "failed": [],
             "helper_version": 7,
-            "helper_build": 18,
+            "helper_build": 19,
         }
 
     def test_a_state_file_the_helper_did_not_write_is_reported_and_never_acted_on(self, host):
@@ -737,7 +737,7 @@ class TestTheContract:
     def test_the_ops_are_registered_and_the_build_is_18(self, helper):
         for name in ("investigation-arm", "investigation-disarm", "investigation-status", "investigation-timer"):
             assert name in helper._OPS
-        assert helper.HELPER_BUILD == 18 and helper.HELPER_VERSION == 7
+        assert helper.HELPER_BUILD == 19 and helper.HELPER_VERSION == 7
 
     def test_there_is_still_no_sudoers_change(self):
         root = _SCRIPT.parent
@@ -1016,6 +1016,10 @@ class TestOneAnswerAboutTheStateFile:
             host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})["detail"]
             == "already restored"
         )
+        # build 19 (Q212): a restored session whose FILE still carries the marker is asked about again at every tick (tests/test_kea_helper_config_write.py::TestTheTickKeepsVerifying); a
+        # finished session is one whose file does not - this is that one
+        host.write_config(_config(at_debug=False, marker=False))
+        host.loaded = _config(at_debug=False, marker=False)  # ... and the RUNNING daemon carries none either
         assert host.tick("--now")["restored"] == []
         assert host.arm(5)["ok"] is True
 

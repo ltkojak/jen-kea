@@ -1161,7 +1161,29 @@ separately — see [Migrating from Windows DHCP](#migrating-from-windows-dhcp-v5
 
 **Explaining a client (v5.35.0).** Network → Explain reconstructs the decision for one client — subnet, reservation, classes, guards, pools, options — from the config Jen holds. It evaluates class `test` expressions itself, but only the grammar the guided rule builder writes (`<accessor> == 'string'`, `<accessor> == 0xhex`, `substring(<accessor>,0,n) == 'string'`, `member('class')`, `and` / `or` / `not`, over option 60/77/12/61, `pkt4.mac`, relay circuit/remote id). A class written as a raw expression outside that grammar is reported as *not evaluable* and shown verbatim; an input the operator didn't supply makes a class *undecided* and the page names the input. The answer assumes those classes did not match. Built-in `KNOWN` / `UNKNOWN` follow the reservation step; `only-in-additional-list` classes are evaluated only where something in the selected subnet, its pools, its shared network or the matched reservation lists them. Subnet selection is the operator's (or the lease's) subnet — Kea's real choice depends on the receiving interface, which Jen cannot see; a supplied giaddr is checked against the subnet's relay addresses and range.
 
-## SSH Setup for Subnet Editing
+## Configuring Kea servers: over the API, or over SSH
+
+A change to subnets, options, classes or DDNS names reaches each Kea server by one of three paths, chosen per server on its card (Settings → Kea → *How changes reach each Kea server*):
+
+- **API** - Jen asks the daemon itself: `config-test`, then `config-set`, then `config-write`, guarded by the daemon's configuration digest. The change is live at once, there is no restart and no SSH. It needs the daemon's control socket (or Control Agent) and nothing else on the host.
+- **file** - Jen replaces the daemon's config file over SSH (validated with `kea-dhcpX -t`, backed up on the host) and restarts Kea. This is the path every server with an SSH host had before 7.0 and keeps unless you switch it.
+- **off** - not a write target. Jen still reads it.
+
+No existing server changes its path when Jen is upgraded. A server added after the upgrade starts on **API**, and writes nothing until you have run **Check API configuration** on its card, read the facts it shows and allowed changes over the API.
+
+**Check API configuration** reads the daemon's configuration (with its digest), asks the daemon to `config-test` it, says how the endpoint is authenticated (a password, Jen's client certificate, or nothing) and over TLS or not, and - where SSH is set up - whether the daemon's account may write its file, whether the file carries an `<?include?>` directive and whether the file and the daemon agree. Kea draws no line between a client that reads and one that writes, so the credential that reads is the credential that writes; nothing new is created on Kea.
+
+**What changes.** Kea writes its file in its own form: comments and key order are not kept (a 1,932-byte file became 4,769). The switch to the API is the one moment they are lost, and the card says so before the click. Kea writes the file in place, so a crash in the middle of a write (milliseconds, a few kilobytes) leaves a file the daemon cannot start on; where there is no SSH that is yours to repair by hand from Config history. One Jen instance per daemon is the supported configuration: inside the two round trips of a change, a second client's `config-set` is overwritten without a trace (Kea has no compare-and-set).
+
+**The daemon must be able to write its file.** On ISC's own container images the daemon runs as root and writes it already. On a package install the daemon is an unprivileged account (`_kea` on Debian and Ubuntu) and the file belongs to root: press **Allow the daemon to write its file** on the card (it needs the Kea host helper build 19 and a recent confirmation of your password). It changes the file's group to the daemon's and its mode to 0660 - the file only, never the directory, never an `o` bit - and **Take the write right back** returns it to 0640. Where there is no SSH, a write the daemon refuses is undone by Jen, remembered on the card ("the daemon may not write <path>") and blocks further changes to that server until you fix it and press **I have fixed it**.
+
+**Switching.** The card's three buttons move a server between the paths and are reversible. `file → api` needs a passing check, no include, the file and the daemon in agreement (or your tick to discard the file's edit), a daemon that may write its file, and your confirmation that comments and key order go; an endpoint with no authentication has its own confirmation. `api → file` needs SSH and the helper and the file and the daemon in agreement. Every switch is audited with both paths named.
+
+**Recovery bundles.** A recovery bundle exported on 5.x restores on 7.0 (the major-version check accepts it); export a fresh one after upgrading.
+
+## SSH Setup (the host's own work, and the file path)
+
+SSH is for the host: logs, Trace, TLS material, the helper, and the file path (config pushes and restarts). It is not needed to change a server over its API.
 
 ### Generate the Key
 
@@ -1588,7 +1610,11 @@ A per-server watermark (a `client_problems_wm:<server id>` row in `settings`) is
 
 The alert type `client_problems` ("Client had DHCP trouble") is opt-in per channel like every alert type. It fires when one client has the same kind of trouble at least `[alerts] client_problem_threshold` times (3) within an hour of the newest log line, at most once per client and kind per 24 hours, with the subnet id attached so a channel scoped to subnets filters it. The window is the last hour from now, not from the newest line. An alert about a client Jen could not place in a subnet has no subnet id, and a channel that has a subnet scope does not receive it (a channel with no scope hears everything). A row counts as alerted only when a channel actually took the alert: a delivery that failed is recorded as attempted and tried again after half an hour while the client's trouble is still inside the window, and the sweep's log line counts attempted, delivered and failed. The two database kinds never alert: they are states, not events.
 
+**Build 19 (7.0.0-beta.1) - who may write the daemon's own file.** Jen changes a configuration over the daemon's API and `config-write` persists it by writing the `-c` file in place, as the account the daemon runs as. Three ops answer for that account: `config-write-check` (facts only: the file's owner, group and mode, the account the unit runs as, whether it may write the file, and any `<?include?>` directive the file carries), `allow-config-write` (the daemon's group and mode 0660, set by file descriptor on a regular file the helper opens without following links, under the file's lock; never the directory, never an `o` bit) and `deny-config-write` (0640, the group kept). A later `apply-config` or restore of a group-writable file keeps the bit it finds, and the backup `<conf>.jen_backup` is never group-writable. The timer's `--self-restore` now keeps verifying after a restore - until Jen forgets the session or its deadline plus 15 minutes it asks again whether the file or the running daemon carries the investigation marker, and puts the logger back again when it does (an API write that lands over a restore is the reason). The sudoers line is unchanged (one line, the helper); the ops are named on the helper table of Settings → Kea → SSH, and the card offers *Allow the daemon to write its file* and *Take the write right back* behind a recent confirmation of your password.
+
 ### Legacy grant (pre-5.11.0 — `python3` is root)
+
+The build-19 ops (`config-write-check`, `allow-config-write`, `deny-config-write`) have no legacy engine: a host without the helper, or with one older than build 19, cannot be granted or checked, and the card says to press Update helper.
 
 A Kea host that does not have the helper yet falls back to the old path:
 Jen pipes a generated Python script over SSH into `sudo python3`. That

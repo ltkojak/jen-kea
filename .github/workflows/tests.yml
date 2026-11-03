@@ -1481,6 +1481,8 @@ jobs:
           systemctl is-active --quiet jen
           expect_eq "$(jen_version)" "$JEN_STABLE_VERSION" "the running version before the upgrade"
           sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
+          # Q212: the stable install carries no `config_transport` (it is API-only); the upgrade must not write one - no existing server gains a write path
+          expect_eq "$(sudo grep -c config_transport /etc/jen/jen.config)" "0" "config_transport lines before the upgrade"
           # the updater on disk is the stable release's own, byte for byte
           tar xzf "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz" -C "$RUNNER_TEMP" jen/jen-update-root.py
           expect_eq "$(sha_of /usr/local/sbin/jen-update-root.py)" "$(sha_of "$RUNNER_TEMP/jen/jen-update-root.py")" "the installed updater"
@@ -1508,6 +1510,11 @@ jobs:
           system_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/system")
           require 'Update Now' "$system_page" "Settings -> System lost its Update control after the upgrade"
           refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after the upgrade"
+          # Q212: the upgrade wrote no transport, and the primary (API-only, no SSH) reads as `off` on its card - the major jump is executed, not assumed
+          expect_eq "$(sudo grep -c config_transport /etc/jen/jen.config)" "0" "config_transport lines after the installer upgrade"
+          kea_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/kea")
+          require 'data-transport="off"' "$kea_page" "Settings -> Kea does not show the primary as off after the upgrade"
+          refuse 'data-transport="api"' "$kea_page" "an upgrade gave a server the API transport"
           echo "upgraded v${JEN_STABLE_VERSION} -> v${HEAD_VERSION}: running version, config and the admin account all survived"
 
       # ── via updater ──────────────────────────────────────────────────────
@@ -1540,6 +1547,9 @@ jobs:
           # hop 2 below proves HEAD's own updater renders it too
           require 'Update Now' "$system_page" "Settings -> System has no Update control after hop 1"
           refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after hop 1"
+          expect_eq "$(sudo grep -c config_transport /etc/jen/jen.config)" "0" "config_transport lines after hop 1"
+          kea_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/kea")
+          require 'data-transport="off"' "$kea_page" "Settings -> Kea does not show the primary as off after hop 1"
           echo "hop 1: v${JEN_STABLE_VERSION} -> v${HEAD_VERSION} by the stable release's own updater"
 
       - name: Hop 2 — HEAD's updater onto a newer release

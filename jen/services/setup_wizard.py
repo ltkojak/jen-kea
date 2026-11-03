@@ -862,12 +862,16 @@ def capture_baseline(server: dict, service: str = "dhcp4") -> dict:
     user: "Skip" on the helper step, then "Capture baseline", used to reach
     an SSH connect with nothing to connect to."""
     from jen.services import config_revisions as __rev
+    from jen.services import kea_api_config as __api
+    from jen.services import kea_changeset as __changeset
     from jen.services import kea_host as __kea_host
 
-    if not ssh_target_ready(server):
+    # Q212 (BB5): a first server on the API transport needs no SSH to record its baseline - the daemon's own `config-get` is read (and recorded as a `kea`-kind baseline) instead of refusing
+    api = __changeset._transport(server, service) == "api"
+    if not api and not ssh_target_ready(server):
         return {"ok": False, "revision": None, "detail": NO_SSH_TARGET}
     why: list[str] = []
-    cfg = __kea_host.read_config(server, service, errors=why)
+    cfg = __api.read(server, service, errors=why)[0] if api else __kea_host.read_config(server, service, errors=why)
     if cfg is None:
         return {
             "ok": False,

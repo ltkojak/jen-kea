@@ -132,6 +132,23 @@ WRITE_FACTS = [
             d.get("reload_error") or ("did not start" if d.get("reload_second_daemon_started") is False else "—")
         ),
     ),
+    ("Jen's transport: apply (dhcp4)", lambda d: str((d.get("transport_apply") or {}).get("code") or "—")),
+    (
+        "Jen's transport: the digest it returned is the daemon's",
+        lambda d: _yn(d.get("transport_apply_digest_is_config_hash_get")),
+    ),
+    ("Jen's transport: revert", lambda d: str((d.get("transport_revert") or {}).get("code") or "—")),
+    (
+        "Jen's transport: a change interrupted between set and write was finished",
+        lambda d: _yn(d.get("transport_pending_finished_the_write")),
+    ),
+    (
+        "Jen's transport over dhcp6: apply",
+        lambda d: str(
+            (d.get("dhcp6_apply") or {}).get("code")
+            or ("kea-dhcp6 did not start" if d.get("dhcp6_started") is False else "—")
+        ),
+    ),
     ("original file restored byte for byte", lambda d: _yn(d.get("original_file_restored_byte_for_byte"))),
     (
         "unprivileged daemon (uid 100): config-write as the file stands",

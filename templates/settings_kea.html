@@ -261,6 +261,78 @@
     {% endif %}
 </div>
 
+<!-- How changes reach each Kea server (Q212): the probe, the three-way transport, and the helper's grant for the daemon's own file -->
+<div class="card" id="kea-config-transport">
+    <div class="card-header">
+        <span class="card-title">{{ icon("git-branch") }} How changes reach each Kea server</span>
+    </div>
+    <p class="form-hint u-da12f2">A change to subnets, options, classes or DDNS names reaches a server one of three ways. <strong>API</strong>: Jen asks the daemon itself (<code>config-test</code>, <code>config-set</code>, <code>config-write</code>), guarded by its configuration digest, live at once with no restart and no SSH. <strong>file</strong>: Jen replaces the config file over SSH, validates it with <code>kea-dhcp4 -t</code> and restarts Kea. <strong>off</strong>: not a write target. No existing server changes its path when Jen is upgraded; switch a server here.</p>
+    {% for c in config_cards %}
+    <div id="config-card-{{ c.id }}" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+        <div class="u-85c718">
+            {{ c.name }}
+            <span class="badge {{ 'badge-tone-blue' if c.transport == 'api' else ('badge-reserved' if c.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ c.transport }}">{{ c.transport }}</span>
+        </div>
+        <p class="form-hint">{{ c.why }}</p>
+        {% if c.refused %}<div class="alert alert-warning" data-transport-refused>{{ icon("triangle-alert") }} {{ c.refused }}</div>{% endif %}
+        {% if c.probe %}
+        <table class="rowlist u-95cc13" data-config-facts>
+            <tbody>
+                <tr><td class="stat-label" style="width:240px;">Last checked</td><td>{{ c.probe.at|utcfmt }}{% if c.probe.consented_at %} · changes over the API allowed {{ c.probe.consented_at|utcfmt }}{% endif %}</td></tr>
+                <tr><td class="stat-label">Configuration read over its API</td><td>{% if c.probe.config_api %}yes{% else %}no — {{ c.probe.read_error or 'no answer' }}{% endif %}</td></tr>
+                {% if c.probe.config_api %}<tr><td class="stat-label">The daemon accepts its own configuration</td><td>{% if c.probe.test_ok %}yes{% else %}no — {{ c.probe.test_detail or 'refused' }}{% endif %}</td></tr>{% endif %}
+                <tr><td class="stat-label">Endpoint</td><td>{{ {'password': 'a password (basic authentication)', 'client certificate': "Jen's client certificate (mutual TLS)", 'none': 'no authentication', 'unknown': 'unknown'}.get(c.probe.auth, c.probe.auth) }}{% if c.probe.tls %} over TLS{% elif c.probe.tls is not none %} without TLS{% endif %}. Kea draws no line between reading and writing, so the credential that reads is the credential that writes; nothing new is created on Kea.</td></tr>
+                <tr><td class="stat-label">May the daemon write its file?</td><td>
+                    {% if c.probe.write is mapping and c.probe.write.unavailable is defined %}not known — {{ c.probe.write.unavailable }}
+                    {% elif c.probe.write is mapping %}{% if c.probe.write.may_write %}yes{% else %}no{% endif %} — the file is {{ c.probe.write.mode }}, run by {{ c.probe.write.account }}
+                    {% else %}{{ c.probe.write }}{% endif %}</td></tr>
+                <tr><td class="stat-label">An include directive</td><td>{% if c.probe.include is none %}cannot be known without SSH — confirm below that the file carries none{% elif c.probe.include %}yes: {{ c.probe.include|join(', ') }} — the API transport is not recommended while it is there{% else %}none{% endif %}</td></tr>
+                <tr><td class="stat-label">The file and the daemon agree</td><td>{% if c.probe.agree is none %}cannot be known without SSH{% elif c.probe.agree %}yes{% else %}no — the file carries a configuration the daemon is not running{% endif %}</td></tr>
+                <tr><td class="stat-label">The file was written by Jen</td><td>{% if c.probe.authored %}yes{% else %}no — Kea writes its file in its own form, so comments and key order are not kept (a 1,932-byte file became 4,769){% endif %}</td></tr>
+            </tbody>
+        </table>
+        <p class="form-hint">Kea writes its file in place: a crash in the middle of a write (milliseconds, a few kilobytes) leaves a file the daemon cannot start on.{% if not c.ssh %} Without SSH that is yours to repair by hand from Config history.{% endif %}</p>
+        {% endif %}
+        {% if current_user.role == 'superadmin' %}
+        <div style="margin-top:8px;">
+            <button type="button" class="btn btn-sm btn-secondary" data-config-probe="{{ c.id }}">Check API configuration</button>
+            <label style="margin-left:10px;"><input type="checkbox" data-config-consent="{{ c.id }}"> I have read the facts above and allow changes over the API</label>
+            <span class="form-hint" data-config-probe-result="{{ c.id }}"></span>
+        </div>
+        <form method="POST" action="/settings/infrastructure/kea-transport/{{ c.id }}" style="margin-top:10px;" data-confirm="Switch {{ c.name }}? This is audited.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-hint">
+                <label><input type="checkbox" name="consent_rendering" value="1"> Kea will write its file in its own form: comments and key order are not kept (the one moment they are lost)</label><br>
+                {% if not c.ssh %}<label><input type="checkbox" name="confirm_no_include" value="1"> {{ c.name }} has no SSH host: I confirm its file carries no include and no edit the daemon has not loaded</label><br>{% endif %}
+                {% if c.probe and c.probe.auth == 'none' %}<label><input type="checkbox" name="consent_unauthenticated" value="1"> This endpoint has no authentication; anything that can reach it can change this daemon's configuration</label><br>{% endif %}
+                {% if c.ssh %}<label><input type="checkbox" name="discard_file_edit" value="1"> If the file carries an edit the daemon has not loaded, discard it (the switch makes the file the daemon's configuration)</label>{% endif %}
+            </div>
+            <button type="submit" name="transport" value="api" class="btn btn-sm btn-primary" {% if c.declared == 'api' %}disabled{% endif %}>Use the API</button>
+            <button type="submit" name="transport" value="file" class="btn btn-sm btn-secondary" {% if c.declared == 'file' or not c.ssh %}disabled title="Needs an SSH host"{% endif %}>Use the file over SSH</button>
+            <button type="submit" name="transport" value="off" class="btn btn-sm btn-secondary" {% if c.declared == 'off' %}disabled{% endif %}>Stop writing to it</button>
+        </form>
+        {% if c.ssh %}
+        <div style="margin-top:8px;">
+            {% if c.helper_ok %}
+            <form method="POST" action="/settings/infrastructure/allow-config-write/{{ c.id }}" class="u-cccfa4" data-confirm="Make {{ c.name }}'s config file writable by the account Kea runs as? It changes the file's group and mode on the host (not the directory). This is audited.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Allow the daemon to write its file</button>
+            </form>
+            <form method="POST" action="/settings/infrastructure/deny-config-write/{{ c.id }}" class="u-cccfa4" data-confirm="Take the write right back on {{ c.name }}? The daemon can still read its file.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Take the write right back</button>
+            </form>
+            {% else %}<span class="form-hint">The grant needs the Kea host helper build {{ config_write_min_build }} on this host (press Update helper above).</span>{% endif %}
+        </div>
+        {% endif %}
+        {% if c.refused and not c.ssh %}
+        <form method="POST" action="/settings/infrastructure/config-write-fixed/{{ c.id }}" style="margin-top:8px;" data-confirm="Clear the refusal on your word? Nothing proves the daemon may write its file now; the next change will find out.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">I have fixed it</button>
+        </form>
+        {% endif %}
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
 <!-- SSH — host/user/path AND the key, one card (was split across two tabs before v5.9.0) -->
 <div class="card" id="kea-ssh">
     <div class="card-header">
@@ -268,7 +340,7 @@
         {% if ssh_configured %}<span class="u-d5881b">● Key present</span>
         {% else %}<span class="u-0051c0">● No key generated</span>{% endif %}
     </div>
-    <p class="form-hint u-da12f2">Used for config pushes, restarts, the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
+    <p class="form-hint u-da12f2">For the host: logs, Trace, TLS material, the helper, and the file transport (config pushes and restarts). Not needed to change a server over its API. Used for the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
     {% if current_user.role != 'superadmin' %}
     <div class="form-row">
         <div class="form-group"><label>Kea server</label><div class="mono">{{ infra.ssh_host or '(not set)' }}</div></div>
@@ -420,7 +492,7 @@
 
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
         <div class="u-85c718">Additional servers</div>
-        <p class="u-6d6af6">For HA peers and multi-server setups. Each needs its own API credentials and SSH config.</p>
+        <p class="u-6d6af6">For HA peers and multi-server setups. Each needs its own API credentials; SSH is for the host: logs, Trace, TLS, the helper, and the file transport.</p>
         {% if current_user.role != 'superadmin' %}
         {% if infra.extra_servers %}
         <table class="rowlist u-95cc13">
@@ -1000,6 +1072,36 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
     row.scrollIntoView({block: 'center'});
     var userField = row.querySelector('[name="extra_api_user[]"]');
     if (userField) userField.focus();
+})();
+
+(function () {
+    // Q212: the per-server card. A click asks the server to check its own API configuration (a read that stores its result), then the page reloads to show the stored facts.
+    document.addEventListener('click', async function (ev) {
+        var btn = ev.target.closest('[data-config-probe]');
+        if (!btn) return;
+        var id = btn.getAttribute('data-config-probe');
+        var box = document.querySelector('[data-config-consent="' + id + '"]');
+        var out = document.querySelector('[data-config-probe-result="' + id + '"]');
+        btn.disabled = true;
+        out.textContent = ' Checking…';
+        try {
+            var resp = await jenFetch('/settings/infrastructure/probe-kea-config/' + id, {
+                method: 'POST',
+                headers: {'X-CSRFToken': {{ csrf_token()|tojson }}, 'Content-Type': 'application/x-www-form-urlencoded'},
+                body: new URLSearchParams({consent: box && box.checked ? '1' : '0'}),
+            });
+            var data = await resp.json();
+            if (data.ok) {
+                window.location.hash = 'config-card-' + id;
+                window.location.reload();
+                return;
+            }
+            out.textContent = ' ' + (data.error || 'The check failed.');
+        } catch (e) {
+            out.textContent = ' The check did not complete.';
+        }
+        btn.disabled = false;
+    });
 })();
 
 async function probeKea() {

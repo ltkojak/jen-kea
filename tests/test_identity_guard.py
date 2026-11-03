@@ -1477,3 +1477,37 @@ class TestAConfirmationMadeAtTheStartOfARequestIsNotAskedAgain:
                 app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()
+
+
+class TestTheTransportIsNotAnIdentity:
+    """Q212 (BB3 a): `config_transport` says HOW a change reaches a server, not WHICH Kea it reaches: it is not an identity key, not a destination key and needs no step-up of its own."""
+
+    def _derive(self, text):
+        import configparser
+
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read_string(text)
+        return jconfig.AppConfig.derive_kea_servers(parser, quiet=True)
+
+    def test_it_is_not_an_identity_key(self):
+        assert "config_transport" not in jconfig.IDENTITY_KEYS
+        assert set(jconfig.IDENTITY_KEYS) == {"api_url", "ssh_host", "ssh_user", "kea_conf"}
+
+    def test_it_rides_on_the_server_dicts_and_an_absent_key_is_none(self):
+        servers = self._derive(
+            "[kea]\napi_url = http://k\nconfig_transport = api\n[kea_server_2]\napi_url = http://k2\n"
+        )
+        assert [s["config_transport"] for s in servers] == ["api", None]
+
+    def test_it_changes_nothing_the_credential_resolver_answers(self):
+        import configparser
+
+        from jen.services import credentials
+
+        def resolved(text):
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read_string(text)
+            return {name: (e.url, e.user, e.password, e.withheld) for name, e in credentials.resolve(parser).items()}
+
+        base = "[kea]\napi_url = http://k\napi_user = u\napi_pass = p\n"
+        assert resolved(base) == resolved(base + "config_transport = api\n")

@@ -926,6 +926,9 @@ class AppConfig:
                 ),
                 "kea_conf": cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
                 "role": cfg.get("kea", "role", fallback="primary"),
+                # Q212 (BB3 a): how a change reaches this server - api | file | off. NOT an identity key and NOT a destination key (no step-up, no identity guard);
+                # None when the section never carried it, which `kea_api_config.declared_transport` reads as today's behavior (file with SSH, else off).
+                "config_transport": cfg.get("kea", "config_transport", fallback=None),
             }
         ]
         # v5.19.1 — gap-tolerant: a `while has_section(kea_server_n): n +=
@@ -972,6 +975,7 @@ class AppConfig:
                     "ssh_key": cfg.get(sec, "ssh_key", fallback=os.path.join(extensions.CONFIG_DIR, "ssh", "jen_rsa")),
                     "kea_conf": cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
                     "role": cfg.get(sec, "role", fallback="standby"),
+                    "config_transport": cfg.get(sec, "config_transport", fallback=None),
                 }
             )
         return servers

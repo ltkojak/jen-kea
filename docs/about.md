@@ -24,8 +24,10 @@ Public License v3. The source is at
 - Jen is not a network monitoring or fleet-management platform for
   servers in general. It manages Kea DHCP specifically.
 - Jen does not require an agent on the Kea host. It connects out to
-  Kea's existing HTTP API and database, and over SSH for config
-  changes; nothing is installed on the Kea server except an optional
+  Kea's existing HTTP API and database; a configuration change goes over
+  that same API (`config-test`, `config-set`, `config-write`) or, for a host
+  whose daemon may not write its own file, over SSH. Nothing is installed on
+  the Kea server except an optional
   helper script (`jen-kea-helper`) that runs only when Jen invokes it - plus,
   once you have turned investigation logging on, a systemd timer of its own
   that wakes it every minute to put the Kea logger back when the time is up -
@@ -33,7 +35,7 @@ Public License v3. The source is at
   apply a Kea config, remove a config file Jen itself just created (the
   undo of authoring a new one), control the Kea service, tail a Kea log, install
   the Kea packages, install a TLS certificate, update itself, and arm, disarm and
-  report a self-restore of the log level (and keep the timer behind it running).
+  report a self-restore of the log level (and keep the timer behind it running), and check, grant and withdraw the daemon's right to write its own config file.
 - Jen is not a DNS server, and does not manage BIND or other DNS
   software directly — it can push DHCP hostnames into a handful of
   third-party DNS/DHCP-aware tools (Pi-hole, AdGuard Home) through an

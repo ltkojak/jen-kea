@@ -1610,6 +1610,35 @@ def _raw_marker_text(cfg) -> str:
         return ""
 
 
+SWEEP_INTERVAL_SECONDS = 60  # the scheduler's `jen_investigation_sweep` runs every minute (jen/services/scheduler.py); the HOST's timer ticks every 60 s too
+
+
+def restore_window(server: dict, now: datetime | None = None) -> str:
+    """Q212 (BB9 d): a sentence when a write over the daemon's API must not be sent now, else "". An API write to a server whose investigation entry has a deadline within +/- two sweep intervals of
+    `now` could land over the HOST's restore: Jen's `config-hash-get` is read, the host's timer puts the logger back, and Jen's `config-set` (built before the restore, marker and all) puts DEBUG 55
+    back over a resolved session. The file path cannot do this (the helper's per-file lock and sha guard refuse the stale write); the API has no compare-and-set, so the window is Jen's to keep
+    empty - and it stays empty for as long as an entry whose deadline has passed is unresolved (the host's restore may be retrying). An entry whose file and daemon are both already restored has nothing to protect. The host also keeps verifying after a restore (helper build 19), so what lands anyway is put back."""
+    record = _record()
+    if record.get("damaged"):
+        return ""  # `file_write_refusal` answers for a record that cannot be read
+    entry = record["servers"].get(str(server.get("id")))
+    if not entry or entry.get("removed"):
+        return ""
+    if entry.get("file", "debug") != "debug" and entry.get("daemon", "debug") != "debug":
+        return ""
+    due = _edit._parse_until(entry.get("until"))
+    if due is None:
+        return ""
+    now = now or datetime.now(timezone.utc)
+    if abs((due - now).total_seconds()) <= 2 * SWEEP_INTERVAL_SECONDS:
+        return f"the host is restoring logging at {due.isoformat(timespec='seconds')}; try again after it"
+    if due <= now:
+        # (found by the walk, seed 283) past the window but still UNRESOLVED: the host's restore may be failing and retrying every minute, and it can land at any moment - including between Jen's
+        # `config-hash-get` and its `config-set`. Until the entry is resolved the host's restore is pending, whatever the clock says.
+        return f"logging was due to be restored at {due.isoformat(timespec='seconds')} and the host has not finished; try again after it has"
+    return ""
+
+
 def file_write_refusal(server: dict, cfg) -> str:
     """The Kea-FILE half of the identity invariant (v5.68.0-beta.28, Q164): "" when `cfg` may be written over `server`'s kea-dhcp4 config by a writer that is not
     investigation logging, else the sentence `kea_host.apply_config` returns as its `detail` (code `investigation-on`).

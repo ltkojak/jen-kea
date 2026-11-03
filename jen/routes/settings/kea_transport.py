@@ -1,0 +1,160 @@
+"""
+jen/routes/settings/kea_transport.py
+────────────────────────────────────
+Q212 - the per-server card's five routes: how a change reaches a Kea server (the probe, the switch, the helper's grant and its inverse, and the operator's "I have fixed it"). Thin: parse the
+request, call `kea_api_config` / `kea_transport_switch` / `kea_host`, flash, audit. Every one is a SUPERADMIN's: it changes who may write a root-owned file or which path a configuration
+takes to a daemon. The switch, the two helper ops and "I have fixed it" also ask for a recent confirmation of the password.
+"""
+
+import logging
+
+from flask import flash, jsonify, redirect, request, url_for
+from flask_login import current_user, login_required
+
+import jen.models.user as __user
+import jen.services.capabilities as __caps
+import jen.services.kea_api_config as __api
+import jen.services.kea_host as __host
+import jen.services.kea_transport_switch as __switch
+from jen import extensions
+from jen.routes.settings import bp
+from jen.services.access import recent_auth_required as _recent_auth_required
+from jen.services.access import superadmin_required as _superadmin_required
+
+logger = logging.getLogger(__name__)
+
+SWITCH_CONSENTS = ("consent_rendering", "consent_unauthenticated", "discard_file_edit", "confirm_no_include")
+
+
+def _server(server_id):
+    return next((s for s in extensions.KEA_SERVERS if s.get("id") == server_id), None)
+
+
+def _back():
+    return redirect(url_for("settings.settings_kea"))
+
+
+def _gone():
+    flash("That server is not configured.", "error")
+    return _back()
+
+
+@bp.route("/settings/infrastructure/probe-kea-config/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+def probe_kea_config(server_id):
+    """The facts an operator reads before the first change over the API (`kea_api_config.probe`), stored for the capability, the card and the gate. With `consent=1` the operator's named
+    consent is recorded when the facts allow it - the probe is a click, the facts are the gate. JSON, for `jenFetch`."""
+    server = _server(server_id)
+    if server is None:
+        return jsonify({"ok": False, "error": "That server is not configured."}), 404
+    consent = request.form.get("consent") == "1"
+    facts = __api.probe(server, "dhcp4", consent=consent)
+    if consent and facts.get("consented_at") and not facts.get("consent_refused"):
+        __user.audit(
+            "KEA_API_CONSENT",
+            server.get("name") or str(server_id),
+            "changes over the API allowed after reading the check",
+        )
+    __caps.invalidate(server_id)
+    return jsonify({"ok": True, "probe": facts, "transport": __api.declared_transport(server)})
+
+
+@bp.route("/settings/infrastructure/kea-transport/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def switch_kea_transport(server_id):
+    """`api | file | off` for one server (BB8). The named consents arrive as fields; a refusal that one of them would answer says which."""
+    server = _server(server_id)
+    if server is None:
+        return _gone()
+    target = request.form.get("transport", "").strip()
+    consents = {name for name in SWITCH_CONSENTS if request.form.get(name) == "1"}
+    result = __switch.switch(server, target, consents=consents, actor=current_user.username)
+    flash(result["line"], result["level"])
+    if result["ok"] and not result.get("unchanged"):
+        __user.audit(
+            "KEA_TRANSPORT_SWITCHED",
+            server.get("name") or str(server_id),
+            f"{result.get('from')} -> {result.get('to')}; consents: {', '.join(result.get('consents') or []) or 'none'}"
+            + (f"; baseline revision #{result['revision']}" if result.get("revision") else ""),
+        )
+        __caps.invalidate(server_id)
+    return _back()
+
+
+def _grant(server_id, op, verb, action):
+    server = _server(server_id)
+    if server is None:
+        return _gone()
+    if not server.get("ssh_host"):
+        flash(
+            f"{server.get('name') or 'This server'} has no SSH host: the file's owner and mode are changed on the host (Settings → Kea → SSH).",
+            "error",
+        )
+        return _back()
+    result = op(server, "dhcp4")
+    if not result["ok"]:
+        flash(f"{server.get('name') or 'The server'}: {result.get('detail') or 'the helper refused'}", "error")
+        return _back()
+    if result.get("changed") is False:
+        flash(f"{server.get('name') or 'The server'}: {result.get('detail') or 'nothing to change'}", "success")
+        return _back()
+    after = result.get("after") or {}
+    flash(
+        f"{server.get('name') or 'The server'}: {verb} (the file is now {after.get('mode')}, group {after.get('gid')}); run Check API configuration to read it back.",
+        "success",
+    )
+    __user.audit(
+        action,
+        server.get("name") or str(server_id),
+        f"{(result.get('before') or {}).get('mode')} -> {after.get('mode')}",
+    )
+    return _back()
+
+
+@bp.route("/settings/infrastructure/allow-config-write/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def allow_config_write(server_id):
+    """Make the daemon's `-c` FILE writable by the account its unit runs as (its group, 0660; never the directory, never an `o` bit)."""
+    return _grant(server_id, __host.allow_config_write, "the daemon may write its file", "KEA_CONFIG_WRITE_ALLOWED")
+
+
+@bp.route("/settings/infrastructure/deny-config-write/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def deny_config_write(server_id):
+    """The way back: 0640, the group kept (the daemon can read its file, not write it)."""
+    return _grant(
+        server_id, __host.deny_config_write, "the daemon may no longer write its file", "KEA_CONFIG_WRITE_DENIED"
+    )
+
+
+@bp.route("/settings/infrastructure/config-write-fixed/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def config_write_fixed(server_id):
+    """ "I have fixed it": clears a remembered refusal for a server with no SSH, where no probe can prove the permission. Nothing proves it - the audit row says who said so."""
+    server = _server(server_id)
+    if server is None:
+        return _gone()
+    if not __api.stored_probe(server_id) or not (__api.stored_probe(server_id) or {}).get("refused"):
+        flash(f"{server.get('name') or 'The server'} has no remembered refusal.", "info")
+        return _back()
+    __api.clear_refusal(server_id)
+    __user.audit(
+        "KEA_CONFIG_WRITE_FIXED_CLAIM",
+        server.get("name") or str(server_id),
+        "the operator said the daemon's write permission was fixed; nothing proved it",
+    )
+    __caps.invalidate(server_id)
+    flash(
+        f"{server.get('name') or 'The server'}: the refusal is cleared on your word; the next change will find out.",
+        "success",
+    )
+    return _back()

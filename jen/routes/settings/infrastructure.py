@@ -160,6 +160,40 @@ def _kea_servers_with_helper_status():
     return rows
 
 
+def _config_cards() -> list:
+    """Q212 (BB3 e, BB5): one card per server for how a change reaches it - the transport word and its sentence from the same derivation the badge, the change set and Health use, the stored probe
+    (a settings read, never a Kea call) and whether the host's helper is new enough for the grant. Facts are strings and flags; nothing secret."""
+    import jen.services.kea_api_config as __api
+    import jen.services.kea_changeset as __cs
+    from jen.services import kea_host as __host
+
+    helper = __host.helper_status()
+    cards = []
+    for server in extensions.KEA_SERVERS or []:
+        probe = __api.stored_probe(server.get("id"))
+        caps = __caps.derive(
+            ssh=bool(server.get("ssh_host")),
+            config_transport=__cs._transport(server, "dhcp4"),
+            config_declared=__api.declared_transport(server),
+            config_probe=probe,
+        )
+        build = (helper.get(str(server.get("id"))) or {}).get("build")
+        cards.append(
+            {
+                "id": server.get("id"),
+                "name": server.get("name") or f"Kea Server {server.get('id')}",
+                "transport": caps.config_transport,
+                "declared": caps.config_declared,
+                "why": caps.transport_why(),
+                "probe": probe,
+                "refused": __api.refusal_sentence(server),
+                "ssh": bool(server.get("ssh_host")),
+                "helper_ok": isinstance(build, int) and build >= __host.CONFIG_WRITE_MIN_HELPER_BUILD,
+            }
+        )
+    return cards
+
+
 def _kea_ca_summary() -> dict:
     """v5.29.0 (Q29) — what the Control Plane card says about the
     Jen-managed Kea CA: present or not, its subject and days left, whether
@@ -435,6 +469,8 @@ def settings_kea():
             readiness = _readiness.summarize(_health.readiness_checks(light_ctx))
         except Exception as e:
             logger.warning(f"readiness summary: {e}")
+    from jen.services.kea_host import CONFIG_WRITE_MIN_HELPER_BUILD
+
     return render_template(
         "settings_kea.html",
         readiness=readiness,
@@ -450,6 +486,8 @@ def settings_kea():
         direct_port_warnings=direct_port_warnings,
         direct_socket_supported=direct_socket_supported,
         kea_ca=_kea_ca_summary(),
+        config_cards=_config_cards(),
+        config_write_min_build=CONFIG_WRITE_MIN_HELPER_BUILD,
         # v5.10.3 — id + name only; the real server dicts carry passwords.
         # v5.11.0 — plus ssh_host + the persisted jen-kea-helper status
         # (never SSHes to render — see jen/services/kea_host.py).
@@ -4930,6 +4968,10 @@ def save_extra_servers():
             for k, v in prev.items():
                 if k not in _EXTRA_SERVER_FORM_KEYS:
                     cfg.set(sec, k, v)
+            if row_id is None:
+                # Q212 (BB3 a): a server ADDED after the upgrade gets the API transport written (the fallback for an absent key is today's behavior, for a section that predates the key). It writes nothing
+                # until its operator has read the probe's facts once and allowed it from the card (`kea_api_config.probe_gate`).
+                cfg.set(sec, "config_transport", "api")
             if nod2_ticked and cfg.has_option(sec, "api_d2_url"):
                 cfg.set(sec, "api_d2_pass", "")  # explicit: the D2 socket has no authentication
                 __credentials.clear_shared(cfg, f"server_{out}_d2")  # Y3 (Q183)

@@ -3745,3 +3745,127 @@ def test_22_k_a_ca_whose_only_usage_is_any_extended_key_usage_refuses_an_https_s
     assert local["state"][0] == "damaged", local
     assert local["after"] == damaged["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+# ── 23. Q212: a change over the daemon's own API, with a file-path server beside it ─────────────────────────────────────────
+
+API_AND_FILE_RESTART_FAILS = (
+    CHANGESET_PRELUDE
+    + """
+from datetime import datetime, timezone
+from jen.services import kea_api_config as api
+
+servers = {s["name"]: s for s in extensions.KEA_SERVERS}
+a = {**servers["kea-a"], "config_transport": "api"}
+a.pop("ssh_host", None)  # kea-a is changed over its API with no SSH (the operator's "no SSH" case); kea-b keeps the file path
+b = {**servers["kea-b"], "config_transport": "file"}
+now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now})  # the operator has read the card's facts once
+
+real_action, seen = kea_host.service_action, {"b": 0}
+
+def hooked(server, service, action, *args, **kw):
+    if action == "restart" and server["name"] == "kea-b":
+        seen["b"] += 1
+        if seen["b"] == 1:
+            return {"ok": False, "detail": "unit failed to restart (system test)"}  # only the FIRST restart of kea-b fails; the compensation's succeeds
+    return real_action(server, service, action, *args, **kw)
+
+kea_host.service_action = hooked
+try:
+    before = api.hash(a, "dhcp4")
+    res = cs.apply_change("dhcp4", mutate, "system-test api+file", servers=[a, b])
+    emit(
+        {
+            "status": res.status,
+            "last_code": res.last_code,
+            "lines": [l[1] for l in res.lines],
+            "restart_failures": res.restart_failures,
+            "needs_hands": res.needs_hands,
+            "a_before": before,
+            "a_after": api.hash(a, "dhcp4"),
+        }
+    )
+except Exception as e:
+    emit({"raised": type(e).__name__ + ": " + str(e)[:300]})
+"""
+)
+
+API_WRITE_REFUSED = (
+    CHANGESET_PRELUDE
+    + """
+from datetime import datetime, timezone
+from jen.services import kea_api_config as api
+
+a = {**[s for s in extensions.KEA_SERVERS if s["name"] == "kea-a"][0], "config_transport": "api"}
+a.pop("ssh_host", None)
+now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now})
+try:
+    before = api.hash(a, "dhcp4")
+    first = cs.apply_change("dhcp4", mutate, "system-test write refused", servers=[a])
+    refused = (api.stored_probe(a["id"]) or {}).get("refused")
+    after_first = api.hash(a, "dhcp4")
+    second = cs.apply_change("dhcp4", mutate, "system-test second change", servers=[a])
+    emit(
+        {
+            "first": {"status": first.status, "lines": [l[1] for l in first.lines]},
+            "refused": refused,
+            "second": {"status": second.status, "last_code": second.last_code, "needs_hands": second.needs_hands, "lines": [l[1] for l in second.lines]},
+            "a_before": before,
+            "a_after_first": after_first,
+        }
+    )
+except Exception as e:
+    emit({"raised": type(e).__name__ + ": " + str(e)[:300]})
+finally:
+    api.clear_refusal(a["id"])
+"""
+)
+
+
+def test_23_a_change_set_over_the_api_and_the_file_undoes_the_api_server_when_the_file_servers_restart_fails(stack):
+    """Q212: kea-a is changed over its own API (no SSH), kea-b over the file path. kea-b's restart fails: kea-a is put back over the API, both daemons answer what they answered before, the result names kea-b.
+    Then kea-a's file stops being writable (the stand-in is the file replaced by a directory: a container's root writes through a read-only mode): `config-write` is refused, the `config-set` is undone, the refusal
+    is remembered, and the next change to kea-a is needs-hands before any read."""
+    before_b = st.kea_command("kea-b", "config-hash-get")["arguments"]["hash"]
+    proc = st.jen_py(API_AND_FILE_RESTART_FAILS, check=False)
+    result = emitted(proc.stdout)
+    assert result is not None and "raised" not in result, (
+        f"no usable result from the change set:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    )
+    assert result["status"] == "rolled_back" and result["last_code"] == "restart-failed", result
+    assert result["restart_failures"] == ["kea-b"], (
+        f"INVARIANT: the result names the server whose restart failed: {result}"
+    )
+    assert result["a_before"] and result["a_after"] == result["a_before"], (
+        "INVARIANT: the API server is back on the configuration it had (the daemon's own digest says so), put back over the API"
+    )
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=90, what="kea-b answering after the compensation's restart")
+    assert st.kea_command("kea-b", "config-hash-get")["arguments"]["hash"] == before_b, (
+        "INVARIANT: the file server's daemon runs what it ran before"
+    )
+    assert json.loads(st.kea_conf_bytes(st.KEA_B)) == json.loads(st.BASELINE[st.KEA_B]), (
+        "INVARIANT: the file server's file is what it was"
+    )
+
+    # the second half: kea-a cannot write its file
+    st.sh(st.KEA_A, f"mv {st.KEA_CONF} {st.KEA_CONF}.orig && mkdir {st.KEA_CONF}")
+    try:
+        out = st.jen_py(API_WRITE_REFUSED, check=False)
+    finally:
+        st.sh(st.KEA_A, f"rmdir {st.KEA_CONF}; mv {st.KEA_CONF}.orig {st.KEA_CONF}", check=False)
+    second_half = emitted(out.stdout)
+    assert second_half is not None and "raised" not in second_half, (
+        f"no usable result:\n{out.stdout[-1500:]}\n{out.stderr[-1500:]}"
+    )
+    texts = " ".join(second_half["first"]["lines"])
+    assert second_half["first"]["status"] in ("aborted", "rolled_back") and "kea-a" in texts, second_half
+    assert second_half["a_after_first"] == second_half["a_before"], (
+        "INVARIANT: a write the daemon refused is undone - the daemon runs what it ran"
+    )
+    assert second_half["refused"], "INVARIANT: the refusal is remembered for the next change"
+    assert second_half["second"]["status"] == "aborted" and second_half["second"]["last_code"] == "needs-hands", (
+        second_half["second"]
+    )
+    assert second_half["second"]["needs_hands"] == ["kea-a"], second_half["second"]

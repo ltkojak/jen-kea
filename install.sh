@@ -1657,6 +1657,10 @@ write_config() {
     # that already exists is NOT given it here - a legacy file is converted by Jen at its first start, and --configure merges answers into the live file without marking it
     local credential_model_block=""
     [[ -f "$CONFIG_FILE" ]] || credential_model_block="$(printf '\n[jen]\ncredential_model = explicit\n')"
+    # Q212 (BB3 a): a config the installer CREATES gets the API transport for its primary Kea; one that already exists is NOT given it here - no existing server gains a write path on
+    # upgrade or on --configure (the key's absence reads as today's behavior: the file path where SSH is set, nothing where it is not)
+    local config_transport_line=""
+    [[ -f "$CONFIG_FILE" ]] || config_transport_line="config_transport = api"
     local wizard_text
     wizard_text="$(cat << CONFEOF
 # Jen - The Kea DHCP Management Console
@@ -1667,6 +1671,7 @@ write_config() {
 api_url  = ${KEA_API_URL}
 api_user = ${KEA_API_USER}
 api_pass = ${KEA_API_PASS}
+${config_transport_line}
 
 [kea_db]
 host     = ${KEA_DB_HOST}

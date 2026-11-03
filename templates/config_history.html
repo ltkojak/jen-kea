@@ -45,6 +45,12 @@
                     <span class="badge badge-tone-blue">restore</span>
                     {% elif r.source == 'baseline' %}
                     <span class="badge u-851d78"  title="the first config Jen saw on this host">baseline</span>
+                    {% elif r.source == 'rollback' %}
+                    <span class="badge badge-tone-blue" title="a change Jen put back because a later step failed">rollback</span>
+                    {% elif r.source == 'switch' %}
+                    <span class="badge u-851d78" title="the baseline recorded when this server's transport was switched">switch</span>
+                    {% elif r.source == 'pending' %}
+                    <span class="badge badge-dynamic" title="written before the daemon was asked; settled by its own answer on the next read">pending</span>
                     {% else %}
                     <span class="badge badge-reserved">jen</span>
                     {% endif %}

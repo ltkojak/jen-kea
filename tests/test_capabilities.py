@@ -346,10 +346,11 @@ class TestForServer:
         app = flask.Flask("capabilities-memo-test")
         with app.test_request_context():
             a = caps.for_server(1)
-            caps.invalidate()  # the version cache is gone, the request's memo is not
+            assert caps.for_server(1) is a  # one request, one answer
+            caps.invalidate()  # Q212: the version cache is gone AND the request's memo is - a route that writes a server's transport reads the new value in the same request
             b = caps.for_server(1)
-            assert a is b
-        assert gathered.count(PRIMARY_CALL) == 1
+            assert a is not b and a == b
+        assert gathered.count(PRIMARY_CALL) == 2
 
     def test_the_memo_does_not_cross_requests(self, gathered):
         import flask

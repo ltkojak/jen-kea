@@ -408,10 +408,23 @@ def _run_change_unlocked(
 
     # ── Phase 1: plan ────────────────────────────────────────────────
     for server, kind in planned:
-        name = server.get("name") or server.get("ssh_host") or server.get("api_url") or "?"
+        name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
         try:
             read_errors: list[str] = []
             if kind == "api":
+                gated = _api.probe_gate(
+                    server
+                )  # no write without the probe's facts and the operator's consent; a remembered refusal (BB9 a) is needs-hands BEFORE the first read
+                if gated:
+                    lines.append(("error", f"❌ {name}: {gated}"))
+                    refused = bool(_api.refusal_sentence(server))
+                    return ChangeSetResult(
+                        "aborted",
+                        "needs-hands" if refused else "needs-probe",
+                        lines,
+                        needs_hands=[name] if refused else [],
+                        needs_hands_ids=[server.get("id")] if refused else [],
+                    )
                 notes: list[str] = []
                 cfg, sha = _api.read(server, service, errors=read_errors, notes=notes)
                 lines.extend(("warning", f"ℹ️ {name}: {note}") for note in notes)
@@ -1005,6 +1018,7 @@ ATTENTION_CATEGORIES = {
     "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
     "tls-superseded": "A server that is not dialed over https now may still run a certificate from a CA Jen has since replaced. When it is dialed over https again, remove its direct socket and set it up again.",
     "record-forgotten": "Jen's record of a certificate was forgotten on the operator's word while the daemon may still present it; its expiry is not watched. A later setup of the socket, or its removal, ends this.",
+    "config-api-unverified": "A configuration Jen wrote over the daemon's own API (a restored revision, or an import) was not confirmed by the daemon's own answer, so the daemon may or may not be running it, and its file may or may not carry it. Ask the daemon, then restore the revision you want from Config history.",
     "config-restart-failed": "A config Jen wrote to the Kea host (a restored revision, or an import) is on disk, but the daemon did not restart on it, so it may be stopped or still running the config it had before. A restart that works ends this.",
     "rotation-pending": "A CA rotation changed what this server's daemon depends on and has not finished recording it. Health names it; the next Rotate, or Forget stale records, finishes it from Jen's files - it is not acknowledged away.",
 }

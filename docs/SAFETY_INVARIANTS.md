@@ -19,9 +19,12 @@ audit of a release (`docs/RELEASE_AUDIT.md`) starts by asking which ids the rele
 **Rule.** A change Jen makes to a Kea host that must not outlive a deadline (investigation logging's DEBUG level) is put back by the HOST - a root-owned timer holding its own record of the
 original - never by the caller's bookkeeping. A daemon the host was armed for is never at DEBUG 55 more than 120 s past its deadline, whatever has happened to Jen.
 **Established.** Q165.
-**Enforced at.** `jen-kea-helper` (`investigation-arm`, `--self-restore`), armed by `investigation_logging.turn_on`.
+**Enforced at.** `jen-kea-helper` (`investigation-arm`, `--self-restore`), armed by `investigation_logging.turn_on`. Since helper build 19 (Q212) the host keeps verifying AFTER a restore: until Jen forgets the session or its deadline + 15 minutes every tick asks again whether the file or the running daemon carries the marker and puts the logger back again when it does (an API write that lands over a restore: Kea has no compare-and-set); and Jen keeps out of the window in which that can happen (`investigation_logging.restore_window`, asked by `kea_api_config.apply`).
 **Tests.**
 - `tests/test_investigation_model.py::TestTheKeaHostKeepsTheDeadline` (the walk's I10, with Jen stopped, and the mutation check that goes red without the timer)
+- `tests/test_investigation_model.py::TestTheApiWriteCannotLandOverTheHostsRestore` (the walk's API write and its fault - the host's restore landing between `config-hash-get` and `config-set` - and the mutation check that goes red without the window and the re-verification)
+- `tests/test_kea_helper_config_write.py::TestTheTickKeepsVerifying`
+- `tests/test_kea_api_config.py::TestTheHostsDeadlineIsRespected`
 - `tests/test_investigation_host.py::TestTurnOnNeedsTheHost`
 - `tests/test_kea_helper_investigation.py::TestSelfRestore`
 - `tests/system/test_boundaries.py::test_19_the_kea_host_puts_investigation_logging_back_with_jen_stopped_or_its_database_down_or_pointed_elsewhere`
@@ -58,9 +61,10 @@ fails closed, nothing is written over it, and the old value is kept.
 connection mode do not change, and nothing but investigation logging may erase, replace or DAMAGE its marker in the Kea config file: a candidate whose marker is absent, carries a different
 restore object or deadline, or is malformed (`restore: {}`, a string, a list, not an object) is refused whenever the entry recorded a valid restore.
 **Established.** Q162, Q164 (and the installer's `--configure` guard, Q165; the malformed-marker rows, Q167).
-**Enforced at.** `AppConfig._write_parser` (the config) and `kea_host.apply_config` (the Kea file); `install.sh _guard_endpoint_changes` for the installer.
+**Enforced at.** `AppConfig._write_parser` (the config) and `kea_host.guard_kea_write` - the one definition of the marker question, called first by BOTH writers of a Kea configuration, `kea_host.apply_config` (the file) and `kea_api_config.apply` (the daemon's own API, Q212); `install.sh _guard_endpoint_changes` for the installer.
 **Tests.**
 - `tests/test_identity_guard.py::TestTheConfigWriterRefusesAnIdentityChange`
+- `tests/test_kea_api_config.py::TestTheMarkerIsRefusedOverTheApi`
 - `tests/test_identity_guard.py::TestTheKeaFileWriterRefusesToEraseTheMarker`
 - `tests/test_investigation_host.py::TestTheElevenRowsOfTheCandidateMarker`
 - `tests/test_install_endpoint_guard.py::TestTheInstallerRefusesAnEndpointChangeWithoutTheFlag`
@@ -292,6 +296,16 @@ updater's allowlist.
 **Tests.**
 - `tests/test_config_file_lock.py::TestAnExternalProcessAndTheServiceDoNotLoseEachOthersWrites`
 - `tests/test_installer_trust.py::TestTheInstallerLocksTheSameInodeThroughTheOneOpen`
+
+### CFG-002 - A configuration change over the daemon's API stands only when the daemon's own answer proves it
+**Rule.** A change written to a Kea daemon over its own API stands only when the daemon's `config-get` afterward carries the digest `config-set` returned AND `config-write` answered 0 (proved through the file where SSH exists); otherwise it is undone, or `needs_hands` with both digests, and a pending change (a record written before `config-set`) is reconciled by content on the next read. Kea has no compare-and-set: Jen compares `config-hash-get` with the digest its change was built from before it sets, a set that cannot be proved is never reported as done, and a `config-write` timeout is never "ok". An API write is refused when it would change a control socket, a hook library or Jen's TLS material (those go through the file path), when no probe has been read and allowed on the server's card, and while a refused `config-write` is remembered.
+**Established.** Q212.
+**Enforced at.** `jen/services/kea_api_config.py` (`apply`: the nine steps; `probe_gate`; `remember_refusal`), the change set's per-target transport (`kea_changeset._transport`, the commit order and the dispatch of every revert), the one change lock (`kea_changeset.change_lock`).
+**Tests.**
+- `tests/test_kea_api_config.py` (`TestApplyInOrder`, `TestConflictSendsNothing`, `TestTheApiOnlyGuard`, `TestSetFailedLeavesTheDaemon`, `TestWriteFailedIsUndone`, `TestAWriteTimeoutIsNeverOk`, `TestASetTimeoutIsAsked`, `TestUnverifiedIsNotUndone`, `TestThePendingRecord`)
+- `tests/test_kea_changeset_transports.py` (`TestMixedTargets`, `TestOneChangeAtATime`, `TestTheCallersDoNotChange`)
+- `tests/test_kea_api_probe.py` (`TestTheGate`, `TestARefusedWriteIsRemembered`)
+- `tests/test_transport_switch.py`
 
 ### FILE-001 - A secret is private from its first byte; a privileged write never resolves a service-owned parent by pathname
 **Rule.** No secret is written by a plain `open`, redirect or `cp`; a `.prev` is made only by the certificate set's commit; root never copies anything into the app tree from the config or content directories.

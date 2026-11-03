@@ -327,7 +327,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 18
+HELPER_BUILD = 19
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -1084,8 +1084,9 @@ def op_apply_config(payload):
         backup = None
         if exists:
             backup = path + ".jen_backup"
-            # the backup is the whole previous config (credentials too): private from its first byte, the same owner and mode as it had
-            _install_private(backup, previous, st.st_uid, st.st_gid, st.st_mode & 0o777)
+            # the backup is the whole previous config (credentials too): private from its first byte, the same owner and mode as it had - except that it never carries a
+            # group- or other-write bit (build 19, Q212): `allow-config-write` makes the FILE group-writable for the daemon's account, and the daemon may not rewrite its own backup
+            _install_private(backup, previous, st.st_uid, st.st_gid, st.st_mode & 0o777 & ~0o022)
             # the replacement keeps the destination's owner and mode, and is 0600 until it is complete (build 13) - except that a config anyone can read
             # (0644, 0664: it carries `lease-database.password`) is tightened to root:<the daemon's group> 0640 (build 18, Q170)
             uid, gid, mode = st.st_uid, st.st_gid, st.st_mode & 0o777
@@ -1132,6 +1133,114 @@ def op_remove_config(payload):
             return {"ok": False, "error": "conflict", "sha256": current}, path
         os.unlink(path)
         return {"ok": True, "removed": True}, path
+
+
+# ── build 19 (Q212): who may write the daemon's own file ────────────────────────────────────────────────────────────────────────────────────────────────────
+# Jen changes a configuration over the daemon's own API; `config-write` persists it by writing the `-c` file IN PLACE as the daemon's account (a group-write bit on the FILE alone is
+# sufficient: the directory is never opened - docs/ARCHITECTURE.md 3.17, row 91). Three ops: FACTS (`config-write-check`), the GRANT (`allow-config-write`) and its inverse
+# (`deny-config-write`). The grant is a group and a mode on one regular file, by descriptor, and nothing else: never the directory, never an `o` bit (a 0664 file would be tightened
+# back to 0640 by the next `apply-config` and the grant revoked by an unrelated write), and an `apply-config` or a restore of a group-writable file keeps the bit it finds.
+
+_INCLUDE_RE = re.compile(rb"<\?include\s+\"([^\"\n]{1,300})\"\s*\?>")
+_GRANT_MODE = 0o660
+_DENY_MODE = 0o640
+
+
+def _may_write(st, account):
+    """Whether the daemon's `account` (None = root) may open the file for writing, by owner, group and other bits - root writes anyway."""
+    if account is None:
+        return True
+    mode = st.st_mode & 0o777
+    groups = {account.get("gid"), *(account.get("extra_groups") or [])}
+    return bool(
+        (st.st_uid == account.get("uid") and mode & 0o200) or (st.st_gid in groups and mode & 0o020) or mode & 0o002
+    )
+
+
+def op_config_write_check(payload):
+    """FACTS only: the file's owner, group and mode, the daemon's account from its unit (`_unit_account`, the identity `-t` and `install-tls` already use; a unit that names no account
+    is root, and root writes anyway), whether that account may write the file, and any `<?include "..."?>` directive the file carries (the daemon reports the MERGED configuration and
+    `config-write` renders one flat file: Jen does not recommend the API transport while an include is present). Changes nothing."""
+    service, path = payload.get("service"), payload.get("path")
+    if not _valid_service(service) or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    try:
+        raw, st = _open_conf(path)
+    except _ConfLink:
+        return {"ok": False, "error": "symlink", "path": path}, path
+    except FileNotFoundError:
+        return {"ok": False, "error": "missing"}, path
+    except OSError as e:
+        return {"ok": False, "error": "unreadable", "detail": str(e)}, path
+    account = _unit_account(service)
+    if account is not None and "refused" in account:
+        return {"ok": False, "error": "unit-account", "detail": account["refused"]}, path
+    includes = [m.decode("utf-8", "replace") for m in _INCLUDE_RE.findall(raw)][:8]
+    return {
+        "ok": True,
+        "owner_uid": st.st_uid,
+        "owner_gid": st.st_gid,
+        "mode": format(st.st_mode & 0o777, "04o"),
+        "size": st.st_size,
+        "account": None if account is None else {"name": account["name"], "uid": account["uid"], "gid": account["gid"]},
+        "daemon_is_root": account is None,
+        "may_write": _may_write(st, account),
+        "includes": includes,
+    }, path
+
+
+def _set_conf_access(payload, grant):
+    service, path = payload.get("service"), payload.get("path")
+    if not _valid_service(service) or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    account = _unit_account(service)
+    if account is not None and "refused" in account:
+        return {"ok": False, "error": "unit-account", "detail": account["refused"]}, path
+    if account is None:
+        # a root daemon writes its file already; the grant would only widen who may
+        return {"ok": True, "changed": False, "detail": "the daemon runs as root: it can write its file without a grant"}, path
+    with _locked(path):
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0))
+        except FileNotFoundError:
+            return {"ok": False, "error": "missing"}, path
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                return {"ok": False, "error": "symlink", "path": path}, path
+            return {"ok": False, "error": "unreadable", "detail": str(e)}, path
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                return {"ok": False, "error": "symlink", "path": path}, path
+            before = {"gid": st.st_gid, "mode": format(st.st_mode & 0o777, "04o")}
+            if grant:
+                os.fchown(fd, -1, account["gid"])  # the daemon's primary group; the owner stays as it is
+                os.fchmod(fd, _GRANT_MODE)
+            else:
+                os.fchmod(fd, _DENY_MODE)  # the group stays: the daemon may read its file, not write it
+            after = os.fstat(fd)
+        except OSError as e:
+            return {"ok": False, "error": "unreadable", "detail": str(e)}, path
+        finally:
+            os.close(fd)
+    return {
+        "ok": True,
+        "changed": True,
+        "before": before,
+        "after": {"gid": after.st_gid, "mode": format(after.st_mode & 0o777, "04o")},
+        "account": {"name": account["name"], "uid": account["uid"], "gid": account["gid"]},
+    }, path
+
+
+def op_allow_config_write(payload):
+    """Make the FILE writable by the daemon's account: `fchown` to the daemon's primary group and `fchmod` to 0660, on an `O_NOFOLLOW`-opened regular file, under the file's lock.
+    Never the directory, never an `o` bit."""
+    return _set_conf_access(payload, True)
+
+
+def op_deny_config_write(payload):
+    """The inverse: `fchmod` 0640 (the group is kept, so the daemon can still read its file)."""
+    return _set_conf_access(payload, False)
 
 
 def _resolve_unit(service):
@@ -2279,7 +2388,7 @@ def _restore_locked(service, state, path):
         return _restore_failed(service, state, f"{result.get('error')}: {result.get('detail', '')}".strip(": "))
     if code == "ok":
         try:
-            _install_private(path + ".jen_backup", raw, st.st_uid, st.st_gid, st.st_mode & 0o777)
+            _install_private(path + ".jen_backup", raw, st.st_uid, st.st_gid, st.st_mode & 0o777 & ~0o022)  # (build 19: the backup is never group-writable)
             _install_private(path, json.dumps(new_cfg, indent=2).encode("utf-8"), st.st_uid, st.st_gid, st.st_mode & 0o777)
         except OSError as e:
             return _restore_failed(service, state, f"the config could not be written: {e}")
@@ -2515,6 +2624,48 @@ def op_investigation_status(payload):
     return {"ok": True, **_status_view(state)}, state.get("path")
 
 
+_REVERIFY_WINDOW = timedelta(minutes=15)
+
+
+def _reverify(service, state):
+    """build 19 (Q212): for a state that is DONE and inside its window, ask again. None - nothing to do (the window is over, the file cannot be read, or neither the file nor the daemon
+    carries the marker); (True, how, "") - the marker was back, the logger was put back again and the restore is noted a second time; (False, None, detail) - it was back and the second
+    restore failed (the record is unresolved again, so the next tick retries). The marker is looked for in the FILE and in the RUNNING daemon (`config-get` on its own control socket)."""
+    until = _parse_iso(state.get("until"))
+    if until is None or _now() > until + _REVERIFY_WINDOW:
+        return None
+    try:
+        raw, _st = _open_conf(state["path"])
+        config = json.loads(raw.decode("utf-8"))
+    except (_ConfLink, OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    carried = False
+    section = config.get("Dhcp4") if isinstance(config.get("Dhcp4"), dict) else {}
+    for entry in section.get("loggers") or []:
+        context = entry.get("user-context") if isinstance(entry, dict) and entry.get("name") == _INV_LOGGER else None
+        if isinstance(context, dict) and _INV_KEY in context:
+            carried = True
+    if not carried:
+        sock, _note = _control_socket(config)
+        seen = _daemon_logger_now(sock) if sock is not None else None
+        carried = seen is not None and seen.get("marker") is not None
+    if not carried:
+        return None
+    again = dict(state)
+    again["re_restores"] = int(state.get("re_restores") or 0) + 1
+    for key in ("restored_at", "how", "evidence", "verified_by_build"):
+        again.pop(key, None)
+    again["restored_at"] = None
+    try:
+        _save_state(service, again)
+    except OSError as e:
+        return False, None, f"the marker is back but the record could not be reopened ({e.strerror or e})"
+    ok, how, detail = _restore_state(service, again)
+    return (True, how, "") if ok else (False, None, detail)
+
+
 def _self_restore(force=False):
     """The timer's tick (and `--self-restore --now` by hand): for every armed state whose `until` has passed - every armed state with `force` - run the restore routine.
     A state file that is not one `investigation-arm` could have written is reported and never acted on."""
@@ -2546,6 +2697,14 @@ def _self_restore(force=False):
             failed.append({"service": service, "error": f"the state file is not usable: {state}"})
             continue
         if state.get("restored_at"):
+            # build 19 (Q212): a restore is not the end. Until Jen forgets the session (or its deadline + 15 minutes) every tick asks again whether the daemon or its file carries the
+            # investigation marker: an API write that landed between Jen's `config-hash-get` and its `config-set` while this timer fired puts DEBUG 55 back over a resolved session,
+            # and the file path cannot do that (the per-file lock and the sha guard refuse the stale write)
+            again = _reverify(service, state)
+            if again is not None:
+                (results if again[0] else failed).append(
+                    {"service": service, "how": again[1], "again": True} if again[0] else {"service": service, "error": again[2]}
+                )
             continue
         due = _parse_iso(state.get("until"))
         if not force and due is not None and due > _now():
@@ -2561,6 +2720,9 @@ _OPS = {
     "test-config": op_test_config,
     "apply-config": op_apply_config,
     "remove-config": op_remove_config,
+    "config-write-check": op_config_write_check,
+    "allow-config-write": op_allow_config_write,
+    "deny-config-write": op_deny_config_write,
     "service": op_service,
     "tail-log": op_tail_log,
     "install-package": op_install_package,

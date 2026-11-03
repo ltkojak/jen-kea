@@ -80,6 +80,9 @@ class TestTheHelpersOperationsAreAllNamedOnTheAboutPage:
         "investigation-disarm": "arm, disarm and\n  report a self-restore of the log level",
         "investigation-status": "arm, disarm and\n  report a self-restore of the log level",
         "investigation-timer": "arm, disarm and\n  report a self-restore of the log level",
+        "config-write-check": "check, grant and withdraw the daemon's right to write its own config file",
+        "allow-config-write": "check, grant and withdraw the daemon's right to write its own config file",
+        "deny-config-write": "check, grant and withdraw the daemon's right to write its own config file",
     }
 
     def test_the_phrase_table_covers_exactly_the_helpers_ops(self):

@@ -70,3 +70,29 @@ def install_store(monkeypatch):
     for name in ("record", "latest", "latest_of_kind", "pending", "finish", "discard"):
         monkeypatch.setattr(f"jen.services.config_revisions.{name}", getattr(s, name))
     return s
+
+
+def install_probes(monkeypatch, *, valid=True):
+    """Patch the stored probe (`kea_api_config.stored_probe` / `store_probe`) with a dict. With `valid` every server id reads as a server whose probe passed, was consented to and is fresh - the
+    state a server is in after its operator has used the card - until a test stores something else for it."""
+    from datetime import datetime, timezone
+
+    from jen.services import kea_api_config as api
+
+    data = {}
+
+    def stored(server_id):
+        if server_id in data:
+            return copy.deepcopy(data[server_id])
+        if not valid:
+            return None
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return {"at": now, "config_api": True, "consented_at": now}
+
+    def store(server_id, value):
+        data[server_id] = copy.deepcopy(value)
+        return True
+
+    monkeypatch.setattr(api, "stored_probe", stored)
+    monkeypatch.setattr(api, "store_probe", store)
+    return data

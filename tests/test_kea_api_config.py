@@ -31,11 +31,17 @@ def store(monkeypatch):
     return world.install_store(monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def probes(monkeypatch):
+    return world.install_probes(monkeypatch)
+
+
 @pytest.fixture
 def refusal(monkeypatch):
     """The investigation question (INV-005), patched the way tests/test_kea_changeset.py patches it - by the module's own name."""
     box = {"text": ""}
     monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: box["text"])
+    monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
     return box
 
 
@@ -493,6 +499,10 @@ class TestTheModuleIsTheOneSender:
             "jen.services.kea_host",
             "jen.services.kea_authoring",
             "jen.services.kea_tls",
+            "jen.services.investigation_logging",  # the host's restore window (lazy: that module imports the change set)
+            "datetime.datetime",  # the stored probe's clock (lazy)
+            "datetime.timezone",
+            "jen.models.user",  # the stored probe is a settings row (lazy)
         }
         assert imported <= allowed, imported - allowed
         calls = {
@@ -501,3 +511,59 @@ class TestTheModuleIsTheOneSender:
             if isinstance(n, ast.Call) and "post" in ast.unparse(n.func).lower()
         }
         assert calls == set(), calls  # no direct HTTP: every command goes through `kea_command`
+
+
+from jen.services import investigation_logging as _inv  # noqa: E402
+
+_REAL_RESTORE_WINDOW = _inv.restore_window  # captured before any fixture patches it out
+
+
+class TestTheHostsDeadlineIsRespected:
+    """BB9 d: an API write within two sweep intervals of an investigation deadline could land over the HOST's restore (Kea has no compare-and-set), so it is refused with the host's own words."""
+
+    def _entry(self, monkeypatch, minutes_from_now, **entry):
+        from datetime import datetime, timedelta, timezone
+
+        until = (datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)).isoformat(timespec="seconds")
+        record = {"servers": {str(SID): {"name": "kea-a", "until": until, **entry}}, "damaged": False}
+        monkeypatch.setattr(_inv, "_record", lambda: record)
+        monkeypatch.setattr(_inv, "restore_window", _REAL_RESTORE_WINDOW)
+        return until
+
+    def test_a_deadline_two_minutes_away_refuses_and_nothing_is_sent(self, fake, server, monkeypatch):
+        cfg, digest = _plan(server)
+        fake.commands.clear()
+        until = self._entry(monkeypatch, 1.5)
+        result = api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
+        assert (
+            result["code"] == "investigation-on"
+            and "try again after it" in result["detail"]
+            and until in result["detail"]
+        )
+        assert fake.commands == []
+
+    def test_a_deadline_that_has_just_passed_refuses_too(self, fake, server, monkeypatch):
+        cfg, digest = _plan(server)
+        self._entry(monkeypatch, -1.5)
+        assert api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)["code"] == "investigation-on"
+
+    def test_a_deadline_ten_minutes_away_does_not(self, fake, server, monkeypatch):
+        cfg, digest = _plan(server)
+        self._entry(monkeypatch, 10)
+        assert api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)["ok"]
+
+    def test_an_entry_already_restored_in_the_file_and_the_daemon_has_nothing_to_protect(
+        self, fake, server, monkeypatch
+    ):
+        cfg, digest = _plan(server)
+        self._entry(monkeypatch, 1, file="restored", daemon="restored")
+        assert api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)["ok"]
+
+    def test_a_rollback_is_not_stopped_by_it(self, fake, server, monkeypatch):
+        cfg, digest = _plan(server)
+        self._entry(monkeypatch, 1)
+        assert api.apply(server, "dhcp4", _candidate(cfg), digest, "x", source="rollback", before_cfg=cfg)["ok"]
+
+    def test_only_dhcp4_carries_the_marker(self, fake, server, monkeypatch):
+        self._entry(monkeypatch, 1)
+        assert _REAL_RESTORE_WINDOW({"id": SID + 1}) == ""  # another server's id: no entry

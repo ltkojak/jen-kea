@@ -22,6 +22,7 @@ import jen.services.dhcp_options as __opts
 import jen.services.isc_dhcp_import as __isc
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_api_config as __api
 import jen.services.kea_changeset as __changeset
 import jen.services.kea_classes as __classes
 import jen.services.kea_config_edit as __edit
@@ -78,10 +79,10 @@ def _config_shas(service):
     degrades to a best-effort compare or, with no sha at all, no guard)."""
     shas = {}
     for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
+        if __changeset._transport(server, service) == "off":
+            continue  # not a write target: the form's guard sha is for the servers the change will be written to
         try:
-            _cfg, sha = __host.read_config_versioned(server, service)
+            _cfg, sha = __host.read_via_transport(server, service)
         except Exception:
             sha = None
         shas[server["id"]] = sha
@@ -774,11 +775,11 @@ def edit_subnet_preview(subnet_id):
 
     server_results = []
     for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        name = server.get("name", server["ssh_host"])
+        if __changeset._transport(server, "dhcp4") == "off":
+            continue  # the preview lists the servers the change will be written to - each read through its own transport (Q212)
+        name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
         try:
-            cfg, live_sha = __host.read_config_versioned(server, "dhcp4")
+            cfg, live_sha = __host.read_via_transport(server, "dhcp4")
             if cfg is None:
                 server_results.append({"name": name, "ok": False, "message": "kea-dhcp4.conf not found on this server"})
                 continue
@@ -1487,12 +1488,15 @@ def dhcp_class_preview():
 
     test_result = None
     if not error:
-        ssh_server = next((s for s in extensions.KEA_SERVERS if s.get("ssh_host")), None)
+        ssh_server = next((s for s in extensions.KEA_SERVERS if __host.read_kind(s, "dhcp4")), None)
         if ssh_server is None:
-            test_result = {"ok": None, "detail": "No SSH-reachable Kea server to validate against."}
+            test_result = {
+                "ok": None,
+                "detail": "No Kea server to validate against: none is reachable over SSH or its own API.",
+            }
         else:
             try:
-                full_cfg, _sha = __host.read_config_versioned(ssh_server, "dhcp4")
+                full_cfg, _sha = __host.read_via_transport(ssh_server, "dhcp4")
                 if full_cfg is None:
                     test_result = {"ok": None, "detail": "Couldn't read the live config on that server."}
                 else:
@@ -1841,11 +1845,11 @@ def edit_subnet6_preview(subnet_id):
 
     server_results = []
     for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
+        if __changeset._transport(server, "dhcp6") == "off":
             continue
-        name = server.get("name", server["ssh_host"])
+        name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
         try:
-            cfg, live_sha = __host.read_config_versioned(server, "dhcp6")
+            cfg, live_sha = __host.read_via_transport(server, "dhcp6")
             if cfg is None:
                 server_results.append({"name": name, "ok": False, "message": "kea-dhcp6.conf not found on this server"})
                 continue
@@ -2304,26 +2308,33 @@ def import_windows_preview(source):
     entry["selections"] = selections
 
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
-    if primary is None or not primary.get("ssh_host"):
-        flash("The primary Kea server needs SSH configured before you can preview or apply an import.", "error")
+    if primary is None or __changeset._transport(primary, "dhcp4") == "off":
+        flash(
+            "The primary Kea server needs SSH configured (or its configuration switched to the API transport) before you can preview or apply an import.",
+            "error",
+        )
         return redirect(review_url)
+    kind = __changeset._transport(primary, "dhcp4")
 
-    existing_cfg, _sha = __host.read_config_versioned(primary, "dhcp4")
+    existing_cfg, _sha = __host.read_via_transport(primary, "dhcp4")
     if existing_cfg is None:
-        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
+        flash("Could not read the primary server's Kea configuration.", "error")
         return redirect(review_url)
 
     new_cfg, reservations, subnets_to_declare, report = __win.to_kea(plan, existing_cfg, subnet_names, selections)
     if src["key"] == "isc":
         # to_kea's summary lines say "scope" (the Windows word); a dhcpd.conf has subnets
         report = [("subnet " + line[len("scope ") :]) if line.startswith("scope ") else line for line in report]
-    test_result = __host.test_config(primary, "dhcp4", new_cfg)
+    test_result = (
+        __api.test(primary, "dhcp4", new_cfg) if kind == "api" else __host.test_config(primary, "dhcp4", new_cfg)
+    )
 
     # v5.28.0 (Q24, C4) — preview==apply: Apply pushes exactly this
     # candidate config (never a fresh to_kea() call) and refuses unless
     # it was actually test_config()-clean and the live config hasn't
     # moved since this sha was read.
     entry["preview_sha"] = _sha
+    entry["preview_kind"] = kind  # Q212: a preview made on one transport is never applied on the other
     entry["candidate_cfg"] = new_cfg
     entry["reservation_rows"] = reservations
     entry["subnets_to_declare"] = subnets_to_declare
@@ -2429,19 +2440,65 @@ def import_windows_apply(source):
         return redirect(review_url)
 
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
-    if primary is None or not primary.get("ssh_host"):
-        flash("The primary Kea server needs SSH configured before you can apply an import.", "error")
+    if primary is None or __changeset._transport(primary, "dhcp4") == "off":
+        flash(
+            "The primary Kea server needs SSH configured (or its configuration switched to the API transport) before you can apply an import.",
+            "error",
+        )
+        return redirect(review_url)
+    kind = __changeset._transport(primary, "dhcp4")
+    if entry.get("preview_kind", "file") != kind:
+        flash(
+            "The primary server's configuration transport changed since you previewed this import — preview it again.",
+            "error",
+        )
         return redirect(review_url)
 
-    live_cfg, live_sha = __host.read_config_versioned(primary, "dhcp4")
+    live_cfg, live_sha = __host.read_via_transport(primary, "dhcp4")
     if live_cfg is None:
-        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
+        flash("Could not read the primary server's Kea configuration.", "error")
         return redirect(review_url)
     if live_sha != entry["preview_sha"]:
         flash(
             "The Kea config on the primary server changed since you previewed this import — preview it again.", "error"
         )
         return redirect(review_url)
+
+    if kind == "api":
+        # Q212 (BB7 b): over the daemon's own API - compare, set, write, verify, no restart - under the change lock, straight to the reservations step
+        try:
+            with __changeset.change_lock():
+                apply_result = __api.apply(
+                    primary,
+                    "dhcp4",
+                    entry["candidate_cfg"],
+                    entry["preview_sha"],
+                    f"{src['label']} import",
+                    before_cfg=live_cfg,
+                )
+        except __changeset.ChangeBusy:
+            flash(__changeset.BUSY_SENTENCE.capitalize() + ".", "error")
+            return redirect(review_url)
+        if apply_result["code"] == "conflict":
+            flash(_conflict_flash(primary.get("name", "the primary server")), "error")
+            return redirect(review_url)
+        if apply_result["code"] != "ok":
+            if apply_result.get("needs_hands"):
+                __changeset.record_attention(
+                    primary.get("id"),
+                    "dhcp4",
+                    f"{src['label']} import",
+                    "config-api-unverified",
+                    server_name=primary.get("name", ""),
+                )
+            flash(f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}", "error")
+            return redirect(review_url)
+        entry["report"].append("Applied over the daemon's own API; no restart was needed.")
+        __changeset.resolve_attention(
+            primary.get("id"), "dhcp4", categories=("config-api-unverified", "config-restart-failed")
+        )
+        report = _finish_windows_import(token, entry)
+        return render_template("import_windows_result.html", report=report, src=src)
 
     apply_result = __host.apply_config(
         primary,
@@ -2534,7 +2591,9 @@ def import_windows_apply_reservations(source):
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
     if primary is None or not primary.get("ssh_host"):
         flash("The primary Kea server needs SSH configured before you can add reservations.", "error")
-        return redirect(review_url)
+        return redirect(
+            review_url
+        )  # (the retry exists for a failed RESTART: an import applied over the API has none, so this step is file-only)
     live_cfg, live_sha = __host.read_config_versioned(primary, "dhcp4")
     if live_cfg is None:
         flash("Could not read the primary server's kea-dhcp4.conf.", "error")

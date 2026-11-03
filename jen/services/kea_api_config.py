@@ -56,7 +56,7 @@ def declared_transport(server: dict) -> str:
 
 
 def _name(server: dict) -> str:
-    return server.get("name") or server.get("api_url") or server.get("ssh_host") or "the server"
+    return server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
 
 
 def _result(ok: bool, code: str, detail: str = "", sha256: str | None = None, **extra) -> dict:
@@ -414,6 +414,19 @@ def apply(
     refusal = _host.guard_kea_write(server, cfg, service)  # (1)
     if refusal:
         return _result(False, "guard", refusal)
+    if source != "rollback":
+        # (1a) BB9 d: never inside the window in which the HOST restores logging - a rollback undoes a change that stood, and is not a new write over the restore
+        from jen.services import (
+            investigation_logging as _inv,
+        )  # lazy: that module imports the change set, which imports this one
+
+        window = _inv.restore_window(server) if service == "dhcp4" else ""
+        if window:
+            return _result(False, "investigation-on", window)
+    # (1b) no write without the probe's facts, the operator's consent and a daemon that is not known to refuse its file
+    gated = probe_gate(server, source)
+    if gated:
+        return _result(False, "guard", gated)
 
     if before_cfg is None:
         before_cfg, before_digest, why = _get(server, service)
@@ -474,6 +487,9 @@ def apply(
     unwritten = ""
     if not wrote_ok:
         if wrote is not None and _answered(wrote):
+            remember_refusal(
+                server, _text(wrote)
+            )  # BB9 a: a fleet does not undo the same change on every edit; cleared only by evidence
             proved_back = _undo(server, service, before_cfg, expect_hash or now)
             if proved_back:
                 _drop_pending()
@@ -553,3 +569,177 @@ def api_daemon_differs(server: dict, service: str) -> str:
         f"the daemon on {_name(server)} runs a configuration its file does not carry (the daemon {digest[:12]}, the file {str(raw or 'unknown')[:12]}); "
         "restore or resolve it from Config history first"
     )
+
+
+# ── the stored probe: the facts are the gate (Q212, BB3 c/d) ──────────────────────────────────────────────────────────────
+
+
+PROBE_KEY = "config_transport_probe:{}"
+PROBE_MAX_AGE_DAYS = 7
+PROBE_SENTENCE = "run Check API configuration on the server's card first"
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def stored_probe(server_id) -> dict | None:
+    """The stored result of the last probe of this server (`settings` key `config_transport_probe:<id>`), or None. It is what `capabilities.derive` reads and what the card renders - a
+    settings read, never a Kea call."""
+    if server_id is None:
+        return None
+    from jen.models import user as _user
+
+    try:
+        raw = _user.get_global_setting(PROBE_KEY.format(server_id))
+        data = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def store_probe(server_id, data: dict) -> bool:
+    from jen.models import user as _user
+
+    return bool(_user.set_global_setting(PROBE_KEY.format(server_id), json.dumps(data, sort_keys=True)))
+
+
+def _age_days(iso: str | None) -> float | None:
+    from datetime import datetime, timezone
+
+    try:
+        when = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - when).total_seconds() / 86400
+
+
+def probe_gate(server: dict, source: str = "jen") -> str:
+    """NO API write without it: a sentence for a server whose stored result is absent, older than 7 days, has `config_api` false, carries no `consented_at` (the operator's named consent, from
+    the card), or remembers a refused write (BB9 a); "" otherwise. A server added through Settings with `api` written by the save route therefore cannot be written to until its operator
+    has read the probe's facts once: the probe is a click, the facts are the gate."""
+    stored = stored_probe(server.get("id"))
+    if not stored:
+        return PROBE_SENTENCE
+    age = _age_days(stored.get("at"))
+    if age is None or age > PROBE_MAX_AGE_DAYS:
+        return f"the last check of {_name(server)} is older than {PROBE_MAX_AGE_DAYS} days - {PROBE_SENTENCE.replace('first', 'again')}"
+    if not stored.get("config_api"):
+        return f"the daemon on {_name(server)} could not be read over its API at the last check - {PROBE_SENTENCE.replace('first', 'again')}"
+    if not stored.get("consented_at"):
+        return f"changes over the API to {_name(server)} have not been allowed yet - read the facts and allow them from the server's card"
+    return (
+        "" if source == "rollback" else refusal_sentence(server)
+    )  # a rollback puts back a change that DID stand on this server: a remembered refusal must not stop it
+
+
+def refusal_sentence(server: dict) -> str:
+    """BB9 a: after a `write-failed` the stored result carries `refused` (Kea's own text) and a change set refuses to PLAN against the server, so a fleet does not undo the same change on every edit."""
+    stored = stored_probe(server.get("id"))
+    if stored and stored.get("refused"):
+        return f"the daemon on {_name(server)} may not write its file ({stored['refused']}); fix it, then run Check API configuration"
+    return ""
+
+
+def remember_refusal(server: dict, text: str) -> bool:
+    """Record Kea's own refusal of `config-write` in the stored result. Cleared only by evidence (`probe` with the helper's `config-write-check` saying the account may write, or the operator's
+    "I have fixed it" with its audit row) - never by a probe that proves nothing."""
+    sid = server.get("id")
+    if sid is None:
+        return False
+    stored = stored_probe(sid) or {"at": _now_iso()}
+    stored["refused"] = (text or "config-write was refused")[:300]
+    return store_probe(sid, stored)
+
+
+def clear_refusal(server_id) -> bool:
+    stored = stored_probe(server_id)
+    if not stored or "refused" not in stored:
+        return True
+    stored.pop("refused", None)
+    return store_probe(server_id, stored)
+
+
+def _endpoint_facts(server: dict, service: str) -> dict:
+    """How the endpoint is authenticated and whether it is reached over TLS - read from what `credentials.resolve` gave the server dict, never sent anywhere. Kea draws no line between a client that reads
+    and one that writes (RBAC is subscriber-only), so the credential that reads is the credential that writes and NOTHING new is created on Kea."""
+    endpoint = _kea._endpoint_for(server, service)
+    if isinstance(endpoint, dict):
+        return {"auth": "unknown", "tls": None}
+    url, user, pwd = endpoint
+    tls = str(url).lower().startswith("https://")
+    if user or pwd:
+        auth = "password"
+    elif tls and _kea._tls_client_cert():
+        auth = "client certificate"
+    else:
+        auth = "none"
+    return {"auth": auth, "tls": tls}
+
+
+def probe(server: dict, service: str = "dhcp4", *, consent: bool = False) -> dict:
+    """The facts an operator reads before the first change over the API, from a GUARDED `config-get` (never `config-hash-get`, which the Control Agent also answers), a `config-test` of the running
+    configuration, how the endpoint is authenticated, and - where SSH exists - the helper's `config-write-check` and a compare of the file with the daemon. Stored (BB3 d) and returned.
+    `consent` records the operator's named consent (`consented_at`) when the facts allow it."""
+    sid = server.get("id")
+    prev = stored_probe(sid) or {}
+    out = {"at": _now_iso(), "service": service}
+    cfg, _digest, why = _get(server, service)
+    out["config_api"] = cfg is not None
+    if cfg is None:
+        out["read_error"] = why
+    else:
+        tested = test(server, service, cfg)
+        out["test_ok"] = bool(tested["ok"])
+        if not tested["ok"]:
+            out["test_detail"] = tested.get("detail", "")
+    out.update(_endpoint_facts(server, service))
+    out["authored"] = False
+    if sid is not None:
+        try:
+            out["authored"] = any(
+                r.get("source") in ("jen", "authoring") for r in _rev.list_revisions(sid, service, limit=500)
+            )
+        except Exception as e:  # a history read never fails the probe
+            logger.warning("kea_api_config: probe could not read the history of %s: %s", sid, type(e).__name__)
+    refused = prev.get("refused")
+    if _has_ssh(server):
+        check = _host.config_write_check(server, service)
+        out["write"] = (
+            {
+                "may_write": bool(check.get("may_write")),
+                "owner_uid": check.get("owner_uid"),
+                "owner_gid": check.get("owner_gid"),
+                "mode": check.get("mode"),
+                "account": (check.get("account") or {}).get("name") if check.get("account") else "root",
+                "daemon_is_root": bool(check.get("daemon_is_root")),
+            }
+            if check.get("ok")
+            else {"unavailable": check.get("detail") or check.get("code")}
+        )
+        out["include"] = list(check.get("includes") or []) if check.get("ok") else None
+        file_cfg, _raw = _host.read_config_versioned(server, service, capture=False)
+        out["agree"] = (
+            None if file_cfg is None or cfg is None else _canonical(file_cfg, service) == _canonical(cfg, service)
+        )
+        if check.get("ok") and check.get("may_write"):
+            refused = None  # evidence: the host says the daemon's account may write its file
+    else:
+        out["write"] = "unknown until the first change - Jen undoes a change whose write fails"
+        out["include"] = None  # cannot be known without the host; the switch asks the operator to confirm there is none
+        out["agree"] = None
+    if refused:
+        out["refused"] = refused
+    if prev.get("consented_at"):
+        out["consented_at"] = prev["consented_at"]
+    if consent:
+        if out["config_api"] and not out.get("include"):
+            out["consented_at"] = _now_iso()
+        else:
+            out["consent_refused"] = "the daemon could not be read over its API, or the file carries an include"
+    store_probe(sid, out)
+    return out

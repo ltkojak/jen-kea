@@ -338,7 +338,7 @@ def _naming_tab_context():
     each server by its OWN sha (Q11) at write time, so there's no
     meaningful single "as of" sha to round-trip through this form."""
     server = __kea.get_active_kea_server()
-    cfg = __host.read_config(server, "dhcp4") if server.get("ssh_host") else None
+    cfg = __host.read_via_transport(server, "dhcp4")[0] if __host.read_kind(server, "dhcp4") else None
     dhcp4 = (cfg or {}).get("Dhcp4", {})
     return {
         "config_unavailable": cfg is None,
@@ -597,8 +597,8 @@ def ddns_naming_save():
         active = __kea.get_active_kea_server()
         # a read for one value: no config revision recorded (it must not race the save that follows), and bounded
         current = (
-            __host.read_config(active, "dhcp4", capture=False, timeout=15)
-            if active and active.get("ssh_host")
+            __host.read_via_transport(active, "dhcp4", capture=False, timeout=15)[0]
+            if active and __host.read_kind(active, "dhcp4")
             else None
         )
         hook = __writers.hook_loaded((current or {}).get("Dhcp4", {}))
@@ -616,7 +616,7 @@ def _d2config_tab_context():
     server, same "one representative server" reasoning as the Naming
     tab — _save_d2_change below pushes to every SSH-configured server."""
     server = __kea.get_active_kea_server() if extensions.KEA_SERVERS else None
-    cfg = __host.read_config(server, "d2") if server and server.get("ssh_host") else None
+    cfg = __host.read_via_transport(server, "d2")[0] if server and __host.read_kind(server, "d2") else None
     d2cfg = (cfg or {}).get("DhcpDdns", {})
     tsig_keys = [
         {"name": k.get("name"), "algorithm": k.get("algorithm")}

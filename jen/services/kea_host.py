@@ -271,7 +271,7 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 18  # v5.69.0-beta.1 (Q170): the walls (credentials, sockets, symlinks, descriptors, the bounded restore lock, the completion validator) around what the helper does as root; build 17: v5.68.0-beta.31 (Q168): a restore is recorded only on the daemon's own answer (config-get on its control socket), Kea's completion id read across rotation, or a NEW active process - a reload-start line is never evidence, an unreadable state file is never "no session"; build 16: v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
+JEN_HELPER_SHIPPED_BUILD = 19  # build 19 (Q212): `config-write-check`, `allow-config-write` and `deny-config-write` (who may write the daemon's own file), a backup that is never group-writable, and a timer tick that keeps verifying after a restore; build 18: v5.69.0-beta.1 (Q170): the walls (credentials, sockets, symlinks, descriptors, the bounded restore lock, the completion validator) around what the helper does as root; build 17: v5.68.0-beta.31 (Q168): a restore is recorded only on the daemon's own answer (config-get on its control socket), Kea's completion id read across rotation, or a NEW active process - a reload-start line is never evidence, an unreadable state file is never "no session"; build 16: v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
@@ -690,6 +690,42 @@ def _read_config_versioned(
     return cfg, sha
 
 
+def read_kind(server: dict, service: str) -> str | None:
+    """How a route may READ this server's configuration (Q212, BB7 d): `"api"` (the daemon's own `config-get`), `"file"` (the helper's read of the file) or None. A write target reads through its own
+    transport; an `off` server reads through the file when it has SSH (what its previews have always shown) and over the API when it has none - reading was never a write path, and the drift check
+    has read every server's `config-get` for years. D2 has no API read in 7.0.0-beta.1: the file where SSH exists, else None."""
+    from jen.services import kea_api_config as _api
+    from jen.services import kea_changeset as _cs
+
+    kind = _cs._transport(server, service)
+    if kind != "off":
+        return kind
+    if server.get("ssh_host"):
+        return "file"
+    return "api" if service in _api.SERVICE_KEY else None
+
+
+def read_via_transport(
+    server: dict, service: str, *, errors: list | None = None, **kw
+) -> tuple[dict | None, str | None]:
+    """`(cfg, sha)` read through the server's own transport (`read_kind`): `kea_api_config.read` for `api` (the sha is the daemon's digest), `read_config_versioned` for `file`. `(None, None)` for a
+    server that cannot be read either way. The thirteen route reads change one gate and this call, not their bodies."""
+    kind = read_kind(server, service)
+    if errors is not None:
+        kw["errors"] = (
+            errors  # (passed only when given: a caller's own stub of the file read takes the two arguments it always had)
+        )
+    if kind == "api":
+        from jen.services import kea_api_config as _api
+
+        return _api.read(server, service, **kw)
+    if kind == "file":
+        return read_config_versioned(server, service, **kw)
+    if errors is not None:
+        errors.append("this server has no way to read its configuration (no SSH host and not served over the API)")
+    return None, None
+
+
 def read_config(server: dict, service: str, *, errors: list | None = None, **kw) -> dict | None:
     """The parsed Kea config for `service` on `server`, or None if it's
     missing or unreadable. Thin wrapper over read_config_versioned() (`**kw`: its `timeout`, `helper_only` and `capture`)."""
@@ -1067,6 +1103,7 @@ def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err), "via": "helper"}
 
 
+CONFIG_WRITE_MIN_HELPER_BUILD = 19  # Q212: the three `*-config-write*` ops; a build-18 host reads as not having them and the card says "build 19 available"
 INVESTIGATION_MIN_HELPER_BUILD = 18  # v5.69.0-beta.1 (Q170): the walls around what the helper reads and connects to as root, the completion validator and the bounded restore are build 18; v5.68.0-beta.31 (Q168): the restore verified from the daemon's own answer and the one state loader are build 17 (build 16: the authoritative host record and the timer ops; build 15: the self-restore itself)
 
 
@@ -1108,6 +1145,44 @@ def _investigation_op(server: dict, op: str, payload: dict) -> dict:
             "detail": f"the Kea host helper on this host is older than build {INVESTIGATION_MIN_HELPER_BUILD} - press Update helper",
         }
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err or "the helper refused")}
+
+
+def _config_write_op(server: dict, op: str, payload: dict) -> dict:
+    """One build-19 helper op, normalized like `_investigation_op`: `{"ok", "code": "ok" | "missing" | "old" | "error", "detail", ...the helper's own fields}`. Never raises. There is NO legacy
+    engine: the grant is a root action on the Kea host, so a host without the helper - or with one older than build 19 - answers `missing` / `old` and the caller says to press Update helper."""
+    try:
+        resp = helper_call(server, op, payload)
+    except HelperMissing:
+        _flag_legacy(server)
+        return {"ok": False, "code": "missing", "detail": HELPER_REQUIRED}
+    except HelperError as e:
+        return {"ok": False, "code": "error", "detail": str(e)}
+    _record_from_resp(server.get("id"), resp)
+    if resp.get("ok"):
+        return {**resp, "ok": True, "code": "ok", "detail": resp.get("detail") or ""}
+    err = resp.get("error")
+    if err == "unknown-op":
+        return {
+            "ok": False,
+            "code": "old",
+            "detail": f"the Kea host helper on this host is older than build {CONFIG_WRITE_MIN_HELPER_BUILD} - press Update helper",
+        }
+    return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err or "the helper refused")}
+
+
+def config_write_check(server: dict, service: str = "dhcp4") -> dict:
+    """Facts about whether the daemon's account may write its `-c` file: owner, group and mode, the account the unit runs as, `may_write` and any `<?include?>` the file carries. Changes nothing."""
+    return _config_write_op(server, "config-write-check", {"service": service, "path": _conf_path(server, service)})
+
+
+def allow_config_write(server: dict, service: str = "dhcp4") -> dict:
+    """Make the FILE writable by the daemon's account (its group and 0660; never the directory, never an `o` bit)."""
+    return _config_write_op(server, "allow-config-write", {"service": service, "path": _conf_path(server, service)})
+
+
+def deny_config_write(server: dict, service: str = "dhcp4") -> dict:
+    """The inverse of `allow_config_write`: 0640, the group kept."""
+    return _config_write_op(server, "deny-config-write", {"service": service, "path": _conf_path(server, service)})
 
 
 def investigation_arm(server: dict, until: str, restore: dict, jen: dict | None = None, log_path: str = "") -> dict:

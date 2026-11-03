@@ -190,6 +190,7 @@ class StatefulKeaServer:
     Every command received is appended to `commands`. The switches, each settable per test:
 
         write_fails        Kea's own permission text: `config-write` answers result 1
+        test_fails         Kea's refusal text: `config-test` answers result 1
         set_fails          Kea's refusal text: `config-set` answers result 1 (the old configuration keeps serving)
         set_fails_and_stops   ... and the daemon then stops answering at all (ISC: a fatal error can stop the server)
         hooks              {command: callable(fake)} run when that command arrives, before it is answered
@@ -207,6 +208,7 @@ class StatefulKeaServer:
         self.file = copy.deepcopy(self.running)
         self.commands: list[str] = []
         self.write_fails = None
+        self.test_fails = None
         self.set_fails = None
         self.set_fails_and_stops = False
         self.hang: dict = {}
@@ -248,6 +250,8 @@ class StatefulKeaServer:
         if command == "config-hash-get":
             return {"result": 0, "arguments": {"hash": self.digest()}}
         if command == "config-test":
+            if self.test_fails:
+                return {"result": 1, "text": self.test_fails}
             return {"result": 0, "text": "Configuration seems sane."}
         if command == "config-set":
             if self.set_fails:

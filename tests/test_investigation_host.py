@@ -454,7 +454,10 @@ class TestTheWrappersAroundTheHelperOps:
     def test_the_minimum_build_is_the_one_the_helper_ships(self):
         from jen.services import kea_host
 
-        assert kea_host.INVESTIGATION_MIN_HELPER_BUILD == 18 == kea_host.JEN_HELPER_SHIPPED_BUILD
+        assert (
+            kea_host.INVESTIGATION_MIN_HELPER_BUILD == 18
+        )  # the investigation ops arrived at 18 and still need only 18
+        assert kea_host.JEN_HELPER_SHIPPED_BUILD == kea_host.CONFIG_WRITE_MIN_HELPER_BUILD == 19
 
 
 class TestTheElevenRowsOfTheCandidateMarker:

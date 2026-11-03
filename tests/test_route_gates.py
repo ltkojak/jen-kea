@@ -36,6 +36,13 @@ NAMED_FORM_WRITERS = (
     ("jen/routes/settings/authoring.py", "install_kea_helper"),
     ("jen/routes/settings/authoring.py", "install_kea_binary"),
     ("jen/routes/settings/infrastructure.py", "toggle_ipv6"),
+    # Q212: the per-server card's routes (superadmin + step-up): the switch changes which path a configuration takes to a daemon, the two helper ops change who may write a root-owned file,
+    # and "I have fixed it" clears a remembered refusal on the operator's word (audited). `probe_kea_config` is a superadmin's read that stores a result and is pinned in
+    # tests/test_kea_transport_routes.py.
+    ("jen/routes/settings/kea_transport.py", "switch_kea_transport"),
+    ("jen/routes/settings/kea_transport.py", "allow_config_write"),
+    ("jen/routes/settings/kea_transport.py", "deny_config_write"),
+    ("jen/routes/settings/kea_transport.py", "config_write_fixed"),
 )
 
 #: Q204 AT6: empty. Q203 pinned `install_kea_binary` and `toggle_ipv6` here as superadmin routes with no step-up and reported them; both ask for one now. A route is added here only with its reason

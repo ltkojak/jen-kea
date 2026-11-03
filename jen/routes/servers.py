@@ -13,10 +13,12 @@ from flask_login import current_user, login_required
 
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.capabilities as __caps
 import jen.services.ha_maintenance as __maint
 import jen.services.investigation_logging as __inv
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_api_config as __api
 import jen.services.kea_authoring as __authoring
 import jen.services.kea_changeset as __changeset
 import jen.services.kea_ha as __ha
@@ -158,6 +160,14 @@ def servers():
             s["version"] = ""
             s["lease_stats"] = {}
             s["packet_health"] = None
+    # Q212 (BB5): how a change reaches each server - ONE word for one state (`api | file | off`), from the same derivation the capability, the change set and the card use
+    for s in statuses:
+        caps = __caps.from_status(s)
+        probe = __api.stored_probe(s["server"].get("id")) or {}
+        s["transport"] = caps.config_transport
+        s["transport_why"] = caps.transport_why()
+        s["transport_unauthenticated"] = caps.config_transport == "api" and probe.get("auth") == "none"
+        s["transport_refused"] = __api.refusal_sentence(s["server"])
     single_server = len(extensions.KEA_SERVERS) == 1
     ha_mode = extensions.cfg.get("kea", "ha_mode", fallback="")
 
@@ -941,7 +951,7 @@ def config_history_detail(server_id, rev_id):
         rev=rev,
         rows=rows,
         is_latest=is_latest,
-        can_restore=current_user.is_superadmin and bool(server.get("ssh_host")),
+        can_restore=current_user.is_superadmin and __changeset._transport(server, rev["service"]) != "off",
         can_download_raw=current_user.is_superadmin,
     )
 
@@ -996,6 +1006,58 @@ def config_history_download_raw(server_id, rev_id):
     )
 
 
+def _restore_over_api(server, server_id, rev_id, service, cfg, back):
+    """Q212 (BB7 a): a revision put back into a daemon over its own API - `config-test`, then `kea_api_config.apply` with the LIVE digest read in THIS request (never a stored row's: after a failed
+    undo no row was recorded and the stored baseline is not what the daemon runs), no restart. A revision from before "Set up direct socket" (or one naming other TLS material) is refused by the module's
+    API-only guard with the file-path sentence. The change lock is held, as for every change."""
+    name = server["name"]
+    try:
+        with __changeset.change_lock():
+            errors, notes = [], []
+            live_cfg, live_hash = __api.read(server, service, errors=errors, capture=False, notes=notes)
+            if live_cfg is None:
+                flash(
+                    f"Restore aborted - {name} did not answer over its API ({errors[0] if errors else 'no answer'}).",
+                    "error",
+                )
+                return back
+            tested = __api.test(server, service, cfg)
+            if not tested["ok"]:
+                flash(
+                    f"Restore aborted — {name} rejected revision #{rev_id}: {tested.get('detail') or 'unknown error'}",
+                    "error",
+                )
+                return back
+            res = __api.apply(
+                server, service, cfg, live_hash, f"restore of #{rev_id}", source="restore", before_cfg=live_cfg
+            )
+    except __changeset.ChangeBusy:
+        flash(__changeset.BUSY_SENTENCE[:1].upper() + __changeset.BUSY_SENTENCE[1:] + ".", "error")
+        return back
+    if res.get("code") == "conflict":
+        flash(
+            f"The configuration on {name} changed while this restore was being made - it was NOT applied. Reload and try again.",
+            "error",
+        )
+        return back
+    if not res.get("ok"):
+        flash(f"Restore failed on {name}: {res.get('detail') or 'unknown error'}", "error")
+        if res.get("needs_hands"):
+            stored = __changeset.record_attention(
+                server_id, service, f"restore of revision #{rev_id}", "config-api-unverified", server_name=name
+            )
+            if not stored:
+                flash("Jen could not record that the daemon is unproved; check it on the host.", "warning")
+        return back
+    __changeset.resolve_attention(server_id, service, categories=("config-api-unverified", "config-restart-failed"))
+    flash(
+        f"Restored revision #{rev_id} to {name} over the API; no restart was needed (the daemon runs digest {str(res.get('sha256') or '')[:12]}).",
+        "success",
+    )
+    __user.audit("RESTORE_KEA_CONFIG", name, f"service={service} revision={rev_id} transport=api")
+    return back
+
+
 @bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/restore", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -1012,7 +1074,13 @@ def config_history_restore(server_id, rev_id):
     service = rev["service"]
     back = redirect(url_for("servers.config_history", server_id=server_id, service=service))
 
-    if not server.get("ssh_host"):
+    transport = __changeset._transport(server, service)
+    if str(server.get("config_transport") or "").strip() == "off":
+        flash(
+            f"{server['name']} is not a write target (its transport is off): switch it on from its card first.", "error"
+        )
+        return back
+    if transport == "off":
         flash("SSH is not configured for this server.", "error")
         return back
     try:
@@ -1020,6 +1088,8 @@ def config_history_restore(server_id, rev_id):
     except ValueError:
         flash("This revision's stored config is not valid JSON — cannot restore.", "error")
         return back
+    if transport == "api":
+        return _restore_over_api(server, server_id, rev_id, service, cfg, back)
 
     # Q203 AS2: the material-before-reference preflight every other writer of a control socket runs - a revision that names Jen's certificate files is refused while they are absent,
     # and not restarted into a config the daemon cannot load.

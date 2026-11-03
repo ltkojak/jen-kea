@@ -121,6 +121,25 @@ class ServerCapabilities:
     host_cmds: bool = False
     ddns: bool = False
     kea32_ready: bool = False
+    # Q212: how a change reaches this server. `config_api` is a capability (the stored probe says the daemon's own API read its configuration with a digest); the transport itself is a
+    # plain three-word field OUTSIDE CAPABILITY_NAMES (`why()` tests truthiness and `as_rows()` casts to bool, so a word cannot be a capability) with its own `transport_why()`.
+    config_api: bool = False
+    config_transport: str = "off"  # api | file | off - what a change set will do (`kea_changeset._transport`)
+    config_declared: str = "off"  # the setting as `kea_api_config.declared_transport` reads it
+    config_probed: bool = False  # a stored probe exists
+    config_probe_error: str = ""  # Kea's own text when the last probe was refused
+
+    def transport_why(self) -> str:
+        """ONE word for one state everywhere (badge, result line, sentence): the sentence that goes with `config_transport`."""
+        if self.config_transport == "api":
+            if self.config_probed and not self.config_api:
+                return "the daemon did not answer the last check; a change will abort until it does"
+            return "changes go over the daemon's own API: no SSH, no restart"
+        if self.config_transport == "file":
+            return "changes replace the file over SSH and restart Kea"
+        if self.config_declared == "file" and not self.ssh:
+            return "no SSH host: the file transport needs one (Settings → Kea → SSH)"
+        return "not a write target - switch it on from the server's card"
 
     def why(self, name: str) -> str:
         """The one sentence the UI shows for capability `name`: what's
@@ -152,6 +171,7 @@ CAPABILITY_NAMES = (
     "host_cmds",
     "ddns",
     "kea32_ready",
+    "config_api",
 )
 
 _LABELS = {
@@ -169,6 +189,7 @@ _LABELS = {
     "host_cmds": "Reservation commands",
     "ddns": "DDNS updates",
     "kea32_ready": "Kea 3.2 readiness",
+    "config_api": "Configuration over the API",
 }
 
 _HELPER_FIX = "Settings → Kea → SSH → Install helper"
@@ -263,6 +284,13 @@ _WHY = {
         if c.hooks_known
         else "Jen has no config for this server to read the DDNS setting from (only the active server's is read)."
     ),
+    "config_api": lambda c: (
+        f"The last check could not read this daemon's configuration over its API ({c.config_probe_error})."
+        if c.config_probed and c.config_probe_error
+        else "The daemon's configuration has not been read over its API yet - run Check API configuration on the server's card."
+        if not c.config_probed
+        else "The daemon did not answer the last check - run Check API configuration on the server's card."
+    ),
     "kea32_ready": lambda c: (
         "Not ready for Kea 3.2: "
         + (
@@ -308,8 +336,12 @@ def derive(
     ssh: bool = False,
     hooks: set | frozenset | None = None,
     ddns_enabled: bool | None = None,
+    config_transport: str = "off",
+    config_declared: str = "off",
+    config_probe: dict | None = None,
 ) -> ServerCapabilities:
-    """Every capability from plain inputs — no I/O, no Flask, no DB."""
+    """Every capability from plain inputs — no I/O, no Flask, no DB. Q212: `config_transport` / `config_declared` are what `kea_changeset._transport` and
+    `kea_api_config.declared_transport` answered for the server, and `config_probe` is the STORED probe result (never a live call: Health builds capabilities with no Kea call)."""
     from jen.services import kea_host
 
     if reachable is None:
@@ -347,7 +379,26 @@ def derive(
         host_cmds=HOOK_HOST_CMDS in hooks,
         ddns=bool(ddns_enabled),
         kea32_ready=bool(ready),
+        config_api=bool((config_probe or {}).get("config_api")),
+        config_transport=config_transport if config_transport in ("api", "file", "off") else "off",
+        config_declared=config_declared if config_declared in ("api", "file", "off") else "off",
+        config_probed=bool(config_probe),
+        config_probe_error=str((config_probe or {}).get("refused") or "")[:200],
     )
+
+
+def config_inputs(server: dict | None) -> dict:
+    """The three `derive()` inputs for a server's configuration transport, from the server dict and the stored probe (a settings read, never a Kea call)."""
+    if not server:
+        return {}
+    from jen.services import kea_api_config as _api
+    from jen.services import kea_changeset as _cs
+
+    return {
+        "config_transport": _cs._transport(server, "dhcp4"),
+        "config_declared": _api.declared_transport(server),
+        "config_probe": _api.stored_probe(server.get("id")),
+    }
 
 
 # ── gathering the inputs ─────────────────────────────────────────────────────
@@ -391,11 +442,15 @@ def _fetch_version(server: dict | None, server_id=None) -> str | None:
 
 def invalidate(server_id=None) -> None:
     """Drop the cached version (all servers, or one) — the Health Center's
-    own refresh calls this so it reads live."""
+    own refresh calls this so it reads live. Q212: also the request's memo, so a route that writes a server's transport and reads `for_server` in the
+    same request sees the new value."""
     if server_id is None:
         _version_cache.clear()
     else:
         _version_cache.pop(str(server_id), None)
+    memo = _request_memo()
+    if memo is not None:
+        memo.clear()
 
 
 def gather_kea_facts(server: dict | None = None, dhcp4_cfg: dict | None = None, server_id=None) -> dict:
@@ -482,6 +537,7 @@ def for_server(
         ssh=bool((server or {}).get("ssh_host")),
         hooks=hooks,
         ddns_enabled=ddns,
+        **config_inputs(server),
     )
     if memo is not None:
         memo[memo_key] = caps
@@ -512,6 +568,7 @@ def from_status(status: dict, *, dhcp4_cfg: dict | None = None) -> ServerCapabil
         ssh=bool(server.get("ssh_host")),
         hooks=hooks,
         ddns_enabled=ddns,
+        **config_inputs(server),
     )
 
 

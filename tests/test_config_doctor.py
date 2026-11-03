@@ -717,3 +717,49 @@ class TestTheCredentialModelMarkerAndTheBlankKea6Database:
 
         source = inspect.getsource(health._endpoint_credentials)
         assert "credential-model-invalid" in source and "kea6-database-blank" in source
+
+
+class TestTheConfigTransport:
+    """Q212 (BB3 a): `config_transport` is exactly api, file or off; anything else reads as off and is named."""
+
+    @staticmethod
+    def _cfg(text):
+        import configparser
+
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read_string(text)
+        return parser
+
+    def _ids(self, text):
+        return [f["id"] for f in doctor._check_config_transport(self._cfg(text))]
+
+    @pytest.mark.parametrize("value", ["API", "yes", "ssh", "Api", "1"])
+    def test_a_value_that_is_not_spelled_exactly_is_named(self, value):
+        assert self._ids(f"[kea]\nconfig_transport = {value}\n") == ["config-transport-unrecognized"]
+
+    @pytest.mark.parametrize("value", ["api", "file", "off"])
+    def test_the_three_words_are_quiet(self, value):
+        assert self._ids(f"[kea]\nconfig_transport = {value}\n[kea_ssh]\nhost = 10.0.0.1\n") == []
+
+    def test_a_section_without_the_key_is_quiet_that_is_todays_behavior(self):
+        assert self._ids("[kea]\napi_url = http://x\n[kea_server_2]\nname = b\n") == []
+
+    def test_an_extra_server_is_read_the_same_way(self):
+        assert self._ids("[kea]\nconfig_transport = api\n[kea_server_2]\nconfig_transport = yes\n") == [
+            "config-transport-unrecognized"
+        ]
+
+    def test_file_without_an_ssh_host_is_named_for_the_primary_and_for_an_extra_server(self):
+        assert self._ids("[kea]\nconfig_transport = file\n") == ["config-transport-file-without-ssh"]
+        assert self._ids("[kea_server_3]\nconfig_transport = file\nssh_host =\n") == [
+            "config-transport-file-without-ssh"
+        ]
+        assert self._ids("[kea_server_3]\nconfig_transport = file\nssh_host = 10.0.0.3\n") == []
+
+    def test_none_and_an_empty_file_give_nothing(self):
+        assert doctor._check_config_transport(None) == []
+        assert self._ids("") == []
+
+    def test_diagnose_carries_it(self):
+        found = doctor.diagnose(None, jen_config=self._cfg("[kea]\nconfig_transport = nope\n"))
+        assert [f["id"] for f in found] == ["config-transport-unrecognized"]
