@@ -67,7 +67,7 @@ def test_statistic_get_all_pkt4_names():
 
 
 def test_config_test_accepts_the_running_config():
-    """config-test only — a dry run; the job never config-sets."""
+    """config-test only — a dry run; this suite never config-sets (test_config_write.py does, in its own step)."""
     cfg = _ok(__kea.kea_command("config-get"))["arguments"]["Dhcp4"]
     _ok(__kea.kea_command("config-test", arguments={"Dhcp4": cfg}))
 

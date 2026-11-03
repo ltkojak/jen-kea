@@ -141,8 +141,11 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
   from ci.yml/release.yml, so a Kea release can't redden a push or a tag); every test skips
   unless `KEA_COMPAT_URL` is set, so `pytest` here just reports them skipped. Image tags are
   exact patch versions (no floating `3.0`) — bump the matrix when Kea ships a patch; the
-  3.3 dev leg is `continue-on-error`. Read-only against Kea (`config-test`, never
-  `config-set`). Run it by hand with `gh workflow run kea-compat.yml`; a workflow-only
+  3.3 dev leg is `continue-on-error`. Read-only against Kea (`config-test`) EXCEPT
+  its one step "Configuration over the API" (Q211, `tests/kea_compat/test_config_write.py`,
+  `pytest.mark.kea_write`): it recreates the daemon once with `/etc/kea` read-write,
+  `config-set`s and `config-write`s Jen's own mutations, and puts the original file back, so
+  the log-level step after it starts from the file it always did. Run it by hand with `gh workflow run kea-compat.yml`; a workflow-only
   change carries no version bump and no release tag.
 - `tests/system/` (Q84 — `pytest.mark.system`) breaks ten of Jen's boundaries on purpose
   against REAL processes: a docker compose stack (`tests/system/compose/`) of Jen under

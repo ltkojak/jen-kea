@@ -4,8 +4,11 @@ name: Kea compatibility
 # fakes and mocked replies the unit and e2e suites use. Weekly, plus on
 # demand (`gh workflow run kea-compat.yml`); deliberately NOT called from
 # ci.yml or release.yml — an upstream Kea release must never turn a
-# push or a tagged release red. Read-only against Kea: config-get and
-# config-test, never config-set; the one write is a throwaway reservation.
+# push or a tagged release red. Read-only against Kea - config-get and
+# config-test; the one write is a throwaway reservation - EXCEPT the step named
+# "Configuration over the API" (Q211): it alone mounts /etc/kea read-write, recreates
+# the daemon once, config-sets and config-writes (tests/kea_compat/test_config_write.py)
+# and puts the original file back, so the steps after it start from the file they always did.
 #
 # Images are ISC's own, on Cloudsmith (docker.cloudsmith.io/isc/docker/…),
 # pulled anonymously. Their tags are EXACT patch versions — there is no
@@ -164,6 +167,24 @@ jobs:
           KEA_COMPAT_BINARY_OUT: ${{ github.workspace }}/results/binary-${{ matrix.kea }}.json
         run: python -m pytest tests/kea_compat -m kea_compat -v
 
+      # Q211 - Jen's own mutation over the daemon's API on real Kea: config-get is not redacted, config-set applies live and moves the digest, config-write persists
+      # across a restart, a bad config-set leaves the old one serving, config-write is confined to the -c file's directory, the digest is the only concurrency guard,
+      # the investigation marker survives the round trip. THE ONE STEP THAT WRITES: it recreates the daemon with /etc/kea read-write (the suite above and the
+      # log-level step below mount it read-only), records what the daemon sees of the mounted file first, chowns that file to the daemon's account ONLY if the
+      # first config-write fails for permission (the row records which it was), and its last row puts the original file back. Facts: results/config-write-<version>.json.
+      - name: Configuration over the API
+        if: always()
+        env:
+          KEA_COMPAT_URL: http://127.0.0.1:8004/
+          KEA_COMPAT_USER: jen
+          KEA_COMPAT_PASS: jen_api_pw
+          KEA_COMPAT_VERSION: ${{ matrix.kea }}
+          KEA_COMPAT_IMAGE: ${{ env.IMAGE }}
+          KEA_COMPAT_CONF_DIR: ${{ github.workspace }}/kea-conf
+          KEA_COMPAT_RUN_DIR: ${{ github.workspace }}/kea-run
+          KEA_COMPAT_WRITE_OUT: ${{ github.workspace }}/results/config-write-${{ matrix.kea }}.json
+        run: python -m pytest tests/kea_compat/test_config_write.py -m kea_write -v
+
       # v5.68.0-beta.2 (Q135) - what a real daemon writes about one client at each log level, and what it stores in the
       # lease row (tests/kea_compat/test_log_levels.py). It restarts the daemon once per level, so it cannot share the
       # suite above (-m kea_compat leaves it out); the findings are in results/log-levels-<version>.json and the raw logs
@@ -221,6 +242,10 @@ jobs:
             echo
             python -m tests.kea_compat.summarize artifacts/*/[0-9]*.json
             echo
+            echo "### Configuration over the API (Q211)"
+            echo
+            python -m tests.kea_compat.summarize --config-write artifacts/*/config-write-*.json
+            echo
             echo "### The Kea daemon binary on ISC's images"
             echo
             echo "| image | owner:group | uid | mode | daemon runs as | image USER | helper would run it |"
@@ -256,3 +281,5 @@ jobs:
             echo "3.3 is Kea's development line: a failure there is informational."
             echo "The pkt4-* statistic names each version reports are in the per-version artifacts."
           } >> "$GITHUB_STEP_SUMMARY"
+          # the same text in the log, so a reader (or `gh run view --log`) has the table without opening the summary page
+          cat "$GITHUB_STEP_SUMMARY"

@@ -130,16 +130,23 @@ def _sh(*args, check=True):
     return subprocess.run(args, check=check, capture_output=True, text=True, timeout=120)
 
 
-def _restart(severity, debuglevel, ddns=False, forms=False):
-    from tests.kea_compat import kea_config
-
-    conf = kea_config.build(severity=severity, debuglevel=debuglevel, probe=True, ddns=ddns, forms=forms)
-    with open(os.path.join(CONF_DIR, "kea-dhcp4.conf"), "w") as fh:
-        json.dump(conf, fh, indent=2)
-    _sh("docker", "rm", "-f", "kea", check=False)
+def _clear_run_dir():
     if RUN_DIR:  # a bind mount outlives the container (a tmpfs did not): the dead daemon's pid file would read as "already running" and its socket as a live one
         for name in os.listdir(RUN_DIR):
             os.unlink(os.path.join(RUN_DIR, name))
+
+
+def _restart(severity, debuglevel, ddns=False, forms=False, writable=False, write_config=True):
+    """Recreate the daemon container. `writable` / `write_config` (Q211) are for tests/kea_compat/test_config_write.py: it mounts the
+    configuration directory read-write once and boots the daemon on the file as it stands; every other caller keeps both defaults."""
+    from tests.kea_compat import kea_config
+
+    if write_config:
+        conf = kea_config.build(severity=severity, debuglevel=debuglevel, probe=True, ddns=ddns, forms=forms)
+        with open(os.path.join(CONF_DIR, "kea-dhcp4.conf"), "w") as fh:
+            json.dump(conf, fh, indent=2)
+    _sh("docker", "rm", "-f", "kea", check=False)
+    _clear_run_dir()
     _sh(
         "docker",
         "run",
@@ -152,9 +159,14 @@ def _restart(severity, debuglevel, ddns=False, forms=False):
         "-e",
         "MARIADB_TLS_DISABLE_PEER_VERIFICATION=1",
         "-v",
-        f"{CONF_DIR}:/etc/kea:ro",
+        f"{CONF_DIR}:/etc/kea" + ("" if writable else ":ro"),
         IMAGE,
     )
+    _wait_ready()
+
+
+def _wait_ready():
+    """Block until the daemon answers `version-get` on its http control socket (and, with a bind-mounted run directory, open its unix socket to the runner)."""
     import requests
 
     url = os.environ["KEA_COMPAT_URL"]
