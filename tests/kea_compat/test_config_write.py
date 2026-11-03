@@ -407,7 +407,7 @@ def _second_daemon_digest(facts, live_dhcp4):
         text = config_revisions.canonical({"Dhcp4": live_dhcp4})
         # through the container's shell, as the entry says: the file is written by the image's own `sh`, not by the runner
         __levels._sh(
-            "docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{scratch}:/c", __levels.IMAGE,
+            "docker", "run", "--rm", "-i", "--entrypoint", "sh", "-v", f"{scratch}:/c", __levels.IMAGE,
             "-c", "cat > /c/kea-dhcp4.conf", input=text,
             check=True,
         )  # fmt: skip
