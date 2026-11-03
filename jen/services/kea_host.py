@@ -715,6 +715,9 @@ def _capture_baseline_or_external_change(server_id, service: str, cfg: dict, sha
         from jen.services import config_revisions as _rev
 
         last = _rev.latest(server_id, service)
+        if last is not None and last.get("hash_kind") == "kea":
+            # Q212: a `kea` row is a daemon digest, never comparable with a file's hash: compare with the newest row that is not one
+            last = _rev.latest(server_id, service, exclude_kind="kea")
         if sha:
             if last is None:
                 _rev.record(
@@ -899,6 +902,20 @@ def investigation_writer():
         _investigation_writer.on = previous
 
 
+def guard_kea_write(server: dict, after_cfg: dict, service: str = "dhcp4") -> str:
+    """The investigation invariant's question (INV-005), asked of ANY write of a Kea configuration before anything is sent - a refusal sentence, or "" (Q212, BB1 d).
+
+    It moved here from `apply_config` so that the two writers of a configuration share ONE definition: `apply_config` (the file) and `kea_api_config.apply` (the daemon's own
+    API) both call it first. The lazy import and the call THROUGH the module's name keep `tests/test_kea_changeset.py`'s monkeypatch of
+    `jen.services.investigation_logging.file_write_refusal` working. `investigation_writer()` is honored by both writers: investigation logging's own writes are the only way past it.
+    The identity question is not asked here (it lives in `AppConfig._write_parser`), and `_jen_side_conflict` re-reads the FILE and stays in `apply_config`."""
+    if service != "dhcp4" or getattr(_investigation_writer, "on", False):
+        return ""
+    from jen.services import investigation_logging as _inv  # lazy: that module imports this one
+
+    return _inv.file_write_refusal(server, after_cfg) or ""
+
+
 def apply_config(
     server: dict,
     service: str,
@@ -936,12 +953,17 @@ def apply_config(
     Every dhcp4 write passes here, so the question is asked here, before anything is sent: a write that is not investigation logging's own (`investigation_writer()`)
     and would remove the marker of a server Jen owes a restore - or is made while Jen's record of that is unreadable or unavailable - returns
     `{"ok": False, "code": "investigation-on", ...}` and writes nothing; `kea_changeset` reports it like any other failed apply and reverts what it committed."""
-    if service == "dhcp4" and not getattr(_investigation_writer, "on", False):
-        from jen.services import investigation_logging as _inv  # lazy: that module imports this one
+    refusal = guard_kea_write(server, cfg, service)
+    if refusal:
+        return {"ok": False, "code": "investigation-on", "detail": refusal, "via": "guard"}
+    from jen.services import kea_api_config as _api  # lazy: that module imports this one
 
-        refusal = _inv.file_write_refusal(server, cfg)
-        if refusal:
-            return {"ok": False, "code": "investigation-on", "detail": refusal, "via": "guard"}
+    if _api.declared_transport(server) == "api":
+        # Q212 (BB2 e): the file path writing onto a server whose transport is the API. The file this write replaces must carry what the daemon runs, or an `unverified` apply (or a hand
+        # `config-set`) would be erased by the next logging toggle; both digests are named. Asked only when BOTH answer and differ.
+        differs = _api.api_daemon_differs(server, service)
+        if differs:
+            return {"ok": False, "code": "error", "detail": differs, "via": "guard"}
     if expect_sha256 is not None and expect_sha256.startswith(_CANONICAL_SENTINEL_PREFIX):
         conflict = _jen_side_conflict(server, service, expect_sha256)
         if conflict is not None:

@@ -11,9 +11,12 @@ check — a fake test double, not a security boundary.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 
 def build_dhcp4_config(
@@ -124,6 +127,148 @@ class FakeKeaServer:
         self._httpd.responses = self.responses
         self.port = self._httpd.server_port
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+
+
+# ── Q212: a fake Kea that HOLDS a configuration ───────────────────────────────────────────────────────────────────────────
+
+
+def digest_of(cfg_section: dict, key: str = "Dhcp4") -> str:
+    """A stand-in for Kea's digest: SHA-256 over canonical JSON of the held section. Jen never computes Kea's digest (it only compares two the daemon gave), so any stable function will do."""
+    return hashlib.sha256(json.dumps({key: cfg_section}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+class _StatefulHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            body = json.loads((self.rfile.read(length) if length else b"{}") or b"{}")
+        except ValueError:
+            body = {}
+        fake = self.server.fake
+        command = body.get("command", "")
+        with fake.lock:
+            fake.commands.append(command)
+            if fake.stopped:
+                self.connection.close()  # a daemon that stopped serving: no reply at all
+                return
+            hook = fake.hooks.get(command)
+            if hook:
+                hook(fake)  # a stranger's change (or a crash) injected at the exact moment this command arrives
+            when = fake.hang.get(command)
+            if when != "before":
+                reply = fake._answer(command, body.get("arguments") or {})
+            else:
+                reply = None
+        if when:
+            time.sleep(fake.hang_seconds)
+            if reply is None:  # "before": the command is never run
+                return
+        payload = json.dumps([reply]).encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        except OSError:
+            pass  # the client gave up (a hang past its wait); nothing to tell it
+
+    def log_message(self, fmt, *args):
+        pass
+
+
+class StatefulKeaServer:
+    """One fake kea-dhcp4 (or kea-dhcp6) that HOLDS a configuration, the way the real daemon does: `config-set` replaces it, `config-get` / `config-hash-get` answer it with a digest,
+    `config-write` writes it to a held FILE, and a restart (`restart()`) reloads from that file - so an apply that forgot `config-write` is lost, exactly as on the real thing.
+    Every command received is appended to `commands`. The switches, each settable per test:
+
+        write_fails        Kea's own permission text: `config-write` answers result 1
+        set_fails          Kea's refusal text: `config-set` answers result 1 (the old configuration keeps serving)
+        set_fails_and_stops   ... and the daemon then stops answering at all (ISC: a fatal error can stop the server)
+        hooks              {command: callable(fake)} run when that command arrives, before it is answered
+        hang               {command: "before" | "after"}: the reply arrives after `hang_seconds`; "before" never runs the command, "after" runs it and then goes quiet
+        no_service_key     `config-get` answers without the Dhcp4/Dhcp6 section (a Control Agent answering for itself)
+        no_digest          `config-get` answers without a `hash`
+        stopped            every request is dropped
+    """
+
+    def __init__(self, config: dict | None = None, *, key: str = "Dhcp4", version: str = "3.0.5"):
+        self.key = key
+        self.version = version
+        self.lock = threading.RLock()
+        self.running = copy.deepcopy(config if config is not None else TWO_SUBNET_DHCP4)
+        self.file = copy.deepcopy(self.running)
+        self.commands: list[str] = []
+        self.write_fails = None
+        self.set_fails = None
+        self.set_fails_and_stops = False
+        self.hang: dict = {}
+        self.hooks: dict = {}
+        self.hang_seconds = 1.0
+        self.no_service_key = False
+        self.no_digest = False
+        self.stopped = False
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _StatefulHandler)
+        self._httpd.daemon_threads = True
+        self._httpd.fake = self
+        self.port = self._httpd.server_port
+        self.url = f"http://127.0.0.1:{self.port}/"
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+
+    # the daemon's own view
+    def digest(self) -> str:
+        return digest_of(self.running, self.key)
+
+    def restart(self):
+        """A daemon restart: it serves the FILE again (whatever was only `config-set` is gone)."""
+        with self.lock:
+            self.running = copy.deepcopy(self.file)
+            self.stopped = False
+
+    def set_running(self, section: dict):
+        """A second client's `config-set` (a hand edit on the daemon), without going through the wire."""
+        with self.lock:
+            self.running = copy.deepcopy(section)
+
+    def _answer(self, command: str, arguments: dict) -> dict:
+        if command == "version-get":
+            return {"result": 0, "text": self.version, "arguments": {"extended": self.version}}
+        if command == "config-get":
+            args = {} if self.no_service_key else {self.key: copy.deepcopy(self.running)}
+            if not self.no_digest:
+                args["hash"] = self.digest()
+            return {"result": 0, "arguments": args}
+        if command == "config-hash-get":
+            return {"result": 0, "arguments": {"hash": self.digest()}}
+        if command == "config-test":
+            return {"result": 0, "text": "Configuration seems sane."}
+        if command == "config-set":
+            if self.set_fails:
+                if self.set_fails_and_stops:
+                    self.stopped = True
+                return {"result": 1, "text": self.set_fails}
+            if self.key not in arguments:
+                return {"result": 1, "text": f"missing {self.key}"}
+            self.running = copy.deepcopy(arguments[self.key])
+            return {"result": 0, "text": "Configuration successful.", "arguments": {"hash": self.digest()}}
+        if command == "config-write":
+            if self.write_fails:
+                return {"result": 1, "text": self.write_fails}
+            self.file = copy.deepcopy(self.running)
+            size = len(json.dumps(self.file))
+            return {
+                "result": 0,
+                "text": "Configuration written",
+                "arguments": {"filename": "/etc/kea/kea-dhcp4.conf", "size": size},
+            }
+        return {"result": 0, "text": "mocked", "arguments": {}}
 
     def start(self):
         self._thread.start()

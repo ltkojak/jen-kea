@@ -11,7 +11,8 @@ of the DECRYPTED bodies is stable) and decrypted transparently by every
 reader below (a legacy plaintext row from before v5.20.0 passes through
 `decrypt_secret()` unchanged).
 
-`source ∈ {jen, external, restore, baseline}`:
+`source ∈ {jen, external, restore, baseline, rollback, switch, pending}` (the last three: Q212 - `rollback` a revert Jen made, `switch` the baseline a transport switch
+records, `pending` a candidate written BEFORE a `config-set` and turned into `jen` once the daemon's own answer proves it):
 - `jen`      — a config Jen applied via a form or route.
 - `external` — the file changed on the host between Jen writes (detected
                by `read_config_versioned`, v2 helper only).
@@ -21,12 +22,13 @@ reader below (a legacy plaintext row from before v5.20.0 passes through
                a canonical one (v1/legacy) — v5.20.0, so the very first
                write is guarded and the very first diff has a "before".
 
-`hash_kind ∈ {raw, canonical, legacy}` records what `sha256` actually
+`hash_kind ∈ {raw, canonical, legacy, kea}` records what `sha256` actually
 hashes (v5.20.0) — `raw` = sha256 of the live config file's own bytes
 (helper v2's `read-config`/`apply-config`), `canonical` = sha256 of
 `canonical(cfg)` (no raw hash available: v1 helper or the legacy path),
-`legacy` = a pre-5.20.0 row whose kind was never recorded. The two
-non-legacy kinds are NOT interchangeable — comparing a `raw` sha against
+`legacy` = a pre-5.20.0 row whose kind was never recorded, `kea` (Q212) =
+the digest Kea's own `config-get`/`config-set`/`config-hash-get` returned for
+a configuration that runs in the daemon. The non-legacy kinds are NOT interchangeable — comparing a `raw` sha against
 a `canonical` one (or vice versa) always mismatches even when nothing
 changed.
 
@@ -124,18 +126,84 @@ def _decrypted(row: dict | None) -> dict | None:
     return row
 
 
-def latest(server_id: int, service: str) -> dict | None:
+def latest(server_id: int, service: str, exclude_kind: str | None = None) -> dict | None:
+    """The newest revision of (server, service); `exclude_kind` skips one `hash_kind` (the FILE reader skips the daemon's `kea` rows: its digests are not comparable with a file hash)."""
     try:
         with _jen_db() as db, db.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s ORDER BY id DESC LIMIT 1",
-                (server_id, service),
-            )
+            if exclude_kind is None:
+                cur.execute(
+                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s ORDER BY id DESC LIMIT 1",
+                    (server_id, service),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind<>%s ORDER BY id DESC LIMIT 1",
+                    (server_id, service, exclude_kind),
+                )
             row = cur.fetchone()
     except Exception as e:
         logger.warning(f"config_revisions.latest failed: {e}")
         return None
     return _decrypted(row)
+
+
+def latest_of_kind(server_id: int, service: str, hash_kind: str) -> dict | None:
+    """The newest revision of one `hash_kind` (Q212): a `kea` digest is compared only with a `kea` digest, a `raw` file hash only with a `raw` one."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s ORDER BY id DESC LIMIT 1",
+                (server_id, service, hash_kind),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.warning(f"config_revisions.latest_of_kind failed: {e}")
+        return None
+    return _decrypted(row)
+
+
+def pending(server_id: int, service: str) -> dict | None:
+    """The `source="pending"` revision of this (server, service) - the candidate a change over the API wrote BEFORE it sent `config-set` (Q212, BB1 c) - or None.
+    Its `sha256` is the digest the daemon had BEFORE the change. There is at most one: an apply deletes or finishes its own row, and a reader reconciles a leftover."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source='pending' ORDER BY id DESC LIMIT 1",
+                (server_id, service),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.warning(f"config_revisions.pending failed: {e}")
+        return None
+    return _decrypted(row)
+
+
+def finish(rev_id: int, *, source: str, sha256: str, summary: str | None = None, cfg: dict | None = None) -> bool:
+    """Turn a pending revision into the record of what the daemon runs (Q212): the SAME row, never a second one. `cfg`, when given, replaces the stored body (the
+    candidate Jen wrote before it sent `config-set` becomes what the daemon's own `config-get` returned). True when a row was updated."""
+    body = encrypt_secret(canonical(cfg)) if cfg is not None else None
+    text = (summary or "")[:255] if summary is not None else None
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "UPDATE kea_config_revisions SET source=%s, sha256=%s, summary=COALESCE(%s, summary), config=COALESCE(%s, config) WHERE id=%s",
+                (source, sha256 or "", text, body, rev_id),
+            )
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.warning(f"config_revisions.finish failed: {e}")
+        return False
+
+
+def discard(rev_id: int) -> bool:
+    """Delete one revision row (Q212: a pending record whose change never reached the daemon). True when a row was removed."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM kea_config_revisions WHERE id=%s", (rev_id,))
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.warning(f"config_revisions.discard failed: {e}")
+        return False
 
 
 def list_revisions(server_id: int, service: str, limit: int = 100) -> list[dict]:

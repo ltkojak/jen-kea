@@ -1269,14 +1269,24 @@ class TestTheKeaFileHasOneChokePointInTheSource:
             ("jen/services/kea_host.py", "apply_config", "legacy write script"),
         }, sites
 
-    def test_04b_apply_config_asks_before_anything_is_sent(self):
+    def test_04b_both_writers_ask_before_anything_is_sent(self):
+        """Q212: the investigation question is `kea_host.guard_kea_write` (the one definition, which reaches `file_write_refusal` through the module's name), and BOTH writers of a Kea
+        configuration call it first - `apply_config` before the sha question, the helper and the legacy script, `kea_api_config.apply` before the first command it sends."""
         fn = next(f for f in _functions(_parse("jen/services/kea_host.py")) if f.name == "apply_config")
         lines = {}
         for call, _scope in _scoped_calls(fn):
             lines.setdefault(_call_name(call), call.lineno)
-        assert lines["file_write_refusal"] < min(
+        assert lines["guard_kea_write"] < min(
             lines["_jen_side_conflict"], lines["helper_call"], lines["_legacy_python3"]
         )
+        guard = next(f for f in _functions(_parse("jen/services/kea_host.py")) if f.name == "guard_kea_write")
+        assert "file_write_refusal" in {_call_name(c) for c, _s in _scoped_calls(guard)}
+        api = next(f for f in _functions(_parse("jen/services/kea_api_config.py")) if f.name == "apply")
+        lines = {}
+        for call, _scope in _scoped_calls(api):
+            lines.setdefault(_call_name(call), call.lineno)
+        senders = [n for n in ("_cmd", "hash", "_get", "_undo", "_write_with_retries", "pending_block") if n in lines]
+        assert senders and lines["guard_kea_write"] < min(lines[n] for n in senders)
 
     def test_04c_every_apply_change_of_investigation_logging_is_inside_investigation_writer(self):
         tree = _parse("jen/services/investigation_logging.py")

@@ -2193,6 +2193,7 @@ def _undo_remote_change(
                 "restore-mismatch": f"{name}: the restored control sockets did not equal the saved list",
             },
             daemon_label=daemon,
+            transport="file",  # a change to control-sockets is never sent over the socket it changes (Q212)
         )
         for style, text in result.lines:
             flash(text, style)
@@ -2760,6 +2761,7 @@ def setup_direct_socket(server_id, service):
         },
         daemon_label=daemon,
         tls_paths=tls_paths,
+        transport="file",  # a change to control-sockets is never sent over the socket it changes (Q212)
     )
     if result.status == "noservers":
         flash(f"{name} has no SSH host configured.", "error")
@@ -4248,6 +4250,7 @@ def remove_direct_socket(server_id, service):
             "multiple": _many_sockets_sentence(daemon, conf),
         },
         daemon_label=daemon,
+        transport="file",  # a change to control-sockets is never sent over the socket it changes (Q212)
     )
     if result.status == "noservers":
         flash(f"{name} has no SSH host configured.", "error")

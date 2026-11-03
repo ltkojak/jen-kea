@@ -538,6 +538,7 @@ def _change(
                 "unsupported": unsupported,
                 "marker-invalid": "the investigation-logging marker is unreadable, so nothing was changed",
             },
+            transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path in 7.0.0-beta.1 (Q212)
         )
     return result, use_reload, support
 
@@ -670,6 +671,7 @@ def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
             servers=[server],
             restart=False,
             code_messages={},
+            transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path in 7.0.0-beta.1 (Q212)
         )
     return result.status in ("ok", "nothing"), [text for _kind, text in result.lines]
 

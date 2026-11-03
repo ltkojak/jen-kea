@@ -541,4 +541,47 @@ class TestExceptionHandling:
         fake = _RaisingRequests(ValueError("unexpected token at position 4"))
         monkeypatch.setattr(kea_svc, "http", fake)
         result = kea_svc.kea_command("config-get")
-        assert result == {"result": 1, "text": "Kea API call failed — the details are in Jen's log."}
+        assert result == {
+            "result": 1,
+            "text": "Kea API call failed — the details are in Jen's log.",
+            "transport": "error",
+        }
+
+
+class TestTransportKey:
+    """Q212 (BB1 b): a reply Jen fabricates for a transport fault carries `transport` (`timeout` | `connect` | `error`); a reply Kea sent never does. The
+    configuration-over-the-API module reads that key and never the sentence, so a Kea refusal and a missing answer cannot be confused."""
+
+    def test_a_connection_error_is_connect(self, monkeypatch):
+        import requests
+
+        monkeypatch.setattr(kea_svc, "http", _RaisingRequests(requests.exceptions.ConnectionError("refused")))
+        assert kea_svc.kea_command("config-set")["transport"] == "connect"
+
+    def test_a_timeout_is_timeout(self, monkeypatch):
+        import requests
+
+        monkeypatch.setattr(kea_svc, "http", _RaisingRequests(requests.exceptions.Timeout("slow")))
+        assert kea_svc.kea_command("config-write")["transport"] == "timeout"
+
+    def test_anything_else_is_error(self, monkeypatch):
+        monkeypatch.setattr(kea_svc, "http", _RaisingRequests(ValueError("bad json")))
+        assert kea_svc.kea_command("config-get")["transport"] == "error"
+
+    def test_a_refusal_from_kea_never_carries_it(self, monkeypatch):
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [{"result": 1, "text": "a pool does not match the prefix of a subnet"}]
+
+        class _Http:
+            exceptions = __import__("requests").exceptions
+
+            def post(self, *a, **kw):
+                return _Resp()
+
+        monkeypatch.setattr(kea_svc, "http", _Http())
+        reply = kea_svc.kea_command("config-set")
+        assert reply["result"] == 1 and "transport" not in reply

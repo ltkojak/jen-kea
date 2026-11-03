@@ -383,6 +383,9 @@ def kea_command(
     Always returns a dict — never raises. `timeout` defaults to 10s;
     pass a smaller value on a page that must not stall when Kea is slow
     (the Settings landing hint uses 3s).
+
+    Q212 (BB1 b): a reply Jen FABRICATES for a transport fault carries `"transport": "timeout" | "connect" | "error"`; a reply Kea sent never does. The
+    configuration-over-the-API module (`jen/services/kea_api_config.py`) tells "Kea refused this" from "no answer" by that key and never by the sentence.
     """
     endpoint = _endpoint_for(server, service)
     if isinstance(endpoint, dict):  # e.g. direct mode with no [kea6] api_url
@@ -427,9 +430,9 @@ def kea_command(
                 }
         return reply
     except http.exceptions.ConnectionError:
-        return {"result": 1, "text": f"Cannot connect to Kea API at {_shown(url)}"}
+        return {"result": 1, "text": f"Cannot connect to Kea API at {_shown(url)}", "transport": "connect"}
     except http.exceptions.Timeout:
-        return {"result": 1, "text": "Kea API request timed out."}
+        return {"result": 1, "text": "Kea API request timed out.", "transport": "timeout"}
     except Exception as e:
         # v5.65.12 (Q101 b): the connect/timeout cases above are canned deliberately (the connect
         # message names the URL - admin-facing and useful, kept). Anything else - a TLS handshake
@@ -441,7 +444,7 @@ def kea_command(
         logger.error(
             f"kea_command({command!r}) against {shown_url(url)} raised {type(e).__name__}: {scrub_urls(str(e))}"
         )
-        return {"result": 1, "text": "Kea API call failed — the details are in Jen's log."}
+        return {"result": 1, "text": "Kea API call failed — the details are in Jen's log.", "transport": "error"}
 
 
 def kea_command_all(command: str, service: str = "dhcp4", arguments: dict = None) -> list:

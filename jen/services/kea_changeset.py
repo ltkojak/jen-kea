@@ -43,6 +43,12 @@ file is a normal target whose expected sha is "" - what `apply_config`'s own `ex
 its write may never overwrite a file that appeared in the meantime). A target that was absent is rolled back by REMOVING the file
 Jen wrote (`kea_host.remove_config`, guarded by the sha Jen's own write produced), the only way "put it back as it was" is true.
 
+Q212 (7.0.0-beta.1) — each target is changed over ITS OWN transport, chosen per server (`_transport`): `api` (the daemon's own API through `kea_api_config`: compare, `config-set`,
+`config-write`, verify - live at once, no restart), `file` (everything above) or `off` (not a write target). The four phases are unchanged in meaning: Plan reads each target through its
+transport, Preflight tests through it (`config-test` over the API; `-t` on the host), Commit applies through it - file targets first (written, not yet live), then api targets (live at
+once), so the window in which servers disagree is the restarts only - and Restart ranges over the file targets. A target that was changed over the API is put back over the API.
+One change runs at a time on a box (`change_lock`): the API path's compare-then-set is two round trips and a second change set would otherwise fall inside it.
+
 Pure orchestration over `kea_host` — no Flask imports. Callers build
 the flash lines from `ChangeSetResult.lines` themselves; this module
 never calls `flash()`.
@@ -51,10 +57,13 @@ never calls `flash()`.
 import contextlib
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass, field
 
 from jen import extensions
 from jen.services import events as _events
+from jen.services import kea_api_config as _api
 from jen.services import kea_host as _host
 from jen.services.kea_authoring import conf_path_for as _conf_path_for
 
@@ -80,6 +89,8 @@ class Target:
     # v5.69.0-beta.19 (Q188, AD9): the revert of this target FAILED, so its file still carries the NEW config. A route that put certificate material on the host before the change must not
     # reinstall the OLD material under the new entry.
     revert_failed: bool = False
+    # Q212: how THIS target is read, tested, written and put back - "file" (the host's config file, then a restart) or "api" (the daemon's own API, live at once, no restart)
+    transport: str = "file"
 
     @property
     def key(self):
@@ -113,6 +124,66 @@ class ChangeSetResult:
 # Jen's own metadata (SUBNET_MAP, audit "done" lines) for these.
 NOT_APPLIED = ("aborted", "rolled_back", "rollback_failed")
 
+# ── the transport of one server (Q212, BB2 a) ─────────────────────────────────────────────────────────────────────────
+
+
+TRANSPORTS = _api.TRANSPORTS
+_declared = (
+    _api.declared_transport
+)  # one definition of the setting's reading (BB3 a), shared with the file path's choke point
+
+
+def _transport(server: dict, service: str) -> str:
+    """`"api" | "file" | "off"` - a PURE function of the server dict and the service. It never calls `capabilities.for_server` (that resolves from `extensions.KEA_SERVERS`, fires `version-get` and
+    would turn every change-set test whose server dict is not in KEA_SERVERS into `noservers`); `capabilities.derive` calls this for the badge, never the reverse. `file` with no SSH host is `off`;
+    `api` is `api` whatever the last probe said (reachability is runtime: a chosen transport that cannot be used aborts the set, it is never silently "not a target"); D2 is `file` where SSH exists
+    and `off` where it does not (no row proves `config-set` with TSIG keys)."""
+    declared = _declared(server)
+    if declared == "off":
+        return "off"
+    ssh = bool(server.get("ssh_host"))
+    if service not in _api.SERVICE_KEY:  # d2
+        return "file" if ssh else "off"
+    if declared == "file":
+        return "file" if ssh else "off"
+    return "api"
+
+
+def _transport_for_run(server: dict, service: str, force: str | None) -> str:
+    """`_transport`, or - for a caller that passed `transport="file"` - the file path for a server that has SSH and is not switched off: a change to the control sockets is never sent over the
+    socket it changes, and investigation logging's marker is restored by the HOST from the file (INV-001)."""
+    if force == "file":
+        return "file" if _declared(server) != "off" and server.get("ssh_host") else "off"
+    return _transport(server, service)
+
+
+# ── one change at a time (Q212, BB9 b) ────────────────────────────────────────────────────────────────────────────────
+
+
+CHANGE_WAIT_SECONDS = 120
+_CHANGE_LOCK = (
+    threading.Lock()
+)  # NOT reentrant: no callee of `_run_change` may start a change set (an `ast` test counts them)
+BUSY_SENTENCE = "another change is running on this box; try again in a moment"
+
+
+class ChangeBusy(Exception):
+    """The change lock could not be had inside the wait."""
+
+
+@contextlib.contextmanager
+def change_lock(wait: float | None = None):
+    """Hold the one process-wide lock a change takes from its first Plan read through its last verify; the switch of a transport, the restore and the import take it too. A second change waits
+    up to `wait` seconds (CHANGE_WAIT_SECONDS) and then raises `ChangeBusy` - a request thread is never parked for minutes. Yields the seconds it waited."""
+    started = time.monotonic()
+    if not _CHANGE_LOCK.acquire(timeout=CHANGE_WAIT_SECONDS if wait is None else wait):
+        raise ChangeBusy(BUSY_SENTENCE)
+    try:
+        yield time.monotonic() - started
+    finally:
+        _CHANGE_LOCK.release()
+
+
 _DETAIL_TAIL = 300
 
 
@@ -139,6 +210,21 @@ def _by_hand(names) -> str:
         f"{', '.join(names)} need attention: check the config on the host, restore the last good one from "
         "Servers → Config history, and restart Kea there by hand."
     )
+
+
+def _by_hand_for(targets) -> str:
+    """`_by_hand` for a list of TARGETS: a file target's sentence is today's (restart Kea there); an api target's names what that target actually needs - the daemon's own answer is the record, and
+    the way back is a `config-set` of the previous revision from Config history (or a restart, which reloads the file the change never touched)."""
+    files = [t.name for t in targets if t.transport != "api"]
+    apis = [t.name for t in targets if t.transport == "api"]
+    parts = []
+    if files:
+        parts.append(_by_hand(files))
+    if apis:
+        parts.append(
+            f"{', '.join(apis)} need attention: ask the daemon what it runs, config-set the previous revision from Servers → Config history, or restart Kea on that host."
+        )
+    return " ".join(parts)
 
 
 def _default_conflict_phrase(name: str) -> str:
@@ -169,7 +255,11 @@ def _failure_line(name: str, res: dict, daemon_label: str) -> str:
 def _restore_target(t: Target, service: str, summary: str, helper_only: bool = False) -> dict:
     """Put one already-committed target back as it was (v5.68.0-beta.15, Q150): the previous config re-applied, or - for a target that
     had no config file before - the file Jen wrote removed again, guarded by the sha that write produced. A result dict like
-    `kea_host.apply_config`'s; never raises."""
+    `kea_host.apply_config`'s; never raises. An api target is put back over the API (`kea_api_config.revert`, guarded by the digest its own write returned)."""
+    if t.transport == "api":
+        return _safe(
+            _api.revert, t.server, service, t.before_cfg, t.applied_sha, f"rollback: {summary}", before_cfg=t.after_cfg
+        )
     if t.before_cfg is None:
         return _safe(_host.remove_config, t.server, service, expect_sha256=t.applied_sha)
     return _safe(
@@ -184,7 +274,32 @@ def _restore_target(t: Target, service: str, summary: str, helper_only: bool = F
     )
 
 
-def _run_change(
+def _run_change(service: str, mutate_fn, summary: str, **kwargs) -> ChangeSetResult:
+    """`_run_change_unlocked` under the one change lock (Q212, BB9 b): a second change waits up to CHANGE_WAIT_SECONDS and then answers that another change is running; a change that waited
+    says so in its first line."""
+    try:
+        with change_lock() as waited:
+            return _run_change_unlocked(service, mutate_fn, summary, waited=waited, **kwargs)
+    except ChangeBusy:
+        return ChangeSetResult("aborted", "busy", [("error", f"❌ {BUSY_SENTENCE}")])
+
+
+def _unloaded_edit(server: dict, service: str, cfg: dict, name: str) -> str:
+    """For an api target WITH SSH: the file on the host must carry what the daemon runs, or `config-write` would overwrite a hand edit without a word (the F8 hazard). "" when they agree."""
+    if not server.get("ssh_host") or service not in _api.SERVICE_KEY:
+        return ""
+    file_cfg, _raw = _host.read_config_versioned(server, service, capture=False)
+    host = server.get("name") or server.get("ssh_host")
+    if file_cfg is None:
+        return (
+            f"the file on {host} could not be read, so a change cannot be proved against it (check the SSH connection)"
+        )
+    if _api._canonical(file_cfg, service) != _api._canonical(cfg, service):
+        return f"the file on {host} carries an edit the daemon has not loaded - restart Kea there first, or discard it from the server's card"
+    return ""
+
+
+def _run_change_unlocked(
     service: str,
     mutate_fn,
     summary: str,
@@ -202,8 +317,10 @@ def _run_change(
     tls_paths_for=None,
     finalize=None,
     helper_only: bool = False,
+    transport: str | None = None,
+    waited: float = 0.0,
 ) -> ChangeSetResult:
-    """Push one config mutation to every SSH-configured Kea server for
+    """Push one config mutation to every Kea server that is a write target for
     `service` ("dhcp4" | "dhcp6" | "d2"), preflighting all of them
     before the first real write and reverting already-applied targets
     if a later one fails.
@@ -260,6 +377,9 @@ def _run_change(
     target is put back exactly as for a failed restart, a revert that fails is `rollback_failed`, and the result is `rolled_back`
     with `last_code == "finalize-failed"` - never ok.
 
+    Q212: `transport="file"` forces the file path (the three control-socket routes and investigation logging's two callers pass it: a change to `control-sockets` is never sent over the
+    socket it changes, and the host restores the marker from the FILE); None lets each server's own transport decide (`_transport`).
+
     Never raises — a per-server exception during planning aborts the
     whole change set with that exception's text as the line, matching
     every converted loop's existing `except Exception as e:
@@ -270,20 +390,41 @@ def _run_change(
     conflict_phrase = conflict_phrase or _default_conflict_phrase
 
     candidates = servers if servers is not None else extensions.KEA_SERVERS
-    ssh_servers = [s for s in candidates if s.get("ssh_host")]
-    if not ssh_servers:
-        return ChangeSetResult(status="noservers", last_code="noservers")
-
+    planned: list[tuple[dict, str]] = []
     lines: list[tuple[str, str]] = []
+    for s in candidates:
+        kind = _transport_for_run(s, service, transport)
+        if kind != "off":
+            planned.append((s, kind))
+        elif str(s.get("config_transport") or "").strip() == "off":
+            lines.append(("success", f"ℹ️ {s.get('name') or s.get('ssh_host') or '?'}: not a write target"))
+    if not planned:
+        return ChangeSetResult(status="noservers", last_code="noservers", lines=lines)
+    if waited >= 1:
+        lines.insert(0, ("success", f"ℹ️ waited {round(waited)} s for another change"))
+
     targets: list[Target] = []
     last_code = "ok"
 
     # ── Phase 1: plan ────────────────────────────────────────────────
-    for server in ssh_servers:
-        name = server.get("name") or server.get("ssh_host") or "?"
+    for server, kind in planned:
+        name = server.get("name") or server.get("ssh_host") or server.get("api_url") or "?"
         try:
             read_errors: list[str] = []
-            if absent_is_expected:  # only here is "nothing came back" ambiguous: say WHY it did not (an unreachable host is not an absent file)
+            if kind == "api":
+                notes: list[str] = []
+                cfg, sha = _api.read(server, service, errors=read_errors, notes=notes)
+                lines.extend(("warning", f"ℹ️ {name}: {note}") for note in notes)
+                if cfg is None:  # a chosen transport that cannot be used aborts the set; it is never "not a target"
+                    lines.append(
+                        ("error", f"❌ {name}: {read_errors[0] if read_errors else 'the daemon did not answer'}")
+                    )
+                    return ChangeSetResult("aborted", "error", lines)
+                unloaded = _unloaded_edit(server, service, cfg, name)
+                if unloaded:
+                    lines.append(("error", f"❌ {name}: {unloaded}"))
+                    return ChangeSetResult("aborted", "error", lines)
+            elif absent_is_expected:  # only here is "nothing came back" ambiguous: say WHY it did not (an unreachable host is not an absent file)
                 cfg, sha = _host.read_config_versioned(server, service, errors=read_errors)
             else:
                 cfg, sha = _host.read_config_versioned(server, service)
@@ -320,7 +461,14 @@ def _run_change(
                         after_cfg,
                         code,
                         allow_overwrite=cfg is not None,
-                        tls_paths=tuple(tls_paths_for(server)) if tls_paths_for else tuple(tls_paths or ()),
+                        tls_paths=(
+                            ()
+                            if kind == "api"
+                            else tuple(tls_paths_for(server))
+                            if tls_paths_for
+                            else tuple(tls_paths or ())
+                        ),
+                        transport=kind,
                     )
                 )
                 continue
@@ -340,14 +488,17 @@ def _run_change(
     # ── Phase 2: preflight every target before touching anything ─────
     preflight_failed = False
     for t in targets:
-        res = _safe(
-            _host.test_config,
-            t.server,
-            service,
-            t.after_cfg,
-            tls_paths=t.tls_paths,
-            **({"helper_only": True} if helper_only else {}),
-        )
+        if t.transport == "api":
+            res = _safe(_api.test, t.server, service, t.after_cfg)
+        else:
+            res = _safe(
+                _host.test_config,
+                t.server,
+                service,
+                t.after_cfg,
+                tls_paths=t.tls_paths,
+                **({"helper_only": True} if helper_only else {}),
+            )
         if not res.get("ok"):
             preflight_failed = True
             if res.get("code") == "conflict":
@@ -360,18 +511,22 @@ def _run_change(
 
     # ── Phase 3: commit sequentially, revert on the first failure ────
     committed: list[Target] = []
-    for t in targets:
-        res = _safe(
-            _host.apply_config,
-            t.server,
-            service,
-            t.after_cfg,
-            tls_paths=t.tls_paths,
-            allow_overwrite=t.allow_overwrite,
-            expect_sha256=t.before_sha,
-            summary=summary,
-            **({"helper_only": True} if helper_only else {}),
-        )
+    # file targets first (written, not yet live), then api targets (live at once): the window in which servers disagree is the restarts only
+    for t in [t for t in targets if t.transport != "api"] + [t for t in targets if t.transport == "api"]:
+        if t.transport == "api":
+            res = _safe(_api.apply, t.server, service, t.after_cfg, t.before_sha, summary, before_cfg=t.before_cfg)
+        else:
+            res = _safe(
+                _host.apply_config,
+                t.server,
+                service,
+                t.after_cfg,
+                tls_paths=t.tls_paths,
+                allow_overwrite=t.allow_overwrite,
+                expect_sha256=t.before_sha,
+                summary=summary,
+                **({"helper_only": True} if helper_only else {}),
+            )
         if res.get("ok"):
             t.applied_sha = res.get("sha256")
             committed.append(t)
@@ -390,7 +545,7 @@ def _run_change(
             if not rres.get("ok"):
                 revert_failed.append(done)
                 continue
-            if restart:
+            if restart and done.transport == "file":
                 rres_restart = _safe(_host.service_action, done.server, service, "restart")
                 if not rres_restart.get("ok"):
                     # v5.65.6 (Q95) - this was a warning line and the status stayed "aborted", which is
@@ -407,7 +562,10 @@ def _run_change(
                         )
                     )
 
-        if revert_failed or restart_stuck:
+        unproved = (
+            [t] if res.get("needs_hands") else []
+        )  # Q212: an api write whose outcome the daemon's own answer could not prove may carry the change
+        if revert_failed or restart_stuck or unproved:
             # v5.28.1 (Q26, A1) — name all three groups correctly.
             # `revert_failed` holds targets whose REVERT call itself
             # failed, meaning THEY still carry the new config — the
@@ -418,18 +576,20 @@ def _run_change(
                 failed_keys = {d.key for d in revert_failed}  # by id: two servers may share a name
                 still_new = [d.name for d in revert_failed]
                 rolled_back = [d.name for d in committed if d.key not in failed_keys]
-                untouched = t.name
+                untouched = f"{t.name} was never changed" if not unproved else f"{t.name} may carry the change (below)"
                 lines.append(
                     (
                         "error",
                         f"🛑 ROLLBACK FAILED — {', '.join(still_new)} still have the NEW config (their rollback "
                         f"failed); {', '.join(rolled_back) or '(none)'} were rolled back to the old config; "
-                        f"{untouched} was never changed. Fix by hand: Servers → Config history → restore.",
+                        f"{untouched}. Fix by hand: Servers → Config history → restore.",
                     )
                 )
             if restart_stuck:
-                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand([d.name for d in restart_stuck])))
-            needs = revert_failed + restart_stuck
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand_for(restart_stuck)))
+            if unproved:
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand_for(unproved)))
+            needs = revert_failed + restart_stuck + unproved
             return ChangeSetResult(
                 "rollback_failed",
                 res.get("code", "error"),
@@ -447,11 +607,14 @@ def _run_change(
     # ── Phase 4: restart (every apply succeeded) ──────────────────────
     # `config.applied` is emitted only once the change stands: a restart failure below (or a finalize
     # failure, phase 5) rolls it back, and a timeline entry saying it was applied would be false.
-    if restart:
+    restartable = [
+        t for t in targets if t.transport == "file"
+    ]  # an api target is live already and has nothing to restart
+    if restart and restartable:
         restarts = {
-            t.key: _safe(_host.service_action, t.server, service, "restart") for t in targets
+            t.key: _safe(_host.service_action, t.server, service, "restart") for t in restartable
         }  # by id, never by the free-text name
-        failed = [t for t in targets if not restarts[t.key].get("ok")]
+        failed = [t for t in restartable if not restarts[t.key].get("ok")]
         if failed:
             # A restart failed although the config passed preflight and was written: the daemon
             # cannot start from what it was just handed (and the restart already stopped the old
@@ -472,7 +635,7 @@ def _run_change(
             )
             names = [t.name for t in failed]
             if stuck:
-                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand([s.name for s in stuck])))
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand_for(stuck)))
                 return ChangeSetResult(
                     "rollback_failed",
                     "restart-failed",
@@ -518,7 +681,7 @@ def _run_change(
                 targets, service, summary, daemon_label, lines, restart=restart, helper_only=helper_only
             )
             if stuck:
-                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand([s.name for s in stuck])))
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand_for(stuck)))
                 return ChangeSetResult(
                     "rollback_failed",
                     "finalize-failed",
@@ -539,7 +702,14 @@ def _run_change(
 
     for t in targets:
         _events.emit("config.applied", server=t.name, detail=summary)
+        if t.transport == "api":
+            lines.append(("success", f"✅ {t.name}: {summary}, over the API, no restart"))
+            continue
         lines.append(("success", f"✅ {t.name}: {summary}" + (f", {daemon_label} restarted" if restart else "")))
+        if (
+            _declared(t.server) == "api" and restart
+        ):  # a FILE write onto a server whose transport is api: record what its daemon runs now, so the next API write is not read as external
+            _safe(_api.record_after_file_write, t.server, service, summary)
     return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets], covered_ids=[t.key for t in targets])
 
 
@@ -557,7 +727,7 @@ def _put_everything_back(targets, service, summary, daemon_label, lines, *, rest
                 ("error", f"❌ {t.name}: could not put the previous config back ({_tail(rres.get('detail'))})")
             )
             continue
-        if not restart:
+        if not restart or t.transport != "file":
             continue
         again = _safe(_host.service_action, t.server, service, "restart")
         if not again.get("ok"):
