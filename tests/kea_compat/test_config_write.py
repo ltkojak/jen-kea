@@ -390,6 +390,95 @@ def test_07_the_investigation_marker_survives_the_round_trip(facts):
     )  # INV-002's oracle: the daemon runs at what the marker asked
 
 
+RELOAD_NAME = "kea-reload"
+
+
+def _second_daemon_digest(facts, live_dhcp4):
+    """Q211 fixup 2: Jen's own rendering of the running configuration (canonical JSON, written through the container's shell) is what a daemon started from it
+    would run. The first daemon is stopped (the control port is the config's own), a second one is started on a scratch directory holding that file, and its
+    `config-hash-get` is read; the first daemon is started again afterward. Recorded, never asserted: the question is whether the digest a `config-set` returned
+    is the digest of the same configuration after a start."""
+    scratch = tempfile.mkdtemp(prefix="kea-reload-", dir=os.path.dirname(CONF_DIR))
+    try:
+        os.chmod(scratch, 0o755)
+        for name in ("jen-api.user", "jen-api.pw"):
+            shutil.copy(os.path.join(CONF_DIR, name), os.path.join(scratch, name))
+            os.chmod(os.path.join(scratch, name), 0o644)
+        text = config_revisions.canonical({"Dhcp4": live_dhcp4})
+        # through the container's shell, as the entry says: the file is written by the image's own `sh`, not by the runner
+        __levels._sh(
+            "docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{scratch}:/c", __levels.IMAGE,
+            "-c", "cat > /c/kea-dhcp4.conf", input=text,
+            check=True,
+        )  # fmt: skip
+        facts["reload_file_bytes"] = len(text.encode("utf-8"))
+        __levels._sh("docker", "stop", "-t", "30", "kea")
+        __levels._sh("docker", "rm", "-f", RELOAD_NAME, check=False)
+        __levels._sh(
+            "docker", "run", "-d", "--name", RELOAD_NAME, "--network", "host",
+            "--tmpfs", "/var/run/kea:rw,mode=755",
+            "-e", "MARIADB_TLS_DISABLE_PEER_VERIFICATION=1",
+            "-v", f"{scratch}:/etc/kea", __levels.IMAGE,
+        )  # fmt: skip
+        for _ in range(40):
+            if _probe_command("version-get", port=8004).get("result") == 0:
+                break
+            time.sleep(1)
+        else:
+            facts["reload_second_daemon_started"] = False
+            facts["reload_second_daemon_log_tail"] = __levels._sh("docker", "logs", RELOAD_NAME, check=False).stderr[
+                -1500:
+            ]
+            return None
+        facts["reload_second_daemon_started"] = True
+        reply = _probe_command("config-hash-get", port=8004)
+        return _first(reply, "hash")[0]
+    finally:
+        __levels._sh("docker", "rm", "-f", RELOAD_NAME, check=False)
+        shutil.rmtree(scratch, ignore_errors=True)
+        __levels._clear_run_dir()
+        __levels._sh("docker", "start", "kea")
+        __levels._wait_ready()
+
+
+def test_08_what_config_get_adds_and_accepts(facts):
+    """Q212's two remaining markers, as facts (recorded, not asserted - except that the daemon answers after all of it): which keys `config-get` adds to what
+    the file carried, whether the `hash` it returns beside `Dhcp4` is accepted when sent back, how long a `config-set` takes, and whether the digest a
+    `config-set` returned equals the digest of a daemon STARTED from Jen's rendering of the same configuration."""
+    assert ORIGINAL is not None, "test_01 did not record the original configuration"
+    authored = json.loads(_STATE["bytes"])[
+        "Dhcp4"
+    ]  # the file as the job wrote it (a compat file Jen's own builder wrote)
+    first = ORIGINAL[0]["Dhcp4"]  # what config-get said of it before any change
+    facts["keys_added_top"] = sorted(set(first) - set(authored))
+    facts["keys_dropped_top"] = sorted(set(authored) - set(first))
+    facts["keys_added_subnet"] = sorted(set(first["subnet4"][0]) - set(authored["subnet4"][0]))
+    facts["keys_added_pool"] = sorted(set(first["subnet4"][0]["pools"][0]) - set(authored["subnet4"][0]["pools"][0]))
+    facts["valid_lifetime_authored_vs_running"] = [authored.get("valid-lifetime"), first.get("valid-lifetime")]
+    live_reply = _get_reply()
+    live = live_reply["arguments"]["Dhcp4"]
+    facts["hash_beside_dhcp4"] = "hash" in live_reply["arguments"]
+    hash_back = __kea.kea_command("config-set", arguments={"Dhcp4": live, "hash": "0" * 64})
+    facts["config_set_accepts_hash_key"] = _brief(
+        hash_back
+    )  # recorded: Jen strips the key before a mutation either way
+    facts["hash_after_a_set_that_carried_a_hash_key"] = _hash()
+    started = time.monotonic()
+    done = __real._ok(__kea.kea_command("config-set", arguments={"Dhcp4": live}))
+    facts["config_set_seconds"] = round(time.monotonic() - started, 2)
+    set_digest = _first(done, "hash")[0]
+    facts["config_set_digest_is_config_hash_get"] = set_digest == _hash()
+    try:
+        second = _second_daemon_digest(facts, live)
+        facts["second_daemon_digest"] = second
+        facts["reload_digest_equals_set_digest"] = None if second is None else second == set_digest
+    except (
+        Exception
+    ) as exc:  # recorded, not asserted: a second daemon that cannot start must not redden the rows the entry names
+        facts["reload_error"] = f"{type(exc).__name__}: {exc}"[:400]
+    assert _hash(), "the daemon does not answer after row 08"
+
+
 def test_90_restore_puts_the_original_back(facts):
     """The configuration the job started with goes back into the daemon, into the file, and then the original file's own bytes replace it."""
     assert ORIGINAL is not None, "test_01 did not record the original configuration"
@@ -416,13 +505,13 @@ PROBE_PORT = 8014
 ACCOUNT = "100:101"  # the `kea` account ISC's image creates and owns the daemon binary with (binary-<version>.json)
 
 
-def _probe_command(command, arguments=None):
+def _probe_command(command, arguments=None, port=PROBE_PORT):
     import requests
 
     payload = {"command": command, **({"arguments": arguments} if arguments else {})}
     auth = (os.environ.get("KEA_COMPAT_USER", ""), os.environ.get("KEA_COMPAT_PASS", ""))
     try:
-        data = requests.post(f"http://127.0.0.1:{PROBE_PORT}/", json=payload, auth=auth, timeout=10).json()
+        data = requests.post(f"http://127.0.0.1:{port}/", json=payload, auth=auth, timeout=10).json()
     except (requests.RequestException, ValueError) as exc:
         return {"result": -1, "text": f"transport: {type(exc).__name__}"}
     return data[0] if isinstance(data, list) else data

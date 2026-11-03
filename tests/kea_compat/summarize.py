@@ -116,6 +116,22 @@ WRITE_FACTS = [
     ("a stale config-set accepted by the daemon", lambda d: _yn(d.get("a_stale_set_is_accepted_by_the_daemon"))),
     ("marker in config-get", lambda d: _yn(d.get("marker_in_config_get"))),
     ("marker in the written file", lambda d: _yn(d.get("marker_in_file_after_write"))),
+    ("keys config-get adds at the top of Dhcp4", lambda d: _keys(d.get("keys_added_top"))),
+    ("keys config-get adds to a subnet", lambda d: _keys(d.get("keys_added_subnet"))),
+    ("keys config-get adds to a pool", lambda d: _keys(d.get("keys_added_pool"))),
+    ("hash beside Dhcp4 in config-get", lambda d: _yn(d.get("hash_beside_dhcp4"))),
+    ("config-set with a hash key sent back", lambda d: _answer(d.get("config_set_accepts_hash_key"))),
+    ("config-set seconds", lambda d: str(d.get("config_set_seconds", "—"))),
+    (
+        "digest of a daemon started on Jen's rendering equals config-set's",
+        lambda d: _yn(d.get("reload_digest_equals_set_digest")),
+    ),
+    (
+        "why the second daemon did not run",
+        lambda d: str(
+            d.get("reload_error") or ("did not start" if d.get("reload_second_daemon_started") is False else "—")
+        ),
+    ),
     ("original file restored byte for byte", lambda d: _yn(d.get("original_file_restored_byte_for_byte"))),
     (
         "unprivileged daemon (uid 100): config-write as the file stands",
@@ -132,6 +148,12 @@ WRITE_FACTS = [
         lambda d: str(d.get("nonroot_error") or ("did not start" if d.get("nonroot_started") is False else "—")),
     ),
 ]
+
+
+def _keys(value):
+    if value is None:
+        return "—"
+    return ", ".join(value) if value else "none"
 
 
 def _owner_mode(facts):

@@ -49,6 +49,24 @@ class TestTheTables:
         assert "| config-write as shipped | refused (1): Permission \\| denied | — |" in text
         assert "| chown of the file needed? | yes, to uid 100 | — |" in text
 
+    def test_row_08_facts_are_columns_and_a_missing_fact_is_a_dash(self):
+        data = _results()
+        data["3.0.5"].update(
+            keys_added_top=["a", "b"],
+            keys_added_subnet=[],
+            hash_beside_dhcp4=True,
+            config_set_accepts_hash_key={"result": 1, "text": "unsupported 'hash'"},
+            config_set_seconds=0.04,
+            reload_digest_equals_set_digest=False,
+        )
+        text = summarize.render_config_write(data)
+        assert "| keys config-get adds at the top of Dhcp4 | a, b | — |" in text
+        assert "| keys config-get adds to a subnet | none | — |" in text
+        assert "| hash beside Dhcp4 in config-get | yes | — |" in text
+        assert "| config-set with a hash key sent back | refused (1): unsupported 'hash' | — |" in text
+        assert "| config-set seconds | 0.04 | — |" in text
+        assert "| digest of a daemon started on Jen's rendering equals config-set's | no | — |" in text
+
     def test_files_are_read_by_their_version_and_a_missing_one_is_said(self, tmp_path):
         for version, data in _results().items():
             (tmp_path / f"config-write-{version}.json").write_text(json.dumps(data), encoding="utf-8")

@@ -126,8 +126,8 @@ def _local_address() -> str:
         probe.close()
 
 
-def _sh(*args, check=True):
-    return subprocess.run(args, check=check, capture_output=True, text=True, timeout=120)
+def _sh(*args, check=True, input=None):
+    return subprocess.run(args, check=check, capture_output=True, text=True, timeout=120, input=input)
 
 
 def _clear_run_dir():
