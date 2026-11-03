@@ -416,7 +416,7 @@ def _second_daemon_digest(facts, live_dhcp4):
         __levels._sh("docker", "rm", "-f", RELOAD_NAME, check=False)
         __levels._sh(
             "docker", "run", "-d", "--name", RELOAD_NAME, "--network", "host",
-            "--tmpfs", "/var/run/kea:rw,mode=755",
+            "--tmpfs", "/var/run/kea:rw,mode=750",
             "-e", "MARIADB_TLS_DISABLE_PEER_VERIFICATION=1",
             "-v", f"{scratch}:/etc/kea", __levels.IMAGE,
         )  # fmt: skip
