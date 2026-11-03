@@ -576,6 +576,14 @@ def _dhcp6_config():
 def test_10_the_same_over_dhcp6(facts, monkeypatch):
     """Q212 (BB1 f): the same sequence for the v6 daemon the ISC image carries. A daemon that cannot be started here is a recorded fact and a skip - dhcp6 then joins D2 on the file path in this beta."""
     api, store = _jens_modules(monkeypatch)
+    probe_binary = __levels._sh(
+        "docker", "run", "--rm", "--entrypoint", "sh", __levels.IMAGE, "-c", "command -v kea-dhcp6", check=False
+    )
+    facts["dhcp6_binary_in_image"] = probe_binary.returncode == 0
+    if probe_binary.returncode != 0:
+        # run 41703269176: ISC's kea-dhcp4 image has no kea-dhcp6 (`exec: "kea-dhcp6": executable file not found`), so this row cannot be built against a real daemon
+        facts["dhcp6_started"] = False
+        pytest.skip("ISC's dhcp4 image carries no kea-dhcp6: dhcp6 joins D2 on the file path in this beta")
     scratch = tempfile.mkdtemp(prefix="kea6-", dir=os.path.dirname(CONF_DIR))
     try:
         os.chmod(scratch, 0o755)

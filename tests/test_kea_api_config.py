@@ -151,21 +151,13 @@ class TestApplyInOrder:
         assert result["sha256"] == fake.digest()
         assert fake.file == fake.running and fake.running["valid-lifetime"] == 7200
 
-    def test_once_per_service(self, monkeypatch, store, refusal):
-        six = StatefulKeaServer({"subnet6": [], "hooks-libraries": []}, key="Dhcp6")
-        six.start()
-        try:
-            monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
-            monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.4)
-            srv = {"id": SID, "name": "kea-a", "api_url": "http://127.0.0.1:1/", "api6_url": six.url}
-            cfg, digest = api.read(srv, "dhcp6", capture=False)
-            cand = copy.deepcopy(cfg)
-            cand["Dhcp6"]["valid-lifetime"] = 9
-            result = api.apply(srv, "dhcp6", cand, digest, "v6", before_cfg=cfg)
-            assert result["ok"], result
-            assert six.commands[1:] == ["config-hash-get", "config-set", "config-write", "config-get"]
-        finally:
-            six.stop()
+    def test_dhcp6_and_d2_are_not_served_in_this_beta(self, fake, server):
+        """ISC's dhcp4 image has no kea-dhcp6, so row 10 could not be built against a real daemon (run 41703269176): dhcp6 joins D2 on the file path."""
+        for service in ("dhcp6", "d2"):
+            assert api.apply(server, service, {"Dhcp6": {}}, "h", "x")["code"] == "noservice"
+            assert api.read(server, service, errors=[], capture=False) == (None, None)
+            assert api.hash(server, service) is None
+        assert fake.commands == []
 
     def test_the_revision_is_the_daemons_answer(self, fake, server, store):
         result, _cfg, _digest = _apply(server, summary="lifetime 7200")
@@ -500,6 +492,7 @@ class TestTheModuleIsTheOneSender:
             "jen.services.kea_authoring",
             "jen.services.kea_tls",
             "jen.services.investigation_logging",  # the host's restore window (lazy: that module imports the change set)
+            "hashlib",  # the probe is bound to its endpoint by a hash
             "datetime.datetime",  # the stored probe's clock (lazy)
             "datetime.timezone",
             "jen.models.user",  # the stored probe is a settings row (lazy)
@@ -516,6 +509,70 @@ class TestTheModuleIsTheOneSender:
 from jen.services import investigation_logging as _inv  # noqa: E402
 
 _REAL_RESTORE_WINDOW = _inv.restore_window  # captured before any fixture patches it out
+
+
+class TestSecondPassRows:
+    """The rows of pass/reports/v7.0.0-beta.1-fix-rows.md (fix rows 1-3, 7, 8 and P3a)."""
+
+    def test_row3_a_young_pending_row_is_not_settled_by_a_reader(self, fake, server, store):
+        cfg, digest = _plan(server)
+        from datetime import datetime, timezone
+
+        rid = store.record(SID, "dhcp4", _candidate(cfg), digest, "in flight", hash_kind="kea", source="pending")
+        store.rows[-1]["created_at"] = datetime.now(
+            timezone.utc
+        )  # an apply is between its pending record and its config-set
+        notes = []
+        api.read(server, "dhcp4", capture=False, notes=notes)
+        assert notes and "in progress" in notes[0] and store.pending(SID, "dhcp4")["id"] == rid  # not discarded
+
+    def test_row2_a_change_that_stands_supersedes_an_unresolved_pending_row(self, fake, server, store):
+        cfg, digest = _plan(server)
+        stranger = copy.deepcopy(fake.running)
+        stranger["valid-lifetime"] = 11
+        store.record(SID, "dhcp4", _candidate(cfg, 99), digest, "left by a crash", hash_kind="kea", source="pending")
+        fake.set_running(stranger)  # neither state
+        cfg2, d2 = api.read(server, "dhcp4", capture=False)
+        restored = api.apply(server, "dhcp4", _candidate(cfg2, 4), d2, "restore", source="restore", before_cfg=cfg2)
+        assert restored["ok"] and store.pending(SID, "dhcp4") is None
+        cfg3, d3 = api.read(server, "dhcp4", capture=False)
+        assert api.apply(server, "dhcp4", _candidate(cfg3, 5), d3, "normal", before_cfg=cfg3)["ok"]
+
+    def test_row7_an_authored_file_is_a_subset_of_what_the_daemon_runs(self):
+        authored = {"Dhcp4": {"valid-lifetime": 3600, "subnet4": [{"id": 1, "subnet": "10.0.0.0/24"}]}}
+        running = {
+            "Dhcp4": {
+                "valid-lifetime": 3600,
+                "echo-client-id": True,
+                "subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "t1-percent": 0.5}],
+            }
+        }
+        assert api.file_in_daemon(authored, running, "dhcp4")
+        edited = {
+            "Dhcp4": {
+                "valid-lifetime": 3600,
+                "subnet4": [{"id": 1, "subnet": "10.0.0.0/24"}, {"id": 2, "subnet": "10.1.0.0/24"}],
+            }
+        }
+        assert not api.file_in_daemon(edited, running, "dhcp4")  # a hand-added subnet the daemon does not run
+        assert api.same_modulo_defaults(running, authored, "dhcp4")
+
+    def test_row3_p3a_a_write_that_may_have_landed_before_a_refusal_is_needs_hands(self, fake, server, store):
+        fake.hang = {"config-write": "after"}  # the first write lands and goes quiet
+        original = fake._answer
+        seen = {"n": 0}
+
+        def second_refused(command, arguments):
+            if command == "config-write":
+                seen["n"] += 1
+                fake.hang.clear()  # only the FIRST attempt goes quiet (the handler already took its mode for this one)
+                if seen["n"] >= 2:
+                    return {"result": 1, "text": "denied"}
+            return original(command, arguments)
+
+        fake._answer = second_refused
+        result, _c, _d = _apply(server)
+        assert result["code"] == "write-failed" and result["needs_hands"] and "earlier attempt" in result["detail"]
 
 
 class TestTheHostsDeadlineIsRespected:
@@ -567,3 +624,62 @@ class TestTheHostsDeadlineIsRespected:
     def test_only_dhcp4_carries_the_marker(self, fake, server, monkeypatch):
         self._entry(monkeypatch, 1)
         assert _REAL_RESTORE_WINDOW({"id": SID + 1}) == ""  # another server's id: no entry
+
+
+def _expands(section):
+    """What Kea does to what it is given (docs/ARCHITECTURE.md 3.17, row 08): defaults written into every subnet."""
+    out = copy.deepcopy(section)
+    for subnet in out.get("subnet4", []):
+        subnet.setdefault("t1-percent", 0.5)
+        subnet.setdefault("allocator", "iterative")
+        subnet.setdefault("reservations", [])
+    out.setdefault("echo-client-id", True)
+    return out
+
+
+class TestKeaWritesItsDefaultsOut:
+    """Real Kea (compat run 41703269176) answers `config-get` with defaults written into a subnet Jen just added, so a candidate is a SUBSET of what the daemon runs, never equal to it: the compare
+    that settles a set with no answer, and the one that settles a pending change, are 'the daemon carries everything the candidate said', with the BEFORE state asked first."""
+
+    def _new_subnet(self, cfg):
+        out = copy.deepcopy(cfg)
+        out["Dhcp4"]["subnet4"].append({"id": 9, "subnet": "10.9.0.0/24", "pools": [{"pool": "10.9.0.10 - 10.9.0.20"}]})
+        return out
+
+    def test_a_set_that_applied_with_no_answer_is_recognized_though_the_daemon_expanded_it(self, fake, server):
+        fake.expand = _expands
+        fake.hang = {"config-set": "after"}
+        cfg, digest = _plan(server)
+        result = api.apply(server, "dhcp4", self._new_subnet(cfg), digest, "x", before_cfg=cfg)
+        assert result["ok"], result
+        assert any(s.get("id") == 9 for s in fake.file["subnet4"])
+
+    def test_a_pending_change_that_is_live_is_finished_though_the_daemon_expanded_it(self, fake, server, store):
+        fake.expand = _expands
+        cfg, digest = _plan(server)
+        candidate = self._new_subnet(cfg)
+        store.record(SID, "dhcp4", candidate, digest, "interrupted", hash_kind="kea", source="pending")
+        fake.set_running(_expands(candidate["Dhcp4"]))  # Jen died after config-set, before config-write
+        notes = []
+        api.read(server, "dhcp4", capture=False, notes=notes)
+        assert notes and "finished" in notes[0], notes
+        assert any(s.get("id") == 9 for s in fake.file["subnet4"]) and store.pending(SID, "dhcp4") is None
+
+    def test_a_pure_deletion_that_never_landed_is_not_mistaken_for_one_that_did(self, fake, server, store):
+        """The candidate lacks a subnet; the daemon still has it, so the daemon 'carries' the candidate. The BEFORE digest is asked first: nothing landed."""
+        cfg, digest = _plan(server)
+        candidate = copy.deepcopy(cfg)
+        candidate["Dhcp4"]["subnet4"] = candidate["Dhcp4"]["subnet4"][:1]
+        store.record(SID, "dhcp4", candidate, digest, "interrupted", hash_kind="kea", source="pending")
+        notes = []
+        api.read(server, "dhcp4", capture=False, notes=notes)
+        assert notes and "never reached" in notes[0] and store.pending(SID, "dhcp4") is None
+        assert len(fake.running["subnet4"]) == 2  # nothing was set, nothing was written
+
+    def test_carries_is_a_subset_test(self):
+        assert api._carries({"a": 1, "b": 2}, {"a": 1})
+        assert not api._carries({"a": 1}, {"a": 1, "b": 2})
+        assert not api._carries({"a": 2}, {"a": 1})
+        assert api._carries([{"x": 1, "y": 2}], [{"x": 1}])
+        assert not api._carries([{"x": 1}, {"x": 2}], [{"x": 1}])  # lists are positional and the same length
+        assert api._carries(5, 5) and not api._carries(5, 6) and not api._carries([], {"a": 1})

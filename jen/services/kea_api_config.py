@@ -32,7 +32,9 @@ from jen.services import kea_host as _host
 
 logger = logging.getLogger(__name__)
 
-SERVICE_KEY = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6"}
+# dhcp4 only in 7.0.0-beta.1. ISC's own dhcp4 image has no kea-dhcp6 binary, so Q211's row 10 ("the same over dhcp6") could not be built against a real daemon (run 41703269176: `exec:
+# "kea-dhcp6": executable file not found`); dhcp6 joins D2 on the file path in this beta, and `kea_changeset._transport` says so for every service this module does not serve.
+SERVICE_KEY = {"dhcp4": "Dhcp4"}
 
 # Kea cuts a control connection at 10 s (not configurable); one second more than that is the whole wait, and a test narrows it.
 COMMAND_TIMEOUT = 15
@@ -96,6 +98,35 @@ def _digest(reply: dict) -> str | None:
 
 def _section(cfg: dict | None, service: str) -> dict:
     return (cfg or {}).get(SERVICE_KEY.get(service, ""), {}) or {}
+
+
+def _carries(running: object, candidate: object) -> bool:
+    """Does the configuration the daemon RUNS carry everything the candidate said? `config-get` returns the daemon's configuration with Kea's own defaults written out (45 keys at the top of
+    `Dhcp4`, 13 per subnet and one per pool - docs/ARCHITECTURE.md 3.17, row 08), so a candidate Jen built is a SUBSET of what the daemon reports after it takes it: every key present with an equal
+    value, lists the same length and elementwise the same. Equality would never hold for a subnet Jen just added. Used with a check of the BEFORE state FIRST, never alone: a candidate that only
+    deletes is a subset of the configuration it came from."""
+    if isinstance(candidate, dict):
+        return isinstance(running, dict) and all(k in running and _carries(running[k], v) for k, v in candidate.items())
+    if isinstance(candidate, list):
+        return (
+            isinstance(running, list)
+            and len(running) == len(candidate)
+            and all(_carries(r, c) for r, c in zip(running, candidate, strict=True))
+        )
+    return running == candidate
+
+
+def file_in_daemon(file_cfg: dict | None, live_cfg: dict | None, service: str) -> bool:
+    """Is everything the FILE says carried by what the daemon runs? A file Jen authored (or an older Kea-written one) is a subset of the daemon's configuration with its defaults written out, and
+    nothing in it would be lost by a `config-write`; a file with a subnet or a value the daemon does not run is a hand edit and is not. (fix row 7: equality never held for an authored file.)"""
+    return _carries(_section(live_cfg, service), _section(file_cfg, service))
+
+
+def same_modulo_defaults(a_cfg: dict | None, b_cfg: dict | None, service: str) -> bool:
+    """Either configuration carries the other: the verification of Kea's own `config-write` (a rendering of what runs, defaults included or not)."""
+    return _carries(_section(a_cfg, service), _section(b_cfg, service)) or _carries(
+        _section(b_cfg, service), _section(a_cfg, service)
+    )
 
 
 def _canonical(cfg: dict | None, service: str) -> str:
@@ -250,6 +281,23 @@ def _api_only_guard(service: str, running: dict | None, candidate: dict) -> str:
 # ── the pending record (step 3) and its reconciliation ────────────────────────────────────────────────────────────────────
 
 
+PENDING_SETTLE_SECONDS = 120  # an apply finishes inside its commands' waits; a pending row younger than this belongs to one in flight and no reader may settle it (fix row 3)
+
+
+def _row_age_seconds(row: dict) -> float:
+    """Seconds since a revision row was written (UTC); 0-age cannot be told apart from "unknown", so an unreadable stamp counts as old."""
+    from datetime import datetime, timezone
+
+    stamp = row.get("created_at")
+    try:
+        when = stamp if isinstance(stamp, datetime) else datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return PENDING_SETTLE_SECONDS + 1
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - when).total_seconds()
+
+
 def _reconcile_pending(server: dict, service: str, cfg: dict, digest: str, notes: list | None) -> tuple[dict, str]:
     """If Jen died between `config-set` and the verify, the next read finds a `pending` row and settles it by CONTENT (Jen cannot compute Kea's digest, so a digest alone cannot say
     whose configuration runs): equal to the candidate -> that change is live, `config-write` is sent (idempotent) and verified, the row becomes `jen`; its digest equal to the row's BEFORE
@@ -265,7 +313,18 @@ def _reconcile_pending(server: dict, service: str, cfg: dict, digest: str, notes
     except (TypeError, ValueError):
         return cfg, digest
     at = str(row.get("created_at") or "an earlier time")
-    if _canonical(cfg, service) == _canonical(candidate, service):
+    if _row_age_seconds(row) < PENDING_SETTLE_SECONDS:
+        if notes is not None:
+            notes.append(
+                f"a change of {at} is in progress; it is not settled until it has had {PENDING_SETTLE_SECONDS} s"
+            )
+        return cfg, digest
+    if row.get("sha256") and digest == row["sha256"]:
+        _rev.discard(row["id"])
+        if notes is not None:
+            notes.append(f"a change of {at} never reached the daemon; its record was removed")
+        return cfg, digest
+    if _carries(_section(cfg, service), _section(candidate, service)):
         wrote = write_file(server, service)
         again, digest2, _ = _get(server, service)
         if wrote.get("ok") and again is not None and digest2:
@@ -277,11 +336,6 @@ def _reconcile_pending(server: dict, service: str, cfg: dict, digest: str, notes
             notes.append(
                 f"a change of {at} is live but its file write is not proved ({wrote.get('detail') or 'no answer'}); the daemon runs {digest}"
             )
-        return cfg, digest
-    if row.get("sha256") and digest == row["sha256"]:
-        _rev.discard(row["id"])
-        if notes is not None:
-            notes.append(f"a change of {at} never reached the daemon; its record was removed")
         return cfg, digest
     if notes is not None:
         notes.append(
@@ -355,12 +409,12 @@ def _after_a_set_without_an_answer(
             "noanswer",
             f"{_name(server)} did not answer the change or the question that followed it ({why}); the daemon may or may not carry it",
         )
-    if _canonical(got, service) == _canonical(cfg, service):
-        return digest, None
     if before_cfg is not None and _canonical(got, service) == _canonical(before_cfg, service):
         return None, _result(
             False, "set-failed", "config-set got no answer and the daemon still runs the previous configuration"
         )
+    if _carries(_section(got, service), _section(cfg, service)):
+        return digest, None
     return None, _unproved(
         "unverified",
         f"{_name(server)} did not answer config-set and now runs a configuration that is neither the change nor the one before it (digest {digest}, before {expect_hash})",
@@ -369,14 +423,15 @@ def _after_a_set_without_an_answer(
     )
 
 
-def _write_with_retries(server: dict, service: str) -> tuple[dict | None, bool]:
-    """`config-write`, re-sent when no answer came (it is idempotent: it writes what runs). (last reply, answered 0)."""
-    reply = None
+def _write_with_retries(server: dict, service: str) -> tuple[dict | None, bool, bool]:
+    """`config-write`, re-sent when no answer came (it is idempotent: it writes what runs). (last reply, answered 0, an earlier attempt got NO answer - it may have written)."""
+    reply, silent = None, False
     for _ in range(WRITE_ATTEMPTS):
         reply = _cmd(server, service, "config-write")
         if _ok(reply) or _answered(reply):
             break
-    return reply, _ok(reply or {})
+        silent = True
+    return reply, _ok(reply or {}), silent and _answered(reply or {})
 
 
 def _has_ssh(server: dict) -> bool:
@@ -483,7 +538,7 @@ def apply(
                 _drop_pending()
             return stop
 
-    wrote, wrote_ok = _write_with_retries(server, service)  # (6)
+    wrote, wrote_ok, maybe_written = _write_with_retries(server, service)  # (6)
     unwritten = ""
     if not wrote_ok:
         if wrote is not None and _answered(wrote):
@@ -491,6 +546,12 @@ def apply(
                 server, _text(wrote)
             )  # BB9 a: a fleet does not undo the same change on every edit; cleared only by evidence
             proved_back = _undo(server, service, before_cfg, expect_hash or now)
+            if proved_back and maybe_written:
+                return _unproved(
+                    "write-failed",
+                    f"{_text(wrote) or 'config-write was refused'}; an earlier attempt got no answer and may have written the file, so it may carry a change the daemon no longer runs",
+                    after_hash=h1,
+                )
             if proved_back:
                 _drop_pending()
                 return _result(False, "write-failed", _text(wrote) or "config-write was refused")
@@ -513,7 +574,7 @@ def apply(
     raw_sha = None
     if _has_ssh(server):  # (8)
         file_cfg, raw_sha = _host.read_config_versioned(server, service, capture=False)
-        if file_cfg is None or _canonical(file_cfg, service) != _canonical(got, service):
+        if file_cfg is None or not same_modulo_defaults(file_cfg, got, service):
             return _unproved(
                 "unverified",
                 f"the file on {_name(server)} does not carry what the daemon runs"
@@ -526,6 +587,9 @@ def apply(
 
     if pending_id is not None:  # (9)
         _rev.finish(pending_id, source=source, sha256=h1, cfg=got)
+        _rev.discard_pending(
+            sid, service
+        )  # (fix row 2) an unresolved row an earlier crash left is superseded by a change that stood
     if raw_sha and sid is not None and not str(raw_sha).startswith(_host._CANONICAL_SENTINEL_PREFIX):
         _rev.record(sid, service, got, raw_sha, summary or f"{source} {service}", hash_kind="raw", source=source)
     return _result(True, "ok", sha256=h1)
@@ -563,7 +627,7 @@ def api_daemon_differs(server: dict, service: str) -> str:
     if live is None:
         return ""
     file_cfg, raw = _host.read_config_versioned(server, service, capture=False)
-    if file_cfg is None or _canonical(file_cfg, service) == _canonical(live, service):
+    if file_cfg is None or file_in_daemon(file_cfg, live, service):
         return ""
     return (
         f"the daemon on {_name(server)} runs a configuration its file does not carry (the daemon {digest[:12]}, the file {str(raw or 'unknown')[:12]}); "
@@ -618,6 +682,14 @@ def _age_days(iso: str | None) -> float | None:
     return (datetime.now(timezone.utc) - when).total_seconds() / 86400
 
 
+def _bound(server: dict) -> str:
+    """Which endpoint a stored probe was read from: a hash of the API url and the SSH host (never stored in the clear). Server ids are reused (the next free number) and `api_url` can be re-pointed,
+    so consent given to one Kea must not carry to another that inherits its number (fix row 6)."""
+    import hashlib
+
+    return hashlib.sha256(f"{server.get('api_url') or ''}|{server.get('ssh_host') or ''}".encode()).hexdigest()[:16]
+
+
 def probe_gate(server: dict, source: str = "jen") -> str:
     """NO API write without it: a sentence for a server whose stored result is absent, older than 7 days, has `config_api` false, carries no `consented_at` (the operator's named consent, from
     the card), or remembers a refused write (BB9 a); "" otherwise. A server added through Settings with `api` written by the save route therefore cannot be written to until its operator
@@ -625,6 +697,8 @@ def probe_gate(server: dict, source: str = "jen") -> str:
     stored = stored_probe(server.get("id"))
     if not stored:
         return PROBE_SENTENCE
+    if stored.get("bound") and stored["bound"] != _bound(server):
+        return f"{_name(server)} now points at a different Kea than the one that was checked - {PROBE_SENTENCE.replace('first', 'again')}"
     age = _age_days(stored.get("at"))
     if age is None or age > PROBE_MAX_AGE_DAYS:
         return f"the last check of {_name(server)} is older than {PROBE_MAX_AGE_DAYS} days - {PROBE_SENTENCE.replace('first', 'again')}"
@@ -687,7 +761,9 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False) -> dic
     `consent` records the operator's named consent (`consented_at`) when the facts allow it."""
     sid = server.get("id")
     prev = stored_probe(sid) or {}
-    out = {"at": _now_iso(), "service": service}
+    out = {"at": _now_iso(), "service": service, "bound": _bound(server)}
+    if prev.get("bound") and prev["bound"] != out["bound"]:
+        prev = {}  # a different endpoint: nothing carries over (consent, a remembered refusal)
     cfg, _digest, why = _get(server, service)
     out["config_api"] = cfg is not None
     if cfg is None:
@@ -723,9 +799,7 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False) -> dic
         )
         out["include"] = list(check.get("includes") or []) if check.get("ok") else None
         file_cfg, _raw = _host.read_config_versioned(server, service, capture=False)
-        out["agree"] = (
-            None if file_cfg is None or cfg is None else _canonical(file_cfg, service) == _canonical(cfg, service)
-        )
+        out["agree"] = None if file_cfg is None or cfg is None else file_in_daemon(file_cfg, cfg, service)
         if check.get("ok") and check.get("may_write"):
             refused = None  # evidence: the host says the daemon's account may write its file
     else:

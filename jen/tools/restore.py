@@ -267,13 +267,19 @@ def load_manifest(bundle_dir: Path) -> dict:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
+# Q212 (7.0.0): which bundle majors an install of a given major restores. A major is a promise about what an operator has to do; 7.0 changed a privilege model, not the bundle's shape,
+# and 6 was skipped on purpose, so a bundle exported on 5.x restores on 7.0 (a bundle NEWER than the install is still refused - here, and by `check_bundle_version`).
+ACCEPTED_BUNDLE_MAJORS = {7: (5, 7)}
+
+
 def check_jen_major(manifest: dict) -> None:
     from jen import JEN_VERSION
     from jen.version import parse_version
 
     bundle_major = parse_version(manifest.get("jen_version", ""))[0]
     here_major = parse_version(JEN_VERSION)[0]
-    if bundle_major != here_major:
+    low, high = ACCEPTED_BUNDLE_MAJORS.get(here_major, (here_major, here_major))
+    if not low <= bundle_major <= high:
         raise RestoreRefused(
             f"this bundle was made by Jen {manifest.get('jen_version')} (major {bundle_major}); "
             f"this install is Jen {JEN_VERSION} (major {here_major}). Restoring across a MAJOR "

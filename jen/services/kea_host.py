@@ -994,7 +994,12 @@ def apply_config(
         return {"ok": False, "code": "investigation-on", "detail": refusal, "via": "guard"}
     from jen.services import kea_api_config as _api  # lazy: that module imports this one
 
-    if _api.declared_transport(server) == "api":
+    if (
+        _api.declared_transport(server) == "api"
+        and source != "rollback"
+        and not getattr(_investigation_writer, "on", False)
+    ):
+        # (fix row 1) asked of a NEW write only: a rollback, and investigation logging's own revert, must always be able to put the file back
         # Q212 (BB2 e): the file path writing onto a server whose transport is the API. The file this write replaces must carry what the daemon runs, or an `unverified` apply (or a hand
         # `config-set`) would be erased by the next logging toggle; both digests are named. Asked only when BOTH answer and differ.
         differs = _api.api_daemon_differs(server, service)

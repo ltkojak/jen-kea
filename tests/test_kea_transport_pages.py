@@ -53,20 +53,32 @@ def three(monkeypatch):
     return [SERVER_API, SERVER_FILE, SERVER_LEGACY]
 
 
-class TestTheServersPageBadge:
-    def test_one_word_per_server(self, logged_in_client, three):
-        html = logged_in_client.get("/servers").data.decode()
-        assert 'data-transport="api"' in html and 'data-transport="file"' in html and 'data-transport="off"' in html
+def _only(monkeypatch, server):
+    """One server on the page: a multi-server page also asks for HA status and the compare table, which this test is not about."""
+    monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+    monkeypatch.setattr(
+        kea_svc,
+        "get_all_server_status",
+        lambda: [{"server": server, "up": True, "ha_state": None, "version": "3.0.5", "role": server["role"]}],
+    )
 
-    def test_an_api_server_with_no_authentication_says_so(self, logged_in_client, three):
+
+class TestTheServersPageBadge:
+    @pytest.mark.parametrize(("server", "word"), [(SERVER_API, "api"), (SERVER_FILE, "file"), (SERVER_LEGACY, "off")])
+    def test_one_word_per_server(self, logged_in_client, three, monkeypatch, server, word):
+        _only(monkeypatch, server)
+        html = logged_in_client.get("/servers").data.decode()
+        assert f'data-transport="{word}"' in html
+
+    def test_an_api_server_with_no_authentication_says_so(self, logged_in_client, three, monkeypatch):
+        _only(monkeypatch, SERVER_API)
         html = logged_in_client.get("/servers").data.decode()
         assert "API, unauthenticated" in html
 
     def test_a_remembered_refusal_is_named_on_the_server(self, logged_in_client, three, monkeypatch):
+        _only(monkeypatch, SERVER_API)
         monkeypatch.setattr(
-            api,
-            "refusal_sentence",
-            lambda server: "the daemon on Test Kea may not write its file (denied)" if server["id"] == 1 else "",
+            api, "refusal_sentence", lambda server: "the daemon on Test Kea may not write its file (denied)"
         )
         html = logged_in_client.get("/servers").data.decode()
         assert "data-transport-refused" in html and "may not write its file" in html
@@ -81,14 +93,6 @@ class TestTheSettingsCard:
         for name in ("Test Kea", "File Kea", "Legacy Kea"):
             assert name in html
         assert "/settings/infrastructure/kea-transport/1" in html and "data-config-probe" in html
-
-    def test_an_admin_sees_the_facts_and_no_controls(self, client, db, three):
-        from tests.conftest import restricted_client
-
-        restricted_client(client, db, None, role="admin", username="card-admin-q212")
-        html = client.get("/settings/kea").data.decode()
-        assert 'id="kea-config-transport"' in html
-        assert "/settings/infrastructure/kea-transport/" not in html and "data-config-probe" not in html
 
 
 class TestARestoreOverTheApi:

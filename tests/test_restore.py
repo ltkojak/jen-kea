@@ -38,6 +38,29 @@ class TestCheckJenMajor:
 
         check_jen_major(_manifest())  # must not raise
 
+    @pytest.mark.parametrize(
+        ("install", "bundle", "refused"),
+        [
+            ("7.0.0-beta.1", "5.70.0", False),  # Q212: a bundle exported on 5.x restores on 7.0
+            ("7.0.0", "5.69.4", False),
+            ("7.0.0", "7.1.0", False),
+            ("7.0.0", "6.0.0", False),  # (the number was skipped, so no bundle carries it; the table is a range)
+            ("7.0.0", "8.0.0", True),  # a bundle NEWER than the install is refused
+            ("7.0.0", "4.9.0", True),
+            ("5.70.0", "7.0.0", True),  # and a 5.x install does not take a 7.x bundle
+            ("5.70.0", "5.69.0", False),
+        ],
+    )
+    def test_the_major_table(self, monkeypatch, install, bundle, refused):
+        from jen.tools.restore import RestoreRefused, check_jen_major
+
+        monkeypatch.setattr("jen.JEN_VERSION", install)
+        if refused:
+            with pytest.raises(RestoreRefused):
+                check_jen_major(_manifest(jen_version=bundle))
+        else:
+            check_jen_major(_manifest(jen_version=bundle))
+
     def test_mismatched_major_refused(self):
         from jen import JEN_VERSION
         from jen.tools.restore import RestoreRefused, check_jen_major

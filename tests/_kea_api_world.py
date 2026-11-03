@@ -55,6 +55,15 @@ class Store:
                 return True
         return False
 
+    def discard_pending(self, server_id, service):
+        before = len(self.rows)
+        self.rows = [
+            r
+            for r in self.rows
+            if not (r["server_id"] == server_id and r["service"] == service and r["source"] == "pending")
+        ]
+        return before - len(self.rows)
+
     def discard(self, rev_id):
         before = len(self.rows)
         self.rows = [r for r in self.rows if r["id"] != rev_id]
@@ -67,7 +76,7 @@ class Store:
 def install_store(monkeypatch):
     """Patch `config_revisions` with a fresh `Store`; a test module wraps this in its own `store` fixture."""
     s = Store()
-    for name in ("record", "latest", "latest_of_kind", "pending", "finish", "discard"):
+    for name in ("record", "latest", "latest_of_kind", "pending", "finish", "discard", "discard_pending"):
         monkeypatch.setattr(f"jen.services.config_revisions.{name}", getattr(s, name))
     return s
 

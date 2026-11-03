@@ -32,6 +32,12 @@ EXPECTED_ENDPOINTS = {
     "settings.save_infra_kea6",
     "settings.save_infra_d2",
     "settings.probe_kea",
+    # Q212: the per-server card's five routes (jen/routes/settings/kea_transport.py)
+    "settings.probe_kea_config",
+    "settings.switch_kea_transport",
+    "settings.allow_config_write",
+    "settings.deny_config_write",
+    "settings.config_write_fixed",
     "settings.setup_direct_socket",  # v5.29.0 (Q29)
     "settings.remove_direct_socket",  # v5.29.0 (Q29)
     "settings.rotate_kea_ca",  # v5.29.0 (Q29)

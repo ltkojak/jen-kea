@@ -294,7 +294,7 @@ def _unloaded_edit(server: dict, service: str, cfg: dict, name: str) -> str:
         return (
             f"the file on {host} could not be read, so a change cannot be proved against it (check the SSH connection)"
         )
-    if _api._canonical(file_cfg, service) != _api._canonical(cfg, service):
+    if not _api.file_in_daemon(file_cfg, cfg, service):
         return f"the file on {host} carries an edit the daemon has not loaded - restart Kea there first, or discard it from the server's card"
     return ""
 
@@ -433,6 +433,12 @@ def _run_change_unlocked(
                         ("error", f"❌ {name}: {read_errors[0] if read_errors else 'the daemon did not answer'}")
                     )
                     return ChangeSetResult("aborted", "error", lines)
+                unresolved = _api.pending_block(server, service)
+                if unresolved:  # (fix row 2) an earlier change that nothing settled: stop before a file target is written for a change no api target will take
+                    lines.append(("error", f"❌ {name}: {unresolved}"))
+                    return ChangeSetResult(
+                        "aborted", "needs-hands", lines, needs_hands=[name], needs_hands_ids=[server.get("id")]
+                    )
                 unloaded = _unloaded_edit(server, service, cfg, name)
                 if unloaded:
                     lines.append(("error", f"❌ {name}: {unloaded}"))
@@ -465,6 +471,8 @@ def _run_change_unlocked(
                 # was actually just read (edit_subnet_post's form
                 # carries a sha from when the form was OPENED, not now).
                 expected = expected_sha_for(server) if expected_sha_for else sha
+                if kind == "api" and not expected:
+                    expected = sha  # (fix row 8) a blank form digest never turns the only compare the API path has into "no compare"
                 targets.append(
                     Target(
                         server,

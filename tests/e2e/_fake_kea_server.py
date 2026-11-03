@@ -191,6 +191,7 @@ class StatefulKeaServer:
 
         write_fails        Kea's own permission text: `config-write` answers result 1
         test_fails         Kea's refusal text: `config-test` answers result 1
+        expand             callable(section) -> section applied to what `config-set` takes, as Kea writes its defaults out
         set_fails          Kea's refusal text: `config-set` answers result 1 (the old configuration keeps serving)
         set_fails_and_stops   ... and the daemon then stops answering at all (ISC: a fatal error can stop the server)
         hooks              {command: callable(fake)} run when that command arrives, before it is answered
@@ -209,6 +210,7 @@ class StatefulKeaServer:
         self.commands: list[str] = []
         self.write_fails = None
         self.test_fails = None
+        self.expand = None  # callable(section) -> section: what the daemon runs after `config-set` (Kea writes its defaults out: docs/ARCHITECTURE.md 3.17, row 08)
         self.set_fails = None
         self.set_fails_and_stops = False
         self.hang: dict = {}
@@ -261,6 +263,8 @@ class StatefulKeaServer:
             if self.key not in arguments:
                 return {"result": 1, "text": f"missing {self.key}"}
             self.running = copy.deepcopy(arguments[self.key])
+            if self.expand is not None:
+                self.running = self.expand(self.running)
             return {"result": 0, "text": "Configuration successful.", "arguments": {"hash": self.digest()}}
         if command == "config-write":
             if self.write_fails:

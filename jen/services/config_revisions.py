@@ -195,6 +195,20 @@ def finish(rev_id: int, *, source: str, sha256: str, summary: str | None = None,
         return False
 
 
+def discard_pending(server_id: int, service: str) -> int:
+    """Delete every `pending` revision of one (server, service) (Q212): a restore - the operator's way out of an unresolved change - and a successful apply supersede them. Returns how many."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source='pending'",
+                (server_id, service),
+            )
+            return cur.rowcount
+    except Exception as e:
+        logger.warning(f"config_revisions.discard_pending failed: {e}")
+        return 0
+
+
 def discard(rev_id: int) -> bool:
     """Delete one revision row (Q212: a pending record whose change never reached the daemon). True when a row was removed."""
     try:

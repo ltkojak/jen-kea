@@ -63,6 +63,12 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
             f"{name}: the file carries an include ({', '.join(facts['include'])}); the daemon reports the merged configuration and config-write renders one flat file, so the API transport is not recommended here"
         )
     has_ssh = bool(server.get("ssh_host"))
+    if has_ssh and (
+        facts.get("agree") is None or facts.get("include") is None or not isinstance(facts.get("write"), dict)
+    ):
+        return _refuse(
+            f"{name}: SSH is configured but the host's facts could not be read (is the helper installed at build 19, and does SSH answer?), so the file could not be compared with the daemon; nothing was changed"
+        )
     if not has_ssh and "confirm_no_include" not in consents:
         return _refuse(
             f"{name} has no SSH host, so Jen cannot see its file: confirm that the file carries no include and no edit the daemon has not loaded, then switch again",
@@ -131,23 +137,31 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
     sid = server.get("id")
     if not server.get("ssh_host"):
         return _refuse(f"{name}: the file transport needs an SSH host (Settings → Kea → SSH); nothing was changed")
-    if current == "api":
-        # a daemon never granted the write must still be able to leave `api`: send it best effort, the compare decides
-        _api.write_file(server, SERVICE)
     file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
     if file_cfg is None:
         return _refuse(
             f"{name}: the file on the host could not be read (is the helper installed? Settings → Kea → SSH); nothing was changed"
         )
     live, digest, why = _api._get(server, SERVICE)
-    if live is not None:
-        if _api._canonical(file_cfg, SERVICE) != _api._canonical(live, SERVICE):
+    if live is not None and not _api.file_in_daemon(file_cfg, live, SERVICE):
+        # (fix row 5) compare FIRST: the file carries something the daemon does not run (a hand edit, or a change the daemon never wrote). Overwriting it is a named consent; a daemon that was never
+        # granted the write (so `config-write` is refused) still leaves `api` once they agree, and the compare decides again after the best-effort write
+        if "discard_file_edit" not in consents:
             return _refuse(
-                f"{name}: the file and the daemon differ (the daemon {_short(digest)}, the file {_short(raw)}); they must agree before the file becomes the thing Jen edits - restart Kea there, or restore from Config history",
+                f"{name}: the file and the daemon differ (the daemon {_short(digest)}, the file {_short(raw)}); they must agree before the file becomes the thing Jen edits - restart Kea there, restore from Config history, or tick 'discard the file's edit' to overwrite it with what the daemon runs",
+                needs="discard_file_edit",
                 before_hash=digest,
                 after_hash=raw,
             )
-    elif current == "api":
+        _api.write_file(server, SERVICE)
+        file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
+        if file_cfg is None or not _api.file_in_daemon(file_cfg, live, SERVICE):
+            return _refuse(
+                f"{name}: the file still differs from the daemon after the write was tried (the daemon {_short(digest)}, the file {_short(raw)}); nothing was changed",
+                before_hash=digest,
+                after_hash=raw,
+            )
+    elif live is None and current == "api":
         return _refuse(
             f"{name}: the daemon did not answer ({why}), so the file cannot be compared with it; nothing was changed"
         )

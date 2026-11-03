@@ -90,7 +90,12 @@ class TestTheTransportIsPure:
             ({}, "dhcp4", "off"),  # absent, no SSH: an API-only server was never a write target
             ({"config_transport": ""}, "dhcp4", "off"),
             ({"config_transport": "api"}, "dhcp4", "api"),
-            ({"config_transport": "api"}, "dhcp6", "api"),
+            (
+                {"config_transport": "api", "ssh_host": "h"},
+                "dhcp6",
+                "file",
+            ),  # dhcp6 joins D2 on the file path in this beta
+            ({"config_transport": "api"}, "dhcp6", "off"),
             ({"config_transport": "api", "ssh_host": "h"}, "d2", "file"),  # D2 stays on the file path where SSH exists
             ({"config_transport": "api"}, "d2", "off"),
             ({"config_transport": "file"}, "dhcp4", "off"),  # file with no SSH host
@@ -229,6 +234,56 @@ class TestMixedTargets:
         assert result.status == "rollback_failed" and result.needs_hands == ["kea-a"]
         assert daemon.running == stranger  # the daemon's own answer is the record; nothing was set over it
         assert daemon.commands.count("config-set") == 1
+
+
+class TestSecondPassRowsOfTheChangeSet:
+    def test_row8_a_blank_form_digest_falls_back_to_the_plan_digest(self, daemon, helper, store):
+        """`expected_sha_for` answering None for an api target must not turn the compare into no compare: a stranger's change after the Plan makes the set refuse."""
+        server = api_server(daemon)
+
+        def stranger_after_the_plan(srv):
+            changed = copy.deepcopy(daemon.running)
+            changed["valid-lifetime"] = 55
+            daemon.set_running(changed)  # between the Plan read and the Commit
+            return None
+
+        result = cs.apply_change(
+            "dhcp4", lifetime(7200), "x", servers=[server], expected_sha_for=stranger_after_the_plan
+        )
+        assert (
+            result.status == "aborted" and daemon.running["valid-lifetime"] == 55
+        )  # the stranger's change was not overwritten
+
+    def test_row2_an_unresolved_pending_change_stops_the_plan_before_any_file_target_is_written(
+        self, daemon, helper, store
+    ):
+        cfg = copy.deepcopy(daemon.running)
+        store.record(
+            1,
+            "dhcp4",
+            {"Dhcp4": {**cfg, "valid-lifetime": 1}},
+            "before",
+            "left by a crash",
+            hash_kind="kea",
+            source="pending",
+        )
+        changed = copy.deepcopy(daemon.running)
+        changed["valid-lifetime"] = 99
+        daemon.set_running(changed)  # neither state
+        result = cs.apply_change("dhcp4", lifetime(7200), "x", servers=[FILE_SERVER, api_server(daemon)])
+        assert result.status == "aborted" and result.last_code == "needs-hands"
+        assert "apply-config" not in helper.ops()  # the file target was never written
+
+    def test_row1_a_rollback_and_investigations_own_revert_pass_the_choke_points_compare(
+        self, daemon, helper, store, monkeypatch
+    ):
+        server = {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3", "config_transport": "api", "api_url": daemon.url}
+        helper.configs[(3, "dhcp4")] = {"Dhcp4": {"valid-lifetime": 1}}  # a file the daemon does not run
+        helper.shas[(3, "dhcp4")] = "raw-c"
+        assert not kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]  # a new write is refused
+        assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="rollback")["ok"]
+        with kea_host.investigation_writer():
+            assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]
 
 
 class TestAFilePathWriteToAnApiServerComparesFirst:

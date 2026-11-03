@@ -225,6 +225,23 @@ class TestProbe:
             monkey.undo()
 
 
+class TestTheProbeIsBoundToItsEndpoint:
+    """Fix row 6: ids are reused and `api_url` can be re-pointed; consent given to one Kea never carries to another that inherits its number."""
+
+    def test_a_server_that_now_points_elsewhere_is_gated(self, daemon, server, store, probes):
+        api.probe(server, "dhcp4", consent=True)
+        assert api.probe_gate(server) == ""
+        moved = {**server, "api_url": "http://127.0.0.1:1/"}
+        assert "different Kea" in api.probe_gate(moved)
+
+    def test_a_probe_of_the_new_endpoint_starts_without_the_old_consent_or_refusal(self, daemon, server, store, probes):
+        api.probe(server, "dhcp4", consent=True)
+        api.remember_refusal(server, "denied")
+        moved = {**server, "api_url": daemon.url.replace("127.0.0.1", "localhost")}
+        out = api.probe(moved, "dhcp4")
+        assert "consented_at" not in out and "refused" not in out
+
+
 class TestTheCapabilityAndTheBadge:
     def _derive(self, **kw):
         return caps.derive(kea_version=(3, 0, 5), reachable=True, direct=True, **kw)

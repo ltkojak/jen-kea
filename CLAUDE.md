@@ -156,7 +156,7 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
   and `tests/system/conftest.py` overrides the unit suite's autouse DB fixtures the way
   `tests/kea_compat/conftest.py` does. It belongs to its own workflow,
   `.github/workflows/system-tests.yml` (weekly, `workflow_dispatch` with an optional `-k`
-  selector, any `-rc.` tag, and — the critical subset only, `test_00/01/02/03/11/12/14/16/17/19` — any `-beta.` tag;
+  selector, any `-rc.` tag, and — the critical subset only, `test_00/01/02/03/11/12/14/16/17/19/21/22/23` — any `-beta.` tag;
   NOT called from ci.yml/release.yml, so a slow boundary
   test can't redden a push or a tag). It has no Docker or WSL here, so a change to it
   is verified by dispatching the workflow (`gh workflow run system-tests.yml`, ~10 min a
@@ -386,7 +386,7 @@ that neither imports the macro nor is on its short list of pages that are part o
   adds a capability or changes stored-data format (e.g. encrypting MFA secrets at rest);
   security hardening bigger than a one-line fix; a new **optional / backward-compatible**
   config section. Upgrade stays fully automatic (`sudo ./install.sh`), no manual steps.
-- **MAJOR** (`5.x → 6.0.0`) — anything that breaks a clean `install.sh` upgrade: a
+- **MAJOR** (`5.x → 7.0.0`; 6 was skipped on purpose) — anything that breaks a clean `install.sh` upgrade: a
   required config-file change, a migration that can't run automatically, dropped
   OS/Kea/Python support, a removed feature or API endpoint, or a changed default an
   operator would notice.

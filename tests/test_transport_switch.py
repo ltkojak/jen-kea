@@ -179,14 +179,25 @@ class TestToFile:
         host(monkeypatch, daemon)
         r = sw.switch(srv(daemon, "api", ssh=True), "file", actor="root")
         assert r["ok"] and written == [("kea_server_5", "config_transport", "file")]
-        assert "config-write" in daemon.commands  # best effort first, to make them agree
+        assert "config-write" not in daemon.commands  # (fix row 5) they agree already: nothing is written to make them
         assert [(x["hash_kind"], x["source"]) for x in store.rows if x["source"] == "switch"] == [("raw", "switch")]
 
     def test_a_file_and_daemon_that_differ_refuse_with_both_digests(self, daemon, store, probes, written, monkeypatch):
         host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
-        daemon.write_fails = "denied"  # the best-effort write is refused too, so they stay apart
         r = sw.switch(srv(daemon, "api", ssh=True), "file")
         assert not r["ok"] and daemon.digest()[:12] in r["line"] and ("f" * 12) in r["line"] and written == []
+        assert (
+            r["needs"] == "discard_file_edit" and "config-write" not in daemon.commands
+        )  # (fix row 5) a hand edit is never overwritten to make the compare pass
+
+    def test_with_the_named_consent_the_file_is_overwritten_and_the_compare_decides_again(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
+        daemon.write_fails = "denied"  # still refused: they stay apart and the switch says so
+        r = sw.switch(srv(daemon, "api", ssh=True), "file", consents={"discard_file_edit"})
+        assert not r["ok"] and "still differs" in r["line"] and written == []
+        assert "config-write" in daemon.commands
 
     def test_a_daemon_never_granted_the_write_can_still_leave_api_when_they_agree(
         self, daemon, store, probes, written, monkeypatch
@@ -212,6 +223,23 @@ class TestToFile:
         host(monkeypatch, daemon)
         daemon.stopped = True
         assert sw.switch(srv(daemon, "off", ssh=True), "file")["ok"]
+
+
+class TestAnUnknownFactWithSshIsARefusal:
+    """Fix row 4: SSH is configured but the helper (or SSH) did not answer: the file could not be compared, so nothing is overwritten."""
+
+    @pytest.mark.parametrize("what", ["file", "helper"])
+    def test_file_to_api_is_refused_and_nothing_is_written(self, daemon, store, probes, written, monkeypatch, what):
+        if what == "file":
+            host(monkeypatch, daemon, file_cfg=None)
+        else:
+            host(monkeypatch, daemon)
+            monkeypatch.setattr(
+                kea_host, "config_write_check", lambda s, svc: {"ok": False, "code": "old", "detail": "build 18"}
+            )
+        r = sw.switch(srv(daemon, ssh=True, transport="file"), "api", consents=ALL)
+        assert not r["ok"] and "could not be read" in r["line"] and written == []
+        assert "config-write" not in daemon.commands
 
 
 class TestToOff:

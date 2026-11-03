@@ -888,21 +888,25 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
         return data
 
-    def test_the_twelve_categories_are_the_ones_the_qs_name(self):
-        assert set(cs.ATTENTION_CATEGORIES) == {
-            "remote-unknown",
-            "restored-restart-unverified",
-            "restart-failed",
-            "tls-not-restored",
-            "tls-local-stale",
-            "restored-endpoint-unreachable",
-            "probe-pending",
-            "aborted",
-            "tls-superseded",  # Q199 (AO1): a parked daemon left on a replaced CA
-            "record-forgotten",  # Q199 (AO1): a record forgotten on the operator's word
-            "rotation-pending",  # Q201 (AQ3): a rotation's bookkeeping not yet finished
-            "config-restart-failed",  # Q203 (AS2): a restored revision whose daemon did not restart
-        }
+    def test_the_thirteen_categories_are_the_ones_the_qs_name(self):
+        assert (
+            set(cs.ATTENTION_CATEGORIES)
+            == {
+                "remote-unknown",
+                "restored-restart-unverified",
+                "restart-failed",
+                "tls-not-restored",
+                "tls-local-stale",
+                "restored-endpoint-unreachable",
+                "probe-pending",
+                "aborted",
+                "tls-superseded",  # Q199 (AO1): a parked daemon left on a replaced CA
+                "record-forgotten",  # Q199 (AO1): a record forgotten on the operator's word
+                "rotation-pending",  # Q201 (AQ3): a rotation's bookkeeping not yet finished
+                "config-restart-failed",  # Q203 (AS2): a restored revision whose daemon did not restart
+                "config-api-unverified",  # Q212 (BB7): a restore or import over the API that the daemon's own answer did not prove
+            }
+        )
 
     @pytest.mark.parametrize("category", sorted(cs.ATTENTION_CATEGORIES))
     def test_every_category_is_recorded_with_its_server_service_and_a_fixed_sentence(self, store, category):
