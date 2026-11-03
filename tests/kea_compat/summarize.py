@@ -117,6 +117,20 @@ WRITE_FACTS = [
     ("marker in config-get", lambda d: _yn(d.get("marker_in_config_get"))),
     ("marker in the written file", lambda d: _yn(d.get("marker_in_file_after_write"))),
     ("original file restored byte for byte", lambda d: _yn(d.get("original_file_restored_byte_for_byte"))),
+    (
+        "unprivileged daemon (uid 100): config-write as the file stands",
+        lambda d: _answer(d.get("nonroot_config_write_as_shipped")),
+    ),
+    (
+        "unprivileged daemon: after the daemon's group + g+w on the file",
+        lambda d: _answer(d.get("nonroot_config_write_after_grant")),
+    ),
+    ("unprivileged daemon: written in place (same inode)", lambda d: _yn(d.get("nonroot_written_in_place"))),
+    ("unprivileged daemon: sibling name", lambda d: _answer(d.get("nonroot_sibling_write"))),
+    (
+        "unprivileged daemon: why the probe did not run",
+        lambda d: str(d.get("nonroot_error") or ("did not start" if d.get("nonroot_started") is False else "—")),
+    ),
 ]
 
 

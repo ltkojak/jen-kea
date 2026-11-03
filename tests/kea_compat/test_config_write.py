@@ -16,6 +16,8 @@ import copy
 import hashlib
 import json
 import os
+import shutil
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -245,7 +247,10 @@ def test_01_config_get_is_not_redacted(facts):
     from_hash_get = _hash()
     ORIGINAL = (copy.deepcopy(cfg), from_hash_get)
     facts["config_get_lease_password_in_plain_text"] = got == want
-    facts["config_get_hosts_password_in_plain_text"] = cfg["Dhcp4"]["hosts-database"].get("password") == want
+    # config-get renders the hosts backend as the list `hosts-databases` on 3.x (the singular key is what the file was written with)
+    hosts = cfg["Dhcp4"].get("hosts-database") or (cfg["Dhcp4"].get("hosts-databases") or [{}])[0]
+    facts["config_get_hosts_database_key"] = "hosts-database" if "hosts-database" in cfg["Dhcp4"] else "hosts-databases"
+    facts["config_get_hosts_password_in_plain_text"] = hosts.get("password") == want
     facts["hash_on_config_get"] = bool(from_reply)
     facts["hash_on_config_get_where"] = where
     facts["hash_on_config_hash_get"] = bool(from_hash_get)
@@ -402,3 +407,114 @@ def test_90_restore_puts_the_original_back(facts):
         )
     assert same, "the restored configuration differs from the original"
     assert facts["original_file_restored_byte_for_byte"]
+
+
+# ── an extra the entry did not list: the same question for a daemon that is NOT root ─────────────────────────────────────
+
+PROBE_NAME = "kea-nonroot"
+PROBE_PORT = 8014
+ACCOUNT = "100:101"  # the `kea` account ISC's image creates and owns the daemon binary with (binary-<version>.json)
+
+
+def _probe_command(command, arguments=None):
+    import requests
+
+    payload = {"command": command, **({"arguments": arguments} if arguments else {})}
+    auth = (os.environ.get("KEA_COMPAT_USER", ""), os.environ.get("KEA_COMPAT_PASS", ""))
+    try:
+        data = requests.post(f"http://127.0.0.1:{PROBE_PORT}/", json=payload, auth=auth, timeout=10).json()
+    except (requests.RequestException, ValueError) as exc:
+        return {"result": -1, "text": f"transport: {type(exc).__name__}"}
+    return data[0] if isinstance(data, list) else data
+
+
+def _scratch_stat(scratch, name="kea-dhcp4.conf"):
+    done = __levels._sh(
+        "docker", "run", "--rm", "--entrypoint", "stat", "-v", f"{scratch}:/c", __levels.IMAGE,
+        "-c", "%u|%g|%a|%i|%s", f"/c/{name}",
+        check=False,
+    )  # fmt: skip
+    parts = done.stdout.strip().split("|")
+    if len(parts) != 5:
+        return {"error": (done.stderr or done.stdout).strip()[:200]}
+    return dict(zip(("uid", "gid", "mode", "inode", "size"), parts, strict=True))
+
+
+def _grant_the_file(scratch):
+    """The grant Q212's helper op would make: the daemon's group on the FILE and group-write - never the directory, never other-write."""
+    steps = []
+    for tool, arg in (("chgrp", "101"), ("chmod", "g+w")):
+        done = __levels._sh(
+            "docker", "run", "--rm", "--entrypoint", tool, "-v", f"{scratch}:/c", __levels.IMAGE,
+            arg, "/c/kea-dhcp4.conf",
+            check=False,
+        )  # fmt: skip
+        steps.append(done.returncode)
+    return steps == [0, 0]
+
+
+def _nonroot_daemon(facts, scratch):
+    os.chmod(scratch, 0o755)
+    conf = os.path.join(scratch, "kea-dhcp4.conf")
+    with open(conf, "w") as fh:
+        json.dump(kea_config.build(http_port=PROBE_PORT), fh, indent=2)
+    os.chmod(conf, 0o644)
+    for name in (
+        "jen-api.user",
+        "jen-api.pw",
+    ):  # the control socket's basic-auth files, read from the daemon's /etc/kea
+        shutil.copy(os.path.join(CONF_DIR, name), os.path.join(scratch, name))
+        os.chmod(os.path.join(scratch, name), 0o644)
+    facts["nonroot_account"] = ACCOUNT
+    facts["nonroot_file_before"] = _scratch_stat(scratch)
+    __levels._sh("docker", "rm", "-f", PROBE_NAME, check=False)
+    __levels._sh(
+        "docker", "run", "-d", "--name", PROBE_NAME, "--network", "host", "--user", ACCOUNT,
+        "--tmpfs", "/var/run/kea:rw,uid=100,gid=101,mode=750",
+        "-e", "MARIADB_TLS_DISABLE_PEER_VERIFICATION=1",
+        "-v", f"{scratch}:/etc/kea", __levels.IMAGE,
+    )  # fmt: skip
+    for _ in range(40):
+        if _probe_command("version-get").get("result") == 0:
+            break
+        time.sleep(1)
+    else:
+        facts["nonroot_started"] = False
+        facts["nonroot_log_tail"] = __levels._sh("docker", "logs", PROBE_NAME, check=False).stderr[-1500:]
+        return
+    facts["nonroot_started"] = True
+    facts["nonroot_runs_as_uid"] = __levels._sh("docker", "exec", PROBE_NAME, "id", "-u", check=False).stdout.strip()
+    first = _probe_command("config-write")
+    facts["nonroot_config_write_as_shipped"] = _brief(first)
+    if first.get("result") != 0:
+        facts["nonroot_grant_made"] = _grant_the_file(scratch)
+        facts["nonroot_file_after_grant"] = _scratch_stat(scratch)
+        second = _probe_command("config-write")
+        facts["nonroot_config_write_after_grant"] = _brief(second)
+        facts["nonroot_file_after_write"] = _scratch_stat(scratch)
+        facts["nonroot_written_in_place"] = facts["nonroot_file_after_grant"].get("inode") == facts[
+            "nonroot_file_after_write"
+        ].get("inode")
+        if second.get("result") != 0:
+            os.chmod(scratch, 0o777)
+            facts["nonroot_config_write_after_grant_and_an_open_directory"] = _brief(_probe_command("config-write"))
+            os.chmod(scratch, 0o755)
+    sibling = _probe_command("config-write", {"filename": SIBLING})
+    facts["nonroot_sibling_write"] = _brief(sibling)
+
+
+def test_91_an_unprivileged_daemon_needs_its_file_writable_and_nothing_more(facts):
+    """EXTRA - not one of the entry's eight rows, RECORDED and NEVER ASSERTED. ISC's images run the daemon as root, so rows 03 and 05 cannot say what a package
+    install (the daemon is an unprivileged account, the file belongs to root) needs. This boots a second daemon on a scratch directory as the image's own `kea`
+    account, sends config-write as the file stands, then with the grant the helper op would make (the daemon's group + group-write on the FILE only), and
+    records the daemon's answers, whether it wrote the file in place, and whether a sibling name is allowed. A probe that cannot start records why."""
+    scratch = tempfile.mkdtemp(prefix="kea-nonroot-", dir=os.path.dirname(CONF_DIR))
+    try:
+        _nonroot_daemon(facts, scratch)
+    except (
+        Exception
+    ) as exc:  # recorded, not asserted: an extra that cannot start must not redden the rows the entry names
+        facts["nonroot_error"] = f"{type(exc).__name__}: {exc}"[:400]
+    finally:
+        __levels._sh("docker", "rm", "-f", PROBE_NAME, check=False)
+        shutil.rmtree(scratch, ignore_errors=True)
