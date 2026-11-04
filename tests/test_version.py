@@ -48,6 +48,17 @@ class TestParseVersion:
         assert keys == sorted(keys)
         assert len(set(keys)) == len(keys)
 
+    def test_7_0_0_beta_1_is_newer_than_every_5_x_and_satisfies_a_5_x_floor(self):
+        # Q212: there is no Jen 6. The first 7.x beta sorts above the last 5.x stable, so a stable box is not offered it and a beta box is,
+        # and a plugin that asks for requires_jen 5.68.0 is satisfied by it (the major number is simply larger).
+        assert version.parse_version("7.0.0-beta.1") > version.parse_version("5.70.0")
+        assert version.parse_version("7.0.0-beta.1") > version.parse_version("5.70.99")
+        assert version.parse_version("7.0.0") > version.parse_version("7.0.0-beta.1")
+        assert version.numeric("7.0.0-beta.1") >= version.numeric("5.68.0")
+        listing = [_rel("v5.70.0"), _rel("v7.0.0-beta.1", prerelease=True)]
+        assert version.pick_release(listing, "stable")["tag_name"] == "v5.70.0"
+        assert version.pick_release(listing, "beta")["tag_name"] == "v7.0.0-beta.1"
+
     def test_numeric_drops_the_prerelease_part(self):
         assert version.numeric("5.32.0-beta.3") == (5, 32, 0)
         assert version.numeric("5.32.0") == (5, 32, 0)
