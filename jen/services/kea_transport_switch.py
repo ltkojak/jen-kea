@@ -67,7 +67,7 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
         facts.get("agree") is None or facts.get("include") is None or not isinstance(facts.get("write"), dict)
     ):
         return _refuse(
-            f"{name}: SSH is configured but the host's facts could not be read (is the helper installed at build 19, and does SSH answer?), so the file could not be compared with the daemon; nothing was changed"
+            f"{name}: SSH is configured but the host's facts could not be read (is the helper installed at build 19 or later, and does SSH answer?), so the file could not be compared with the daemon; nothing was changed"
         )
     if not has_ssh and "confirm_no_include" not in consents:
         return _refuse(

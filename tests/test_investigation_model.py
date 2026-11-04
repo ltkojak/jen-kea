@@ -2193,6 +2193,37 @@ class TestWhatTheWalkFound:
         (row,) = inv.active(NOW + timedelta(minutes=13))
         assert row["file"] == "restored" and row["needs_hand"], "and the row says a person has to restore it by hand"
 
+    def _finished_session(self, world, monkeypatch):
+        """Turn logging on, let the deadline pass and the host's tick restore it: the host's record is DONE (restored_at set) and inside the re-verify window."""
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        first_deadline = kea.helper_state["until"]
+        monkeypatch.setattr(inv, "_now", lambda: NOW + timedelta(minutes=6))
+        assert kea.host_tick() and not has_marker(kea.file) and kea.helper_state["restored_at"]
+        return kea, first_deadline
+
+    def test_a_new_sessions_marker_is_not_a_stray_to_the_finished_sessions_tick__system_test_19(
+        self, world, monkeypatch
+    ):
+        """Build 20. System boundaries test_19 on v7.0.0-beta.1: Jen writes a NEW session's marker, and the host's timer ticks for the FINISHED session's record before the new arm replaces it. Build 19's
+        re-verify took ANY marker out; the new session was silently off with the host armed (file restored, daemon other). The marker of a new session carries a new deadline: it is not the record's."""
+        kea, _first = self._finished_session(world, monkeypatch)
+        later = (NOW + timedelta(minutes=11)).isoformat(timespec="seconds")
+        cfg, code = inv._edit.set_investigation_logging(kea.file, later)
+        assert code == "ok"
+        kea.file = cfg
+        assert kea.host_tick() is None, "the tick found a marker that is not the finished session's and left it"
+        assert has_marker(kea.file)
+
+    def test_the_finished_sessions_own_marker_written_back_is_still_put_back_again(self, world, monkeypatch):
+        """The other half: a stray of the FINISHED session (its candidate was built before the restore, so its marker has the old deadline) is what the re-verify exists for."""
+        kea, first = self._finished_session(world, monkeypatch)
+        cfg, code = inv._edit.set_investigation_logging(kea.file, first)
+        assert code == "ok"
+        kea.file = cfg
+        assert kea.host_tick(), "the tick put it back"
+        assert not has_marker(kea.file)
+
     def test_a_person_pressing_turn_off_is_never_held_back_by_that_bound(self, world):
         kea = world.daemons[1]
         kea.commands = ["version-get"]

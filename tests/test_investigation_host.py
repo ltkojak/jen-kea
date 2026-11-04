@@ -457,7 +457,9 @@ class TestTheWrappersAroundTheHelperOps:
         assert (
             kea_host.INVESTIGATION_MIN_HELPER_BUILD == 18
         )  # the investigation ops arrived at 18 and still need only 18
-        assert kea_host.JEN_HELPER_SHIPPED_BUILD == kea_host.CONFIG_WRITE_MIN_HELPER_BUILD == 19
+        assert (
+            kea_host.JEN_HELPER_SHIPPED_BUILD == 20 and kea_host.CONFIG_WRITE_MIN_HELPER_BUILD == 19
+        )  # build 20 changed the tick, not the ops: the ops still need only 19
 
 
 class TestTheElevenRowsOfTheCandidateMarker:

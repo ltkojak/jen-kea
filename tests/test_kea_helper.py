@@ -203,7 +203,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 19
+        assert out["helper_build"] == helper.HELPER_BUILD == 20
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 

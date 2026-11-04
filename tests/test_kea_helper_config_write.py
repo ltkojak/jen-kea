@@ -82,7 +82,7 @@ def _mode(path):
 
 class TestTheOpsExistAtBuild19:
     def test_the_build_and_the_ops(self, helper):
-        assert helper.HELPER_BUILD == 19
+        assert helper.HELPER_BUILD == 20
         for op in ("config-write-check", "allow-config-write", "deny-config-write"):
             assert op in helper._OPS
 
@@ -244,7 +244,7 @@ class TestTheTickKeepsVerifying:
             "attempts": 0,
         }
 
-    def _marked_file(self, conf):
+    def _marked_file(self, conf, until="2026-11-03T11:50:00+00:00"):
         conf.write_text(
             json.dumps(
                 {
@@ -254,7 +254,7 @@ class TestTheTickKeepsVerifying:
                                 "name": "kea-dhcp4",
                                 "severity": "DEBUG",
                                 "debuglevel": 55,
-                                "user-context": {"jen-investigation": {"until": "x"}},
+                                "user-context": {"jen-investigation": {"until": until}},
                             }
                         ]
                     }
@@ -291,10 +291,53 @@ class TestTheTickKeepsVerifying:
         monkeypatch.setattr(
             helper,
             "_daemon_logger_now",
-            lambda sock: {"present": True, "severity": "DEBUG", "debuglevel": 55, "marker": {"until": "x"}},
+            lambda sock: {
+                "present": True,
+                "severity": "DEBUG",
+                "debuglevel": 55,
+                "marker": {"until": "2026-11-03T11:50:00+00:00"},
+            },
         )
         assert helper._reverify("dhcp4", self._state(conf))[0] is True
         assert saved
+
+    def test_a_new_sessions_marker_in_the_file_is_not_a_stray__found_by_system_test_19(self, helper, conf, monkeypatch):
+        """Build 20. Build 19 re-restored on ANY marker. Jen writes a NEW session's marker before the arm replaces the finished session's record; a tick that landed in that window took the new
+        marker out ("file restored, daemon other, armed") - the System boundaries run on v7.0.0-beta.1 failed test_19 on it. The new marker carries a new deadline: it is not this session's."""
+        self._marked_file(conf, until="2026-11-03T12:04:00+00:00")  # the new session's deadline, not the state's 11:50
+        saved, restored = self._wire(helper, monkeypatch)
+        monkeypatch.setattr(helper, "_control_socket", lambda config: (None, "no socket"))
+        assert helper._reverify("dhcp4", self._state(conf)) is None
+        assert saved == [] and restored == []
+
+    def test_a_new_sessions_marker_in_the_running_daemon_is_not_a_stray_either(self, helper, conf, monkeypatch):
+        conf.write_text(
+            json.dumps({"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/run/kea/s"}]}})
+        )
+        saved, restored = self._wire(helper, monkeypatch)
+        monkeypatch.setattr(helper, "_control_socket", lambda config: ("sock", ""))
+        monkeypatch.setattr(
+            helper,
+            "_daemon_logger_now",
+            lambda sock: {
+                "present": True,
+                "severity": "DEBUG",
+                "debuglevel": 55,
+                "marker": {"until": "2026-11-03T12:04:00+00:00"},
+            },
+        )
+        assert helper._reverify("dhcp4", self._state(conf)) is None
+        assert saved == [] and restored == []
+
+    @pytest.mark.parametrize("marker", [True, "x", {}, {"until": "not a time"}, {"until": None}])
+    def test_a_marker_without_a_readable_deadline_is_not_this_sessions(self, helper, marker):
+        assert helper._marker_is_the_states(marker, {"until": "2026-11-03T11:50:00+00:00"}) is False
+
+    def test_the_same_instant_in_another_spelling_is_this_sessions(self, helper):
+        assert helper._marker_is_the_states({"until": "2026-11-03T11:50:00Z"}, {"until": "2026-11-03T11:50:00+00:00"})
+        assert helper._marker_is_the_states(
+            {"until": "2026-11-03T12:50:00+01:00"}, {"until": "2026-11-03T11:50:00+00:00"}
+        )
 
     def test_nothing_carrying_the_marker_is_nothing_to_do(self, helper, conf, monkeypatch):
         saved, restored = self._wire(helper, monkeypatch)

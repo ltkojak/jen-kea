@@ -512,7 +512,7 @@ class TestDisarm:
             "signalled": True,
             "detail": "",
             "helper_version": 7,
-            "helper_build": 19,
+            "helper_build": 20,
         }
         assert host.config() == _config(at_debug=False, marker=False)
         assert host.signals and host.signals[0][0] == 4242
@@ -694,7 +694,7 @@ class TestSelfRestore:
             "restored": [],
             "failed": [],
             "helper_version": 7,
-            "helper_build": 19,
+            "helper_build": 20,
         }
 
     def test_a_state_file_the_helper_did_not_write_is_reported_and_never_acted_on(self, host):
@@ -737,7 +737,7 @@ class TestTheContract:
     def test_the_ops_are_registered_and_the_build_is_18(self, helper):
         for name in ("investigation-arm", "investigation-disarm", "investigation-status", "investigation-timer"):
             assert name in helper._OPS
-        assert helper.HELPER_BUILD == 19 and helper.HELPER_VERSION == 7
+        assert helper.HELPER_BUILD == 20 and helper.HELPER_VERSION == 7
 
     def test_there_is_still_no_sudoers_change(self):
         root = _SCRIPT.parent

@@ -327,7 +327,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 19
+HELPER_BUILD = 20
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -2627,6 +2627,18 @@ def op_investigation_status(payload):
 _REVERIFY_WINDOW = timedelta(minutes=15)
 
 
+def _marker_is_the_states(marker, state):
+    """build 20 (Q212): is `marker` (the `jen-investigation` object a logger carries, in the FILE or in the running daemon) the marker of the session `state` recorded? A session's marker carries its
+    deadline, and that deadline is the state's `until` - a stray write of the finished session (an API `config-set` built before the restore) carries the OLD deadline, while a NEW session's marker,
+    written by Jen a moment before it arms, carries a new one. Build 19 re-restored on ANY marker and so took a new session's marker out between Jen's file write and the arm that replaces the
+    record: logging turned on, then silently off, with the host armed (found by the System boundaries run on v7.0.0-beta.1, test_19). A marker that is not an object, or has no readable deadline,
+    is not this session's: whoever wrote it is dealt with by Jen's own sweep and by the arm's refusal of an unresolved record."""
+    if not isinstance(marker, dict):
+        return False
+    theirs, ours = _parse_iso(marker.get("until")), _parse_iso(state.get("until"))
+    return theirs is not None and ours is not None and theirs == ours
+
+
 def _reverify(service, state):
     """build 19 (Q212): for a state that is DONE and inside its window, ask again. None - nothing to do (the window is over, the file cannot be read, or neither the file nor the daemon
     carries the marker); (True, how, "") - the marker was back, the logger was put back again and the restore is noted a second time; (False, None, detail) - it was back and the second
@@ -2645,12 +2657,12 @@ def _reverify(service, state):
     section = config.get("Dhcp4") if isinstance(config.get("Dhcp4"), dict) else {}
     for entry in section.get("loggers") or []:
         context = entry.get("user-context") if isinstance(entry, dict) and entry.get("name") == _INV_LOGGER else None
-        if isinstance(context, dict) and _INV_KEY in context:
+        if isinstance(context, dict) and _marker_is_the_states(context.get(_INV_KEY), state):
             carried = True
     if not carried:
         sock, _note = _control_socket(config)
         seen = _daemon_logger_now(sock) if sock is not None else None
-        carried = seen is not None and seen.get("marker") is not None
+        carried = seen is not None and _marker_is_the_states(seen.get("marker"), state)
     if not carried:
         return None
     again = dict(state)

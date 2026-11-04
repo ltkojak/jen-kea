@@ -356,7 +356,8 @@ class FakeKea:
         self.list_unreachable = False
         return "restart", "config-get" if self._answering() else "process", None
 
-    def _at_debug(self):
+    def _at_debug(self, of_state=None):
+        """The running logger is at the investigation DEBUG with a marker; with `of_state`, only when that marker is the one of THAT session (build 20's re-verify)."""
         entry = helper()._logger_entry(self.loaded)
         context = (entry or {}).get("user-context")
         return (
@@ -365,6 +366,7 @@ class FakeKea:
             and entry.get("debuglevel") == 55
             and isinstance(context, dict)
             and "jen-investigation" in context
+            and (of_state is None or helper()._marker_is_the_states(context.get("jen-investigation"), of_state))
         )
 
     def host_restore(self):
@@ -432,9 +434,10 @@ class FakeKea:
             return None
         entry = helper()._logger_entry(self.file)
         context = (entry or {}).get("user-context")
-        carried = isinstance(context, dict) and "jen-investigation" in context
+        # build 20: only the marker of the session this record is of - a NEW session's marker (a different deadline) is not a stray to put back
+        carried = isinstance(context, dict) and helper()._marker_is_the_states(context.get("jen-investigation"), st)
         if not carried:
-            carried = self._at_debug()
+            carried = self._at_debug(st)
         if not carried:
             return None
         st.update(restored_at=None, how=None, evidence=None)
