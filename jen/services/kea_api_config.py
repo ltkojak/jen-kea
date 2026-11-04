@@ -108,6 +108,10 @@ RENAMED_KEYS = {"hosts-database": "hosts-databases", "control-socket": "control-
 # reports that is not a `pool` is a new entry here, named, never a wider rule (Q216 BF5).
 SPACE_INSENSITIVE_KEYS = frozenset({"pool"})
 
+# Keys of `interfaces-config` that `config-get` OMITS when they hold their default (compat row 11, Kea 3.0.5, 3.2.1 and 3.3.3: a file carrying `service-sockets-require-all: false` and
+# `service-sockets-max-retries: 0` comes back without them). A file that carries one at its default is carried by a daemon that does not report it; any other value is a difference.
+OMITTED_AT_DEFAULT = {"service-sockets-require-all": False, "service-sockets-max-retries": 0}
+
 
 def _carries(running: object, candidate: object, under: str | None = None) -> bool:
     """Does the configuration the daemon RUNS carry everything the candidate said? `config-get` returns the daemon's configuration with Kea's own defaults written out (45 keys at the top of
@@ -124,8 +128,16 @@ def _carries(running: object, candidate: object, under: str | None = None) -> bo
                     return False
                 continue
             renamed = running.get(RENAMED_KEYS.get(k, ""))
-            if not (isinstance(renamed, list) and len(renamed) == 1 and _carries(renamed[0], v, k)):
-                return False
+            if isinstance(renamed, list) and len(renamed) == 1 and _carries(renamed[0], v, k):
+                continue
+            if (
+                under == "interfaces-config"
+                and k in OMITTED_AT_DEFAULT
+                and v == OMITTED_AT_DEFAULT[k]
+                and type(v) is type(OMITTED_AT_DEFAULT[k])
+            ):
+                continue
+            return False
         return True
     if isinstance(candidate, list):
         return (

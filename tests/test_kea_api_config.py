@@ -865,6 +865,30 @@ class TestKeaWritesItsDefaultsOut:
         assert not api._carries({}, {"hosts-database": {"type": "mysql"}})
         assert api.RENAMED_KEYS == {"hosts-database": "hosts-databases", "control-socket": "control-sockets"}
 
+    def test_a_default_valued_key_config_get_omits_is_carried_and_nothing_else_is(self):
+        """Q216, found by compat row 11 on Kea 3.0.5, 3.2.1 and 3.3.3: `service-sockets-require-all: false` and `service-sockets-max-retries: 0` come back from `config-get` as nothing."""
+        running = {"interfaces-config": {"interfaces": ["*"], "re-detect": True}}
+        assert api._carries(
+            running,
+            {
+                "interfaces-config": {
+                    "interfaces": ["*"],
+                    "service-sockets-require-all": False,
+                    "service-sockets-max-retries": 0,
+                }
+            },
+        )
+        assert not api._carries(
+            running, {"interfaces-config": {"service-sockets-require-all": True}}
+        )  # not the default: a difference
+        assert not api._carries(running, {"interfaces-config": {"service-sockets-max-retries": 3}})
+        assert not api._carries(
+            running, {"interfaces-config": {"service-sockets-max-retries": False}}
+        )  # False is not 0 here
+        assert not api._carries(
+            {"x": {}}, {"x": {"service-sockets-require-all": False}}
+        )  # only under interfaces-config
+
     def test_only_a_pool_is_compared_without_its_spaces(self):
         """Q216 BF5. Fixup 2 stripped the spaces of EVERY string on both sides; Kea re-renders a pool "a - b" as "a-b" and nothing else row 09 saw."""
         assert api._carries(

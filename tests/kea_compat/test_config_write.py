@@ -767,6 +767,9 @@ def test_11_what_config_get_renames(facts):
     differences = _paths_not_carried(running, authored)
     facts["renames_paths_the_file_has_and_config_get_does_not_carry"] = differences
     assert not [d for d in differences if d.startswith("hosts-database")], differences
+    assert api.file_in_daemon({"Dhcp4": authored}, ORIGINAL[0], "dhcp4"), (
+        differences
+    )  # the file the job runs is carried, whole, by the module's rule
     # the singular control-socket: a fact, whatever the daemon says
     both = copy.deepcopy(authored)
     both["control-socket"] = {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-singular.sock"}
