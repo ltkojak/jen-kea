@@ -571,7 +571,12 @@ def test_09_jens_own_transport_round_trip(facts, monkeypatch):
     __real._ok(__kea.kea_command("config-set", arguments=_body(candidate)))
     assert 3 in _subnet_ids(_get()) and 3 not in _subnet_ids(_file())
     notes = []
-    settled_cfg, settled_digest = api.read(server, "dhcp4", capture=False, notes=notes)
+    api.read(
+        server, "dhcp4", capture=False, notes=notes
+    )  # a read only CLASSIFIES (Q216 AA19); the settlement is the Plan's and the card's
+    assert notes and "is live" in notes[0] and 3 not in _subnet_ids(_file()), notes
+    notes = api.settle_pending(server, "dhcp4")
+    settled_cfg, settled_digest = api.read(server, "dhcp4", capture=False)
     facts["transport_pending_notes"] = notes
     facts["transport_pending_first_difference"] = _first_difference(_section_of(settled_cfg), _section_of(candidate))
     facts["transport_pending_finished_the_write"] = 3 in _subnet_ids(_file())
@@ -704,6 +709,37 @@ def _scratch_daemon_on(text, port=8004):
         __levels._wait_ready()
 
 
+def _paths_not_carried(running, candidate, path=""):
+    """The paths of `candidate` that `running` does not carry (the rule of `kea_api_config._carries`, listed instead of a bare False)."""
+    from jen.services import kea_api_config as api
+
+    if isinstance(candidate, dict):
+        if not isinstance(running, dict):
+            return [path or "/"]
+        out = []
+        for k, v in candidate.items():
+            here = f"{path}/{k}" if path else k
+            if k in running:
+                out += _paths_not_carried(running[k], v, here)
+            elif isinstance(running.get(api.RENAMED_KEYS.get(k, "")), list) and len(running[api.RENAMED_KEYS[k]]) == 1:
+                out += _paths_not_carried(running[api.RENAMED_KEYS[k]][0], v, here)
+            else:
+                out.append(here + " (absent)")
+        return out
+    if isinstance(candidate, list):
+        if not isinstance(running, list) or len(running) != len(candidate):
+            return [f"{path} (list {len(candidate)} vs {len(running) if isinstance(running, list) else 'not a list'})"]
+        out = []
+        for i, (r, c) in enumerate(zip(running, candidate, strict=True)):
+            out += _paths_not_carried(r, c, f"{path}[{i}]")
+        return out
+    if isinstance(running, str) and isinstance(candidate, str) and path.rsplit("/", 1)[-1] == "pool":
+        return (
+            [] if running.replace(" ", "") == candidate.replace(" ", "") else [f"{path} ({candidate!r} vs {running!r})"]
+        )
+    return [] if running == candidate else [f"{path} ({candidate!r} vs {running!r})"]
+
+
 def test_11_what_config_get_renames(facts):
     """Q216 BF4: the source of `kea_api_config.RENAMED_KEYS`. A hand-written file carries singular keys Kea renders as lists; this row records, per version, WHICH top-level and subnet keys of the file are
     ABSENT from `config-get` and which list key appeared in their place (facts), asserts that `file_in_daemon(file, config-get)` is true with the table for the file the job runs (it carries the singular
@@ -726,10 +762,11 @@ def test_11_what_config_get_renames(facts):
     }
     facts["renames_subnet_keys_absent"] = sorted(set(authored["subnet4"][0]) - set(running["subnet4"][0]))
     facts["renames_table_in_the_product"] = dict(api.RENAMED_KEYS)
-    # the file the job runs: carried, by name, through the table
-    assert api.file_in_daemon({"Dhcp4": authored}, ORIGINAL[0], "dhcp4"), (
-        f"the file's keys are not carried by config-get even with RENAMED_KEYS: {absent_top} absent"
-    )
+    # every path of the file that config-get does NOT carry, by the module's own rule (renames and pool spacing included): a fact - whatever it lists is what a hand-written file reads as "an edit the
+    # daemon has not loaded". The row's assertion is that the renamed key is not among them.
+    differences = _paths_not_carried(running, authored)
+    facts["renames_paths_the_file_has_and_config_get_does_not_carry"] = differences
+    assert not [d for d in differences if d.startswith("hosts-database")], differences
     # the singular control-socket: a fact, whatever the daemon says
     both = copy.deepcopy(authored)
     both["control-socket"] = {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-singular.sock"}

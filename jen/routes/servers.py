@@ -165,12 +165,17 @@ def servers():
         caps = __caps.from_status(s)
         probe = __api.stored_probe(s["server"].get("id")) or {}
         s["transport"] = caps.config_transport
-        s["transport_why"] = caps.transport_why()
         s["transport_blocked"] = (
             caps.transport_blocked
         )  # (Q216 AA13) the gate's own state: the badge never says "healthy" over a gate that refuses
+        # (second pass, row 1) the gate's sentences name host paths (an include), the daemon's account and a file mode: an admin's to read, as the incident detail lines on this page are
+        s["transport_why"] = (
+            caps.transport_why()
+            if current_user.is_admin_or_above or not caps.transport_blocked
+            else "changes over the API are not allowed yet"
+        )
         s["transport_unauthenticated"] = caps.config_transport == "api" and probe.get("auth") == "none"
-        s["transport_refused"] = __api.refusal_sentence(s["server"])
+        s["transport_refused"] = __api.refusal_sentence(s["server"]) if current_user.is_admin_or_above else ""
     single_server = len(extensions.KEA_SERVERS) == 1
     ha_mode = extensions.cfg.get("kea", "ha_mode", fallback="")
 

@@ -319,3 +319,82 @@ class TestTheSchedulerKeepsTheFactsFresh:
         )
         assert 'id="jen_probe_refresh"' in source and "IntervalTrigger(hours=1)" in source
         assert "refresh_probe" in source and 'declared_transport(server) != "api"' in source
+
+
+class TestSecondPassRows:
+    """The author's second pass on d644e08 (pass/reports/v7.0.0-beta.2-fix-rows.md): rows 4, 5, 10 and 11b."""
+
+    def test_row4_a_file_the_host_could_not_read_this_time_keeps_what_was_known(
+        self, daemon, store, probes, monkeypatch
+    ):
+        server = {**_server(daemon, True), "api_user": "jen", "api_pass": "pw"}
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0660", "account": {"name": "_kea"}},
+        )
+        monkeypatch.setattr(
+            kea_host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(daemon.running)}, "r" * 64)
+        )
+        assert api.probe(server, "dhcp4", consent=True, consents=("consent_rendering",))["consented_at"]
+        assert api.probe_gate(server) == ""
+        monkeypatch.setattr(kea_host, "read_config_versioned", lambda *a, **k: (None, None))  # one failed SSH read
+        before = copy.deepcopy(probes[4])
+        assert api.refresh_probe(server, "dhcp4") is False
+        assert probes[4] == before and api.probe_gate(server) == ""
+
+    def test_row4_the_gate_sentence_does_not_carry_the_servers_name(self, daemon, probes):
+        probes[4] = {
+            "at": _iso(),
+            "consented_at": _iso(),
+            "consents": ["consent_rendering"],
+            **GOOD,
+            "include": ["/etc/kea/x.json"],
+        }
+        sentence = api.probe_gate(_server(daemon, True))
+        assert sentence.startswith("the file carries an include") and "kea-d: kea-d" not in sentence
+
+    def test_row5_a_settlement_asks_the_writers_two_questions_before_its_config_write(
+        self, daemon, store, probes, monkeypatch
+    ):
+        server = _server(daemon, False)
+        cfg, digest, _ = api._get(server, "dhcp4")
+        cand = copy.deepcopy(cfg)
+        cand["Dhcp4"]["valid-lifetime"] = 4242
+        store.record(4, "dhcp4", cand, digest, "interrupted", hash_kind="kea", source="pending")
+        daemon.set_running(cand["Dhcp4"])  # live, its file write not proved
+        monkeypatch.setattr(
+            "jen.services.investigation_logging.restore_window",
+            lambda server, now=None: "the host is restoring logging at T; try again after it",
+        )
+        daemon.commands.clear()
+        lines = api.settle_pending(server, "dhcp4")
+        assert (
+            "waits" in " ".join(lines)
+            and "config-write" not in daemon.commands
+            and store.pending(4, "dhcp4") is not None
+        )
+        monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
+        assert "finished" in api.settle_pending(server, "dhcp4")[0]
+
+    def test_row10_a_refresh_never_discards_a_consent_given_while_it_ran(self, daemon, store, probes, monkeypatch):
+        server = {**_server(daemon, True), "api_user": "jen", "api_pass": "pw"}
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0660", "account": {"name": "_kea"}},
+        )
+        monkeypatch.setattr(
+            kea_host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(daemon.running)}, "r" * 64)
+        )
+        api.probe(server, "dhcp4", consent=True, consents=("consent_rendering",))
+        real = api.probe
+
+        def probe_then_a_newer_consent(*a, **k):
+            out = real(*a, **k)
+            probes[4]["consents"] = ["consent_rendering", "discard_file_edit"]  # given while the refresh was reading
+            return out
+
+        monkeypatch.setattr(api, "probe", probe_then_a_newer_consent)
+        assert api.refresh_probe(server, "dhcp4") is True
+        assert probes[4]["consents"] == ["consent_rendering", "discard_file_edit"]

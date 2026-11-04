@@ -844,7 +844,9 @@ def _still_running(held: dict | None) -> bool:
     return held.get("daemon") == "debug" or (held.get("daemon") == "other" and held.get("file", "debug") == "debug")
 
 
-def _did_not_take(server, record, sid, entry, lines, step_lines, *, contradiction=False, held=None) -> dict:
+def _did_not_take(
+    server, record, sid, entry, lines, step_lines, *, contradiction=False, held=None, armed=False
+) -> dict:
     """The daemon did not (visibly) take the DEBUG file: put it straight back, WITHOUT a restart - and then LOOK, because a reload whose reply was
     lost may have been applied. Seen restored: the entry is dropped ("not activated"). Seen at DEBUG: kept, the sweep finishes it. Seen at anything
     else: kept and LEFT ALONE. With `contradiction` (a reload or restart that was asked of a DEBUG file and answered "restored") the entry is kept
@@ -865,6 +867,8 @@ def _did_not_take(server, record, sid, entry, lines, step_lines, *, contradictio
             # saying what happened to this attempt; the sweep restores it at its deadline.
             kept = dict(held)
             kept["error"] = "a later turn-on did not take; this session is still on"
+            if armed:  # (second pass, row 6) the host was armed for this attempt's later deadline: the record and the host say the same deadline
+                kept["until"] = entry["until"]
             stored = _put(record, sid, kept)
             return {
                 "ok": False,
@@ -878,6 +882,8 @@ def _did_not_take(server, record, sid, entry, lines, step_lines, *, contradictio
             }
         if state == "restored":
             if _drop(record, sid):
+                if armed:  # (second pass, row 6) nothing is on: the host's record of the failed attempt would refuse the next turn-on until its deadline - settle it now (best effort)
+                    _abandon_host_arm(server)
                 return {"ok": False, "mode": "", "lines": head + ["Logging was not activated."], "until": ""}
             _put(record, sid, entry)
             return {
@@ -1087,7 +1093,15 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                     + " - the change did not take."
                 ]
                 return _did_not_take(
-                    server, record, sid, entry, lines, step_lines, contradiction=(state == "restored"), held=held
+                    server,
+                    record,
+                    sid,
+                    entry,
+                    lines,
+                    step_lines,
+                    contradiction=(state == "restored"),
+                    held=held,
+                    armed=True,
                 )
             entry.update(pending=None if state == "debug" else "reload", mode="restart")
             if not _put(record, sid, entry):
@@ -1151,10 +1165,18 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 "lines": [f"Kea said it reloaded, but its running logger is {shown} - the change did not take."],
             }
             return _did_not_take(
-                server, record, sid, entry, lines, step["lines"], contradiction=(state == "restored"), held=held
+                server,
+                record,
+                sid,
+                entry,
+                lines,
+                step["lines"],
+                contradiction=(state == "restored"),
+                held=held,
+                armed=True,
             )
         # The daemon did not (visibly) take it: put the file straight back, WITHOUT a restart - and then look
-        return _did_not_take(server, record, sid, entry, lines, step["lines"], held=held)
+        return _did_not_take(server, record, sid, entry, lines, step["lines"], held=held, armed=True)
 
 
 OBSERVE_AFTER_HUP_S = 6  # a SIGHUP is not acknowledged: look this long for the daemon to show the restored level before calling it still at DEBUG
@@ -1198,6 +1220,9 @@ def _restore_via_host(server: dict, record: dict, sid: str, entry: dict):
     if not _put(record, sid, entry):
         logger.warning("investigation_logging: the host-restored entry for %s could not be stored", _name(server))
     state = _settled(server, entry, OBSERVE_AFTER_HUP_S if how != "nothing" else 0.0)
+    _record_daemon_after_reload(
+        server
+    )  # (second pass, row 2) what the daemon runs after the host's restore, so the next read does not call Jen's own turn-off a change made outside Jen
     said = {
         "reload": "The Kea host put the logger back and told Kea to re-read its config.",
         "restart": "The Kea host put the logger back and restarted Kea.",
@@ -2226,6 +2251,10 @@ def _host_phase(known: dict, record: dict, now: datetime) -> set:
             same_restore = "restore" not in entry or status.get("restore") == entry.get("restore")
             mine = due is not None and _edit._parse_until(status.get("until") or "") == due and same_restore
             if status.get("restored_at") and mine:
+                if entry.get("host_restored_at") != str(status["restored_at"]):
+                    _record_daemon_after_reload(
+                        server
+                    )  # (row 2) the host's own timer restored it: once per restore, what the daemon runs now
                 entry["host_restored_at"] = str(
                     status["restored_at"]
                 )  # (`armed` stays: the restore asks the host once more, which answers "already restored")

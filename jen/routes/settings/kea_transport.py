@@ -121,7 +121,11 @@ def settle_pending_change(server_id):
         return _back()
     __user.audit("KEA_PENDING_CHANGE_SETTLED", name, "; ".join(lines)[:500])
     __caps.invalidate(server_id)
-    flash(f"{name}: {' '.join(lines)}", "success")
+    text = " ".join(lines)
+    unsettled = any(
+        w in text for w in ("nothing was settled", "cannot be read", "unresolved", "not proved", "waits:", "no pending")
+    )
+    flash(f"{name}: {text}", "warning" if unsettled else "success")  # (second pass, row 7)
     return _back()
 
 
@@ -193,7 +197,9 @@ def config_write_fixed(server_id):
     if not stored.get("refused"):
         flash(f"{server.get('name') or 'The server'} has no remembered refusal.", "info")
         return _back()
-    if server.get("ssh_host") and isinstance(stored.get("write"), dict):
+    if (
+        server.get("ssh_host") and isinstance(stored.get("write"), dict) and "may_write" in stored["write"]
+    ):  # (row 11) a helper that did not answer is not a proof
         # (Q216 AA9) the host can PROVE the permission: a claim is for a server where nothing can
         flash(
             f"{server.get('name') or 'The server'}: run Check API configuration instead - the host can prove whether the daemon may write its file.",

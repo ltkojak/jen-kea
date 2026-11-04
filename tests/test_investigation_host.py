@@ -154,6 +154,44 @@ class TestQ216AFileWriteOnAnApiServerRecordsTheDaemon:
         assert out["ok"] and any("not compared with what the daemon runs" in line for line in out["lines"])
 
 
+class TestSecondPassRowsOfTheTurnOnAndOff:
+    """Rows 2 and 6 of the author's second pass on d644e08 (pass/reports/v7.0.0-beta.2-fix-rows.md)."""
+
+    def _api(self, world, monkeypatch):
+        from tests import _kea_api_world as api_world
+
+        store = api_world.install_store(monkeypatch)
+        api_world.install_probes(monkeypatch)
+        world.daemons[1].include_hash = True
+        monkeypatch.setattr(
+            inv._kea,
+            "kea_command",
+            lambda command, *a, server=None, **kw: world.daemons[server["id"]].kea_command(
+                command, arguments=a[1] if len(a) > 1 else None
+            ),
+        )
+        world.servers[0].update(config_transport="api", api_url="http://10.0.0.1:8000/")
+        return store, world.servers[0]
+
+    def test_row2_turn_off_on_an_api_server_leaves_no_external_row(self, world, monkeypatch):
+        from jen.services import kea_api_config as api
+
+        store, server = self._api(world, monkeypatch)
+        assert inv.turn_on(server, 5)["ok"] and inv.turn_off(server)["ok"]
+        api.read(server, "dhcp4")
+        assert not [r for r in store.rows if r["source"] == "external"], [
+            (r["source"], r["summary"]) for r in store.rows
+        ]
+
+    def test_row6_a_turn_on_that_did_not_take_leaves_the_host_free_for_the_retry(self, world, monkeypatch):
+        kea = world.daemons[1]
+        kea.reload_result = 1  # config-reload refused: the arm succeeded, the daemon did not take it
+        assert not inv.turn_on(world.servers[0], 15)["ok"]
+        kea.reload_result = 0
+        out = inv.turn_on(world.servers[0], 15)
+        assert out["ok"], out["lines"]
+
+
 class TestARefusedArmPutsTheFileBack:
     def test_an_arm_the_host_refuses_reverts_the_file_and_nothing_is_on(self, world):
         kea = world.daemons[1]

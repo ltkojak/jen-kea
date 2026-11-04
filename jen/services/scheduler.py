@@ -17,7 +17,13 @@ _start_error = (
 )
 
 #: the jobs `start_scheduler` registers - the Health Center's liveness row requires every one of them
-CORE_JOB_IDS = ("jen_backup", "jen_audit_cleanup", "jen_investigation_sweep", "jen_client_problems_sweep")
+CORE_JOB_IDS = (
+    "jen_backup",
+    "jen_audit_cleanup",
+    "jen_investigation_sweep",
+    "jen_client_problems_sweep",
+    "jen_probe_refresh",
+)
 
 
 def scheduler_status() -> dict:

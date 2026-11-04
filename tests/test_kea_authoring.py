@@ -2156,7 +2156,7 @@ class TestAnApiServerIsNamedNotAuthored:
         "db_host": "h",
         "db_user": "u",
         "db_name": "kea",
-        "subnets": "1 = V6LAN, 2001:db8::/64",
+        "subnets": "1 = LAN, 192.168.1.0/24",
     }
 
     def _api_server(self, monkeypatch):
@@ -2168,17 +2168,22 @@ class TestAnApiServerIsNamedNotAuthored:
             "config_transport": "api",
         }
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        monkeypatch.setattr(
-            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
-        )
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
         return server
+
+    def test_dhcp6_authoring_is_the_files_whatever_dhcp4s_transport_is(self, monkeypatch):
+        """Second pass, row 3: dhcp6 and D2 stay on the file path, so a server whose dhcp4 transport is `api` is still a target for them."""
+        from jen.routes.settings import authoring
+
+        self._api_server(monkeypatch)
+        assert authoring._authoring_api_servers("dhcp4") and authoring._authoring_api_servers("dhcp6") == []
 
     def test_the_page_says_so(self, logged_in_client, monkeypatch):
         import jen.services.kea6 as kea6_module
 
         self._api_server(monkeypatch)
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("", "")] * 6))
-        body = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6").get_data(as_text=True)
+        body = logged_in_client.get("/settings/infrastructure/author-kea/dhcp4").get_data(as_text=True)
         assert "data-author-api-server" in body and self.SENTENCE in body
 
     def test_the_preview_names_it_and_never_checks_it(self, logged_in_client, monkeypatch):
@@ -2187,7 +2192,7 @@ class TestAnApiServerIsNamedNotAuthored:
         self._api_server(monkeypatch)
         fake_ssh = FakeSSHClient([])
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
-        data = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6/preview", data=self.FORM).get_json()
+        data = logged_in_client.post("/settings/infrastructure/author-kea/dhcp4/preview", data=self.FORM).get_json()
         assert data["servers"][0]["ok"] is False and self.SENTENCE in data["servers"][0]["message"]
         assert data["all_passed"] is False and fake_ssh.calls == []
 
@@ -2201,6 +2206,6 @@ class TestAnApiServerIsNamedNotAuthored:
         )
         monkeypatch.setattr(kea_changeset, "apply_change", lambda *a, **k: sent.append("apply_change"))
         monkeypatch.setattr("jen.services.kea.kea_command", lambda *a, **k: sent.append("kea_command") or {"result": 0})
-        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data=self.FORM, follow_redirects=True)
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp4", data=self.FORM, follow_redirects=True)
         text = resp.get_data(as_text=True)
         assert self.SENTENCE in text and "Nothing was written" in text and sent == []

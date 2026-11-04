@@ -17,7 +17,6 @@ import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
 import jen.services.kea6 as __kea6
-import jen.services.kea_api_config as __api
 import jen.services.kea_authoring as __authoring
 import jen.services.kea_changeset as __changeset
 import jen.services.kea_host as __host
@@ -207,7 +206,7 @@ def author_kea_config(service):
         endpoint_error=endpoint_error,
         any_http=any_http,
         bind_candidates=bind_candidates,
-        api_servers=_authoring_api_servers(),
+        api_servers=_authoring_api_servers(service),
         cert_required=cert_required,
         subnet_lines=subnet_lines,
         has_existing_subnets=bool(existing_subnets),
@@ -491,13 +490,15 @@ AUTHORING_API_SENTENCE = (
 )
 
 
-def _authoring_api_servers() -> list[dict]:
+def _authoring_api_servers(service: str = "dhcp4") -> list[dict]:
     """(Q216 AA - the second pass's P3b) Author Kea Config writes Jen's whole FILE (the include, the hooks path, the loggers) and the API carries none of the file's layout: a server whose transport is
     `api` is named as not a target - on the page, in the preview, and by the POST before anything is built - with this one sentence."""
     return [
         {"name": s.get("name") or s.get("ssh_host") or "server", "sentence": AUTHORING_API_SENTENCE}
         for s in extensions.KEA_SERVERS
-        if s.get("ssh_host") and __api.declared_transport(s) == "api"
+        if s.get("ssh_host")
+        and __changeset._transport(s, service)
+        == "api"  # (second pass, row 3) the service's own transport: dhcp6 and D2 stay on the file path
     ]
 
 
@@ -518,7 +519,7 @@ def author_kea_config_preview(service):
         if not server.get("ssh_host"):
             continue
         name = server.get("name", server["ssh_host"])
-        if __api.declared_transport(server) == "api":
+        if __changeset._transport(server, service) == "api":
             server_results.append({"name": name, "ok": False, "message": f"{name}: {AUTHORING_API_SENTENCE}."})
             continue
         config, tls_paths, warning, cfg_err = _author_kea_config_for(service, server, common, subnets)
@@ -604,7 +605,7 @@ def author_kea_config_post(service):
     if not servers:
         flash("No Kea server has SSH configured.", "error")
         return redirect(url_for("settings.settings_kea"))
-    api_servers = _authoring_api_servers()
+    api_servers = _authoring_api_servers(service)
     if api_servers:  # before a helper is asked, before a candidate is built, before `apply_change`: nothing is sent
         flash(
             "; ".join(f"{s['name']}: {s['sentence']}" for s in api_servers) + ". Nothing was written.",

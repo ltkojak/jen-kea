@@ -38,6 +38,7 @@ EXPECTED_ENDPOINTS = {
     "settings.allow_config_write",
     "settings.deny_config_write",
     "settings.config_write_fixed",
+    "settings.settle_pending_change",
     "settings.setup_direct_socket",  # v5.29.0 (Q29)
     "settings.remove_direct_socket",  # v5.29.0 (Q29)
     "settings.rotate_kea_ca",  # v5.29.0 (Q29)

@@ -203,7 +203,11 @@ def _config_cards() -> list:
                 "helper_ok": helper_ok,
                 # (Q216 AA9) "I have fixed it" is for a server whose permission nothing can PROVE: no SSH, a helper below build 19, or facts the helper could not read
                 "can_claim_fixed": bool(refused)
-                and (not server.get("ssh_host") or not helper_ok or not isinstance(write_fact, dict)),
+                and (
+                    not server.get("ssh_host")
+                    or not helper_ok
+                    or not (isinstance(write_fact, dict) and "may_write" in write_fact)
+                ),
                 "pending": pending,
                 "pending_unreadable": pending_unreadable,
             }

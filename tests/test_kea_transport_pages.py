@@ -139,6 +139,42 @@ class TestTheCardOffersOnlyWhatTheFactsAllow:
         assert "/settings/infrastructure/config-write-fixed/2" in html
 
 
+class TestTheGateSentencesAreAnAdminsToRead:
+    """Second pass, row 1: the gate's sentences name host paths, the daemon's account and a file mode; a viewer sees a neutral phrase."""
+
+    def _stored(self, monkeypatch):
+        monkeypatch.setattr(
+            api,
+            "stored_probe",
+            lambda sid: (
+                {
+                    "at": "2026-11-04T10:00:00+00:00",
+                    "config_api": True,
+                    "consented_at": "2026-11-04T10:00:00+00:00",
+                    "include": ["/etc/kea/secret-site-extra.json"],
+                    "agree": True,
+                    "write": {"may_write": True},
+                }
+                if sid == 1
+                else None
+            ),
+        )
+        monkeypatch.setattr(api, "_age_days", lambda iso: 0.1)
+
+    def test_an_admin_reads_the_sentence(self, logged_in_client, three, monkeypatch):
+        self._stored(monkeypatch)
+        html = logged_in_client.get("/servers").data.decode()
+        assert "secret-site-extra.json" in html
+
+    def test_a_viewer_reads_a_neutral_phrase(self, client, db, three, monkeypatch):
+        from tests.conftest import restricted_client
+
+        self._stored(monkeypatch)
+        restricted_client(client, db, None, role="viewer", username="viewer-q216")
+        html = client.get("/servers").data.decode()
+        assert "secret-site-extra.json" not in html and "changes over the API are not allowed yet" in html
+
+
 class TestARestoreOverTheApi:
     CFG = {"Dhcp4": {"valid-lifetime": 1234, "subnet4": []}}
 

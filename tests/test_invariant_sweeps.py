@@ -766,7 +766,7 @@ S10_ALLOWED = {
         "the name stamped on a revision row is bookkeeping for people reading Config history; nothing decides on it (Q216)"
     ),
     ("jen/services/config_revisions.py", "record", "Exception", "return None"): (
-        "a history row that could not be WRITTEN is bookkeeping - the decision whether a change may be sent reads `pending()`, which raises RevisionStoreUnreadable on a store that cannot be asked, and `pending_block` refuses on it before `apply` records anything (Q216 AA11)"
+        "a history row that could not be WRITTEN is bookkeeping - the decision whether a change may be sent reads `pending()`, which raises RevisionStoreUnreadable on a store that cannot be asked, and `pending_block` refuses on it before `apply` records anything; a RESTORE skips that check by design (it is the way out) and so goes out without a pending row while the store is down (Q216 AA11, second pass row 8)"
     ),
     ("jen/services/config_revisions.py", "latest", "Exception", "return None"): (
         "the newest revision is read for the history page, a baseline capture and a restore picker; an unreadable store shows no row and decides nothing - the write gate is `pending()` (Q216)"

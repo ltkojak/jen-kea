@@ -418,6 +418,16 @@ def _reconcile_pending(server: dict, service: str, cfg: dict, digest: str, notes
             notes.append(f"a change of {at} never reached the daemon; its record was removed")
         return cfg, digest
     if _carries(_section(cfg, service), _section(candidate, service)):
+        # (second pass, row 5) the settlement's `config-write` is a write of this server's file: it asks what every other writer asks first - the investigation marker and the host's restore window
+        from jen.services import investigation_logging as _inv
+
+        waits = _host.guard_kea_write(server, cfg, service) or (
+            _inv.restore_window(server) if service == "dhcp4" else ""
+        )
+        if waits:
+            if notes is not None:
+                notes.append(f"a change of {at} is live and its file write waits: {waits}")
+            return cfg, digest
         wrote = write_file(server, service)
         again, digest2, _ = _get(server, service)
         if wrote.get("ok") and again is not None and digest2:
@@ -898,7 +908,10 @@ def probe_gate(server: dict, source: str = "jen") -> str:
     given = stored.get("consents", CONSENTS)
     uncovered = consent_allowed(_name(server), stored, given, has_ssh=_has_ssh(server), strict=False)
     if uncovered:
-        return uncovered
+        prefix = f"{_name(server)}: "
+        return (
+            uncovered[len(prefix) :] if uncovered.startswith(prefix) else uncovered
+        )  # (the caller names the server: "❌ kea-d: ...")
     return (
         "" if source in ("rollback", "restore") else refusal_sentence(server)
     )  # a rollback puts back a change that DID stand on this server, and a restore is the way out the failure's own line names (Q216 AA14): a remembered refusal must not stop either
@@ -965,8 +978,18 @@ def refresh_probe(server: dict, service: str = "dhcp4") -> bool:
     if cfg is None:
         return False
     fresh = probe(server, service, persist=False)
-    if _has_ssh(server) and fresh.get("include") is None and stored.get("include") is not None:
-        return False  # the host did not answer this time: what was known stays known
+    if _has_ssh(server) and (
+        fresh.get("include") is None or fresh.get("agree") is None or not isinstance(fresh.get("write"), dict)
+    ):
+        return False  # (second pass, row 4) the host did not answer this time - or its file could not be read: what was known stays known, never an unknown that closes the gate
+    latest = (
+        stored_probe(sid) or {}
+    )  # (row 10) re-read just before the write: a consent or a refusal given while the facts were being read is the operator's, not ours to discard
+    for key in ("consented_at", "consents", "refused"):
+        if key in latest:
+            fresh[key] = latest[key]
+        else:
+            fresh.pop(key, None)
     return store_probe(sid, fresh)
 
 
