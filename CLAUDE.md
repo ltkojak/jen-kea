@@ -279,7 +279,7 @@ warning and recording a null status. Config mutation is pure (`jen/services/kea_
 - **The Kea host owns the restore of investigation logging (v5.68.0-beta.29, Q165).** `jen-kea-helper` build 15 arms a root-owned systemd timer (`investigation-arm`;
   `--self-restore [--now]`; state in `/var/lib/jen-kea-helper/`) when logging goes on and puts the `kea-dhcp4` logger back at the deadline with Jen stopped, its database down or
   its settings pointed elsewhere. Jen's index, marker, sweep and observation are **display and audit** - a new investigation *state* on Jen's side is display and is held to
-  that, and the property to defend is the walk's I10 (`tests/test_investigation_model.py`): a daemon the host was armed for is never at DEBUG 55 past its deadline + 120 s.
+  that, and the properties to defend are the walk's I10 (`tests/test_investigation_model.py`): a daemon the host was armed for is never at DEBUG 55 past its deadline + 120 s - and I12 (Q216): a session Jen armed is never undone by the host before its own deadline.
   The restore transformation exists twice (`kea_config_edit.clear_investigation_logging`, the helper's `_restore_logger`) and is held identical by
   `tests/vectors/investigation_restore.json`; a change to either runs the other's test.
   **The host's evidence is the daemon's own answer (v5.68.0-beta.31, Q168, helper build 17).** `restored_at` is written in one place (`_restore_state`), only with an `evidence`: the running daemon's `config-get` on

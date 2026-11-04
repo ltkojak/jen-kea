@@ -109,7 +109,10 @@ class FakeKea:
         # restore landing between Jen's `config-hash-get` and its `config-set`), and whether the host's tick keeps verifying after a restore (build 19)
         self.include_hash = False
         self.before_command = {}
-        self.reverify = True
+        self.reverify = (
+            self.REVERIFY
+        )  # build 19's keeps-verifying tick; the mutation checks of the walk switch it off for every fake at once
+        self.tick_before_arm = False  # Q216 BF1: the host's timer fires BETWEEN Jen's file write and its arm (the walk's fault `tick_between_write_and_arm`)
 
     def digest(self):
         import hashlib
@@ -422,6 +425,7 @@ class FakeKea:
             return {"ok": False, "code": "error", "detail": detail}
         return {"ok": True, "code": "ok", "restored": True, "how": how, "signalled": self.signaled, "detail": ""}
 
+    REVERIFY = True
     REVERIFY_WINDOW = timedelta(minutes=15)
 
     def _reverify(self, st):

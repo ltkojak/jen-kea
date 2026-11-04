@@ -47,7 +47,7 @@ from jen.services import kea_changeset as _changeset_mod
 from jen.services import kea_config_edit as ed
 from jen.services import kea_host
 from tests import _kea_api_world as _api_world
-from tests._investigation_world import FUTURE, NOW, FakeKea, _cfg
+from tests._investigation_world import FUTURE, NOW, FakeKea, _cfg, helper
 
 pytest_plugins = ("tests._investigation_world",)
 
@@ -125,6 +125,11 @@ class Walk:
     #: Q212: how often (of the steps Jen is running) the step is followed by a write to a server over the daemon's own API.
     API_WRITE_SHARE = float(os.environ.get("JEN_MODEL_API_SHARE", "0.10"))  # 0 takes the API write out of every walk
 
+    #: Q216 (BF1): how often (of the steps Jen is running) the step is followed by `op_turn_on_again_inside_the_window`. Its own random source, like the API write's.
+    WINDOW_SHARE = float(
+        os.environ.get("JEN_MODEL_WINDOW_SHARE", "0.06")
+    )  # 0 takes the window operation out of every walk
+
     #: Q165: the HostTimer actor. False is the mutation check of I10 - the walk must go red without the host's timer.
     HOST_TIMER = True
 
@@ -136,6 +141,9 @@ class Walk:
         self.rng = random.Random(seed)
         # Q212: the API write is an extra step with a random source of its OWN, so the main stream - and every seed this suite pins - draws exactly what it drew before
         self.api_rng = random.Random(f"api-{seed}")
+        self.window_rng = random.Random(
+            f"window-{seed}"
+        )  # Q216: the same for the turn-on inside the finished session's window
         self.world, self.tmp_path = world, tmp_path
         self.log: list[str] = []
         self.step_no = 0
@@ -166,6 +174,12 @@ class Walk:
         self._seen_kind = "ok"
         self.hand_removed: set = set()  # server ids a person removed from jen.config by hand: the identity baseline of an id starts over when it is added again
         self.last_turn_on = (None, True)
+        self.armed: dict = {}  # I12: host -> the deadline of a session Jen's turn-on armed and has not turned off (cleared by a disarm, a hand edit of the file or Forget)
+        self.i12_breach: str | None = (
+            None  # an arm that left its own session's marker out of the file: noted by the wire, failed by `_invariants` (an exception raised inside the service would be swallowed there)
+        )
+        self._turning_on = False
+        self._armed_by_this_turn_on = None
         self.foreign: dict = {}  # host -> the foreign session a fault put there (INV-008: it is never overwritten)
         self.prev_ident, self.prev_mode = {}, "ca"
         self._build(monkeypatch)
@@ -335,10 +349,30 @@ class Walk:
 
     def _host_arm(self, server, until, restore, jen=None, log_path=""):
         fake = self.ssh_fake(server)
-        return dict(self._NO_ROUTE) if fake is None else fake.investigation_arm(server, until, restore, jen, log_path)
+        if fake is None:
+            return dict(self._NO_ROUTE)
+        if fake.tick_before_arm:  # the fault `tick_between_write_and_arm`: the host's timer fires after Jen's file write and before this arm replaces the finished session's record
+            fake.tick_before_arm = False
+            result = fake.host_tick()
+            self.say(f"  host timer on {fake.host} fired BETWEEN the file write and the arm: {result}")
+        reply = fake.investigation_arm(server, until, restore, jen, log_path)
+        if reply.get("ok") and self._turning_on and not reply.get("idempotent"):
+            self._armed_by_this_turn_on = (fake.host, until)
+            theirs = ((_logger_of(fake.file) or {}).get("user-context") or {}).get("jen-investigation")
+            mine = ed._parse_until(until)
+            if not isinstance(theirs, dict) or ed._parse_until(theirs.get("until")) != mine:
+                self.i12_breach = (
+                    f"the host at {fake.host} was armed for {until} and the file it holds no longer carries that session's marker ({theirs}): the host's own timer undid the session between "
+                    f"Jen's write and Jen's arm"
+                )
+        return reply
 
     def _host_disarm(self, server):
         fake = self.ssh_fake(server)
+        if fake is not None:
+            self.armed.pop(
+                fake.host, None
+            )  # Jen turned it off (or tried to): the host's restore is no longer a violation of a session Jen is keeping
         return dict(self._NO_ROUTE) if fake is None else fake.investigation_disarm(server)
 
     def _host_timer_ensure(self, server):
@@ -385,6 +419,10 @@ class Walk:
         self.applies.append((self.op, fake.host))
         if before_marker and not has_marker(fake.file):
             self.marker_removals.append((fake.host, bool(getattr(kea_host._investigation_writer, "on", False))))
+            if self.marker_removals[-1][1]:
+                self.armed.pop(
+                    fake.host, None
+                )  # Jen's own investigation write took it out (a restore, or the undo of a turn-on its database refused): Jen turned it off
         return {"ok": True, "sha256": "applied"}
 
     # ── independent readings ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -490,6 +528,8 @@ class Walk:
                 getattr(self, "op_" + self.op)()
                 if self.op != "idle" and self.api_rng.random() < self.API_WRITE_SHARE:
                     self.op_api_write()
+                if self.op != "idle" and self.window_rng.random() < self.WINDOW_SHARE:
+                    self.op_turn_on_again_inside_the_window()
             except InvariantViolated:
                 raise
             except Exception as e:  # an operation must never raise: it is the page's route and the scheduler's job
@@ -741,6 +781,7 @@ class Walk:
             entry["severity"], entry["debuglevel"] = "INFO", 0
         elif how == "loggers_deleted":
             section.pop("loggers", None)
+        self.armed.pop(fake.host, None)  # a person took the session's file into their own hands
         self.say(f"FAULT a person hand-edited the FILE on {fake.host}: {how}")
 
     def fault_hand_reload(self):
@@ -788,10 +829,24 @@ class Walk:
         if server is None:
             return
         minutes = self.rng.choice(inv.DURATIONS)
+        self._turn_on(server, minutes)
+
+    def _turn_on(self, server, minutes):
         sfake, afake = self.ssh_fake(server), self.api_fake(server)
         listed = bool(afake and "config-reload" in afake.commands and not afake.list_unreachable)
         restarts0 = sfake.calls.count("restart:dhcp4") if sfake else 0
-        out = inv.turn_on(server, minutes, actor="walk")
+        self._turning_on, self._armed_by_this_turn_on = True, None
+        try:
+            out = inv.turn_on(server, minutes, actor="walk")
+        finally:
+            self._turning_on = False
+        out = self._after_turn_on(server, minutes, sfake, listed, restarts0, out)
+        if out["ok"] and self._armed_by_this_turn_on is not None:
+            # a session Jen SAYS is on: only that one is Jen's to keep (a turn-on that did not take reverts its own file)
+            self.armed[self._armed_by_this_turn_on[0]] = self._armed_by_this_turn_on[1]
+        return out
+
+    def _after_turn_on(self, server, minutes, sfake, listed, restarts0, out):
         restarts = (sfake.calls.count("restart:dhcp4") if sfake else 0) - restarts0
         self.say(f"turn_on {server['id']} {minutes}m -> ok={out['ok']} {out['lines'][-1][:90] if out['lines'] else ''}")
         self.turn_on_listed = listed
@@ -816,6 +871,38 @@ class Walk:
         self._life.pop(
             str(server["id"]), None
         )  # a person pressing Turn on writes a FRESH entry: its counters start over
+        return out
+
+    def fault_tick_between_write_and_arm(self, fake):
+        """Q216 (BF1): the host's timer fires after Jen's file write and before Jen's arm. Armed for ONE turn-on by the operation below (not in the main fault draw, so every seed's main stream
+        is what it was); `_host_arm` fires the tick."""
+        fake.tick_before_arm = True
+        self.say(f"FAULT the host's timer on {fake.host} will fire between the next file write and the arm")
+
+    def op_turn_on_again_inside_the_window(self):
+        """Q216 (BF1): the sequence System boundaries test_19 found on v7.0.0-beta.1 - a session turned off, the clock inside the old deadline + 15 minutes (the host's record of it is DONE and
+        still re-verified), and a NEW session turned on with the host's timer firing between Jen's file write (the new marker) and Jen's arm (the new record). It draws from its own source."""
+        rng = self.window_rng
+        if not self.world.servers or self.raw_state()[0] != "ok" or self.start_kind != "ok":
+            return
+        server = rng.choice(self.world.servers)
+        sfake = self.ssh_fake(server)
+        if sfake is None or sfake.host_down or not sfake.timer_running:
+            return
+        if not self._turn_on(server, rng.choice(inv.DURATIONS))["ok"]:
+            return
+        off = inv.turn_off(server, actor="walk")
+        state = sfake.helper_state
+        self.say(f"window: turn_off {server['id']} -> ok={off['ok']}")
+        if not off["ok"] or state is None or not state["restored_at"]:
+            return
+        self.now += timedelta(seconds=rng.randint(1, 240))  # still inside the finished session's deadline + 15 minutes
+        self.fault_tick_between_write_and_arm(sfake)
+        try:
+            out = self._turn_on(server, rng.choice(inv.DURATIONS))
+        finally:
+            sfake.tick_before_arm = False
+        self.say(f"window: turn_on again {server['id']} -> ok={out['ok']}")
 
     def op_turn_off(self):
         server = self._pick_server()
@@ -897,6 +984,8 @@ class Walk:
             fake = self.physical[host]
             fake.file, fake.loaded = copy.deepcopy(self.original[host]), copy.deepcopy(self.original[host])
             fixed = True
+        if host is not None:
+            self.armed.pop(host, None)  # Forget is the person taking the session over
         out = inv.forget(sid, actor="walk")
         self.say(f"forget {sid} (by hand first: {fixed}) -> {out}")
         if out:
@@ -1213,11 +1302,17 @@ class Walk:
                 fake.before_command["config-set"] = lambda f: self._host_timers_for(f)
             state, everything = self.raw_state()
             sid_here = str(server["id"])
+
+            def same_kea(e):  # (the file write's definition above: a Kea is its SSH host AND its config path)
+                conf = e.get("kea_conf") or ""
+                return e.get("ssh_host") == server.get("ssh_host") and (
+                    not conf or conf == (server.get("kea_conf") or DEFAULT_CONF)
+                )
+
             owed = [
                 e
                 for k, e in everything.items()
-                if (k == sid_here and not e.get("removed"))
-                or (k != sid_here and e.get("ssh_host") == server.get("ssh_host") and e.get("ssh_host"))
+                if (k == sid_here and not e.get("removed")) or (k != sid_here and e.get("ssh_host") and same_kea(e))
             ]
             entry = next((e for e in owed if e.get("file", "debug") == "debug"), None)
             erases = bool(entry and not has_marker(candidate))
@@ -1346,6 +1441,9 @@ class Walk:
                     f"a non-investigation write (op {self.op}) removed the marker from {host}, which an entry says Jen owes a restore",
                 )
             self.say(f"  > a non-investigation write removed a marker no entry knows from {host} (the scan's to find)")
+            self.armed.pop(
+                host, None
+            )  # no entry owes this Kea any more (a server removed by hand): the window ARCHITECTURE names, not a session Jen is keeping
         # I4 - identity is frozen while state is outstanding
         ident, mode = self.identity()
         for sid, entry in entries.items():
@@ -1431,8 +1529,50 @@ class Walk:
         self._i11()
         # I10 - DEBUG never outlives its deadline (v5.68.0-beta.29, Q165)
         self._i10()
+        # I12 - a session Jen armed is not undone by the host before its own deadline (Q216)
+        self._i12(kind, entries)
         self.prev_entries = entries if kind == "ok" else {}
         self.prev_kind, self.prev_raw = kind, raw
+
+    def _i12(self, kind, entries):
+        """I12 - a session Jen armed keeps its marker in the FILE, at DEBUG 55, with the host armed for it, until its own deadline - unless Jen turned it off (a disarm), a person took the file
+        (a hand edit) or took the session (Forget). The host's re-verify is for a STRAY of a FINISHED session (build 19 judged by the presence of a marker, and took a NEW session's out between Jen's
+        write and Jen's arm - System boundaries test_19 on v7.0.0-beta.1); this is the invariant that says the other half: it is never for a live one. Checked against the stored record and the
+        fake host's file, after every step, and at the moment of every turn-on's arm (`_host_arm`)."""
+        if self.i12_breach is not None:
+            breach, self.i12_breach = self.i12_breach, None
+            self.fail("I12", breach)
+        for host, until in list(self.armed.items()):
+            fake = self.physical[host]
+            due = ed._parse_until(until)
+            if due is None or self.now >= due:
+                del self.armed[
+                    host
+                ]  # the deadline: from here the restore is the host's to make (I10 asks that it does)
+                continue
+            if kind != "ok":
+                continue  # the record cannot be read: nothing is known about who owes this Kea (I1, I6 and I9 are about that step)
+            if not any(e.get("ssh_host") == host and not e.get("removed") for e in entries.values()):
+                del self.armed[
+                    host
+                ]  # no live entry owes it any more (the record was rebuilt, the server removed by hand): the window ARCHITECTURE names - the scan's to find, not a session Jen is keeping
+                continue
+            marker = ((_logger_of(fake.file) or {}).get("user-context") or {}).get("jen-investigation")
+            state = fake.helper_state
+            if (
+                not at_debug(fake.file)
+                or not isinstance(marker, dict)
+                or ed._parse_until(marker.get("until")) is None
+                or ed._parse_until(marker.get("until"))
+                < due  # (an EXTENSION that did not finish - its arm took and its record did not - leaves a LATER deadline in both: the same session, longer)
+                or state is None
+                or ed._parse_until(state["until"]) != ed._parse_until(marker.get("until"))
+                or state["restored_at"]
+            ):
+                self.fail(
+                    "I12",
+                    f"the session Jen armed on {host} for {until} is not intact before its deadline (now {self.now.isoformat(timespec='seconds')}): file at DEBUG={at_debug(fake.file)}, marker={marker}, host state={state}",
+                )
 
     I10_GRACE_S = 120  # the host's timer fires every 60 s; this is the allowance past the deadline
 
@@ -1684,7 +1824,9 @@ class TestTheApiWriteCannotLandOverTheHostsRestore:
     def test_i10_is_red_without_the_deadline_defenses(self, seed, walk_world, monkeypatch):
         """The mutation check: no restore window and a host that does not keep verifying - an API write landing over the host's restore leaves DEBUG 55 past the deadline."""
         monkeypatch.setattr(inv, "restore_window", lambda server, now=None: "")
-        monkeypatch.setattr(FakeKea, "_reverify", lambda self, st: None)
+        monkeypatch.setattr(
+            FakeKea, "REVERIFY", False
+        )  # the host that does not keep verifying (build 18): the fake's own switch, not a replaced method (Q216 BF1)
         monkeypatch.setattr(Walk, "API_WRITE_SHARE", 0.5)
         try:
             walk_world(seed, STEPS).run()
@@ -1699,6 +1841,58 @@ class TestTheApiWriteCannotLandOverTheHostsRestore:
         assert TestTheApiWriteCannotLandOverTheHostsRestore.RED, (
             "the walk never found the API write landing over the restore - its fault does not bite"
         )
+
+
+def _build19_reverify(self, st):
+    """The helper's re-verify as BUILD 19 had it: ANY investigation marker in the file or in the running daemon after a restore is a stray to put back. Presence is not identity (Q216 BF1)."""
+    if not self.reverify:
+        return None
+    due = ed._parse_until(st["until"])
+    if due is None or self_now() > due + self.REVERIFY_WINDOW:
+        return None
+    entry = helper()._logger_entry(self.file)
+    context = (entry or {}).get("user-context")
+    carried = isinstance(context, dict) and "jen-investigation" in context
+    if not carried:
+        carried = self._at_debug()
+    if not carried:
+        return None
+    st.update(restored_at=None, how=None, evidence=None)
+    st["re_restores"] = int(st.get("re_restores") or 0) + 1
+    return self.host_restore()
+
+
+def self_now():
+    return inv._now()
+
+
+class TestTheWalkFindsTheBuild19Race:
+    """Q216 BF1: the walk composes the sequence System boundaries test_19 found on v7.0.0-beta.1 - a session turned off, a NEW one turned on inside the finished session's re-verify window, the
+    host's timer firing between Jen's file write and Jen's arm (`op_turn_on_again_inside_the_window`, the fault `tick_between_write_and_arm`) - and I12 is what goes red when the re-verify is
+    build 19's. The mutation check: put build 19's rule back and the window operation, raised to one step in two, must break I12 (and nothing the invariants do not name)."""
+
+    RED = []
+
+    @pytest.mark.parametrize("seed", range(40))
+    def test_i12_is_red_when_the_reverify_takes_any_marker(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(FakeKea, "_reverify", _build19_reverify)
+        monkeypatch.setattr(Walk, "WINDOW_SHARE", 0.5)
+        try:
+            walk_world(seed, STEPS).run()
+        except InvariantViolated as red:
+            assert "I12 violated" in str(red), str(red)[:600]
+            TestTheWalkFindsTheBuild19Race.RED.append(seed)
+
+    def test_it_goes_red_often_enough_to_mean_something(self):
+        print(
+            f"MODEL I12 MUTATION: {len(TestTheWalkFindsTheBuild19Race.RED)} of 40 seeds red: {TestTheWalkFindsTheBuild19Race.RED}"
+        )
+        assert len(TestTheWalkFindsTheBuild19Race.RED) >= 10, TestTheWalkFindsTheBuild19Race.RED
+
+    @pytest.mark.parametrize("seed", range(24))
+    def test_with_build_20_the_same_walks_are_green(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(Walk, "WINDOW_SHARE", 0.5)
+        walk_world(seed, STEPS).run()
 
 
 class TestSeedsThatCaughtARealDefect:
@@ -2214,6 +2408,19 @@ class TestWhatTheWalkFound:
         kea.file = cfg
         assert kea.host_tick() is None, "the tick found a marker that is not the finished session's and left it"
         assert has_marker(kea.file)
+
+    def test_the_walk_composes_the_window__seed_0_goes_red_on_build_19s_rule_and_green_on_build_20s(
+        self, walk_world, monkeypatch
+    ):
+        """Q216 BF1. The two tests around this one replay the sequence by hand; the walk composes it: `op_turn_on_again_inside_the_window` (a session turned off, the clock inside the old deadline + 15
+        minutes, a new turn-on) with the fault `tick_between_write_and_arm`, and I12 says the session Jen armed is intact before its own deadline. Seed 0 with the window raised to one step in two is
+        red on I12 under build 19's rule (presence of a marker) and green under build 20's."""
+        monkeypatch.setattr(Walk, "WINDOW_SHARE", 0.5)
+        with monkeypatch.context() as old:
+            old.setattr(FakeKea, "_reverify", _build19_reverify)
+            with pytest.raises(InvariantViolated, match="I12 violated"):
+                walk_world(0, STEPS).run()
+        walk_world(0, STEPS).run()
 
     def test_the_finished_sessions_own_marker_written_back_is_still_put_back_again(self, world, monkeypatch):
         """The other half: a stray of the FINISHED session (its candidate was built before the restore, so its marker has the old deadline) is what the re-verify exists for."""

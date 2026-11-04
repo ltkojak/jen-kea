@@ -23,6 +23,7 @@ original - never by the caller's bookkeeping. A daemon the host was armed for is
 **Tests.**
 - `tests/test_investigation_model.py::TestTheKeaHostKeepsTheDeadline` (the walk's I10, with Jen stopped, and the mutation check that goes red without the timer)
 - `tests/test_investigation_model.py::TestTheApiWriteCannotLandOverTheHostsRestore` (the walk's API write and its fault - the host's restore landing between `config-hash-get` and `config-set` - and the mutation check that goes red without the window and the re-verification)
+- `tests/test_investigation_model.py::TestTheWalkFindsTheBuild19Race` (the walk's I12 - a session Jen armed is intact before its own deadline - composed by `op_turn_on_again_inside_the_window` and the fault `tick_between_write_and_arm`, and the mutation check that goes red when the re-verify is build 19's)
 - `tests/test_kea_helper_config_write.py::TestTheTickKeepsVerifying`
 - `tests/test_kea_api_config.py::TestTheHostsDeadlineIsRespected`
 - `tests/test_investigation_host.py::TestTurnOnNeedsTheHost`
