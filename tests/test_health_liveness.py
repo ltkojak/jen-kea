@@ -76,7 +76,7 @@ def _workers(monkeypatch, live):
 class TestBackgroundWorkersProveLiveness:
     def test_healthy_is_ok_and_says_what_is_alive(self, started, monkeypatch):
         c = _workers(monkeypatch, _live())
-        assert c.status == "ok" and "alert loop" in c.detail and "4 jobs" in c.detail
+        assert c.status == "ok" and "alert loop" in c.detail and f"{len(CORE)} jobs" in c.detail
 
     def test_the_test_server_is_still_a_skip(self, monkeypatch):
         monkeypatch.setattr(background, "STARTED_AT", None)

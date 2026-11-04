@@ -163,6 +163,7 @@ class TestTheGateSentencesAreAnAdminsToRead:
 
     def test_an_admin_reads_the_sentence(self, logged_in_client, three, monkeypatch):
         self._stored(monkeypatch)
+        _only(monkeypatch, SERVER_API)
         html = logged_in_client.get("/servers").data.decode()
         assert "secret-site-extra.json" in html
 
@@ -171,6 +172,7 @@ class TestTheGateSentencesAreAnAdminsToRead:
 
         self._stored(monkeypatch)
         restricted_client(client, db, None, role="viewer", username="viewer-q216")
+        _only(monkeypatch, SERVER_API)
         html = client.get("/servers").data.decode()
         assert "secret-site-extra.json" not in html and "changes over the API are not allowed yet" in html
 
