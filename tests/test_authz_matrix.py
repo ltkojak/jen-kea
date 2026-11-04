@@ -1184,7 +1184,9 @@ class TestTheListSummariesAndEmptyStatesNameNoHiddenSubnet:
         assert self._summary(hidden) == self._summary(missing)
         hidden_empty = client.get(f"{page}?subnet=2&search={self.NOTHING}", headers=self.HX).data.decode()
         missing_empty = client.get(f"{page}?subnet=999&search={self.NOTHING}", headers=self.HX).data.decode()
-        assert hidden_empty == missing_empty
+        # the form's CSRF token embeds the second it was signed in: two requests across a second boundary differ there and nowhere else
+        token = re.compile(r'name="csrf_token" value="[^"]*"')
+        assert token.sub("<csrf>", hidden_empty) == token.sub("<csrf>", missing_empty)
 
     @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
     @pytest.mark.parametrize("page", PAGES)
