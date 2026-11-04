@@ -8013,7 +8013,8 @@ class TestTheUrlIsJudgedByEveryName:
 
     def test_the_docstring_and_the_upgrade_note_say_it_truthfully(self):
         assert "a TLS client accepts any name the certificate carries" in inspect.getsource(kea_tls.issue_server_cert)
-        text = pathlib.Path("docs/upgrading.md").read_text(encoding="utf-8")
+        # the note was written for 5.69.2; 7.0.0-beta.1 started a fresh page at 5.70.0 and archived that one
+        text = pathlib.Path("docs/release-history/upgrading-5.69.0-to-5.70.0.md").read_text(encoding="utf-8")
         assert "any name the certificate carries" in text
 
 

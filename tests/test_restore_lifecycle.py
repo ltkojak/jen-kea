@@ -548,14 +548,21 @@ class TestRefusalsBeforeQuiesce:
         self._assert_nothing_happened(world, *before)
 
     def test_bundle_from_a_newer_jen_without_force(self, world):
-        _make_bundle(world, manifest={"jen_version": "5.999.0"})
+        _make_bundle(world, manifest={"jen_version": _newer_version()})
         before = (_tree(world.etc), _tree(world.content))
         assert _run(world) != 0
         self._assert_nothing_happened(world, *before)
 
     def test_newer_jen_with_force_proceeds(self, world):
-        _make_bundle(world, manifest={"jen_version": "5.999.0"})
+        _make_bundle(world, manifest={"jen_version": _newer_version()})
         assert _run(world, force=True) == 0
+
+
+def _newer_version() -> str:
+    """A version newer than this install, in its own major (a fixed "5.999.0" became older than Jen 7)."""
+    from jen import JEN_VERSION
+
+    return f"{JEN_VERSION.split('.')[0]}.999.0"
 
 
 class TestMidApplyFailuresRestoreThePreviousState:

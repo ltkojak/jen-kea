@@ -286,9 +286,12 @@ class TestRestoreKeysAndVersionGate:
             assert stat.S_IMODE((content / "logo.png").stat().st_mode) == 0o644
 
     def test_newer_jen_refused_unless_forced(self):
+        from jen import JEN_VERSION
         from jen.tools.restore import RestoreRefused, check_bundle_version
 
-        newer = _manifest(jen_version="5.999.0")
+        newer = _manifest(
+            jen_version=f"{JEN_VERSION.split('.')[0]}.999.0"
+        )  # newer than THIS install, in its own major (a fixed "5.999.0" became older than Jen 7)
         with pytest.raises(RestoreRefused) as exc:
             check_bundle_version(newer)
         assert "newer" in str(exc.value)
