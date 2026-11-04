@@ -151,7 +151,7 @@ class TestOffIsNotATarget:
         off = api_server(daemon, config_transport="off", name="kea-off")
         result = cs.apply_change("dhcp4", lifetime(9), "x", servers=[off, FILE_SERVER])
         assert result.status == "ok"
-        assert any("kea-off: not a write target" in text for _k, text in result.lines)
+        assert any("kea-off: read-only" in text for _k, text in result.lines)
         assert daemon.commands == []
 
     def test_only_off_servers_is_noservers(self, daemon, helper, store):

@@ -485,9 +485,7 @@ def _author_server_state(server, service):
     return True, sha or "", None
 
 
-AUTHORING_API_SENTENCE = (
-    "this server takes changes over Kea's API; switch it to the file transport under Settings → Kea to author its file"
-)
+AUTHORING_API_SENTENCE = "this server's write mode is Live API; switch it to File over SSH under Settings → Kea → Write mode to author its file"
 
 
 def _authoring_api_servers(service: str = "dhcp4") -> list[dict]:

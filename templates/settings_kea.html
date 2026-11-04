@@ -78,7 +78,7 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. {% if current_user.role == 'superadmin' %}<form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form>{% else %}A superadmin restarts Jen.{% endif %}</div>
 {% endif %}
 
-{% set toc = [('kea-api', 'Control Plane'), ('kea-config-transport', 'How changes reach each server'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA'), ('kea-ddns', 'DDNS')] %}
+{% set toc = [('kea-api', 'Control Plane'), ('kea-config-transport', 'Write mode'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA'), ('kea-ddns', 'DDNS')] %}
 {% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
 {% include '_card_toc.html' %}
 
@@ -261,88 +261,137 @@
     {% endif %}
 </div>
 
-<!-- How changes reach each Kea server (Q212): the probe, the three-way transport, and the helper's grant for the daemon's own file -->
+<!-- Write mode (Q217): one choice per server, the steps its choice needs under it. The three radios are the switch form's own inputs (the form attribute: row buttons that POST elsewhere cannot nest in it). -->
 <div class="card" id="kea-config-transport">
     <div class="card-header">
-        <span class="card-title">{{ icon("git-branch") }} How changes reach each Kea server</span>
+        <span class="card-title">{{ icon("git-branch") }} Write mode</span>
     </div>
-    <p class="form-hint u-da12f2">A change to subnets, options, classes or DDNS names reaches a server one of three ways. <strong>API</strong>: Jen asks the daemon itself (<code>config-test</code>, <code>config-set</code>, <code>config-write</code>), guarded by its configuration digest, live at once with no restart and no SSH. <strong>file</strong>: Jen replaces the config file over SSH, validates it with <code>kea-dhcp4 -t</code> and restarts Kea. <strong>off</strong>: not a write target. No existing server changes its path when Jen is upgraded; switch a server here.</p>
+    <p class="form-hint u-da12f2">How Jen writes configuration changes to each Kea server. Pick a mode; the steps it needs appear under it. Nothing changes until you press the switch button, and a switch is audited and reversible from this card.</p>
     {% for c in config_cards %}
     <hr>
-    <div id="config-card-{{ c.id }}" class="mt-3">
-        <div class="u-85c718">
-            {{ c.name }}
-            <span class="badge {{ 'badge-tone-blue' if c.transport == 'api' else ('badge-reserved' if c.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ c.transport }}">{{ c.transport }}{% if c.blocked %}, blocked{% endif %}</span>
+    <div id="config-card-{{ c.id }}" class="wm-card mt-3" data-wm-card="{{ c.id }}">
+        <div class="wm-head">
+            <strong>{{ c.name }}</strong>
+            <span class="badge {{ 'badge-tone-blue' if c.transport == 'api' else ('badge-reserved' if c.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ c.transport }}" data-wm-chip>Current: {{ c.mode_word }}{% if c.blocked %}, blocked{% endif %}</span>
+            {% if c.full %}<span class="form-hint">{% if c.probe %}Last checked {{ c.probe.at|utcfmt }}{% else %}Not checked yet{% endif %}</span>{% endif %}
         </div>
         <p class="form-hint">{{ c.why }}</p>
+        {% if c.full %}
         {% if c.pending_unreadable %}<div class="alert alert-warning" data-transport-pending-unreadable>{{ icon("triangle-alert") }} The record of an earlier change cannot be read, so nothing is sent to this server until it can.</div>{% endif %}
-        {% if c.pending %}<div class="alert alert-warning" data-transport-pending>{{ icon("triangle-alert") }} A change this server's process left half-done is on record.{% if current_user.role == 'superadmin' %}
+        {% if c.pending %}<div class="alert alert-warning" data-transport-pending>{{ icon("triangle-alert") }} A change this server's process left half-done is on record.
             <form method="POST" action="/settings/infrastructure/settle-pending-change/{{ c.id }}" class="u-cccfa4" data-confirm="Settle the unfinished change on {{ c.name }}? Jen compares what the daemon runs with the change and finishes or removes it. This is audited.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Settle it now</button>
-            </form>{% endif %}</div>{% endif %}
+            </form></div>{% endif %}
         {% if c.refused %}<div class="alert alert-warning" data-transport-refused>{{ icon("triangle-alert") }} {{ c.refused }}</div>{% endif %}
-        {% if c.probe %}
-        <table class="u-95cc13" data-config-facts>
-            <tbody>
-                <tr><td class="stat-label">Last checked</td><td>{{ c.probe.at|utcfmt }}{% if c.probe.consented_at %} · changes over the API allowed {{ c.probe.consented_at|utcfmt }}{% endif %}</td></tr>
-                <tr><td class="stat-label">Configuration read over its API</td><td>{% if c.probe.config_api %}yes{% else %}no — {{ c.probe.read_error or 'no answer' }}{% endif %}</td></tr>
-                {% if c.probe.config_api %}<tr><td class="stat-label">The daemon accepts its own configuration</td><td>{% if c.probe.test_ok %}yes{% else %}no — {{ c.probe.test_detail or 'refused' }}{% endif %}</td></tr>{% endif %}
-                <tr><td class="stat-label">Endpoint</td><td>{{ {'password': 'a password (basic authentication)', 'client certificate': "Jen's client certificate (mutual TLS)", 'none': 'no authentication', 'unknown': 'unknown'}.get(c.probe.auth, c.probe.auth) }}{% if c.probe.tls %} over TLS{% elif c.probe.tls is not none %} without TLS{% endif %}. Kea draws no line between reading and writing, so the credential that reads is the credential that writes; nothing new is created on Kea.</td></tr>
-                <tr><td class="stat-label">May the daemon write its file?</td><td>
-                    {% if c.probe.write is mapping and c.probe.write.unavailable is defined %}not known — {{ c.probe.write.unavailable }}
-                    {% elif c.probe.write is mapping %}{% if c.probe.write.may_write %}yes{% else %}no{% endif %} — the file is {{ c.probe.write.mode }}, run by {{ c.probe.write.account }}
-                    {% else %}{{ c.probe.write }}{% endif %}</td></tr>
-                <tr><td class="stat-label">An include directive</td><td>{% if c.probe.include is none %}cannot be known without SSH — confirm below that the file carries none{% elif c.probe.include %}yes: {{ c.probe.include|join(', ') }} — the API transport is not recommended while it is there{% else %}none{% endif %}</td></tr>
-                <tr><td class="stat-label">The file and the daemon agree</td><td>{% if c.probe.agree is none %}cannot be known without SSH{% elif c.probe.agree %}yes{% else %}no — the file carries a configuration the daemon is not running{% endif %}</td></tr>
-                <tr><td class="stat-label">The file was written by Jen</td><td>{% if c.probe.authored %}yes{% else %}no — Kea writes its file in its own form, so comments and key order are not kept (a 1,932-byte file became 4,769){% endif %}</td></tr>
-            </tbody>
-        </table>
-        <p class="form-hint">Kea writes its file in place: a crash in the middle of a write (milliseconds, a few kilobytes) leaves a file the daemon cannot start on.{% if not c.ssh %} Without SSH that is yours to repair by hand from Config history.{% endif %}</p>
-        {% endif %}
-        {% if current_user.role == 'superadmin' %}
-        <div class="u-8a77e5">
-            <button type="button" class="btn btn-sm btn-secondary" data-config-probe="{{ c.id }}">Check API configuration</button>
-            <span class="form-hint" data-config-probe-result="{{ c.id }}"></span>
-            {% if c.probe %}
-            <div class="form-hint" data-config-consent-group="{{ c.id }}" data-at="{{ c.probe.at }}">
-                <label><input type="checkbox" data-config-consent="{{ c.id }}"> I have read the facts above and allow changes over the API</label><br>
-                <label><input type="checkbox" data-config-named="{{ c.id }}" value="consent_rendering"> Kea will write its file in its own form: comments and key order are not kept</label>
-                {% if not c.ssh %}<br><label><input type="checkbox" data-config-named="{{ c.id }}" value="confirm_no_include"> {{ c.name }} has no SSH host: I confirm its file carries no include and no edit the daemon has not loaded</label>{% endif %}
-                {% if c.probe.auth == 'none' %}<br><label><input type="checkbox" data-config-named="{{ c.id }}" value="consent_unauthenticated"> This endpoint has no authentication; anything that can reach it can change this daemon's configuration</label>{% endif %}
-                {% if c.ssh and c.probe.agree is false %}<br><label><input type="checkbox" data-config-named="{{ c.id }}" value="discard_file_edit"> The file carries a configuration the daemon is not running; discard that edit</label>{% endif %}
-            </div>
-            {% endif %}
-        </div>
-        <form method="POST" action="/settings/infrastructure/kea-transport/{{ c.id }}" class="u-d2c171" data-confirm="Switch {{ c.name }}? This is audited.">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="form-hint">
-                <label><input type="checkbox" name="consent_rendering" value="1"> Kea will write its file in its own form: comments and key order are not kept (the one moment they are lost)</label><br>
-                {% if not c.ssh %}<label><input type="checkbox" name="confirm_no_include" value="1"> {{ c.name }} has no SSH host: I confirm its file carries no include and no edit the daemon has not loaded</label><br>{% endif %}
-                {% if c.probe and c.probe.auth == 'none' %}<label><input type="checkbox" name="consent_unauthenticated" value="1"> This endpoint has no authentication; anything that can reach it can change this daemon's configuration</label><br>{% endif %}
-                {% if c.ssh %}<label><input type="checkbox" name="discard_file_edit" value="1"> If the file carries an edit the daemon has not loaded, discard it (the switch makes the file the daemon's configuration)</label>{% endif %}
-            </div>
-            <button type="submit" name="transport" value="api" class="btn btn-sm btn-primary" {% if c.declared == 'api' %}disabled{% endif %}>Use the API</button>
-            <button type="submit" name="transport" value="file" class="btn btn-sm btn-secondary" {% if c.declared == 'file' or not c.ssh %}disabled title="Needs an SSH host"{% endif %}>Use the file over SSH</button>
-            <button type="submit" name="transport" value="off" class="btn btn-sm btn-secondary" {% if c.declared == 'off' %}disabled{% endif %}>Stop writing to it</button>
-        </form>
-        {% if c.ssh %}
-        <div class="u-8a77e5">
-            {% if c.helper_ok %}
-            <form method="POST" action="/settings/infrastructure/allow-config-write/{{ c.id }}" class="u-cccfa4" data-confirm="Make {{ c.name }}'s config file writable by the account Kea runs as? It changes the file's group and mode on the host (not the directory). This is audited.">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Allow the daemon to write its file</button>
-            </form>
-            <form method="POST" action="/settings/infrastructure/deny-config-write/{{ c.id }}" class="u-cccfa4" data-confirm="Take the write right back on {{ c.name }}? The daemon can still read its file.">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Take the write right back</button>
-            </form>
-            {% else %}<span class="form-hint">The grant needs the Kea host helper build {{ config_write_min_build }} on this host (press Update helper above).</span>{% endif %}
-        </div>
-        {% endif %}
         {% if c.can_claim_fixed %}
         <form method="POST" action="/settings/infrastructure/config-write-fixed/{{ c.id }}" class="u-8a77e5" data-confirm="Clear the refusal on your word? Nothing proves the daemon may write its file now; the next change will find out.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">I have fixed it</button>
         </form>
         {% endif %}
+        <form id="wm-form-{{ c.id }}" method="POST" action="/settings/infrastructure/kea-transport/{{ c.id }}" data-wm-confirm="Switch {{ c.name }} to the selected write mode? This is audited." data-wm-form="{{ c.id }}" data-wm-name="{{ c.name }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="probe_at" value="{{ c.probe_at }}">
+        </form>
         {% endif %}
+        <div class="wm-modes" role="radiogroup" aria-label="Write mode of {{ c.name }}">
+            {% for m in c.modes %}
+            <div class="wm-mode">
+                <label class="wm-mode-label">
+                    <input type="radio" name="transport" value="{{ m.value }}" {% if c.full %}form="wm-form-{{ c.id }}"{% else %}disabled{% endif %} {% if m.value == c.transport %}checked{% endif %} data-wm-radio="{{ c.id }}" data-wm-word="{{ m.word }}">
+                    <strong>{{ m.word }}{% if m.value == c.transport %} (current){% endif %}</strong>
+                    <span class="form-hint">{{ m.sentence }}</span>
+                </label>
+                {% if c.full %}
+                <div class="wm-panel" data-mode-panel="{{ m.value }}" data-wm-panel-of="{{ c.id }}">
+                    {% if m.value == 'api' %}
+                    <ol class="wm-steps">
+                        <li class="wm-step" data-state="{{ c.row1.state }}" data-wm-row="1">
+                            <span class="wm-icon wm-icon-{{ c.row1.state }}">{{ icon({'ok': 'circle-check', 'warn': 'triangle-alert', 'bad': 'circle-x', 'idle': 'circle'}[c.row1.state]) }}</span>
+                            <span class="wm-text"><strong>1.</strong> {{ c.row1.text }}</span>
+                            {% if c.row1.button %}
+                            <form method="POST" action="/settings/infrastructure/install-kea-helper/{{ c.id }}" class="u-cccfa4">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">{{ c.row1.button }}</button>
+                            </form>
+                            {% endif %}
+                        </li>
+                        <li class="wm-step" data-state="{{ c.row2.state }}" data-wm-row="2">
+                            <span class="wm-icon wm-icon-{{ c.row2.state }}">{{ icon({'ok': 'circle-check', 'warn': 'triangle-alert', 'bad': 'circle-x', 'idle': 'circle'}[c.row2.state]) }}</span>
+                            <span class="wm-text"><strong>2.</strong> Readiness check: {{ c.row2.text }}{% if c.probe and c.row2.state == 'ok' %} {{ c.probe.at|utcfmt }}{% endif %}</span>
+                            <button type="button" class="btn btn-sm btn-secondary" data-wm-check="{{ c.id }}">{{ c.row2.button }}</button>
+                            <span class="form-hint" data-wm-check-result="{{ c.id }}"></span>
+                            {% if c.can_allow %}
+                            <form method="POST" action="/settings/infrastructure/allow-config-write/{{ c.id }}" class="u-cccfa4" data-confirm="Make {{ c.name }}'s config file writable by the account Kea runs as? It changes the file's group and mode on the host (not the directory). This is audited.">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Allow the daemon to write its file</button>
+                            </form>
+                            {% endif %}
+                            {% if c.can_deny %}
+                            <form method="POST" action="/settings/infrastructure/deny-config-write/{{ c.id }}" class="u-cccfa4" data-confirm="Take the write right back on {{ c.name }}? The daemon can still read its file.">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Take the write right back</button>
+                            </form>
+                            {% endif %}
+                            {% if c.probe %}
+                            <details class="wm-found">
+                                <summary>What the check found</summary>
+                                <table class="u-95cc13" data-config-facts>
+                                    <tbody>
+                                        <tr><td class="stat-label">API reachable, config readable</td><td>{% if c.probe.get('config_api') %}yes{% else %}no — {{ c.probe.get('read_error') or 'no answer' }}{% endif %}</td></tr>
+                                        {% if c.probe.get('config_api') %}<tr><td class="stat-label">Running config passes config-test</td><td>{% if c.probe.get('test_ok') %}yes{% else %}no — {{ c.probe.get('test_detail') or 'refused' }}{% endif %}</td></tr>{% endif %}
+                                        <tr><td class="stat-label">API authentication</td><td>{{ {'password': 'a password (basic authentication)', 'client certificate': "Jen's client certificate (mutual TLS)", 'none': 'none', 'unknown': 'unknown'}.get(c.probe.get('auth'), c.probe.get('auth')) }}{% if c.probe.get('tls') %}, over TLS{% elif c.probe.get('tls') is not none %}, without TLS{% endif %}. Kea draws no line between reading and writing, so the credential that reads is the credential that writes.</td></tr>
+                                        <tr><td class="stat-label">Daemon can write its own config file</td><td>
+                                            {% if c.probe.get('write') is mapping and c.probe.get('write').unavailable is defined %}not known — {{ c.probe.get('write').unavailable }}
+                                            {% elif c.probe.get('write') is mapping %}{% if c.probe.get('write').may_write %}yes{% else %}no{% endif %} — the file is {{ c.probe.get('write').mode }}, run by {{ c.probe.get('write').account }}
+                                            {% else %}{{ c.probe.get('write') }}{% endif %}</td></tr>
+                                        <tr><td class="stat-label">Config file uses include</td><td>{% if c.probe.get('include') is none %}{% if c.ssh %}not known — {{ c.probe.get('include_unavailable') or 'the Kea host helper did not answer' }}{% else %}cannot be known without SSH — you confirm below that there is none{% endif %}{% elif c.probe.get('include') %}yes: {{ c.probe.get('include')|join(', ') }} — Live API is not recommended while it is there{% else %}no{% endif %}</td></tr>
+                                        <tr><td class="stat-label">Config file matches running config</td><td>{% if c.probe.get('agree') is none %}{% if c.ssh %}not known — {{ c.probe.get('include_unavailable') or 'the file could not be read' }}{% else %}cannot be known without SSH{% endif %}{% elif c.probe.get('agree') %}yes{% else %}no — {{ c.probe.get('agree_at') or 'the file carries a configuration the daemon is not running' }}{% endif %}</td></tr>
+                                        <tr><td class="stat-label">Config file last written by Jen</td><td>{% if c.probe.get('authored') %}yes{% else %}no — Kea writes its file in its own format, so comments and key order are lost (a 1,932-byte file became 4,769){% endif %}</td></tr>
+                                    </tbody>
+                                </table>
+                                <p class="form-hint">Kea writes its file in place: a crash in the middle of a write (milliseconds, a few kilobytes) leaves a file the daemon cannot start on.{% if not c.ssh %} Without SSH that is yours to repair by hand from Config history.{% endif %}</p>
+                            </details>
+                            {% endif %}
+                        </li>
+                        <li class="wm-step" data-state="idle" data-wm-row="3">
+                            <span class="wm-icon wm-icon-idle">{{ icon("circle") }}</span>
+                            <span class="wm-text"><strong>3.</strong> Accept what changes</span>
+                            <div class="wm-consents">
+                                {% for n in c.consents %}
+                                <label><input type="checkbox" name="{{ n.name }}" value="1" form="wm-form-{{ c.id }}" data-wm-consent="{{ c.id }}"> {{ n.text }}</label>
+                                {% endfor %}
+                            </div>
+                        </li>
+                    </ol>
+                    <div class="wm-switch">
+                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-primary" data-wm-switch="{{ c.id }}" data-wm-target="api" data-holds="{{ '1' if c.holding else '' }}" {% if m.value == c.transport %}data-current="1"{% endif %} {% if m.value == c.transport or c.holding %}disabled{% endif %}>Switch to live API</button>
+                        <span class="form-hint" data-wm-holding="{{ c.id }}">{% if m.value == c.transport %}This is the current mode.{% else %}{{ c.holding }}{% endif %}</span>
+                    </div>
+                    <div class="form-hint">Audited. Reversible from this card.</div>
+                    {% elif m.value == 'file' %}
+                    <ol class="wm-steps">
+                        <li class="wm-step" data-state="{{ 'ok' if c.ssh else 'bad' }}">
+                            <span class="wm-icon wm-icon-{{ 'ok' if c.ssh else 'bad' }}">{{ icon('circle-check' if c.ssh else 'circle-x') }}</span>
+                            <span class="wm-text"><strong>1.</strong> SSH host: {% if c.ssh %}set{% else %}none — add one under <a href="#kea-ssh">SSH to the Kea server</a>{% endif %}</span>
+                        </li>
+                    </ol>
+                    <p class="form-hint">Jen compares the file with what the daemon runs before it writes anything; a file edit the daemon never loaded is kept.</p>
+                    {% if c.transport == 'api' and c.probe and c.probe.get('agree') is false %}
+                    <div class="wm-consents"><label><input type="checkbox" name="discard_file_edit" value="1" form="wm-form-{{ c.id }}"> {{ c.consent_texts.discard_file_edit }}</label></div>
+                    {% endif %}
+                    <div class="wm-switch">
+                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-secondary" data-wm-switch="{{ c.id }}" data-wm-target="file" {% if m.value == c.transport or not c.ssh %}disabled{% endif %}>Switch to file over SSH</button>
+                        <span class="form-hint">{% if m.value == c.transport %}This is the current mode.{% elif not c.ssh %}Waiting on step 1: SSH host: none{% endif %}</span>
+                    </div>
+                    {% else %}
+                    <div class="wm-switch">
+                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-secondary" data-wm-switch="{{ c.id }}" data-wm-target="off" {% if m.value == c.transport %}disabled{% endif %}>Make read-only</button>
+                        <span class="form-hint">{% if m.value == c.transport %}This is the current mode.{% else %}The daemon keeps serving; Jen stops writing to it.{% endif %}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% if not c.full %}<p class="form-hint">A superadmin changes the write mode.</p>{% endif %}
     </div>
     {% endfor %}
 </div>
@@ -354,7 +403,7 @@
         {% if ssh_configured %}<span class="u-d5881b">● Key present</span>
         {% else %}<span class="u-0051c0">● No key generated</span>{% endif %}
     </div>
-    <p class="form-hint u-da12f2">For the host: logs, Trace, TLS material, the helper, and the file transport (config pushes and restarts). Not needed to change a server over its API. Used for the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
+    <p class="form-hint u-da12f2">For the host: logs, Trace, TLS material, the helper, and File over SSH (config pushes and restarts). Not needed to change a server over its API. Used for the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
     {% if current_user.role != 'superadmin' %}
     <div class="form-row">
         <div class="form-group"><label>Kea server</label><div class="mono">{{ infra.ssh_host or '(not set)' }}</div></div>
@@ -506,7 +555,7 @@
 
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
         <div class="u-85c718">Additional servers</div>
-        <p class="u-6d6af6">For HA peers and multi-server setups. Each needs its own API credentials; SSH is for the host: logs, Trace, TLS, the helper, and the file transport.</p>
+        <p class="u-6d6af6">For HA peers and multi-server setups. Each needs its own API credentials; SSH is for the host: logs, Trace, TLS, the helper, and File over SSH.</p>
         {% if current_user.role != 'superadmin' %}
         {% if infra.extra_servers %}
         <table class="rowlist u-95cc13">
@@ -1089,23 +1138,62 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
 })();
 
 (function () {
-    // Q212: the per-server card. A click asks the server to check its own API configuration (a read that stores its result), then the page reloads to show the stored facts.
+    // Q217: the Write mode card. The radios are the switch form's own inputs; the panel under the selected one is shown and the others are hidden here (with JavaScript off every panel shows and
+    // the form still submits). The switch button's holding sentence is a convenience for the person - the ROUTE decides for real (`consent_gap`). Delegated listeners, no inline handler.
+    function selected(card) {
+        var r = card.querySelector('[data-wm-radio]:checked');
+        return r ? r.value : null;
+    }
+    function refresh(card) {
+        var id = card.getAttribute('data-wm-card');
+        var mode = selected(card);
+        card.querySelectorAll('[data-mode-panel]').forEach(function (p) {
+            p.classList.toggle('wm-hidden', p.getAttribute('data-mode-panel') !== mode);
+        });
+        var form = card.querySelector('[data-wm-form]');
+        var radio = card.querySelector('[data-wm-radio]:checked');
+        if (form && radio) {
+            form.setAttribute('data-wm-confirm', 'Switch ' + (form.getAttribute('data-wm-name') || 'this server') + ' to ' + (radio.getAttribute('data-wm-word') || 'the selected mode') + '? This is audited.');
+        }
+        var sw = card.querySelector('[data-wm-switch="' + id + '"][data-wm-target="api"]');
+        if (!sw || sw.hasAttribute('data-current') || sw.getAttribute('data-holds')) return;
+        var say = card.querySelector('[data-wm-holding="' + id + '"]');
+        var boxes = card.querySelectorAll('[data-wm-consent="' + id + '"]');
+        var first = null;
+        boxes.forEach(function (b) { if (!first && !b.checked) first = b; });
+        sw.disabled = !!first;
+        if (say) say.textContent = first ? 'Waiting on step 3: accept “' + first.parentNode.textContent.trim() + '”' : '';
+        var row3 = card.querySelector('[data-wm-row="3"]');
+        if (row3) row3.setAttribute('data-state', first ? 'idle' : 'ok');
+    }
+    function refreshAll() {
+        document.querySelectorAll('[data-wm-card]').forEach(refresh);
+    }
+    document.addEventListener('change', function (ev) {
+        var card = ev.target.closest('[data-wm-card]');
+        if (card) refresh(card);
+    });
+    document.addEventListener('click', function (ev) {
+        // The switch buttons sit OUTSIDE the switch form (the form attribute links them), so base.html's form[data-confirm] wiring cannot see them: ask here, then submit the form.
+        var sw = ev.target.closest('[data-wm-switch]');
+        if (!sw || sw.disabled) return;
+        var form = document.getElementById('wm-form-' + sw.getAttribute('data-wm-switch'));
+        if (!form || typeof window.jenConfirm !== 'function') return;
+        ev.preventDefault();
+        window.jenConfirm(form.getAttribute('data-wm-confirm') || 'Switch this server? This is audited.', function () { form.submit(); });
+    });
     document.addEventListener('click', async function (ev) {
-        var btn = ev.target.closest('[data-config-probe]');
+        var btn = ev.target.closest('[data-wm-check]');
         if (!btn) return;
-        var id = btn.getAttribute('data-config-probe');
-        var box = document.querySelector('[data-config-consent="' + id + '"]');
-        var group = document.querySelector('[data-config-consent-group="' + id + '"]');
-        var out = document.querySelector('[data-config-probe-result="' + id + '"]');
-        var fields = {consent: box && box.checked ? '1' : '0', at: group ? group.getAttribute('data-at') : ''};
-        document.querySelectorAll('[data-config-named="' + id + '"]').forEach(function (n) { if (n.checked) fields[n.value] = '1'; });
+        var id = btn.getAttribute('data-wm-check');
+        var out = document.querySelector('[data-wm-check-result="' + id + '"]');
         btn.disabled = true;
-        out.textContent = ' Checking…';
+        if (out) out.textContent = ' Checking…';
         try {
             var resp = await jenFetch('/settings/infrastructure/probe-kea-config/' + id, {
                 method: 'POST',
                 headers: {'X-CSRFToken': {{ csrf_token()|tojson }}, 'Content-Type': 'application/x-www-form-urlencoded'},
-                body: new URLSearchParams(fields),
+                body: new URLSearchParams({}),
             });
             var data = await resp.json();
             if (data.ok) {
@@ -1113,12 +1201,13 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
                 window.location.reload();
                 return;
             }
-            out.textContent = ' ' + (data.error || 'The check failed.');
+            if (out) out.textContent = ' ' + (data.error || 'The check failed.');
         } catch (e) {
-            out.textContent = ' The check did not complete.';
+            if (out) out.textContent = ' The check did not complete.';
         }
         btn.disabled = false;
     });
+    refreshAll();
 })();
 
 async function probeKea() {

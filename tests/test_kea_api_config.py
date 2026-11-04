@@ -582,6 +582,93 @@ class TestSecondPassRows:
         assert result["code"] == "write-failed" and result["needs_hands"] and "earlier attempt" in result["detail"]
 
 
+class TestTheFirstDifferenceIsNamed:
+    """Q217 BG3 b: ONE walk answers "is it carried?" and "where does it differ?"; `_carries` is its negation, so they cannot disagree."""
+
+    FILE = {
+        "Dhcp4": {
+            "valid-lifetime": 3600,
+            "subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "pools": [{"pool": "10.0.0.10 - 10.0.0.20"}]}],
+            "hosts-database": {"type": "mysql", "name": "kea", "password": "hunter2-secret"},
+        }
+    }
+
+    def _live(self):
+        return {
+            "Dhcp4": {
+                "valid-lifetime": 3600,
+                "decline-probation-period": 86400,
+                "subnet4": [
+                    {"id": 1, "subnet": "10.0.0.0/24", "t1-percent": 0.5, "pools": [{"pool": "10.0.0.10-10.0.0.20"}]}
+                ],
+                "hosts-databases": [{"type": "mysql", "name": "kea", "password": "hunter2-secret", "port": 3306}],
+            }
+        }
+
+    def test_a_file_that_is_carried_names_nothing(self):
+        # a renamed key IS carried, and a pool with spaces IS the same pool
+        assert api.difference_text(self.FILE, self._live(), "dhcp4") == "" and api.file_in_daemon(
+            self.FILE, self._live(), "dhcp4"
+        )
+
+    def test_a_changed_leaf(self):
+        live = self._live()
+        live["Dhcp4"]["valid-lifetime"] = 7200
+        text = api.difference_text(self.FILE, live, "dhcp4")
+        assert text == "at Dhcp4.valid-lifetime: the file says 3600, the daemon 7200"
+        assert not api.file_in_daemon(self.FILE, live, "dhcp4")
+
+    def test_a_missing_key(self):
+        live = self._live()
+        del live["Dhcp4"]["valid-lifetime"]
+        assert (
+            api.difference_text(self.FILE, live, "dhcp4")
+            == "at Dhcp4.valid-lifetime: the file says 3600, the daemon nothing"
+        )
+
+    def test_a_longer_list(self):
+        file_cfg = copy.deepcopy(self.FILE)
+        file_cfg["Dhcp4"]["subnet4"].append({"id": 2, "subnet": "10.1.0.0/24"})
+        text = api.difference_text(file_cfg, self._live(), "dhcp4")
+        assert text == "at Dhcp4.subnet4: the file says a list of 2, the daemon a list of 1"
+
+    def test_the_path_is_built_as_the_walk_descends(self):
+        live = self._live()
+        live["Dhcp4"]["subnet4"][0]["pools"][0]["pool"] = "10.0.0.10-10.0.0.99"
+        assert api.difference_text(self.FILE, live, "dhcp4").startswith("at Dhcp4.subnet4[0].pools[0].pool: ")
+
+    def test_the_value_under_a_password_key_is_never_printed(self):
+        live = self._live()
+        live["Dhcp4"]["hosts-databases"][0]["password"] = "a-different-secret"
+        text = api.difference_text(self.FILE, live, "dhcp4")
+        assert text.startswith("at Dhcp4.hosts-database.password") and "hunter2" not in text and "different" not in text
+        assert "not shown" in text
+
+    def test_a_missing_object_is_not_printed_whole(self):
+        live = self._live()
+        del live["Dhcp4"]["hosts-databases"]
+        text = api.difference_text(self.FILE, live, "dhcp4")
+        assert (
+            text == "at Dhcp4.hosts-database: the file says an object with 3 keys, the daemon nothing"
+            and "hunter2" not in text
+        )
+
+    def test_a_leaf_is_cut_to_sixty_characters(self):
+        file_cfg = {"Dhcp4": {"user-context": {"note": "x" * 200}}}
+        live = {"Dhcp4": {"user-context": {"note": "y" * 200}}}
+        text = api.difference_text(file_cfg, live, "dhcp4")
+        assert "x" * 60 not in text and "…" in text
+
+    def test_first_difference_is_the_negation_of_carries(self):
+        for running, candidate in (
+            ({"a": 1}, {"a": 1}),
+            ({"a": 1}, {"a": 2}),
+            ({"a": [1, 2]}, {"a": [1]}),
+            ({}, {"b": 1}),
+        ):
+            assert (api.first_difference(running, candidate) == "") is api._carries(running, candidate)
+
+
 class TestQ216TheRegister:
     """Q216 - BF3 (no compare, no set), BF8 b (a hook's parameters), g (an unreadable record), o (the digest on record) and l (one restore window per Kea)."""
 

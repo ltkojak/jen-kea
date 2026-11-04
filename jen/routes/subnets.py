@@ -80,7 +80,7 @@ def _config_shas(service):
     shas = {}
     for server in extensions.KEA_SERVERS:
         if __changeset._transport(server, service) == "off":
-            continue  # not a write target: the form's guard sha is for the servers the change will be written to
+            continue  # a read-only server: the form's guard sha is for the servers the change will be written to
         try:
             _cfg, sha = __host.read_via_transport(server, service)
         except Exception:
@@ -2319,7 +2319,7 @@ def import_windows_preview(source):
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
     if primary is None or __changeset._transport(primary, "dhcp4") == "off":
         flash(
-            "The primary Kea server needs SSH configured (or its configuration switched to the API transport) before you can preview or apply an import.",
+            "The primary Kea server needs SSH configured (or its write mode switched to Live API) before you can preview or apply an import.",
             "error",
         )
         return redirect(review_url)
@@ -2451,7 +2451,7 @@ def import_windows_apply(source):
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
     if primary is None or __changeset._transport(primary, "dhcp4") == "off":
         flash(
-            "The primary Kea server needs SSH configured (or its configuration switched to the API transport) before you can apply an import.",
+            "The primary Kea server needs SSH configured (or its write mode switched to Live API) before you can apply an import.",
             "error",
         )
         return redirect(review_url)

@@ -44,7 +44,7 @@ def worked(monkeypatch):
             f"jen.services.kea_host.{name}",
             lambda *a, _n=name, **k: calls.append(_n) or {"ok": True, "changed": False, "detail": "x"},
         )
-    monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"refused": "denied"})
+    monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"refused": "denied", "at": "T"})
     monkeypatch.setattr("jen.services.kea_api_config.clear_refusal", lambda sid: calls.append("fixed") or True)
     monkeypatch.setattr(
         "jen.services.kea_api_config.settle_pending",
@@ -55,7 +55,7 @@ def worked(monkeypatch):
 
 
 def _post(client, url):
-    return client.post(url, data={"transport": "api", "consent": "1"}, follow_redirects=False)
+    return client.post(url, data={"transport": "api", "probe_at": "T"}, follow_redirects=False)
 
 
 class TestOnlyASuperadminGetsThere:
@@ -94,9 +94,9 @@ class TestTheFourThatChangeSomethingAskForARecentConfirmation:
         if needs:
             assert r.status_code == 302 and "reauth" in r.headers["Location"] and worked == []
         else:
-            # the probe that only READS asks for no confirmation; the one that records a CONSENT does (Q216 AA1) - see TestAConsentIsAnActNotAClick
-            r = logged_in_client.post(url, data={"consent": "0"}, follow_redirects=False)
-            assert worked == ["probe"]
+            assert (
+                worked == ["probe"]
+            )  # the readiness check only READS: it asks for no confirmation (the consent is the switch, TestAConsentIsAnActNotAClick)
 
     def test_an_unknown_server_is_a_message_not_an_error(self, logged_in_client, worked):
         r = _post(logged_in_client, "/settings/infrastructure/kea-transport/99")
@@ -104,45 +104,65 @@ class TestTheFourThatChangeSomethingAskForARecentConfirmation:
 
 
 class TestAConsentIsAnActNotAClick:
-    """Q216 AA1. The consent is given for the facts the operator READ (the page carries the stored probe's `at`), by a superadmin who confirmed the password recently."""
+    """Q217 BG2 / CFG-003 (Q216 AA1 moved here). The consent is the SWITCH POST: given for the facts the operator READ (the form carries the stored probe's `at` as `probe_at`), by a superadmin who
+    confirmed the password recently, for the consents named by the boxes ticked. The readiness check reads and records nothing."""
 
-    def test_a_stale_confirmation_stops_a_consent_before_the_probe(self, logged_in_client, worked):
+    def test_the_readiness_check_records_no_consent(self, logged_in_client, worked, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(
+            "jen.services.kea_api_config.probe",
+            lambda server, service="dhcp4", **k: seen.update(k) or {"config_api": True},
+        )
+        logged_in_client.post(
+            "/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "consent_rendering": "1"}
+        )
+        assert seen == {}  # no consent, no consents: the route does not even read them
+
+    def test_a_stale_confirmation_stops_the_switch_before_any_work(self, logged_in_client, worked):
         with logged_in_client.session_transaction() as sess:
             sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
-        r = logged_in_client.post("/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "at": ""})
-        assert r.status_code == 401 and r.get_json().get("reauth") and worked == []
+        r = _post(logged_in_client, "/settings/infrastructure/kea-transport/3")
+        assert r.status_code == 302 and "reauth" in r.headers["Location"] and worked == []
 
-    def test_a_consent_for_facts_that_are_not_the_stored_ones_is_refused(self, logged_in_client, worked, monkeypatch):
-        monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"at": "2026-11-04T10:00:00+00:00"})
+    def test_a_switch_for_facts_that_are_not_the_stored_ones_is_refused(self, logged_in_client, worked):
         r = logged_in_client.post(
-            "/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "at": "2026-11-04T09:00:00+00:00"}
+            "/settings/infrastructure/kea-transport/3",
+            data={"transport": "api", "probe_at": "OLD", "consent_rendering": "1"},
+            follow_redirects=True,
         )
-        assert r.status_code == 409 and "changed since you read them" in r.get_json()["error"] and worked == []
+        assert worked == [] and b"readiness check was refreshed" in r.data
 
-    def test_a_consent_the_facts_do_not_allow_says_why_and_audits_nothing(self, logged_in_client, worked, monkeypatch):
-        monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"at": "T"})
-        monkeypatch.setattr(
-            "jen.services.kea_api_config.probe",
-            lambda *a, **k: worked.append("probe") or {"config_api": True, "consent_refused": "tick the confirmation"},
+    def test_a_switch_with_no_facts_at_all_is_refused(self, logged_in_client, worked):
+        r = logged_in_client.post(
+            "/settings/infrastructure/kea-transport/3", data={"transport": "api", "consent_rendering": "1"}
         )
-        r = logged_in_client.post("/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "at": "T"})
-        assert r.status_code == 200 and r.get_json()["ok"] is False and "tick the confirmation" in r.get_json()["error"]
+        assert worked == [] and r.status_code == 302
 
-    def test_the_named_consents_reach_the_probe(self, logged_in_client, worked, monkeypatch):
+    def test_the_consents_recorded_are_the_boxes_ticked(self, logged_in_client, worked, monkeypatch):
         seen = {}
-        monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"at": "T"})
         monkeypatch.setattr(
-            "jen.services.kea_api_config.probe",
-            lambda server, service, consent=False, consents=(), **k: (
-                seen.update(consent=consent, consents=set(consents))
-                or {"config_api": True, "consented_at": "now", "consents": sorted(consents)}
+            "jen.services.kea_transport_switch.switch",
+            lambda server, target, consents=(), actor="": (
+                seen.update(target=target, consents=set(consents))
+                or {
+                    "ok": True,
+                    "level": "success",
+                    "line": "switched",
+                    "from": "file",
+                    "to": "api",
+                    "consents": sorted(consents),
+                }
             ),
         )
         logged_in_client.post(
-            "/settings/infrastructure/probe-kea-config/3",
-            data={"consent": "1", "at": "T", "consent_rendering": "1", "bogus": "1"},
+            "/settings/infrastructure/kea-transport/3",
+            data={"transport": "api", "probe_at": "T", "consent_rendering": "1", "bogus": "1"},
         )
-        assert seen == {"consent": True, "consents": {"consent_rendering"}}
+        assert seen == {"target": "api", "consents": {"consent_rendering"}}
+
+    def test_a_switch_to_the_file_or_to_read_only_needs_no_facts(self, logged_in_client, worked):
+        logged_in_client.post("/settings/infrastructure/kea-transport/3", data={"transport": "off"})
+        assert worked == ["switch"]
 
 
 class TestIHaveFixedItIsForAServerNothingCanProve:

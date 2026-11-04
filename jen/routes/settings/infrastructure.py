@@ -161,57 +161,144 @@ def _kea_servers_with_helper_status():
 
 
 def _config_cards() -> list:
-    """Q212 (BB3 e, BB5): one card per server for how a change reaches it - the transport word and its sentence from the same derivation the badge, the change set and Health use, the stored probe
-    (a settings read, never a Kea call) and whether the host's helper is new enough for the grant. Facts are strings and flags; nothing secret."""
+    """Q217 (BG2): one Write mode card per server - the effective mode (the one word the radio, the chip, the Servers page badge and `transport_why` all print), the ordered rows of the Live API panel
+    (the helper, the readiness check, what the operator accepts), the first thing holding the switch, and the alerts. A superadmin's card carries the facts; an admin's and a viewer's carries the
+    header only (nothing a host or an endpoint says reaches them: AB5's class). Facts are strings and flags; nothing secret - the probe stores no password and `difference_text` redacts one."""
     import jen.services.config_revisions as __rev
     import jen.services.kea_api_config as __api
     import jen.services.kea_changeset as __cs
+    import jen.services.write_mode as __words
     from jen.services import kea_host as __host
 
+    full = bool(getattr(current_user, "is_superadmin", False))
     helper = __host.helper_status()
     cards = []
     for server in extensions.KEA_SERVERS or []:
-        probe = __api.stored_probe(server.get("id"))
+        sid = server.get("id")
+        name = server.get("name") or f"Kea Server {sid}"
+        probe = __api.stored_probe(sid)
         transport = __cs._transport(server, "dhcp4")
+        ssh = bool(server.get("ssh_host"))
         caps = __caps.derive(
-            ssh=bool(server.get("ssh_host")),
+            ssh=ssh,
             config_transport=transport,
             config_declared=__api.declared_transport(server),
             config_probe=probe,
             config_gate=__api.probe_gate(server) if transport == "api" else "",
         )
-        build = (helper.get(str(server.get("id"))) or {}).get("build")
-        helper_ok = isinstance(build, int) and build >= __host.CONFIG_WRITE_MIN_HELPER_BUILD
+        card = {
+            "id": sid,
+            "name": name,
+            "transport": caps.config_transport,
+            "declared": caps.config_declared,
+            "mode_word": __words.mode_word(caps.config_transport),
+            "blocked": caps.transport_blocked,
+            "why": caps.transport_why(),
+            "ssh": ssh,
+            "full": full,
+            "modes": [
+                {"value": m, "word": __words.MODE_WORDS[m], "sentence": __words.MODE_SENTENCES[m]}
+                for m in __words.MODE_ORDER
+            ],
+        }
+        if not full:
+            cards.append(card)
+            continue
+        st = helper.get(str(sid)) or {}
+        build = st.get("build")
+        helper_min = __host.CONFIG_WRITE_MIN_HELPER_BUILD
+        helper_ok = isinstance(build, int) and build >= helper_min
         refused = __api.refusal_sentence(server)
         write_fact = (probe or {}).get("write")
         try:
-            pending = __rev.pending(server.get("id"), "dhcp4") is not None if server.get("id") is not None else False
+            pending = __rev.pending(sid, "dhcp4") is not None if sid is not None else False
             pending_unreadable = False
         except __rev.RevisionStoreUnreadable:
             pending, pending_unreadable = False, True
-        cards.append(
+        # row 1 - the helper (only a host reached over SSH needs one)
+        if not ssh:
+            row1 = {
+                "state": "idle",
+                "text": "No SSH host - the Kea host helper is not needed for Live API",
+                "holds": False,
+            }
+        elif helper_ok:
+            row1 = {
+                "state": "ok",
+                "text": f"Kea host helper at build {build} (needs {helper_min} or later)",
+                "holds": False,
+            }
+        elif isinstance(build, int):
+            row1 = {
+                "state": "bad",
+                "text": f"Kea host helper at build {helper_min} or later - this host has build {build}; press Update helper",
+                "holds": True,
+                "button": "Update helper",
+            }
+        else:
+            row1 = {
+                "state": "bad",
+                "text": f"Kea host helper at build {helper_min} or later - the helper has not answered yet; press Install helper",
+                "holds": True,
+                "button": "Install helper",
+            }
+        # row 2 - the readiness check: the gate's own first refusal, verbatim, with every consent assumed (what is left is a FACT to fix)
+        gap = __api.consent_gap(name, probe, __api.CONSENTS, has_ssh=ssh, strict=False)[0] if probe is not None else ""
+        if probe is None:
+            row2 = {
+                "state": "idle",
+                "text": "Not run yet",
+                "holds": True,
+                "button": "Run check",
+                "sentence": "Run the readiness check",
+            }
+        elif gap:
+            row2 = {
+                "state": "bad" if not probe.get("config_api") or probe.get("include") else "warn",
+                "text": gap,
+                "holds": True,
+                "button": "Run check again",
+                "sentence": gap,
+            }
+        else:
+            row2 = {"state": "ok", "text": "Passed", "holds": False, "button": "Run check again", "sentence": ""}
+        for row in (row1, row2):
+            row.setdefault("button", "")
+            row.setdefault("sentence", "")
+        needs = __api.consents_called_for(probe, has_ssh=ssh) if probe is not None else []
+        holding = ""
+        if row1["holds"]:
+            holding = "Waiting on step 1: " + row1["text"]
+        elif row2["holds"]:
+            holding = "Waiting on step 2: " + row2["sentence"]
+        card.update(
             {
-                "id": server.get("id"),
-                "name": server.get("name") or f"Kea Server {server.get('id')}",
-                "transport": caps.config_transport,
-                "blocked": caps.transport_blocked,
-                "declared": caps.config_declared,
-                "why": caps.transport_why(),
                 "probe": probe,
+                "probe_at": (probe or {}).get("at") or "",
                 "refused": refused,
-                "ssh": bool(server.get("ssh_host")),
                 "helper_ok": helper_ok,
+                "helper_build": build,
+                "helper_min": helper_min,
+                "consent_texts": __words.CONSENT_TEXTS,
+                "row1": row1,
+                "row2": row2,
+                "consents": [{"name": n, "text": __words.CONSENT_TEXTS[n]} for n in needs],
+                "holding": holding,
+                # the grant buttons live on row 2: only when the write fact says what they would change
+                "can_allow": helper_ok and isinstance(write_fact, dict) and write_fact.get("may_write") is False,
+                "can_deny": helper_ok
+                and isinstance(write_fact, dict)
+                and write_fact.get("may_write") is True
+                and not write_fact.get("daemon_is_root"),
+                "agree_at": (probe or {}).get("agree_at") or "",
                 # (Q216 AA9) "I have fixed it" is for a server whose permission nothing can PROVE: no SSH, a helper below build 19, or facts the helper could not read
                 "can_claim_fixed": bool(refused)
-                and (
-                    not server.get("ssh_host")
-                    or not helper_ok
-                    or not (isinstance(write_fact, dict) and "may_write" in write_fact)
-                ),
+                and (not ssh or not helper_ok or not (isinstance(write_fact, dict) and "may_write" in write_fact)),
                 "pending": pending,
                 "pending_unreadable": pending_unreadable,
             }
         )
+        cards.append(card)
     return cards
 
 

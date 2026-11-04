@@ -440,6 +440,25 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .alert-error, .alert-danger { background: color-mix(in srgb, var(--danger) 18%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
         .alert-info { background: color-mix(in srgb, var(--primary) 18%, transparent); border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent); color: var(--primary); }
         .alert-warning { background: color-mix(in srgb, var(--warning) 18%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+        /* Q217: the Write mode card - one choice, the steps its choice needs under it */
+        .wm-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px; }
+        .wm-modes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+        .wm-mode { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+        .wm-mode-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; cursor: pointer; }
+        .wm-mode-label .form-hint { flex-basis: 100%; margin: 0 0 0 24px; }
+        .wm-panel { margin: 10px 0 2px 24px; }
+        .wm-panel.wm-hidden { display: none; }
+        .wm-steps { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+        .wm-step { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+        .wm-step .wm-text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+        .wm-icon { display: inline-flex; flex: 0 0 auto; }
+        .wm-icon-ok { color: var(--success); }
+        .wm-icon-warn { color: var(--warning); }
+        .wm-icon-bad { color: var(--danger); }
+        .wm-icon-idle { color: var(--text-muted); }
+        .wm-found, .wm-consents { flex-basis: 100%; margin-left: 28px; }
+        .wm-consents label { display: block; margin: 2px 0; font-size: 13px; }
+        .wm-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; }
         /* v5.70.0-beta.2 (Q206, AV1/AV2): a flash can be dismissed; a toast is the same alert made small and fixed. Both leave through `.leaving`; with prefers-reduced-motion the script removes them at once. */
         .alert-flash { display: flex; align-items: flex-start; gap: 12px; }
         .alert-flash[hidden] { display: none; }

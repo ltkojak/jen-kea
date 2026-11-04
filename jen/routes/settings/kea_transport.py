@@ -17,10 +17,10 @@ import jen.services.kea_api_config as __api
 import jen.services.kea_changeset as __cs
 import jen.services.kea_host as __host
 import jen.services.kea_transport_switch as __switch
+import jen.services.write_mode as __write_mode
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import recent_auth_required as _recent_auth_required
-from jen.services.access import step_up_redirect as _step_up_redirect
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -45,36 +45,13 @@ def _gone():
 @login_required
 @_superadmin_required
 def probe_kea_config(server_id):
-    """The facts an operator reads before the first change over the API (`kea_api_config.probe`), stored for the capability, the card and the gate. With `consent=1` the operator's named
-    consent is recorded when the facts allow it - the probe is a click, the facts are the gate. JSON, for `jenFetch`."""
+    """The readiness check of the Write mode card (`kea_api_config.probe`): what an operator reads before switching to Live API, stored for the capability, the card and the gate. It READS - a consent
+    is not given here (Q217 BG2: the switch POST is the consent act, for the facts whose time the form carries). JSON, for `jenFetch`."""
     server = _server(server_id)
     if server is None:
         return jsonify({"ok": False, "error": "That server is not configured."}), 404
-    consent = request.form.get("consent") == "1"
-    consents = {name for name in __api.CONSENTS if request.form.get(name) == "1"}
-    if consent:
-        # (Q216 AA1) a consent is an act, not a click that reads: it needs a recent confirmation of the password, and it is given for the facts the operator READ - the page carries the stored probe's `at`
-        stepped = _step_up_redirect(10, fetch=True)
-        if stepped is not None:
-            return stepped
-        stored = __api.stored_probe(server_id) or {}
-        if not stored or request.form.get("at", "") != str(stored.get("at") or ""):
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "The facts changed since you read them (or were never read): check the API configuration, read what it says, then allow changes.",
-                }
-            ), 409
-    facts = __api.probe(server, "dhcp4", consent=consent, consents=consents)
+    facts = __api.probe(server, "dhcp4")
     __caps.invalidate(server_id)
-    if consent and facts.get("consent_refused"):
-        return jsonify({"ok": False, "error": facts["consent_refused"], "probe": facts}), 200
-    if consent and facts.get("consented_at"):
-        __user.audit(
-            "KEA_API_CONSENT",
-            server.get("name") or str(server_id),
-            f"changes over the API allowed after reading the check; consents: {', '.join(facts.get('consents') or []) or 'none'}",
-        )
     return jsonify({"ok": True, "probe": facts, "transport": __api.declared_transport(server)})
 
 
@@ -83,19 +60,28 @@ def probe_kea_config(server_id):
 @_superadmin_required
 @_recent_auth_required(minutes=10)
 def switch_kea_transport(server_id):
-    """`api | file | off` for one server (BB8). The named consents arrive as fields; a refusal that one of them would answer says which."""
+    """The write mode of one server: `api | file | off` (BB8; Live API, File over SSH, Read-only on the card). THIS POST is the consent act (Q217 BG2, CFG-003): the named consents arrive as fields, are
+    given for the facts whose time the form carries (`probe_at`), and need the recent confirmation this route already asks for; `kea_transport_switch` applies `consent_gap`'s table."""
     server = _server(server_id)
     if server is None:
         return _gone()
     target = request.form.get("transport", "").strip()
     consents = {name for name in SWITCH_CONSENTS if request.form.get(name) == "1"}
+    if target == "api":
+        stored = __api.stored_probe(server_id) or {}
+        if not stored or request.form.get("probe_at", "") != str(stored.get("at") or ""):
+            flash(
+                f"{server.get('name') or 'The server'}: the readiness check was refreshed (or never run) since you read it - read the card again and accept what it shows; nothing was changed.",
+                "error",
+            )
+            return _back()
     result = __switch.switch(server, target, consents=consents, actor=current_user.username)
     flash(result["line"], result["level"])
     if result["ok"] and not result.get("unchanged"):
         __user.audit(
             "KEA_TRANSPORT_SWITCHED",
             server.get("name") or str(server_id),
-            f"{result.get('from')} -> {result.get('to')}; consents: {', '.join(result.get('consents') or []) or 'none'}"
+            f"write mode {__write_mode.mode_word(result.get('from'))} -> {__write_mode.mode_word(result.get('to'))}; consents: {', '.join(result.get('consents') or []) or 'none'}"
             + (f"; baseline revision #{result['revision']}" if result.get("revision") else ""),
         )
         __caps.invalidate(server_id)
@@ -153,7 +139,7 @@ def _grant(server_id, op, verb, action):
         return _back()
     after = result.get("after") or {}
     flash(
-        f"{server.get('name') or 'The server'}: {verb} (the file is now {after.get('mode')}, group {after.get('gid')}); run Check API configuration to read it back.",
+        f"{server.get('name') or 'The server'}: {verb} (the file is now {after.get('mode')}, group {after.get('gid')}); run the readiness check to read it back.",
         "success",
     )
     __user.audit(
@@ -202,7 +188,7 @@ def config_write_fixed(server_id):
     ):  # (row 11) a helper that did not answer is not a proof
         # (Q216 AA9) the host can PROVE the permission: a claim is for a server where nothing can
         flash(
-            f"{server.get('name') or 'The server'}: run Check API configuration instead - the host can prove whether the daemon may write its file.",
+            f"{server.get('name') or 'The server'}: run the readiness check instead - the host can prove whether the daemon may write its file.",
             "error",
         )
         return _back()

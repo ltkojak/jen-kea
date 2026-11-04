@@ -22,6 +22,7 @@ from jen.services import config_revisions as _rev
 from jen.services import kea_api_config as _api
 from jen.services import kea_changeset as _cs
 from jen.services import kea_host as _host
+from jen.services import write_mode as _words
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +110,9 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     stored.pop("consent_refused", None)
     _api.store_probe(sid, stored)
     return _done(
-        f"{name}: switched to the API transport; Kea rendered its file; revision #{revision} is the baseline"
+        f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
         if revision
-        else f"{name}: switched to the API transport; Kea rendered its file",
+        else f"{name}: switched to Live API; Kea rendered its file",
         revision=revision,
     )
 
@@ -120,7 +121,7 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
     name = server.get("name") or server.get("ssh_host") or "the server"
     sid = server.get("id")
     if not server.get("ssh_host"):
-        return _refuse(f"{name}: the file transport needs an SSH host (Settings → Kea → SSH); nothing was changed")
+        return _refuse(f"{name}: File over SSH needs an SSH host (Settings → Kea → SSH); nothing was changed")
     unreadable = _api.record_unreadable(server, SERVICE)
     if unreadable:
         return _refuse(f"{name}: {unreadable}; nothing was changed")
@@ -167,9 +168,9 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
             source="switch",
         )
     return _done(
-        f"{name}: switched to the file transport; revision #{revision} is the baseline"
+        f"{name}: switched to File over SSH; revision #{revision} is the baseline"
         if revision
-        else f"{name}: switched to the file transport",
+        else f"{name}: switched to File over SSH",
         revision=revision,
     )
 
@@ -185,7 +186,7 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
     current = _api.declared_transport(server)
     name = server.get("name") or "the server"
     if target == current:
-        return _done(f"{name} already uses the {target} transport", unchanged=True)
+        return _done(f"{name} is already in write mode {_words.mode_word(target)}", unchanged=True)
     try:
         with _cs.change_lock():
             if target == "api":
@@ -193,7 +194,7 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
             elif target == "file":
                 result = _to_file(server, current, consents, actor)
             else:
-                result = _done(f"{name}: no longer a write target; the daemon keeps serving")
+                result = _done(f"{name}: now Read-only; the daemon keeps serving")
             if not result["ok"]:
                 return result
             try:

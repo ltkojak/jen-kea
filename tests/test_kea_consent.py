@@ -197,7 +197,7 @@ class TestTheTenStateTable:
             ssh=ssh, config_transport="api", config_declared="api", config_probe=probes[4], config_gate=gate
         )
         assert c.transport_blocked is bool(gate)
-        assert (gate in c.transport_why()) if gate else ("no SSH, no restart" in c.transport_why())
+        assert (gate in c.transport_why()) if gate else ("no restart, no SSH needed" in c.transport_why())
 
 
 class TestAConsentWithoutTheFactsOnThePageIsNotGiven:

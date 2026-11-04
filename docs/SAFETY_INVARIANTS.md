@@ -308,6 +308,16 @@ updater's allowlist.
 - `tests/test_kea_api_probe.py` (`TestTheGate`, `TestARefusedWriteIsRemembered`)
 - `tests/test_transport_switch.py`
 
+### CFG-003 - A consent is given on the switch, for the facts whose time the form carries, by a superadmin with a recent confirmation; the gate's table is the oracle
+**Rule.** The act of accepting what a switch to Live API changes (Kea rewrites the file in its own format; an endpoint with no authentication; a file edit discarded; no SSH so no include) is the POST that switches, not a click that reads: it is a superadmin's, it needs a recent confirmation of the password, it is given for the readiness check whose time (`probe_at`) the form carries - a check that ran again since is refused - and `kea_api_config.consent_gap` is the one table that says which consents the facts call for, asked by the switch, by the gate every change meets and by the card that offers the boxes. A consent is never recorded by the readiness check.
+**Established.** Q216 (AA1) and Q217 (BG2).
+**Enforced at.** `jen/routes/settings/kea_transport.py` (`switch_kea_transport`: `probe_at`, the step-up), `jen/services/kea_transport_switch.py` (`_to_api`), `jen/services/kea_api_config.py` (`consent_gap`, `consents_called_for`, `probe_gate`).
+**Tests.**
+- `tests/test_kea_transport_routes.py` (`TestAConsentIsAnActNotAClick`)
+- `tests/test_kea_consent.py` (`TestTheTenStateTable`)
+- `tests/test_write_mode_card.py` (`TestTheCardIsOneChoice`, `TestAnAdminAndAViewerSeeTheHeader`)
+- `tests/test_transport_switch.py`
+
 ### FILE-001 - A secret is private from its first byte; a privileged write never resolves a service-owned parent by pathname
 **Rule.** No secret is written by a plain `open`, redirect or `cp`; a `.prev` is made only by the certificate set's commit; root never copies anything into the app tree from the config or content directories.
 **Established.** Q150, Q151, Q155.

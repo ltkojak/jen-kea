@@ -113,23 +113,34 @@ SPACE_INSENSITIVE_KEYS = frozenset({"pool"})
 OMITTED_AT_DEFAULT = {"service-sockets-require-all": False, "service-sockets-max-retries": 0}
 
 
-def _carries(running: object, candidate: object, under: str | None = None) -> bool:
-    """Does the configuration the daemon RUNS carry everything the candidate said? `config-get` returns the daemon's configuration with Kea's own defaults written out (45 keys at the top of
-    `Dhcp4`, 13 per subnet and one per pool - docs/ARCHITECTURE.md 3.17, row 08), so a candidate Jen built is a SUBSET of what the daemon reports after it takes it: every key present with an equal
-    value, lists the same length and elementwise the same. Equality would never hold for a subnet Jen just added. Used with a check of the BEFORE state FIRST, never alone: a candidate that only
+_MISSING = object()
+
+
+def _walk(running: object, candidate: object, under: str | None = None, path: str = ""):
+    """THE one walk (Q217 BG3 b): `None` when the configuration the daemon RUNS carries everything the candidate said, else `(path, candidate_leaf, running_leaf)` for the FIRST thing it does not -
+    the path built as the walk descends (`Dhcp4.subnet4[2].pools[0].pool`; the caller prefixes the section). `config-get` returns the daemon's configuration with Kea's own defaults written out (45 keys
+    at the top of `Dhcp4`, 13 per subnet and one per pool - docs/ARCHITECTURE.md 3.17, row 08), so a candidate Jen built is a SUBSET of what the daemon reports after it takes it: every key present with
+    an equal value, lists the same length and elementwise the same. Equality would never hold for a subnet Jen just added. Used with a check of the BEFORE state FIRST, never alone: a candidate that only
     deletes is a subset of the configuration it came from. `under` is the key a value sits below: a candidate key Kea renames (`RENAMED_KEYS`) is carried by the list that took its place, and a string
     is compared without its spaces only under a `pool` key."""
     if isinstance(candidate, dict):
         if not isinstance(running, dict):
-            return False
+            return (path, candidate, running)
         for k, v in candidate.items():
+            here = f"{path}.{k}" if path else k
             if k in running:
-                if not _carries(running[k], v, k):
-                    return False
+                found = _walk(running[k], v, k, here)
+                if found is not None:
+                    return found
                 continue
             renamed = running.get(RENAMED_KEYS.get(k, ""))
-            if isinstance(renamed, list) and len(renamed) == 1 and _carries(renamed[0], v, k):
-                continue
+            if isinstance(renamed, list) and len(renamed) == 1:
+                found = _walk(
+                    renamed[0], v, k, here
+                )  # (the list Kea reports in the key's place: descend, so a difference is named at its own path, never as the whole object)
+                if found is None:
+                    continue
+                return found
             if (
                 under == "interfaces-config"
                 and k in OMITTED_AT_DEFAULT
@@ -137,25 +148,77 @@ def _carries(running: object, candidate: object, under: str | None = None) -> bo
                 and type(v) is type(OMITTED_AT_DEFAULT[k])
             ):
                 continue
-            return False
-        return True
+            return (here, v, _MISSING)
+        return None
     if isinstance(candidate, list):
-        return (
-            isinstance(running, list)
-            and len(running) == len(candidate)
-            and all(_carries(r, c, under) for r, c in zip(running, candidate, strict=True))
-        )
+        if not isinstance(running, list):
+            return (path, candidate, running)
+        if len(running) != len(candidate):
+            return (path, candidate, running)
+        for i, (r, c) in enumerate(zip(running, candidate, strict=True)):
+            found = _walk(r, c, under, f"{path}[{i}]")
+            if found is not None:
+                return found
+        return None
     if isinstance(running, str) and isinstance(candidate, str):
         if under in SPACE_INSENSITIVE_KEYS:
-            return running.replace(" ", "") == candidate.replace(" ", "")
-        return running == candidate
-    return running == candidate
+            same = running.replace(" ", "") == candidate.replace(" ", "")
+        else:
+            same = running == candidate
+        return None if same else (path, candidate, running)
+    return None if running == candidate else (path, candidate, running)
+
+
+def _carries(running: object, candidate: object, under: str | None = None) -> bool:
+    """Does the configuration the daemon RUNS carry everything the candidate said? `first_difference` answers the same question with the path; this is its negation, so they cannot disagree."""
+    return _walk(running, candidate, under) is None
+
+
+def first_difference(running: object, candidate: object, under: str | None = None, path: str = "") -> str:
+    """The FIRST path of `candidate` that `running` does not carry (`""` when it is carried): the one walk, as a path."""
+    found = _walk(running, candidate, under, path)
+    return "" if found is None else (found[0] or "/")
 
 
 def file_in_daemon(file_cfg: dict | None, live_cfg: dict | None, service: str) -> bool:
     """Is everything the FILE says carried by what the daemon runs? A file Jen authored (or an older Kea-written one) is a subset of the daemon's configuration with its defaults written out, and
     nothing in it would be lost by a `config-write`; a file with a subnet or a value the daemon does not run is a hand edit and is not. (fix row 7: equality never held for an authored file.)"""
     return _carries(_section(live_cfg, service), _section(file_cfg, service))
+
+
+_SECRET_WORDS = ("password", "secret", "token")
+
+
+def _secret_path(path: str) -> bool:
+    """Is any segment of `path` a name a value must not be printed under? (`hosts-databases[0].password` is on a path Jen prints.)"""
+    for segment in path.replace("[", ".").replace("]", "").split("."):
+        low = segment.lower()
+        if any(w in low for w in _SECRET_WORDS) or low == "key" or low.endswith(("-key", "_key")):
+            return True
+    return False
+
+
+def _leaf(value: object) -> str:
+    if value is _MISSING:
+        return "nothing"
+    if isinstance(value, dict):
+        return f"an object with {len(value)} keys"  # (a container is never printed: it may hold a secret the path does not name)
+    if isinstance(value, list):
+        return f"a list of {len(value)}"
+    text = json.dumps(value, sort_keys=True, default=str)
+    return text if len(text) <= 60 else text[:59] + "…"
+
+
+def difference_text(file_cfg: dict | None, live_cfg: dict | None, service: str) -> str:
+    """Where the file and the daemon differ, in a sentence an operator can act on: `at <path>: the file says <a>, the daemon <b>` (each leaf cut to 60 characters, and the values replaced by an
+    ellipsis when any segment of the path names a secret) - or `""` when the file is carried. The path is prefixed with the section (`Dhcp4.`)."""
+    found = _walk(_section(live_cfg, service), _section(file_cfg, service), None, SERVICE_KEY.get(service, service))
+    if found is None:
+        return ""
+    path, mine, theirs = found
+    if _secret_path(path):
+        return f"at {path}: the file and the daemon differ (the values are not shown)"
+    return f"at {path}: the file says {_leaf(mine)}, the daemon {_leaf(theirs)}"
 
 
 def same_modulo_defaults(a_cfg: dict | None, b_cfg: dict | None, service: str) -> bool:
@@ -768,8 +831,9 @@ def api_daemon_differs(server: dict, service: str) -> str:
     file_cfg, raw = _host.read_config_versioned(server, service, capture=False)
     if file_cfg is None or file_in_daemon(file_cfg, live, service):
         return ""
+    where = difference_text(file_cfg, live, service)
     return (
-        f"the daemon on {_name(server)} runs a configuration its file does not carry (the daemon {digest[:12]}, the file {str(raw or 'unknown')[:12]}); "
+        f"the daemon on {_name(server)} runs a configuration its file does not carry ({where + '; ' if where else ''}the daemon {digest[:12]}, the file {str(raw or 'unknown')[:12]}); "
         "restore or resolve it from Config history first"
     )
 
@@ -779,7 +843,7 @@ def api_daemon_differs(server: dict, service: str) -> str:
 
 PROBE_KEY = "config_transport_probe:{}"
 PROBE_MAX_AGE_DAYS = 7
-PROBE_SENTENCE = "run Check API configuration on the server's card first"
+PROBE_SENTENCE = "run the readiness check on the server's Write mode card first"
 
 
 def _now_iso() -> str:
@@ -854,7 +918,7 @@ def consent_gap(name: str, facts: dict | None, consents, *, has_ssh: bool, stric
         )
     if facts.get("include"):
         return (
-            f"{name}: the file carries an include ({', '.join(facts['include'])}); the daemon reports the merged configuration and config-write renders one flat file, so the API transport is not recommended here",
+            f"{name}: the file carries an include ({', '.join(facts['include'])}); the daemon reports the merged configuration and config-write renders one flat file, so Live API is not recommended here",
             "",
         )
     if has_ssh and (
@@ -895,6 +959,21 @@ def consent_gap(name: str, facts: dict | None, consents, *, has_ssh: bool, stric
     return "", ""
 
 
+def consents_called_for(facts: dict | None, *, has_ssh: bool) -> list[str]:
+    """The consents the FACTS call for, in the order `consent_gap` names them (Q217 BG2): the card's row 3 and the gate's table are one list (a test walks `consent_gap` one refusal at a time and
+    compares). `consent_rendering` is asked of every switch."""
+    facts = facts or {}
+    out = []
+    if not has_ssh:
+        out.append("confirm_no_include")
+    if has_ssh and facts.get("agree") is False:
+        out.append("discard_file_edit")
+    out.append("consent_rendering")
+    if facts.get("auth") == "none":
+        out.append("consent_unauthenticated")
+    return out
+
+
 def consent_allowed(name: str, facts: dict | None, consents, *, has_ssh: bool, strict: bool = True) -> str:
     """`consent_gap`'s sentence alone: "" when the named consents cover the facts."""
     return consent_gap(name, facts, consents, has_ssh=has_ssh, strict=strict)[0]
@@ -933,7 +1012,7 @@ def refusal_sentence(server: dict) -> str:
     """BB9 a: after a `write-failed` the stored result carries `refused` (Kea's own text) and a change set refuses to PLAN against the server, so a fleet does not undo the same change on every edit."""
     stored = stored_probe(server.get("id"))
     if stored and stored.get("refused"):
-        return f"the daemon on {_name(server)} may not write its file ({stored['refused']}); fix it, then run Check API configuration"
+        return f"the daemon on {_name(server)} may not write its file ({stored['refused']}); fix it, then run the readiness check on the server's Write mode card"
     return ""
 
 
@@ -1058,8 +1137,15 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False, consen
             else {"unavailable": check.get("detail") or check.get("code")}
         )
         out["include"] = list(check.get("includes") or []) if check.get("ok") else None
+        if not check.get("ok"):
+            # (Q217 BG3 a) SSH EXISTS here: the helper did not answer. The card names that cause (a helper below build 19, SSH down), never "without SSH"
+            out["include_unavailable"] = str(check.get("detail") or check.get("code") or "the helper did not answer")[
+                :300
+            ]
         file_cfg, _raw = _host.read_config_versioned(server, service, capture=False)
         out["agree"] = None if file_cfg is None or cfg is None else file_in_daemon(file_cfg, cfg, service)
+        if out["agree"] is False:
+            out["agree_at"] = difference_text(file_cfg, cfg, service)
         if check.get("ok") and check.get("may_write"):
             refused = None  # evidence: the host says the daemon's account may write its file
     else:

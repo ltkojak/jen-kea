@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, fields
 
 from jen import extensions
+from jen.services.write_mode import MODE_SENTENCES
 
 logger = logging.getLogger(__name__)
 
@@ -140,15 +141,15 @@ class ServerCapabilities:
         consented, re-pointed, refused, not readable - the same state the change set will meet."""
         if self.config_transport == "api":
             if self.config_gate:
-                return f"changes cannot go over the API yet: {self.config_gate}"
+                return f"Live API is not ready: {self.config_gate}"
             if self.config_probed and not self.config_api:
-                return "the daemon did not answer the last check; a change will abort until it does"
-            return "changes go over the daemon's own API: no SSH, no restart"
+                return "the daemon did not answer the last readiness check; a change will stop until it does"
+            return MODE_SENTENCES["api"]
         if self.config_transport == "file":
-            return "changes replace the file over SSH and restart Kea"
+            return MODE_SENTENCES["file"]
         if self.config_declared == "file" and not self.ssh:
-            return "no SSH host: the file transport needs one (Settings → Kea → SSH)"
-        return "not a write target - switch it on from the server's card"
+            return "File over SSH needs an SSH host (Settings → Kea → SSH); until it has one this server is read-only"
+        return MODE_SENTENCES["off"]
 
     def why(self, name: str) -> str:
         """The one sentence the UI shows for capability `name`: what's
@@ -296,9 +297,9 @@ _WHY = {
     "config_api": lambda c: (
         f"The last check could not read this daemon's configuration over its API ({c.config_probe_error})."
         if c.config_probed and c.config_probe_error
-        else "The daemon's configuration has not been read over its API yet - run Check API configuration on the server's card."
+        else "The daemon's configuration has not been read over its API yet - run the readiness check on the server's Write mode card."
         if not c.config_probed
-        else "The daemon did not answer the last check - run Check API configuration on the server's card."
+        else "The daemon did not answer the last check - run the readiness check on the server's Write mode card."
     ),
     "kea32_ready": lambda c: (
         "Not ready for Kea 3.2: "

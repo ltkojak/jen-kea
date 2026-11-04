@@ -2149,7 +2149,7 @@ class TestAnApiServerIsNamedNotAuthored:
     """Q216 (the second pass's P3b): Author Kea Config writes Jen's whole FILE and the API carries none of the file's layout, so a server whose transport is `api` is named as not a target - on the page, in the
     preview, and by the POST before anything is built or sent."""
 
-    SENTENCE = "switch it to the file transport under Settings"  # (the apostrophe in "Kea's API" is escaped on a page)
+    SENTENCE = "switch it to File over SSH under Settings"  # (the apostrophe in "Kea's API" is escaped on a page)
     FORM = {
         "interfaces": "eth0",
         "control_socket": "/run/kea6.sock",

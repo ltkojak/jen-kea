@@ -102,7 +102,7 @@ class TestToApi:
 
     def test_off_to_api_succeeds_with_the_named_consents(self, daemon, store, probes, written):
         r = sw.switch(srv(daemon), "api", consents=ALL, actor="root")
-        assert r["ok"] and "switched to the API transport" in r["line"] and f"revision #{r['revision']}" in r["line"]
+        assert r["ok"] and "switched to Live API" in r["line"] and f"revision #{r['revision']}" in r["line"]
         assert_file_is_running(daemon)
         assert written == [("kea_server_5", "config_transport", "api")]
         assert [(x["hash_kind"], x["source"]) for x in store.rows if x["source"] == "switch"] == [("kea", "switch")]
@@ -219,7 +219,7 @@ class TestToFile:
     def test_off_to_file_with_a_daemon_that_does_not_answer_is_allowed(
         self, daemon, store, probes, written, monkeypatch
     ):
-        """An `off` server with SSH may have no usable API at all: the file transport is what it had before (the daemon is not compared when it cannot be asked)."""
+        """An `off` server with SSH may have no usable API at all: File over SSH is what it had before (the daemon is not compared when it cannot be asked)."""
         host(monkeypatch, daemon)
         daemon.stopped = True
         assert sw.switch(srv(daemon, "off", ssh=True), "file")["ok"]

@@ -25,6 +25,7 @@ import jen.services.kea_ha as __ha
 import jen.services.kea_host as __host
 import jen.services.kea_tls as __tls
 import jen.services.packet_health as __packet_health
+import jen.services.write_mode as __write_mode
 from jen import extensions
 from jen.services import config_revisions as __rev
 from jen.services.access import admin_required as _admin_required
@@ -165,6 +166,9 @@ def servers():
         caps = __caps.from_status(s)
         probe = __api.stored_probe(s["server"].get("id")) or {}
         s["transport"] = caps.config_transport
+        s["transport_word"] = __write_mode.mode_word(
+            caps.config_transport
+        )  # (Q217 BG1) what the operator picks, not the config value
         s["transport_blocked"] = (
             caps.transport_blocked
         )  # (Q216 AA13) the gate's own state: the badge never says "healthy" over a gate that refuses
@@ -172,9 +176,12 @@ def servers():
         s["transport_why"] = (
             caps.transport_why()
             if current_user.is_admin_or_above or not caps.transport_blocked
-            else "changes over the API are not allowed yet"
+            else "Live API is not ready yet"
         )
-        s["transport_unauthenticated"] = caps.config_transport == "api" and probe.get("auth") == "none"
+        # (Q217 BG4 a, AB5) whether a named endpoint has no authentication is an admin's to read, like the two lines around it
+        s["transport_unauthenticated"] = (
+            current_user.is_admin_or_above and caps.config_transport == "api" and probe.get("auth") == "none"
+        )
         s["transport_refused"] = __api.refusal_sentence(s["server"]) if current_user.is_admin_or_above else ""
     single_server = len(extensions.KEA_SERVERS) == 1
     ha_mode = extensions.cfg.get("kea", "ha_mode", fallback="")
@@ -1084,9 +1091,7 @@ def config_history_restore(server_id, rev_id):
 
     transport = __changeset._transport(server, service)
     if str(server.get("config_transport") or "").strip() == "off":
-        flash(
-            f"{server['name']} is not a write target (its transport is off): switch it on from its card first.", "error"
-        )
+        flash(f"{server['name']} is Read-only: pick File over SSH or Live API on its Write mode card first.", "error")
         return back
     if transport == "off":
         flash("SSH is not configured for this server.", "error")

@@ -44,7 +44,7 @@ its write may never overwrite a file that appeared in the meantime). A target th
 Jen wrote (`kea_host.remove_config`, guarded by the sha Jen's own write produced), the only way "put it back as it was" is true.
 
 Q212 (7.0.0-beta.1) — each target is changed over ITS OWN transport, chosen per server (`_transport`): `api` (the daemon's own API through `kea_api_config`: compare, `config-set`,
-`config-write`, verify - live at once, no restart), `file` (everything above) or `off` (not a write target). The four phases are unchanged in meaning: Plan reads each target through its
+`config-write`, verify - live at once, no restart), `file` (everything above) or `off` (read-only). The four phases are unchanged in meaning: Plan reads each target through its
 transport, Preflight tests through it (`config-test` over the API; `-t` on the host), Commit applies through it - file targets first (written, not yet live), then api targets (live at
 once), so the window in which servers disagree is the restarts only - and Restart ranges over the file targets. A target that was changed over the API is put back over the API.
 One change runs at a time on a box (`change_lock`): the API path's compare-then-set is two round trips and a second change set would otherwise fall inside it.
@@ -295,7 +295,12 @@ def _unloaded_edit(server: dict, service: str, cfg: dict, name: str) -> str:
             f"the file on {host} could not be read, so a change cannot be proved against it (check the SSH connection)"
         )
     if not _api.file_in_daemon(file_cfg, cfg, service):
-        return f"the file on {host} carries an edit the daemon has not loaded - restart Kea there first, or discard it from the server's card"
+        where = _api.difference_text(file_cfg, cfg, service)  # (Q217 BG3 b) the first place they differ
+        return (
+            f"the file on {host} carries an edit the daemon has not loaded ({where}) - restart Kea there first, or discard it from the server's Write mode card"
+            if where
+            else f"the file on {host} carries an edit the daemon has not loaded - restart Kea there first, or discard it from the server's Write mode card"
+        )
     return ""
 
 
@@ -397,7 +402,12 @@ def _run_change_unlocked(
         if kind != "off":
             planned.append((s, kind))
         elif str(s.get("config_transport") or "").strip() == "off":
-            lines.append(("success", f"ℹ️ {s.get('name') or s.get('ssh_host') or '?'}: not a write target"))
+            lines.append(
+                (
+                    "success",
+                    f"ℹ️ {s.get('name') or s.get('ssh_host') or '?'}: read-only - Jen never changes its configuration",
+                )
+            )
     if not planned:
         return ChangeSetResult(status="noservers", last_code="noservers", lines=lines)
     if waited >= 1:

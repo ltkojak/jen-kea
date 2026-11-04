@@ -760,7 +760,7 @@ def _where(name: str) -> str:
 
 def _check_config_transport(jen_cfg) -> list[Finding]:
     """Q212 (BB3 a): the `config_transport` key of `[kea]` and every `[kea_server_N]` is exactly `api`, `file` or `off`. Anything else (`API`, `yes`, `ssh`) reads as `off` - a mistake never grants a
-    write path - and the Doctor names it, because the server is then silently not a write target. `file` on a server with no SSH host is named too: it reads as `off`."""
+    write path - and the Doctor names it, because the server is then silently read-only. `file` on a server with no SSH host is named too: it reads as `off`."""
     if jen_cfg is None:
         return []
     import re
@@ -782,11 +782,11 @@ def _check_config_transport(jen_cfg) -> list[Finding]:
                         _finding(
                             "config-transport-api-without-address",
                             "warn",
-                            "The API transport needs an address",
-                            f"[{section}] config_transport is `api`, but this server has no api_url, so a change to it cannot be sent: the whole change set stops with an error that names neither the server nor the cause.",
+                            "Live API needs an address",
+                            f"[{section}] config_transport is `api` (write mode Live API), but this server has no api_url, so a change to it cannot be sent: the whole change set stops with an error that names neither the server nor the cause.",
                             f"[{section}] api_url",
                             fix_url="/settings/kea",
-                            why="The API transport asks the daemon itself; without its address there is nothing to ask. Add the API URL, or switch the server to the file transport from its card.",
+                            why="Live API asks the daemon itself; without its address there is nothing to ask. Add the API URL, or switch the server to File over SSH from its Write mode card.",
                         )
                     )
             ssh_key = "host" if section == "kea" else "ssh_host"
@@ -796,11 +796,11 @@ def _check_config_transport(jen_cfg) -> list[Finding]:
                     _finding(
                         "config-transport-file-without-ssh",
                         "warn",
-                        "The file transport needs an SSH host",
-                        f"[{section}] config_transport is `file`, but this server has no SSH host, so it reads as `off`: changes are not written to it.",
+                        "File over SSH needs an SSH host",
+                        f"[{section}] config_transport is `file` (write mode File over SSH), but this server has no SSH host, so it reads as `off` (Read-only): changes are not written to it.",
                         f"[{section}] config_transport",
                         fix_url="/settings/kea",
-                        why="The file transport replaces the daemon's config file over SSH and restarts it. Add the SSH host, or switch the server to the API transport from its card.",
+                        why="File over SSH replaces the daemon's config file over SSH and restarts it. Add the SSH host, or switch the server to Live API from its Write mode card.",
                     )
                 )
             continue
@@ -808,8 +808,8 @@ def _check_config_transport(jen_cfg) -> list[Finding]:
             _finding(
                 "config-transport-unrecognized",
                 "warn",
-                "The configuration transport is not a value Jen knows",
-                f"[{section}] config_transport is {value!r}. Jen reads it as `off`: nothing is written to this server. Write exactly `api`, `file` or `off` (lower case), or switch it from the server's card.",
+                "The write mode is not a value Jen knows",
+                f"[{section}] config_transport is {value!r}. Jen reads it as `off` (Read-only): nothing is written to this server. Write exactly `api`, `file` or `off` (lower case), or pick the mode on the server's Write mode card.",
                 f"[{section}] config_transport",
                 fix_url="/settings/kea",
                 why="A value that is not spelled exactly never grants a write path.",

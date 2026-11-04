@@ -74,7 +74,7 @@ class TestTheServersPageBadge:
     def test_an_api_server_with_no_authentication_says_so(self, logged_in_client, three, monkeypatch):
         _only(monkeypatch, SERVER_API)
         html = logged_in_client.get("/servers").data.decode()
-        assert "API, unauthenticated" in html
+        assert "Live API, unauthenticated" in html
 
     def test_a_remembered_refusal_is_named_on_the_server(self, logged_in_client, three, monkeypatch):
         _only(monkeypatch, SERVER_API)
@@ -93,11 +93,11 @@ class TestTheSettingsCard:
         assert 'id="kea-config-transport"' in html
         for name in ("Test Kea", "File Kea", "Legacy Kea"):
             assert name in html
-        assert "/settings/infrastructure/kea-transport/1" in html and "data-config-probe" in html
+        assert "/settings/infrastructure/kea-transport/1" in html and "data-wm-check" in html
 
 
 class TestTheCardOffersOnlyWhatTheFactsAllow:
-    """Q216 AA1 (the consent control exists only with the facts on the page), AA9 ("I have fixed it" is for a server nothing can prove), AA13 (the badge says blocked where the gate does)."""
+    """Q216 AA1 (the consent boxes exist only with the facts on the page), AA9 ("I have fixed it" is for a server nothing can prove), AA13 (the badge says blocked where the gate does)."""
 
     def _stored(self, monkeypatch, value):
         monkeypatch.setattr(api, "stored_probe", lambda sid: value if sid == 1 else None)
@@ -106,7 +106,7 @@ class TestTheCardOffersOnlyWhatTheFactsAllow:
         self._stored(monkeypatch, None)
         html = logged_in_client.get("/settings/kea").data.decode()
         card = html.split('id="config-card-1"')[1].split('id="config-card-2"')[0]
-        assert "data-config-consent=" not in card and ", blocked" in card
+        assert "data-wm-consent=" not in card and ", blocked" in card and "Current: Live API" in card
 
     def test_a_stored_probe_brings_the_consent_control_with_its_timestamp_and_the_named_consents(
         self, logged_in_client, three, monkeypatch
@@ -114,9 +114,9 @@ class TestTheCardOffersOnlyWhatTheFactsAllow:
         self._stored(monkeypatch, {"at": "2026-11-04T10:00:00+00:00", "config_api": True, "auth": "none"})
         html = logged_in_client.get("/settings/kea").data.decode()
         card = html.split('id="config-card-1"')[1].split('id="config-card-2"')[0]
-        assert 'data-at="2026-11-04T10:00:00+00:00"' in card and 'data-config-consent="1"' in card
-        assert 'value="consent_rendering"' in card and 'value="consent_unauthenticated"' in card
-        assert 'value="confirm_no_include"' in card  # server 1 has no SSH host
+        assert 'name="probe_at" value="2026-11-04T10:00:00+00:00"' in card
+        assert 'name="consent_rendering"' in card and 'name="consent_unauthenticated"' in card
+        assert 'name="confirm_no_include"' in card  # server 1 has no SSH host
 
     def test_i_have_fixed_it_is_not_offered_where_the_host_can_prove_it(self, logged_in_client, three, monkeypatch):
         monkeypatch.setattr(
@@ -174,7 +174,41 @@ class TestTheGateSentencesAreAnAdminsToRead:
         restricted_client(client, db, None, role="viewer", username="viewer-q216")
         _only(monkeypatch, SERVER_API)
         html = client.get("/servers").data.decode()
-        assert "secret-site-extra.json" not in html and "changes over the API are not allowed yet" in html
+        assert "secret-site-extra.json" not in html and "Live API is not ready yet" in html
+
+
+class TestAViewerIsNotToldAnEndpointHasNoAuthentication:
+    """Q217 BG4 a (Opus's AB5): `transport_unauthenticated` is gated like the two lines around it - the badge a viewer reads is the mode word alone."""
+
+    def _stored(self, monkeypatch):
+        monkeypatch.setattr(
+            api,
+            "stored_probe",
+            lambda sid: (
+                {
+                    "at": "2026-11-04T10:00:00+00:00",
+                    "config_api": True,
+                    "consented_at": "2026-11-04T10:00:00+00:00",
+                    "auth": "none",
+                }
+                if sid == 1
+                else None
+            ),
+        )
+
+    def test_the_admin_and_the_superadmin_read_it(self, logged_in_client, three, monkeypatch):
+        self._stored(monkeypatch)
+        _only(monkeypatch, SERVER_API)
+        assert "unauthenticated" in logged_in_client.get("/servers").data.decode()
+
+    def test_a_viewer_never_reads_unauthenticated(self, client, db, three, monkeypatch):
+        from tests.conftest import restricted_client
+
+        self._stored(monkeypatch)
+        _only(monkeypatch, SERVER_API)
+        restricted_client(client, db, None, role="viewer", username="viewer-q217")
+        html = client.get("/servers").data.decode()
+        assert "unauthenticated" not in html and "Live API" in html
 
 
 class TestARestoreOverTheApi:
@@ -233,12 +267,12 @@ class TestARestoreOverTheApi:
         incidents = cs.recovery_incidents()
         assert any(i.get("category") == "config-api-unverified" for i in incidents), incidents
 
-    def test_an_off_server_is_not_a_write_target(self, logged_in_client, db, three, monkeypatch):
+    def test_a_read_only_server_is_not_restored_over_anything(self, logged_in_client, db, three, monkeypatch):
         server = dict(SERVER_API, config_transport="off")
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         rid = rev.record(1, "dhcp4", self.CFG, "h" * 64, "x", hash_kind="kea", source="jen")
         r = logged_in_client.post(f"/servers/1/config-history/{rid}/restore", follow_redirects=True)
-        assert b"not a write target" in r.data
+        assert b"Read-only" in r.data
 
 
 class TestTheHistoryLabelsTheNewSources:

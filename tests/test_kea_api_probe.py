@@ -66,7 +66,7 @@ def lifetime(value):
 
 class TestTheGate:
     def test_a_server_never_checked_cannot_be_written(self, server, probes):
-        assert "Check API configuration" in api.probe_gate(server)
+        assert "readiness check" in api.probe_gate(server)
 
     @pytest.mark.parametrize(
         ("stored", "needle"),
@@ -98,7 +98,7 @@ class TestTheGate:
         cfg, digest, _ = api._get(server, "dhcp4")
         daemon.commands.clear()
         result = api.apply(server, "dhcp4", cfg, digest, "x", before_cfg=cfg)
-        assert result["code"] == "guard" and "Check API configuration" in result["detail"] and daemon.commands == []
+        assert result["code"] == "guard" and "readiness check" in result["detail"] and daemon.commands == []
 
     def test_a_server_added_with_api_cannot_be_changed_until_its_operator_has_read_the_facts(
         self, daemon, server, store, probes
@@ -125,7 +125,7 @@ class TestARefusedWriteIsRemembered:
         second = cs.apply_change("dhcp4", lifetime(10), "x", servers=[server])
         assert second.status == "aborted" and second.last_code == "needs-hands" and second.needs_hands == ["kea-d"]
         assert daemon.commands == []  # before the first read
-        assert "run Check API configuration" in " ".join(t for _k, t in second.lines)
+        assert "run the readiness check" in " ".join(t for _k, t in second.lines)
 
     def test_a_probe_that_proves_nothing_does_not_clear_it(self, daemon, server, store, probes):
         self._ready(probes)
@@ -151,6 +151,40 @@ class TestARefusedWriteIsRemembered:
     def test_i_have_fixed_it_clears_it(self, server, probes):
         api.remember_refusal(server, "denied")
         assert api.clear_refusal(4) and "refused" not in probes[4]
+
+
+class TestTheProbeNamesItsCause:
+    """Q217 BG3 a: SSH exists and the helper did not answer is not "no SSH"."""
+
+    def test_an_old_helper_is_named_not_ssh(self, daemon, server, store, probes, monkeypatch):
+        server["ssh_host"] = "10.0.0.4"
+        detail = "the Kea host helper on this host is older than build 19 - press Update helper"
+        monkeypatch.setattr(
+            kea_host, "config_write_check", lambda s, svc: {"ok": False, "code": "helper-too-old", "detail": detail}
+        )
+        monkeypatch.setattr(kea_host, "read_config_versioned", lambda *a, **k: (None, None))
+        out = api.probe(server, "dhcp4")
+        assert out["include"] is None and out["include_unavailable"] == detail
+        assert out["write"] == {"unavailable": detail}
+
+    def test_no_ssh_is_named_no_ssh(self, daemon, server, store, probes):
+        out = api.probe(server, "dhcp4")
+        assert out["include"] is None and "include_unavailable" not in out
+
+    def test_where_the_file_differs_is_stored(self, daemon, server, store, probes, monkeypatch):
+        server["ssh_host"] = "10.0.0.4"
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0660", "account": {"name": "_kea"}},
+        )
+        monkeypatch.setattr(
+            kea_host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": {"valid-lifetime": 1}}, "r" * 64)
+        )
+        out = api.probe(server, "dhcp4")
+        assert out["agree"] is False and out["agree_at"].startswith(
+            "at Dhcp4.valid-lifetime: the file says 1, the daemon "
+        )
 
 
 class TestProbe:
@@ -270,19 +304,19 @@ class TestTheCapabilityAndTheBadge:
         [
             (
                 {"config_transport": "api", "config_declared": "api", "config_probe": {"config_api": True}},
-                "own API: no SSH, no restart",
+                "no restart, no SSH needed",
             ),
             (
                 {"config_transport": "api", "config_declared": "api", "config_probe": {"config_api": False}},
-                "did not answer the last check; a change will abort until it does",
+                "did not answer the last readiness check; a change will stop until it does",
             ),
             (
                 {"config_transport": "api", "config_declared": "api"},
-                "own API",
+                "Live at once",
             ),  # never probed: reachability is runtime, the badge stays api
-            ({"config_transport": "file", "config_declared": "file", "ssh": True}, "replace the file over SSH"),
-            ({"config_transport": "off", "config_declared": "off"}, "not a write target"),
-            ({"config_transport": "off", "config_declared": "file", "ssh": False}, "no SSH host"),
+            ({"config_transport": "file", "config_declared": "file", "ssh": True}, "rewrites kea-dhcp4.conf over SSH"),
+            ({"config_transport": "off", "config_declared": "off"}, "never changes its configuration"),
+            ({"config_transport": "off", "config_declared": "file", "ssh": False}, "needs an SSH host"),
         ],
     )
     def test_one_sentence_per_state(self, kw, needle):

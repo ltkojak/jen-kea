@@ -273,7 +273,7 @@ class TestSettingsCardsCollapsibleOnPhone:
     # v5.69.0-beta.11 (Q180): the Kea6, Kea6-database and D2 password fields gained a "No password" box beside "Inherit" (an explicit blank, for a Kea with no authentication). CI measured
     # 2201 px with the boxes on the Inherit line, against a ceiling of 2185: 16 px over, so the baseline gains 60 px (ceiling +42, 2227) - a real measurement, not a guess.
     NO_PASSWORD_BOXES_Q180 = 60
-    # v7.0.0-beta.1 (Q212): the card "How changes reach each server" (one row per Kea server: its transport, the probe, the switch) joined this page. CI measured 2461 px against a ceiling of 2227: 234 px
+    # v7.0.0-beta.1 (Q212): the Write mode card (one block per Kea server: its mode, the probe, the switch) joined this page. CI measured 2461 px against a ceiling of 2227: 234 px
     # over, so the baseline gains 340 px (ceiling +238, 2465) - a real measurement, not a guess. On the phone the card is one of the folded ones (it is in the page's toc), so the phone budget is unchanged.
     CONFIG_TRANSPORT_CARD_Q212 = 340
 
