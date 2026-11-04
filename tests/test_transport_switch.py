@@ -286,3 +286,51 @@ class TestTheLock:
         monkeypatch.setattr(jen_config.app_config, "write_value", spy)
         sw.switch(srv(daemon), "api", consents=ALL)
         assert seen == [True]
+
+
+class TestQ216TheSwitchAsksTheWritersQuestionsAndSaysWhenTheSettingFails:
+    """Q216 AA10 / AA16: the switch's two `config-write` calls ask `guard_kea_write` and `restore_window` first, and a setting that cannot be saved is a line, never a 500 over a half-done switch."""
+
+    def test_to_api_asks_the_marker_question_before_it_writes(self, daemon, store, probes, written, monkeypatch):
+        monkeypatch.setattr(
+            "jen.services.investigation_logging.file_write_refusal",
+            lambda server, cfg: "Investigation logging is on for kea-e",
+        )
+        daemon.commands.clear()
+        r = sw.switch(srv(daemon, "off"), "api", consents=ALL)
+        assert not r["ok"] and "Investigation logging is on" in r["line"] and "config-write" not in daemon.commands
+        assert written == []
+
+    def test_to_api_asks_the_restore_window_before_it_writes(self, daemon, store, probes, written, monkeypatch):
+        monkeypatch.setattr(
+            "jen.services.investigation_logging.restore_window",
+            lambda server, now=None: "the host is restoring logging at T; try again after it",
+        )
+        daemon.commands.clear()
+        r = sw.switch(srv(daemon, "off"), "api", consents=ALL)
+        assert not r["ok"] and "try again after it" in r["line"] and "config-write" not in daemon.commands
+
+    def test_to_file_asks_both_before_the_best_effort_write(self, daemon, store, probes, written, monkeypatch):
+        host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
+        monkeypatch.setattr(
+            "jen.services.investigation_logging.restore_window",
+            lambda server, now=None: "the host is restoring logging at T; try again after it",
+        )
+        daemon.commands.clear()
+        r = sw.switch(srv(daemon, "api", ssh=True), "file", consents={"discard_file_edit"})
+        assert not r["ok"] and "try again after it" in r["line"] and "config-write" not in daemon.commands
+
+    def test_a_setting_that_cannot_be_saved_is_a_line(self, daemon, store, probes, monkeypatch):
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(jen_config.app_config, "write_value", boom)
+        r = sw.switch(srv(daemon, "off"), "api", consents=ALL)
+        assert not r["ok"] and "could not be saved" in r["line"] and "the transport did not change" in r["line"]
+
+    def test_an_unreadable_record_refuses_both_directions(self, daemon, store, probes, written, monkeypatch):
+        store.unreadable = True
+        host(monkeypatch, daemon)
+        assert "cannot be read" in sw.switch(srv(daemon, "off"), "api", consents=ALL)["line"]
+        assert "cannot be read" in sw.switch(srv(daemon, "api", ssh=True), "file", consents=ALL)["line"]
+        assert written == []

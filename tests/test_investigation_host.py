@@ -101,6 +101,59 @@ class TestTurnOnNeedsTheHost:
         )
 
 
+class TestQ216AFileWriteOnAnApiServerRecordsTheDaemon:
+    """BF2: investigation logging's toggle writes the FILE and asks the daemon to re-read it; on a server whose transport is `api` what the daemon runs afterward is a `kea` row, so the next
+    API read does not capture Jen's own toggle as "changed outside Jen"."""
+
+    def test_the_toggle_leaves_no_external_row(self, world, monkeypatch):
+        from tests import _kea_api_world as api_world
+
+        store = api_world.install_store(monkeypatch)
+        api_world.install_probes(monkeypatch)
+        kea = world.daemons[1]
+        kea.include_hash = True
+        monkeypatch.setattr(
+            inv._kea,
+            "kea_command",
+            lambda command, *a, server=None, **kw: world.daemons[server["id"]].kea_command(
+                command, arguments=a[1] if len(a) > 1 else None
+            ),
+        )
+        world.servers[0].update(config_transport="api", api_url="http://10.0.0.1:8000/")
+        server = world.servers[0]
+        assert inv.turn_on(server, 5)["ok"]
+        rows = [r for r in store.rows if r["hash_kind"] == "kea"]
+        assert rows and rows[-1]["source"] == "jen" and "investigation logging" in rows[-1]["summary"]
+        from jen.services import kea_api_config as api
+
+        api.read(server, "dhcp4")  # the next read: nothing differs from the last `kea` row
+        assert not [r for r in store.rows if r["source"] == "external"]
+
+    def test_a_file_server_records_nothing_of_the_kind(self, world, monkeypatch):
+        from tests import _kea_api_world as api_world
+
+        store = api_world.install_store(monkeypatch)
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        assert store.rows == []
+
+    def test_the_operators_line_says_the_compare_was_not_asked_of_the_toggle(self, world, monkeypatch):
+        from tests import _kea_api_world as api_world
+
+        api_world.install_store(monkeypatch)
+        api_world.install_probes(monkeypatch)
+        monkeypatch.setattr(
+            inv._kea,
+            "kea_command",
+            lambda command, *a, server=None, **kw: world.daemons[server["id"]].kea_command(
+                command, arguments=a[1] if len(a) > 1 else None
+            ),
+        )
+        world.servers[0].update(config_transport="api", api_url="http://10.0.0.1:8000/")
+        server = world.servers[0]
+        out = inv.turn_on(server, 5)
+        assert out["ok"] and any("not compared with what the daemon runs" in line for line in out["lines"])
+
+
 class TestARefusedArmPutsTheFileBack:
     def test_an_arm_the_host_refuses_reverts_the_file_and_nothing_is_on(self, world):
         kea = world.daemons[1]

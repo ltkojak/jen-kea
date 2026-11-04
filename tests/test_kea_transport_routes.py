@@ -21,6 +21,7 @@ ROUTES = [
     ("/settings/infrastructure/allow-config-write/3", True),
     ("/settings/infrastructure/deny-config-write/3", True),
     ("/settings/infrastructure/config-write-fixed/3", True),
+    ("/settings/infrastructure/settle-pending-change/3", True),
 ]
 
 
@@ -45,6 +46,10 @@ def worked(monkeypatch):
         )
     monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"refused": "denied"})
     monkeypatch.setattr("jen.services.kea_api_config.clear_refusal", lambda sid: calls.append("fixed") or True)
+    monkeypatch.setattr(
+        "jen.services.kea_api_config.settle_pending",
+        lambda *a, **k: calls.append("settle") or ["a change was finished now"],
+    )
     monkeypatch.setattr("jen.services.capabilities.invalidate", lambda *a, **k: None)
     return calls
 
@@ -89,8 +94,67 @@ class TestTheFourThatChangeSomethingAskForARecentConfirmation:
         if needs:
             assert r.status_code == 302 and "reauth" in r.headers["Location"] and worked == []
         else:
-            assert worked == ["probe"]  # the probe only reads: it asks for no confirmation
+            # the probe that only READS asks for no confirmation; the one that records a CONSENT does (Q216 AA1) - see TestAConsentIsAnActNotAClick
+            r = logged_in_client.post(url, data={"consent": "0"}, follow_redirects=False)
+            assert worked == ["probe"]
 
     def test_an_unknown_server_is_a_message_not_an_error(self, logged_in_client, worked):
         r = _post(logged_in_client, "/settings/infrastructure/kea-transport/99")
         assert r.status_code == 302 and worked == []
+
+
+class TestAConsentIsAnActNotAClick:
+    """Q216 AA1. The consent is given for the facts the operator READ (the page carries the stored probe's `at`), by a superadmin who confirmed the password recently."""
+
+    def test_a_stale_confirmation_stops_a_consent_before_the_probe(self, logged_in_client, worked):
+        with logged_in_client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        r = logged_in_client.post("/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "at": ""})
+        assert r.status_code == 401 and r.get_json().get("reauth") and worked == []
+
+    def test_a_consent_for_facts_that_are_not_the_stored_ones_is_refused(self, logged_in_client, worked, monkeypatch):
+        monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"at": "2026-11-04T10:00:00+00:00"})
+        r = logged_in_client.post(
+            "/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "at": "2026-11-04T09:00:00+00:00"}
+        )
+        assert r.status_code == 409 and "changed since you read them" in r.get_json()["error"] and worked == []
+
+    def test_a_consent_the_facts_do_not_allow_says_why_and_audits_nothing(self, logged_in_client, worked, monkeypatch):
+        monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"at": "T"})
+        monkeypatch.setattr(
+            "jen.services.kea_api_config.probe",
+            lambda *a, **k: worked.append("probe") or {"config_api": True, "consent_refused": "tick the confirmation"},
+        )
+        r = logged_in_client.post("/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "at": "T"})
+        assert r.status_code == 200 and r.get_json()["ok"] is False and "tick the confirmation" in r.get_json()["error"]
+
+    def test_the_named_consents_reach_the_probe(self, logged_in_client, worked, monkeypatch):
+        seen = {}
+        monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"at": "T"})
+        monkeypatch.setattr(
+            "jen.services.kea_api_config.probe",
+            lambda server, service, consent=False, consents=(), **k: (
+                seen.update(consent=consent, consents=set(consents))
+                or {"config_api": True, "consented_at": "now", "consents": sorted(consents)}
+            ),
+        )
+        logged_in_client.post(
+            "/settings/infrastructure/probe-kea-config/3",
+            data={"consent": "1", "at": "T", "consent_rendering": "1", "bogus": "1"},
+        )
+        assert seen == {"consent": True, "consents": {"consent_rendering"}}
+
+
+class TestIHaveFixedItIsForAServerNothingCanProve:
+    def test_a_server_whose_host_can_prove_it_is_sent_to_the_check(self, logged_in_client, worked, monkeypatch):
+        monkeypatch.setattr(
+            "jen.services.kea_api_config.stored_probe", lambda sid: {"refused": "denied", "write": {"may_write": False}}
+        )
+        r = logged_in_client.post("/settings/infrastructure/config-write-fixed/3", follow_redirects=False)
+        assert r.status_code == 302 and "fixed" not in worked
+
+
+class TestTheSettleRouteWorksUnderTheLockAndIsAudited:
+    def test_it_settles_and_says_what_was_done(self, logged_in_client, worked):
+        r = logged_in_client.post("/settings/infrastructure/settle-pending-change/3", follow_redirects=True)
+        assert r.status_code == 200 and worked == ["settle"] and b"finished now" in r.data

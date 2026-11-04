@@ -163,6 +163,7 @@ def _kea_servers_with_helper_status():
 def _config_cards() -> list:
     """Q212 (BB3 e, BB5): one card per server for how a change reaches it - the transport word and its sentence from the same derivation the badge, the change set and Health use, the stored probe
     (a settings read, never a Kea call) and whether the host's helper is new enough for the grant. Facts are strings and flags; nothing secret."""
+    import jen.services.config_revisions as __rev
     import jen.services.kea_api_config as __api
     import jen.services.kea_changeset as __cs
     from jen.services import kea_host as __host
@@ -171,24 +172,40 @@ def _config_cards() -> list:
     cards = []
     for server in extensions.KEA_SERVERS or []:
         probe = __api.stored_probe(server.get("id"))
+        transport = __cs._transport(server, "dhcp4")
         caps = __caps.derive(
             ssh=bool(server.get("ssh_host")),
-            config_transport=__cs._transport(server, "dhcp4"),
+            config_transport=transport,
             config_declared=__api.declared_transport(server),
             config_probe=probe,
+            config_gate=__api.probe_gate(server) if transport == "api" else "",
         )
         build = (helper.get(str(server.get("id"))) or {}).get("build")
+        helper_ok = isinstance(build, int) and build >= __host.CONFIG_WRITE_MIN_HELPER_BUILD
+        refused = __api.refusal_sentence(server)
+        write_fact = (probe or {}).get("write")
+        try:
+            pending = __rev.pending(server.get("id"), "dhcp4") is not None if server.get("id") is not None else False
+            pending_unreadable = False
+        except __rev.RevisionStoreUnreadable:
+            pending, pending_unreadable = False, True
         cards.append(
             {
                 "id": server.get("id"),
                 "name": server.get("name") or f"Kea Server {server.get('id')}",
                 "transport": caps.config_transport,
+                "blocked": caps.transport_blocked,
                 "declared": caps.config_declared,
                 "why": caps.transport_why(),
                 "probe": probe,
-                "refused": __api.refusal_sentence(server),
+                "refused": refused,
                 "ssh": bool(server.get("ssh_host")),
-                "helper_ok": isinstance(build, int) and build >= __host.CONFIG_WRITE_MIN_HELPER_BUILD,
+                "helper_ok": helper_ok,
+                # (Q216 AA9) "I have fixed it" is for a server whose permission nothing can PROVE: no SSH, a helper below build 19, or facts the helper could not read
+                "can_claim_fixed": bool(refused)
+                and (not server.get("ssh_host") or not helper_ok or not isinstance(write_fact, dict)),
+                "pending": pending,
+                "pending_unreadable": pending_unreadable,
             }
         )
     return cards

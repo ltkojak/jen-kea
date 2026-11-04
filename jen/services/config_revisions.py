@@ -50,6 +50,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_KEEP = 50
 
 
+class RevisionStoreUnreadable(ValueError):
+    """The record of revisions could not be READ (the database refused, a row could not be decrypted). A caller that asks "is anything pending?" must never take this for "no" (Q216, AA11): the
+    answer to a question that could not be asked is a refusal, the same rule INV-009 holds for the investigation record."""
+
+
 def _jen_db():
     from jen.models.db import jen_db
 
@@ -164,7 +169,8 @@ def latest_of_kind(server_id: int, service: str, hash_kind: str) -> dict | None:
 
 def pending(server_id: int, service: str) -> dict | None:
     """The `source="pending"` revision of this (server, service) - the candidate a change over the API wrote BEFORE it sent `config-set` (Q212, BB1 c) - or None.
-    Its `sha256` is the digest the daemon had BEFORE the change. There is at most one: an apply deletes or finishes its own row, and a reader reconciles a leftover."""
+    Its `sha256` is the digest the daemon had BEFORE the change. There is at most one: an apply deletes or finishes its own row, and a reader classifies a leftover (a writer settles it).
+    Raises `RevisionStoreUnreadable` when the store cannot be read: None means there is no pending row, nothing else."""
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute(
@@ -174,8 +180,14 @@ def pending(server_id: int, service: str) -> dict | None:
             row = cur.fetchone()
     except Exception as e:
         logger.warning(f"config_revisions.pending failed: {e}")
-        return None
-    return _decrypted(row)
+        raise RevisionStoreUnreadable(f"the revision store could not be read ({type(e).__name__})") from e
+    try:
+        return _decrypted(row)
+    except (
+        Exception
+    ) as e:  # a pending row whose body cannot be decrypted is a row that is there and cannot be read - never "no row"
+        logger.warning(f"config_revisions.pending could not decrypt its row: {e}")
+        raise RevisionStoreUnreadable(f"a pending change could not be read ({type(e).__name__})") from e
 
 
 def finish(rev_id: int, *, source: str, sha256: str, summary: str | None = None, cfg: dict | None = None) -> bool:

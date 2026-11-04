@@ -14,6 +14,7 @@ class Store:
     def __init__(self):
         self.rows = []
         self._next = 1
+        self.unreadable = False  # Q216 (AA11): the store cannot be READ - `pending()` raises, as `config_revisions.pending` does, never answers None
 
     def record(self, server_id, service, cfg, sha256, summary, *, hash_kind, source="jen"):
         row = {
@@ -43,6 +44,10 @@ class Store:
         return copy.deepcopy(rows[-1]) if rows else None
 
     def pending(self, server_id, service):
+        if self.unreadable:
+            from jen.services.config_revisions import RevisionStoreUnreadable
+
+            raise RevisionStoreUnreadable("the revision store could not be read (the test's fault)")
         rows = [r for r in self._of(server_id, service) if r["source"] == "pending"]
         return copy.deepcopy(rows[-1]) if rows else None
 

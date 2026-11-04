@@ -46,55 +46,38 @@ def _short(digest) -> str:
     return str(digest or "unknown")[:12]
 
 
+def _write_guard(server: dict, name: str, live: dict | None) -> str:
+    """A refusal sentence when a `config-write` of what the daemon runs must not be sent now, else "" (Q216 AA10/AA16): the switch's two `config-write` calls ask the same two questions every other
+    writer of this server's file asks first - INV-005 (a write that would erase the investigation marker) and the host's restore window (BB9 d)."""
+    from jen.services import investigation_logging as _inv
+
+    refusal = _host.guard_kea_write(server, live or {}, SERVICE)
+    if refusal:
+        return f"{name}: {refusal}; nothing was changed"
+    window = _inv.restore_window(server)
+    if window:
+        return f"{name}: {window}; nothing was changed"
+    return ""
+
+
 def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     name = server.get("name") or f"Server {server.get('id')}"
     sid = server.get("id")
+    unreadable = _api.record_unreadable(server, SERVICE)
+    if unreadable:
+        return _refuse(f"{name}: {unreadable}; nothing was changed")
     facts = _api.probe(server, SERVICE)  # the facts, now: the stored result a switch relies on is fresh by construction
-    if not facts.get("config_api"):
-        return _refuse(
-            f"{name}: the daemon could not be read over its API ({facts.get('read_error') or 'no answer'}); nothing was changed"
-        )
-    if facts.get("test_ok") is False:
-        return _refuse(
-            f"{name}: the daemon did not accept its own configuration in a config-test ({facts.get('test_detail') or 'refused'}); nothing was changed"
-        )
-    if facts.get("include"):
-        return _refuse(
-            f"{name}: the file carries an include ({', '.join(facts['include'])}); the daemon reports the merged configuration and config-write renders one flat file, so the API transport is not recommended here"
-        )
     has_ssh = bool(server.get("ssh_host"))
-    if has_ssh and (
-        facts.get("agree") is None or facts.get("include") is None or not isinstance(facts.get("write"), dict)
-    ):
-        return _refuse(
-            f"{name}: SSH is configured but the host's facts could not be read (is the helper installed at build 19 or later, and does SSH answer?), so the file could not be compared with the daemon; nothing was changed"
-        )
-    if not has_ssh and "confirm_no_include" not in consents:
-        return _refuse(
-            f"{name} has no SSH host, so Jen cannot see its file: confirm that the file carries no include and no edit the daemon has not loaded, then switch again",
-            needs="confirm_no_include",
-        )
-    if has_ssh and facts.get("agree") is False and "discard_file_edit" not in consents:
-        return _refuse(
-            f"{name}: the file on the host carries a configuration the daemon is not running - restart Kea first, or tick 'discard the file's edit' (the switch makes the file the daemon's configuration)",
-            needs="discard_file_edit",
-        )
-    write = facts.get("write")
-    if has_ssh and isinstance(write, dict) and write.get("may_write") is False:
-        return _refuse(
-            f"{name}: the daemon's account ({write.get('account') or 'unknown'}) may not write its file ({write.get('mode')}); press Allow the daemon to write its file, then switch again",
-            needs="allow_config_write",
-        )
-    if "consent_rendering" not in consents:
-        return _refuse(
-            f"{name}: Kea writes its file in its own form - comments and key order are not kept (a 1,932-byte file became 4,769). This is the one moment they are lost: tick the confirmation to go on",
-            needs="consent_rendering",
-        )
-    if facts.get("auth") == "none" and "consent_unauthenticated" not in consents:
-        return _refuse(
-            f"{name}: this endpoint has no authentication; anything that can reach it can change this daemon's configuration. Confirm that, then switch again",
-            needs="consent_unauthenticated",
-        )
+    # THE one definition of "the operator's consents cover the facts" (Q216 AA1), shared with `probe(consent=True)` and the gate
+    gap, needs = _api.consent_gap(name, facts, consents, has_ssh=has_ssh)
+    if gap:
+        return _refuse(gap, **({"needs": needs} if needs else {}))
+    live, _digest, why = _api._get(server, SERVICE)
+    if live is None:
+        return _refuse(f"{name}: the daemon did not answer before the write ({why}); nothing was switched")
+    blocked = _write_guard(server, name, live)
+    if blocked:
+        return _refuse(blocked)
     wrote = _api.write_file(server, SERVICE)
     if not wrote["ok"]:
         _api.remember_refusal(server, wrote.get("detail", ""))
@@ -122,6 +105,7 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     # the operator's consent is on record from this moment: the gate in `apply` reads it
     stored = _api.stored_probe(sid) or facts
     stored["consented_at"] = _api._now_iso()
+    stored["consents"] = sorted(set(consents) & set(_api.CONSENTS))
     stored.pop("consent_refused", None)
     _api.store_probe(sid, stored)
     return _done(
@@ -137,6 +121,9 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
     sid = server.get("id")
     if not server.get("ssh_host"):
         return _refuse(f"{name}: the file transport needs an SSH host (Settings → Kea → SSH); nothing was changed")
+    unreadable = _api.record_unreadable(server, SERVICE)
+    if unreadable:
+        return _refuse(f"{name}: {unreadable}; nothing was changed")
     file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
     if file_cfg is None:
         return _refuse(
@@ -153,6 +140,9 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
                 before_hash=digest,
                 after_hash=raw,
             )
+        blocked = _write_guard(server, name, live)
+        if blocked:
+            return _refuse(blocked)
         _api.write_file(server, SERVICE)
         file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
         if file_cfg is None or not _api.file_in_daemon(file_cfg, live, SERVICE):
@@ -206,7 +196,13 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
                 result = _done(f"{name}: no longer a write target; the daemon keeps serving")
             if not result["ok"]:
                 return result
-            _config.app_config.write_value(section_for(server), "config_transport", target)
+            try:
+                _config.app_config.write_value(section_for(server), "config_transport", target)
+            except Exception as e:  # (Q216 AA10) the file was rendered and the setting could not be written: say so, never a 500 over a half-done switch
+                logger.warning("kea_transport_switch: the setting could not be written: %s", type(e).__name__)
+                return _refuse(
+                    f"{name}: the switch was done but the setting could not be saved ({e}); the transport did not change - run the switch again"
+                )
     except _cs.ChangeBusy:
         return _refuse(_cs.BUSY_SENTENCE)
     result.setdefault("from", current)

@@ -286,6 +286,30 @@ class TestSecondPassRowsOfTheChangeSet:
             assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]
 
 
+class TestQ216TheRestoreWindowIsAskedAtPlan:
+    def test_a_mixed_set_inside_the_window_writes_nothing_anywhere(self, daemon, helper, store, monkeypatch):
+        """BF6: the window is asked at PLAN, beside the probe gate - not inside `apply`, after the file targets were written and had to be reverted."""
+        monkeypatch.setattr(
+            "jen.services.investigation_logging.restore_window",
+            lambda server, now=None: "the host is restoring logging at 2026-11-04T12:00:30+00:00; try again after it",
+        )
+        server = api_server(daemon)
+        daemon.commands.clear()
+        before = copy.deepcopy(helper.configs[(2, "dhcp4")])
+        result = cs.apply_change("dhcp4", lifetime(7200), "x", servers=[FILE_SERVER, server])
+        assert result.status == "aborted" and result.last_code == "investigation-on"
+        assert "try again after it" in " ".join(t for _k, t in result.lines)
+        assert helper.configs[(2, "dhcp4")] == before and "apply-config" not in helper.ops()
+        assert not any(c in daemon.commands for c in ("config-set", "config-write", "config-hash-get"))
+
+    def test_a_file_only_set_is_not_asked(self, daemon, helper, store, monkeypatch):
+        monkeypatch.setattr(
+            "jen.services.investigation_logging.restore_window",
+            lambda server, now=None: pytest.fail("a file target is not asked"),
+        )
+        assert cs.apply_change("dhcp4", lifetime(7200), "x", servers=[FILE_SERVER]).status == "ok"
+
+
 class TestAFilePathWriteToAnApiServerComparesFirst:
     SERVER = {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3", "config_transport": "api"}
 

@@ -8,6 +8,7 @@
 
 <div class="alert alert-warning">{{ icon("triangle-alert") }} This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>
 
+{% for s in api_servers %}<div class="alert alert-warning" data-author-api-server>{{ s.name }}: {{ s.sentence }}.</div>{% endfor %}
 {% if direct_mode %}
 {% if endpoint_error %}
 <div class="alert alert-danger">{{ icon("octagon-alert") }} Direct mode: no kea-dhcp6 control-socket URL is configured for

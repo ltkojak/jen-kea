@@ -14,6 +14,7 @@ from jen import extensions
 from jen.services import config_revisions as rev
 from jen.services import kea as kea_svc
 from jen.services import kea_api_config as api
+from jen.services import kea_host
 
 SERVER_API = {
     "id": 1,
@@ -93,6 +94,49 @@ class TestTheSettingsCard:
         for name in ("Test Kea", "File Kea", "Legacy Kea"):
             assert name in html
         assert "/settings/infrastructure/kea-transport/1" in html and "data-config-probe" in html
+
+
+class TestTheCardOffersOnlyWhatTheFactsAllow:
+    """Q216 AA1 (the consent control exists only with the facts on the page), AA9 ("I have fixed it" is for a server nothing can prove), AA13 (the badge says blocked where the gate does)."""
+
+    def _stored(self, monkeypatch, value):
+        monkeypatch.setattr(api, "stored_probe", lambda sid: value if sid == 1 else None)
+
+    def test_no_stored_probe_no_consent_control_and_a_blocked_badge(self, logged_in_client, three, monkeypatch):
+        self._stored(monkeypatch, None)
+        html = logged_in_client.get("/settings/kea").data.decode()
+        card = html.split('id="config-card-1"')[1].split('id="config-card-2"')[0]
+        assert "data-config-consent=" not in card and ", blocked" in card
+
+    def test_a_stored_probe_brings_the_consent_control_with_its_timestamp_and_the_named_consents(
+        self, logged_in_client, three, monkeypatch
+    ):
+        self._stored(monkeypatch, {"at": "2026-11-04T10:00:00+00:00", "config_api": True, "auth": "none"})
+        html = logged_in_client.get("/settings/kea").data.decode()
+        card = html.split('id="config-card-1"')[1].split('id="config-card-2"')[0]
+        assert 'data-at="2026-11-04T10:00:00+00:00"' in card and 'data-config-consent="1"' in card
+        assert 'value="consent_rendering"' in card and 'value="consent_unauthenticated"' in card
+        assert 'value="confirm_no_include"' in card  # server 1 has no SSH host
+
+    def test_i_have_fixed_it_is_not_offered_where_the_host_can_prove_it(self, logged_in_client, three, monkeypatch):
+        monkeypatch.setattr(
+            api,
+            "stored_probe",
+            lambda sid: {"refused": "denied", "write": {"may_write": False}} if sid == 2 else None,
+        )
+        monkeypatch.setattr(api, "refusal_sentence", lambda server: "denied" if server["id"] == 2 else "")
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"2": {"build": 20}})
+        html = logged_in_client.get("/settings/kea").data.decode()
+        assert "/settings/infrastructure/config-write-fixed/2" not in html
+
+    def test_i_have_fixed_it_is_offered_for_an_ssh_server_whose_helper_is_too_old(
+        self, logged_in_client, three, monkeypatch
+    ):
+        monkeypatch.setattr(api, "stored_probe", lambda sid: {"refused": "denied"} if sid == 2 else None)
+        monkeypatch.setattr(api, "refusal_sentence", lambda server: "denied" if server["id"] == 2 else "")
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"2": {"build": 18}})
+        html = logged_in_client.get("/settings/kea").data.decode()
+        assert "/settings/infrastructure/config-write-fixed/2" in html
 
 
 class TestARestoreOverTheApi:

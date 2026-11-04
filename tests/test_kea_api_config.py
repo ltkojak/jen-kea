@@ -398,21 +398,28 @@ class TestThePendingRecord:
         store.record(SID, "dhcp4", cand, digest, "interrupted", hash_kind="kea", source="pending")
         return cfg, digest, cand
 
-    def test_a_change_that_is_live_is_finished_on_the_next_read(self, fake, server, store):
+    def test_a_change_that_is_live_is_classified_by_a_read_and_finished_by_the_settle(self, fake, server, store):
         _cfg, _digest, cand = self._pending(fake, server, store)
         fake.set_running(cand["Dhcp4"])  # Jen died after config-set, before config-write
         notes = []
+        fake.commands.clear()
         cfg, new = api.read(server, "dhcp4", capture=False, notes=notes)
+        assert fake.commands == ["config-get"], "a read sends config-get and nothing else (Q216 AA19)"
+        assert fake.file != fake.running and store.pending(SID, "dhcp4") is not None
+        assert new == fake.digest() and notes and "is live" in notes[0]
+        lines = api.settle_pending(server, "dhcp4")  # the settlement: under the lock, from the card or the Plan
         assert fake.file == fake.running  # config-write was sent
-        assert new == fake.digest() and notes and "finished" in notes[0]
-        assert store.pending(SID, "dhcp4") is None
+        assert lines and "finished" in lines[0] and store.pending(SID, "dhcp4") is None
         assert [r["source"] for r in store.rows] == ["jen"]
 
-    def test_a_change_that_never_landed_is_deleted(self, fake, server, store):
+    def test_a_change_that_never_landed_is_classified_by_a_read_and_deleted_by_the_settle(self, fake, server, store):
         self._pending(fake, server, store)
         notes = []
+        fake.commands.clear()
         api.read(server, "dhcp4", capture=False, notes=notes)
-        assert store.rows == [] and notes and "never reached" in notes[0]
+        assert fake.commands == ["config-get"] and notes and "never reached" in notes[0] and store.rows != []
+        lines = api.settle_pending(server, "dhcp4")
+        assert store.rows == [] and "never reached" in lines[0]
 
     def test_neither_state_stays_pending_and_blocks_an_apply_but_not_a_restore(self, fake, server, store):
         _cfg, digest, _cand = self._pending(fake, server, store)
@@ -575,6 +582,167 @@ class TestSecondPassRows:
         assert result["code"] == "write-failed" and result["needs_hands"] and "earlier attempt" in result["detail"]
 
 
+class TestQ216TheRegister:
+    """Q216 - BF3 (no compare, no set), BF8 b (a hook's parameters), g (an unreadable record), o (the digest on record) and l (one restore window per Kea)."""
+
+    def test_bf3_no_digest_to_compare_against_sends_nothing_and_writes_no_pending_row(self, fake, server, store):
+        cfg, _digest = _plan(server)
+        fake.commands.clear()
+        result = api.apply(server, "dhcp4", _candidate(cfg), "", "x", before_cfg=cfg)
+        assert result["code"] == "conflict" and "no digest to compare against" in result["detail"]
+        assert fake.commands == [] and store.rows == []
+
+    def test_bf8b_a_hooks_parameters_are_part_of_the_guard(self):
+        before = {
+            "Dhcp4": {
+                "hooks-libraries": [
+                    {
+                        "library": "/usr/lib/ha.so",
+                        "parameters": {
+                            "high-availability": [
+                                {"this-server-name": "a", "peers": [{"url": "http://10.0.0.2:8000/"}]}
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+        same = copy.deepcopy(before)
+        assert api._api_only_guard("dhcp4", before, same) == ""
+        changed = copy.deepcopy(before)
+        changed["Dhcp4"]["hooks-libraries"][0]["parameters"]["high-availability"][0]["peers"][0]["url"] = (
+            "http://10.0.0.9:8000/"
+        )
+        assert (
+            api._api_only_guard("dhcp4", before, changed) == api.GUARD_SENTENCE and "parameters" in api.GUARD_SENTENCE
+        )
+        reordered = copy.deepcopy(before)
+        reordered["Dhcp4"]["hooks-libraries"].append({"library": "/usr/lib/lease_cmds.so"})
+        assert api._api_only_guard("dhcp4", before, reordered)
+
+    def test_bf8b_a_revision_from_before_an_ha_peer_change_is_refused_over_the_api(self, fake, server, store):
+        """The Config history restore row: the restore's candidate is an OLDER revision; its hooks entry carries the old peer address, so it goes through the file path."""
+        cfg, digest = _plan(server)
+        running = copy.deepcopy(cfg)
+        running["Dhcp4"]["hooks-libraries"] = [
+            {
+                "library": "/usr/lib/ha.so",
+                "parameters": {"high-availability": [{"peers": [{"url": "http://10.0.0.9:8000/"}]}]},
+            }
+        ]
+        old = copy.deepcopy(running)
+        old["Dhcp4"]["hooks-libraries"][0]["parameters"]["high-availability"][0]["peers"][0]["url"] = (
+            "http://10.0.0.2:8000/"
+        )
+        fake.commands.clear()
+        result = api.apply(server, "dhcp4", old, digest, "restore", source="restore", before_cfg=running)
+        assert result["code"] == "guard" and "its parameters" in result["detail"] and fake.commands == []
+
+    def test_bg_an_unreadable_record_is_a_refusal_and_nothing_is_sent(self, fake, server, store):
+        cfg, digest = _plan(server)
+        store.unreadable = True
+        fake.commands.clear()
+        blocked = api.pending_block(server, "dhcp4")
+        assert "cannot be read" in blocked
+        result = api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
+        assert result["code"] == "unverified" and "cannot be read" in result["detail"]
+        assert not any(c in fake.commands for c in ("config-set", "config-write", "config-hash-get"))
+        assert "cannot be read" in api.record_unreadable(server, "dhcp4")
+
+    def test_bg_a_read_still_answers_and_says_the_record_could_not_be_read(self, fake, server, store):
+        store.unreadable = True
+        notes = []
+        cfg, digest = api.read(server, "dhcp4", capture=False, notes=notes)
+        assert cfg is not None and digest and notes and "cannot be read" in notes[0]
+
+    def test_bg_the_real_store_raises_rather_than_answering_none(self, monkeypatch):
+        from jen.services import config_revisions as rev
+
+        class Boom:
+            def __enter__(self):
+                raise OSError("database down")
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(rev, "_jen_db", lambda: Boom())
+        with pytest.raises(rev.RevisionStoreUnreadable):
+            rev.pending(7, "dhcp4")
+
+    def test_bo_a_hand_set_of_a_key_the_file_omits_is_a_difference_when_a_digest_is_on_record(
+        self, fake, server, store, monkeypatch
+    ):
+        """The containment blind spot: the daemon writes 45 defaults out that the file omits, so a stranger's `config-set` of ONE of them is invisible to `file_in_daemon`. The digest of the last
+        configuration Jen recorded is the check; the file-path write is refused naming both."""
+        fake.expand = _expands
+        cfg, digest = _plan(server)
+        file_cfg = {"Dhcp4": copy.deepcopy(fake.running)}
+        monkeypatch.setattr(host, "read_config_versioned", lambda *a, **k: (copy.deepcopy(file_cfg), "r" * 64))
+        server = {**server, "ssh_host": "10.0.0.7", "config_transport": "api"}
+        store.record(
+            SID, "dhcp4", {"Dhcp4": copy.deepcopy(fake.running)}, fake.digest(), "jen", hash_kind="kea", source="jen"
+        )
+        assert api.api_daemon_differs(server, "dhcp4") == ""  # as recorded: the daemon is what Jen last wrote
+        stranger = copy.deepcopy(fake.running)
+        stranger["decline-probation-period"] = 123  # an expanded default the FILE omits
+        fake.set_running(stranger)
+        file_cfg = {"Dhcp4": {k: v for k, v in file_cfg["Dhcp4"].items() if k != "decline-probation-period"}}
+        sentence = api.api_daemon_differs(server, "dhcp4")
+        assert "not the one Jen last recorded" in sentence and fake.digest()[:12] in sentence
+
+    def test_bo_without_a_kea_row_containment_is_the_fallback_and_its_limit_is_named_by_this_test(
+        self, fake, server, store, monkeypatch
+    ):
+        fake.expand = _expands
+        _plan(server)
+        file_cfg = {"Dhcp4": {"valid-lifetime": fake.running["valid-lifetime"]}}  # the file omits the defaults
+        monkeypatch.setattr(host, "read_config_versioned", lambda *a, **k: (copy.deepcopy(file_cfg), "r" * 64))
+        server = {**server, "ssh_host": "10.0.0.7", "config_transport": "api"}
+        stranger = copy.deepcopy(fake.running)
+        stranger["decline-probation-period"] = 123
+        fake.set_running(stranger)
+        assert (
+            api.api_daemon_differs(server, "dhcp4") == ""
+        )  # no `kea` row on record: containment says the file is in the daemon, and it is - the limit of the fallback
+
+    def test_bl_one_kea_is_one_window_whichever_server_id_names_it(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        until = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(timespec="seconds")
+        record = {
+            "servers": {"9": {"name": "kea-a", "until": until, "ssh_host": "10.0.0.7", "removed": True}},
+            "damaged": False,
+        }
+        monkeypatch.setattr(_inv, "_record", lambda: record)
+        same_kea = {"id": 2, "ssh_host": "10.0.0.7"}
+        other_kea = {"id": 3, "ssh_host": "10.0.0.8"}
+        assert "try again after it" in _REAL_RESTORE_WINDOW(same_kea)
+        assert _REAL_RESTORE_WINDOW(other_kea) == ""
+
+    def test_reads_from_every_route_send_one_command(self, fake, server, store, monkeypatch):
+        """Q216 AA19, the whole-tree reading: the one function every GET reads a configuration through sends `config-get` and nothing else, with a settled-by-content pending row on record."""
+        cfg, digest = _plan(server)
+        cand = copy.deepcopy(cfg)
+        cand["Dhcp4"]["valid-lifetime"] = 4242
+        store.record(SID, "dhcp4", cand, digest, "interrupted", hash_kind="kea", source="pending")
+        fake.set_running(cand["Dhcp4"])
+        fake.commands.clear()
+        host.read_via_transport(server, "dhcp4")
+        assert fake.commands == ["config-get"], fake.commands
+        assert store.pending(SID, "dhcp4") is not None
+
+    def test_the_source_has_one_settler_and_a_read_never_calls_it(self):
+        tree = ast.parse((ROOT / "jen" / "services" / "kea_api_config.py").read_text(encoding="utf-8"))
+        read = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "read")
+        called = {
+            (c.func.id if isinstance(c.func, ast.Name) else c.func.attr)
+            for c in ast.walk(read)
+            if isinstance(c, ast.Call) and isinstance(c.func, (ast.Name, ast.Attribute))
+        }
+        assert not called & {"_reconcile_pending", "settle_pending", "write_file", "_write_with_retries"}, called
+        assert "_classify_pending" in called
+
+
 class TestTheHostsDeadlineIsRespected:
     """BB9 d: an API write within two sweep intervals of an investigation deadline could land over the HOST's restore (Kea has no compare-and-set), so it is refused with the host's own words."""
 
@@ -662,7 +830,9 @@ class TestKeaWritesItsDefaultsOut:
         fake.set_running(_expands(candidate["Dhcp4"]))  # Jen died after config-set, before config-write
         notes = []
         api.read(server, "dhcp4", capture=False, notes=notes)
-        assert notes and "finished" in notes[0], notes
+        assert notes and "is live" in notes[0], notes
+        lines = api.settle_pending(server, "dhcp4")
+        assert lines and "finished" in lines[0], lines
         assert any(s.get("id") == 9 for s in fake.file["subnet4"]) and store.pending(SID, "dhcp4") is None
 
     def test_a_pure_deletion_that_never_landed_is_not_mistaken_for_one_that_did(self, fake, server, store):
@@ -673,8 +843,36 @@ class TestKeaWritesItsDefaultsOut:
         store.record(SID, "dhcp4", candidate, digest, "interrupted", hash_kind="kea", source="pending")
         notes = []
         api.read(server, "dhcp4", capture=False, notes=notes)
-        assert notes and "never reached" in notes[0] and store.pending(SID, "dhcp4") is None
+        assert notes and "never reached" in notes[0], notes
+        api.settle_pending(server, "dhcp4")
+        assert store.pending(SID, "dhcp4") is None
         assert len(fake.running["subnet4"]) == 2  # nothing was set, nothing was written
+
+    def test_carries_knows_the_keys_kea_renames_by_name(self):
+        """Q216 BF4. A hand-written file's singular `hosts-database` / `control-socket` come back from `config-get` as one-element lists; the table is the module's, the compat row its source."""
+        assert api._carries(
+            {"hosts-databases": [{"type": "mysql", "name": "x", "port": 3306}]},
+            {"hosts-database": {"type": "mysql", "name": "x"}},
+        )
+        assert api._carries(
+            {"control-sockets": [{"socket-type": "unix", "socket-name": "/s"}]},
+            {"control-socket": {"socket-type": "unix"}},
+        )
+        assert not api._carries(
+            {"hosts-databases": [{"type": "mysql"}, {"type": "pgsql"}]}, {"hosts-database": {"type": "mysql"}}
+        )  # a list of two is not the one the file named
+        assert not api._carries({"hosts-databases": [{"type": "pgsql"}]}, {"hosts-database": {"type": "mysql"}})
+        assert not api._carries({}, {"hosts-database": {"type": "mysql"}})
+        assert api.RENAMED_KEYS == {"hosts-database": "hosts-databases", "control-socket": "control-sockets"}
+
+    def test_only_a_pool_is_compared_without_its_spaces(self):
+        """Q216 BF5. Fixup 2 stripped the spaces of EVERY string on both sides; Kea re-renders a pool "a - b" as "a-b" and nothing else row 09 saw."""
+        assert api._carries(
+            {"pools": [{"pool": "10.0.0.10-10.0.0.20"}]}, {"pools": [{"pool": "10.0.0.10 - 10.0.0.20"}]}
+        )
+        assert not api._carries({"user-context": {"note": "a-b"}}, {"user-context": {"note": "a - b"}})
+        assert not api._carries({"comment": "ab"}, {"comment": "a b"})
+        assert set(api.SPACE_INSENSITIVE_KEYS) == {"pool"}
 
     def test_carries_is_a_subset_test(self):
         assert api._carries({"a": 1, "b": 2}, {"a": 1})

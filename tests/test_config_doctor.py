@@ -739,15 +739,28 @@ class TestTheConfigTransport:
 
     @pytest.mark.parametrize("value", ["api", "file", "off"])
     def test_the_three_words_are_quiet(self, value):
-        assert self._ids(f"[kea]\nconfig_transport = {value}\n[kea_ssh]\nhost = 10.0.0.1\n") == []
+        assert self._ids(f"[kea]\napi_url = http://x\nconfig_transport = {value}\n[kea_ssh]\nhost = 10.0.0.1\n") == []
+
+    def test_a_blank_value_is_absent_not_unrecognized(self):
+        """Q216 AA8: `declared_transport` reads a blank value as absent (`file` where there is SSH), so the Doctor does not say Jen reads it as `off`."""
+        assert self._ids("[kea]\nconfig_transport =\n[kea_ssh]\nhost = 10.0.0.1\n") == []
+        assert self._ids("[kea_server_2]\nconfig_transport =   \nssh_host = 10.0.0.2\n") == []
+
+    def test_api_without_an_address_is_named_for_the_primary_and_for_an_extra_server(self):
+        """Q216 AA23: the whole fleet's change set stopped with an error that names neither the server nor the cause."""
+        assert self._ids("[kea]\nconfig_transport = api\n") == ["config-transport-api-without-address"]
+        assert self._ids("[kea_server_3]\nconfig_transport = api\napi_url =\n") == [
+            "config-transport-api-without-address"
+        ]
+        assert self._ids("[kea_server_3]\nconfig_transport = api\napi_url = http://10.0.0.3:8000\n") == []
 
     def test_a_section_without_the_key_is_quiet_that_is_todays_behavior(self):
         assert self._ids("[kea]\napi_url = http://x\n[kea_server_2]\nname = b\n") == []
 
     def test_an_extra_server_is_read_the_same_way(self):
-        assert self._ids("[kea]\nconfig_transport = api\n[kea_server_2]\nconfig_transport = yes\n") == [
-            "config-transport-unrecognized"
-        ]
+        assert self._ids(
+            "[kea]\napi_url = http://x\nconfig_transport = api\n[kea_server_2]\nconfig_transport = yes\n"
+        ) == ["config-transport-unrecognized"]
 
     def test_file_without_an_ssh_host_is_named_for_the_primary_and_for_an_extra_server(self):
         assert self._ids("[kea]\nconfig_transport = file\n") == ["config-transport-file-without-ssh"]

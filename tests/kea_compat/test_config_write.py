@@ -668,6 +668,85 @@ def test_10_the_same_over_dhcp6(facts, monkeypatch):
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+def _scratch_daemon_on(text, port=8004):
+    """(started, config-get arguments or None, the log tail): a second daemon on a scratch directory holding `text` as its kea-dhcp4.conf, written through the container's shell (row 08's recipe). The
+    first daemon is stopped for the duration (the control port is the config's own) and started again afterward."""
+    scratch = tempfile.mkdtemp(prefix="kea-renames-", dir=os.path.dirname(CONF_DIR))
+    try:
+        os.chmod(scratch, 0o755)
+        for name in ("jen-api.user", "jen-api.pw"):
+            shutil.copy(os.path.join(CONF_DIR, name), os.path.join(scratch, name))
+            os.chmod(os.path.join(scratch, name), 0o644)
+        __levels._sh(
+            "docker", "run", "--rm", "-i", "--entrypoint", "sh", "-v", f"{scratch}:/c", __levels.IMAGE,
+            "-c", "cat > /c/kea-dhcp4.conf", input=text,
+            check=True,
+        )  # fmt: skip
+        __levels._sh("docker", "stop", "-t", "30", "kea")
+        __levels._sh("docker", "rm", "-f", RELOAD_NAME, check=False)
+        __levels._sh(
+            "docker", "run", "-d", "--name", RELOAD_NAME, "--network", "host",
+            "--tmpfs", "/var/run/kea:rw,mode=750",
+            "-e", "MARIADB_TLS_DISABLE_PEER_VERIFICATION=1",
+            "-v", f"{scratch}:/etc/kea", __levels.IMAGE,
+        )  # fmt: skip
+        for _ in range(40):
+            if _probe_command("version-get", port=port).get("result") == 0:
+                reply = _probe_command("config-get", port=port)
+                return True, reply.get("arguments"), ""
+            time.sleep(1)
+        return False, None, __levels._sh("docker", "logs", RELOAD_NAME, check=False).stderr[-1500:]
+    finally:
+        __levels._sh("docker", "rm", "-f", RELOAD_NAME, check=False)
+        shutil.rmtree(scratch, ignore_errors=True)
+        __levels._clear_run_dir()
+        __levels._sh("docker", "start", "kea")
+        __levels._wait_ready()
+
+
+def test_11_what_config_get_renames(facts):
+    """Q216 BF4: the source of `kea_api_config.RENAMED_KEYS`. A hand-written file carries singular keys Kea renders as lists; this row records, per version, WHICH top-level and subnet keys of the file are
+    ABSENT from `config-get` and which list key appeared in their place (facts), asserts that `file_in_daemon(file, config-get)` is true with the table for the file the job runs (it carries the singular
+    `hosts-database`), and records - as a fact, a daemon that refuses it is a fact - what a daemon does with the singular `control-socket` the 3.x ARM says is gone. The row and the table disagree -> the
+    row wins and the table is edited."""
+    from jen.services import kea_api_config as api
+
+    assert ORIGINAL is not None, "test_01 did not record the original configuration"
+    authored = json.loads(_STATE["bytes"])["Dhcp4"]
+    running = ORIGINAL[0]["Dhcp4"]
+    absent_top = sorted(set(authored) - set(running))
+    facts["renames_top_absent_from_config_get"] = absent_top
+    facts["renames_absent_key_to_the_key_that_appeared"] = {
+        k: [k2 for k2 in sorted(set(running) - set(authored)) if k2.startswith(k)] for k in absent_top
+    }
+    facts["renames_hosts_database_became"] = {
+        k: type(running.get(k)).__name__ + (f"[{len(running[k])}]" if isinstance(running.get(k), list) else "")
+        for k in ("hosts-database", "hosts-databases", "control-socket", "control-sockets")
+        if k in running
+    }
+    facts["renames_subnet_keys_absent"] = sorted(set(authored["subnet4"][0]) - set(running["subnet4"][0]))
+    facts["renames_table_in_the_product"] = dict(api.RENAMED_KEYS)
+    # the file the job runs: carried, by name, through the table
+    assert api.file_in_daemon({"Dhcp4": authored}, ORIGINAL[0], "dhcp4"), (
+        f"the file's keys are not carried by config-get even with RENAMED_KEYS: {absent_top} absent"
+    )
+    # the singular control-socket: a fact, whatever the daemon says
+    both = copy.deepcopy(authored)
+    both["control-socket"] = {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-singular.sock"}
+    try:
+        started, arguments, tail = _scratch_daemon_on(json.dumps({"Dhcp4": both}))
+        facts["singular_control_socket_starts"] = started
+        if started and arguments:
+            facts["singular_control_socket_config_get_keys"] = sorted(
+                k for k in arguments["Dhcp4"] if k.startswith("control-socket")
+            )
+        else:
+            facts["singular_control_socket_refusal_tail"] = tail[-600:]
+    except Exception as exc:  # recorded, never asserted: the daemon may refuse the key outright on 3.x
+        facts["singular_control_socket_error"] = f"{type(exc).__name__}: {exc}"[:400]
+    assert _hash(), "the daemon does not answer after row 11"
+
+
 def test_90_restore_puts_the_original_back(facts):
     """The configuration the job started with goes back into the daemon, into the file, and then the original file's own bytes replace it."""
     assert ORIGINAL is not None, "test_01 did not record the original configuration"

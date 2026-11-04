@@ -79,6 +79,16 @@ def start_scheduler(app):
         max_instances=1,
         coalesce=True,
     )
+    # Q216 (AA12): every hour, re-read the FACTS about each server whose changes go over the daemon's API (the consent is never re-asked; a fact it does not cover closes the gate)
+    _scheduler.add_job(
+        _run_probe_refresh,
+        IntervalTrigger(hours=1),
+        id="jen_probe_refresh",
+        replace_existing=True,
+        args=[app],
+        max_instances=1,
+        coalesce=True,
+    )
     try:
         _scheduler.start()
         logger.info("Backup scheduler started")
@@ -132,6 +142,26 @@ def _run_investigation_sweep(app):
                 logger.info(f"investigation logging sweep: {result}")
         except Exception as e:
             logger.error(f"Investigation logging sweep error: {e}")
+
+
+def _run_probe_refresh(app):
+    """Called every hour: re-run the probe for every server on the API transport (`kea_api_config.refresh_probe`); the operator's consent and a daemon that does not answer are left as they are."""
+    with app.app_context():
+        try:
+            from jen import extensions
+            from jen.services import kea_api_config
+
+            for server in extensions.KEA_SERVERS or []:
+                if kea_api_config.declared_transport(server) != "api":
+                    continue
+                try:
+                    kea_api_config.refresh_probe(server)
+                except Exception as e:  # one server's refresh never stops the next
+                    logger.warning(
+                        f"probe refresh failed for {server.get('name') or server.get('id')}: {type(e).__name__}"
+                    )
+        except Exception as e:
+            logger.error(f"Probe refresh error: {e}")
 
 
 def _run_client_problems_sweep(app):

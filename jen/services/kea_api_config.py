@@ -100,22 +100,43 @@ def _section(cfg: dict | None, service: str) -> dict:
     return (cfg or {}).get(SERVICE_KEY.get(service, ""), {}) or {}
 
 
-def _carries(running: object, candidate: object) -> bool:
+# Kea renders some singular keys of a file as lists in `config-get` (docs/ARCHITECTURE.md 3.17: `hosts-database` comes back as `hosts-databases`, `control-socket` as `control-sockets`). The table's SOURCE is a
+# compat row (`tests/kea_compat/test_config_write.py::test_11_what_config_get_renames`, Q216 BF4): a row and this table that disagree are settled by the row, and the table is edited.
+RENAMED_KEYS = {"hosts-database": "hosts-databases", "control-socket": "control-sockets"}
+
+# The ONE kind of string Kea re-renders: a pool "a - b" is reported as "a-b" (compat run 41712142556). The spacing rule is for a string UNDER one of these keys and nowhere else; a path the compat row
+# reports that is not a `pool` is a new entry here, named, never a wider rule (Q216 BF5).
+SPACE_INSENSITIVE_KEYS = frozenset({"pool"})
+
+
+def _carries(running: object, candidate: object, under: str | None = None) -> bool:
     """Does the configuration the daemon RUNS carry everything the candidate said? `config-get` returns the daemon's configuration with Kea's own defaults written out (45 keys at the top of
     `Dhcp4`, 13 per subnet and one per pool - docs/ARCHITECTURE.md 3.17, row 08), so a candidate Jen built is a SUBSET of what the daemon reports after it takes it: every key present with an equal
     value, lists the same length and elementwise the same. Equality would never hold for a subnet Jen just added. Used with a check of the BEFORE state FIRST, never alone: a candidate that only
-    deletes is a subset of the configuration it came from."""
+    deletes is a subset of the configuration it came from. `under` is the key a value sits below: a candidate key Kea renames (`RENAMED_KEYS`) is carried by the list that took its place, and a string
+    is compared without its spaces only under a `pool` key."""
     if isinstance(candidate, dict):
-        return isinstance(running, dict) and all(k in running and _carries(running[k], v) for k, v in candidate.items())
+        if not isinstance(running, dict):
+            return False
+        for k, v in candidate.items():
+            if k in running:
+                if not _carries(running[k], v, k):
+                    return False
+                continue
+            renamed = running.get(RENAMED_KEYS.get(k, ""))
+            if not (isinstance(renamed, list) and len(renamed) == 1 and _carries(renamed[0], v, k)):
+                return False
+        return True
     if isinstance(candidate, list):
         return (
             isinstance(running, list)
             and len(running) == len(candidate)
-            and all(_carries(r, c) for r, c in zip(running, candidate, strict=True))
+            and all(_carries(r, c, under) for r, c in zip(running, candidate, strict=True))
         )
     if isinstance(running, str) and isinstance(candidate, str):
-        # Kea renders a pool "a - b" as "a-b": spacing is formatting, never a value (compat run 41712142556)
-        return running.replace(" ", "") == candidate.replace(" ", "")
+        if under in SPACE_INSENSITIVE_KEYS:
+            return running.replace(" ", "") == candidate.replace(" ", "")
+        return running == candidate
     return running == candidate
 
 
@@ -216,13 +237,18 @@ def read(
     """`(cfg, digest)` from the daemon's own `config-get`, or `(None, None)` with a sentence appended to `errors`. The digest comes from the reply, beside the service's section, and is
     STRIPPED from `cfg` before anything reads it.
 
-    A pending change of Jen's own (BB9 c: Jen died between `config-set` and the verify) is reconciled by content on this read; the line it earns goes to `notes`."""
+    A pending change of Jen's own (BB9 c: Jen died between `config-set` and the verify) is CLASSIFIED by content on this read and the line it earns goes to `notes`; a read never settles it (Q216,
+    AA19: a read that reconciles is a write path - it sent `config-write` and changed the store from a GET, outside the change lock). Settlement is `settle_pending`, under the lock."""
     cfg, digest, why = _get(server, service, timeout)
     if cfg is None:
         if errors is not None:
             errors.append(why)
         return None, None
-    cfg, digest = _reconcile_pending(server, service, cfg, digest, notes)
+    try:
+        _classify_pending(server, service, cfg, digest, notes)
+    except _rev.RevisionStoreUnreadable:
+        if notes is not None:
+            notes.append(unreadable_sentence(server))
     if capture:
         _capture(server, service, cfg, digest)
     return cfg, digest
@@ -255,15 +281,19 @@ def test(server: dict, service: str, cfg: dict) -> dict:
 # ── the API-only guard (step 2) ───────────────────────────────────────────────────────────────────────────────────────
 
 
-GUARD_SENTENCE = "a change to the control socket, a hook library or TLS material goes through the file path"
+GUARD_SENTENCE = (
+    "a change to the control socket, a hook library or its parameters, or TLS material goes through the file path"
+)
 
 
-def _libraries(sec: dict) -> list:
-    return [h.get("library") for h in (sec.get("hooks-libraries") or []) if isinstance(h, dict)]
+def _hooks(sec: dict) -> list:
+    """The `hooks-libraries` list AS VALUES - each entry's `library` and its `parameters`, in order (Q216 AA4): an HA peer's address or a lease_cmds setting is a hook's `parameters`, and a restore
+    of a revision from before such a change would otherwise be sent over the API with the paths and the order unchanged."""
+    return list(sec.get("hooks-libraries") or [])
 
 
 def _api_only_guard(service: str, running: dict | None, candidate: dict) -> str:
-    """The candidate's `control-sockets`, `hook-libraries` (paths and order) and every TLS path Jen's own certificate files appear at must equal the running configuration's: a change to
+    """The candidate's `control-sockets`, `hooks-libraries` (each entry as a value: the library AND its parameters, in order) and every TLS path Jen's own certificate files appear at must equal the running configuration's: a change to
     the socket the command arrives on is never sent over that socket, and a hook library or a certificate is host material the file path checks (`tlsmissing`) and this path cannot. This is what
     makes the direct-socket callers, the restore and the import safe over the API without each writer knowing the rule."""
     from jen.services import kea_authoring as _auth
@@ -273,7 +303,7 @@ def _api_only_guard(service: str, running: dict | None, candidate: dict) -> str:
     for key in ("control-sockets", "control-socket"):
         if (before.get(key) or None) != (after.get(key) or None):
             return GUARD_SENTENCE
-    if _libraries(before) != _libraries(after):
+    if _hooks(before) != _hooks(after):
         return GUARD_SENTENCE
     tls = _tls.remote_tls_paths(service)
     if sorted(_auth.referenced_tls_paths(running or {}, tls)) != sorted(_auth.referenced_tls_paths(candidate, tls)):
@@ -301,10 +331,70 @@ def _row_age_seconds(row: dict) -> float:
     return (datetime.now(timezone.utc) - when).total_seconds()
 
 
+def unreadable_sentence(server: dict) -> str:
+    return f"the record of an earlier change on {_name(server)} cannot be read; nothing is sent until it can"
+
+
+def record_unreadable(server: dict, service: str = "dhcp4") -> str:
+    """A refusal sentence when the record of pending changes cannot be READ, else "" (Q216, AA11): `None` from the store means nothing is pending, and a store that could not be asked is not that."""
+    sid = server.get("id")
+    if sid is None or service not in SERVICE_KEY:
+        return ""
+    try:
+        _rev.pending(sid, service)
+    except _rev.RevisionStoreUnreadable:
+        return unreadable_sentence(server)
+    return ""
+
+
+def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes: list | None) -> None:
+    """What a pending row would be settled as, said in a line - and nothing else: no command is sent, no row changes (a read is not a write path, Q216 AA19). Raises `RevisionStoreUnreadable`."""
+    sid = server.get("id")
+    if sid is None or service not in SERVICE_KEY or notes is None:
+        return
+    row = _rev.pending(sid, service)
+    if row is None:
+        return
+    try:
+        candidate = json.loads(row["config"])
+    except (TypeError, ValueError):
+        return
+    at = str(row.get("created_at") or "an earlier time")
+    if _row_age_seconds(row) < PENDING_SETTLE_SECONDS:
+        notes.append(f"a change of {at} is in progress; it is not settled until it has had {PENDING_SETTLE_SECONDS} s")
+    elif row.get("sha256") and digest == row["sha256"]:
+        notes.append(
+            f"a change of {at} never reached the daemon; its record is removed at the next change or when you settle it"
+        )
+    elif _carries(_section(cfg, service), _section(candidate, service)):
+        notes.append(
+            f"a change of {at} is live and its file write is not proved yet; the next change finishes it, or you can settle it from the server's card"
+        )
+    else:
+        notes.append(
+            f"a change of {at} is unresolved: the daemon runs {digest}, which is neither the state before it ({row.get('sha256') or 'unknown'}) nor the change; resolve it from Config history"
+        )
+
+
+def settle_pending(server: dict, service: str = "dhcp4") -> list[str]:
+    """Settle a pending row by content NOW - the two places that may (Q216 AA19), both under `kea_changeset.change_lock`: this, called by the card's "settle" route, and `pending_block`, asked by the
+    Plan of a change set and by `apply`. The lines say what happened."""
+    notes: list[str] = []
+    cfg, digest, why = _get(server, service)
+    if cfg is None:
+        return [f"{_name(server)} did not answer ({why}); nothing was settled"]
+    try:
+        _reconcile_pending(server, service, cfg, digest, notes)
+    except _rev.RevisionStoreUnreadable:
+        notes.append(unreadable_sentence(server))
+    return notes or ["there is no pending change to settle"]
+
+
 def _reconcile_pending(server: dict, service: str, cfg: dict, digest: str, notes: list | None) -> tuple[dict, str]:
-    """If Jen died between `config-set` and the verify, the next read finds a `pending` row and settles it by CONTENT (Jen cannot compute Kea's digest, so a digest alone cannot say
+    """If Jen died between `config-set` and the verify, the next change finds a `pending` row and settles it by CONTENT (Jen cannot compute Kea's digest, so a digest alone cannot say
     whose configuration runs): equal to the candidate -> that change is live, `config-write` is sent (idempotent) and verified, the row becomes `jen`; its digest equal to the row's BEFORE
-    digest -> nothing landed, the row is deleted; neither -> the row stays and the line names both digests; no answer -> the row stays. Returns the (cfg, digest) the daemon runs NOW."""
+    digest -> nothing landed, the row is deleted; neither -> the row stays and the line names both digests; no answer -> the row stays. Returns the (cfg, digest) the daemon runs NOW. A WRITER:
+    never from a read - the caller holds the change lock. Raises `RevisionStoreUnreadable`."""
     sid = server.get("id")
     if sid is None or service not in SERVICE_KEY:
         return cfg, digest
@@ -351,15 +441,22 @@ def pending_block(server: dict, service: str) -> str:
     """A sentence when a pending change is on record and the daemon is in neither of its states (read, reconcile, and nothing settled it); else "". `apply` refuses on it (a restore, which is
     the operator's way out, passes `source="restore"` and is not stopped)."""
     sid = server.get("id")
-    if sid is None or _rev.pending(sid, service) is None:
+    if sid is None:
         return ""
-    notes: list = []
-    cfg, digest, why = _get(server, service)
-    if cfg is None:
-        return f"an earlier change on {_name(server)} is unresolved and the daemon did not answer ({why})"
-    _reconcile_pending(server, service, cfg, digest, notes)
-    if _rev.pending(sid, service) is None:
-        return ""
+    try:
+        if _rev.pending(sid, service) is None:
+            return ""
+        notes: list = []
+        cfg, digest, why = _get(server, service)
+        if cfg is None:
+            return f"an earlier change on {_name(server)} is unresolved and the daemon did not answer ({why})"
+        _reconcile_pending(server, service, cfg, digest, notes)
+        if _rev.pending(sid, service) is None:
+            return ""
+    except _rev.RevisionStoreUnreadable:
+        return unreadable_sentence(
+            server
+        )  # (Q216 AA11) a store that cannot be asked is a refusal, never "nothing is pending"
     return notes[-1] if notes else f"an earlier change on {_name(server)} is unresolved; resolve it from Config history"
 
 
@@ -458,7 +555,7 @@ def apply(
       (1) `guard_kea_write` (INV-005: the investigation marker) - a refusal is `guard`, nothing sent.
       (2) the API-only guard - a socket, a hook library or a TLS path that differs from the running configuration's is `guard`.
       (3) the pending record is written (the candidate, with the BEFORE digest), so a reader can settle a half-applied change by content.
-      (4) `config-hash-get` equals `expect_hash` or `conflict` (nothing sent).
+      (4) `config-hash-get` equals `expect_hash` or `conflict` (nothing sent); no `expect_hash` at all is `conflict` too - a compare that is not asked for is not a compare (Q216 BF3).
       (5) `config-set` -> h1. A refusal: ask the daemon; a missing answer: ask `config-get` and compare canonically.
       (6) `config-write` (re-sent on a missing answer); a refusal undoes the set (`write-failed`); no answer is never `ok`.
       (7) `config-get` carries h1, or `unverified` (NOT undone: a different digest may be someone else's change).
@@ -491,6 +588,10 @@ def apply(
         if before_cfg is None:
             return _result(False, "noanswer", f"the running configuration of {_name(server)} could not be read ({why})")
         expect_hash = expect_hash or before_digest
+    if (
+        not expect_hash
+    ):  # (Q216 BF3) the digest compare is the only compare the API has: a call that brings none sends nothing
+        return _result(False, "conflict", "no digest to compare against - read the daemon first")
     guarded = _api_only_guard(service, before_cfg, cfg)  # (2)
     if guarded:
         return _result(False, "guard", guarded)
@@ -629,6 +730,19 @@ def api_daemon_differs(server: dict, service: str) -> str:
     live, digest, _why = _get(server, service)
     if live is None:
         return ""
+    sid = server.get("id")
+    try:
+        last = _rev.latest_of_kind(sid, service, "kea") if sid is not None else None
+    except Exception as e:  # a history read never decides this question: containment below is the fallback
+        logger.warning("kea_api_config: api_daemon_differs could not read the history of %s: %s", sid, type(e).__name__)
+        last = None
+    if last is not None and last.get("source") != PENDING and last.get("sha256") and last["sha256"] != digest:
+        # (Q216 AA - the blind spot) a hand `config-set` of a key the FILE omits (one of the 45 defaults `config-get` writes out) is invisible to containment; the DIGEST of the last configuration Jen
+        # recorded for this daemon is the check, and containment is the fallback for a server with no `kea` row yet (docs/ARCHITECTURE.md 3.17 says that is its limit)
+        return (
+            f"the daemon on {_name(server)} runs a configuration that is not the one Jen last recorded for it (the daemon {digest[:12]}, Jen's record {str(last['sha256'])[:12]}); "
+            "restore or resolve it from Config history first"
+        )
     file_cfg, raw = _host.read_config_versioned(server, service, capture=False)
     if file_cfg is None or file_in_daemon(file_cfg, live, service):
         return ""
@@ -693,10 +807,81 @@ def _bound(server: dict) -> str:
     return hashlib.sha256(f"{server.get('api_url') or ''}|{server.get('ssh_host') or ''}".encode()).hexdigest()[:16]
 
 
+CONSENTS = ("consent_rendering", "consent_unauthenticated", "discard_file_edit", "confirm_no_include")
+
+
+def consent_gap(name: str, facts: dict | None, consents, *, has_ssh: bool, strict: bool = True) -> tuple[str, str]:
+    """(sentence, needs): the FIRST thing that stands between these `facts` and an operator's named `consents` - "" when nothing does. THE one definition of whether the operator's consents cover the facts (Q216
+    AA1): the switch's rules of BB8 moved here verbatim, asked by the switch, by `probe(consent=True)` and - for the facts a refresh brought - by the gate. `needs` is the consent field that would answer
+    the sentence (or the helper grant, `allow_config_write`). With `strict=False` a fact that is ABSENT from a stored result (an older release wrote none; a test stores three keys) is not an unknown one."""
+    facts = facts or {}
+    consents = set(consents or ())
+
+    def known(key):
+        return strict or key in facts
+
+    if not facts.get("config_api"):
+        return (
+            f"{name}: the daemon could not be read over its API ({facts.get('read_error') or 'no answer'}); nothing was changed",
+            "",
+        )
+    if facts.get("test_ok") is False:
+        return (
+            f"{name}: the daemon did not accept its own configuration in a config-test ({facts.get('test_detail') or 'refused'}); nothing was changed",
+            "",
+        )
+    if facts.get("include"):
+        return (
+            f"{name}: the file carries an include ({', '.join(facts['include'])}); the daemon reports the merged configuration and config-write renders one flat file, so the API transport is not recommended here",
+            "",
+        )
+    if has_ssh and (
+        (known("agree") and facts.get("agree") is None)
+        or (known("include") and facts.get("include") is None)
+        or (known("write") and not isinstance(facts.get("write"), dict))
+    ):
+        return (
+            f"{name}: SSH is configured but the host's facts could not be read (is the helper installed at build 19 or later, and does SSH answer?), so the file could not be compared with the daemon; nothing was changed",
+            "",
+        )
+    if not has_ssh and "confirm_no_include" not in consents:
+        return (
+            f"{name} has no SSH host, so Jen cannot see its file: confirm that the file carries no include and no edit the daemon has not loaded, then switch again",
+            "confirm_no_include",
+        )
+    if has_ssh and facts.get("agree") is False and "discard_file_edit" not in consents:
+        return (
+            f"{name}: the file on the host carries a configuration the daemon is not running - restart Kea first, or tick 'discard the file's edit' (the switch makes the file the daemon's configuration)",
+            "discard_file_edit",
+        )
+    write = facts.get("write")
+    if has_ssh and isinstance(write, dict) and write.get("may_write") is False:
+        return (
+            f"{name}: the daemon's account ({write.get('account') or 'unknown'}) may not write its file ({write.get('mode')}); press Allow the daemon to write its file, then switch again",
+            "allow_config_write",
+        )
+    if "consent_rendering" not in consents:
+        return (
+            f"{name}: Kea writes its file in its own form - comments and key order are not kept (a 1,932-byte file became 4,769). This is the one moment they are lost: tick the confirmation to go on",
+            "consent_rendering",
+        )
+    if facts.get("auth") == "none" and "consent_unauthenticated" not in consents:
+        return (
+            f"{name}: this endpoint has no authentication; anything that can reach it can change this daemon's configuration. Confirm that, then switch again",
+            "consent_unauthenticated",
+        )
+    return "", ""
+
+
+def consent_allowed(name: str, facts: dict | None, consents, *, has_ssh: bool, strict: bool = True) -> str:
+    """`consent_gap`'s sentence alone: "" when the named consents cover the facts."""
+    return consent_gap(name, facts, consents, has_ssh=has_ssh, strict=strict)[0]
+
+
 def probe_gate(server: dict, source: str = "jen") -> str:
     """NO API write without it: a sentence for a server whose stored result is absent, older than 7 days, has `config_api` false, carries no `consented_at` (the operator's named consent, from
-    the card), or remembers a refused write (BB9 a); "" otherwise. A server added through Settings with `api` written by the save route therefore cannot be written to until its operator
-    has read the probe's facts once: the probe is a click, the facts are the gate."""
+    the card), carries a fact the consent given does not cover (a refresh found an include, or the endpoint lost its authentication - Q216 AA12), or remembers a refused write (BB9 a); "" otherwise. A
+    server added through Settings with `api` written by the save route therefore cannot be written to until its operator has read the probe's facts once: the probe is a click, the facts are the gate."""
     stored = stored_probe(server.get("id"))
     if not stored:
         return PROBE_SENTENCE
@@ -709,9 +894,14 @@ def probe_gate(server: dict, source: str = "jen") -> str:
         return f"the daemon on {_name(server)} could not be read over its API at the last check - {PROBE_SENTENCE.replace('first', 'again')}"
     if not stored.get("consented_at"):
         return f"changes over the API to {_name(server)} have not been allowed yet - read the facts and allow them from the server's card"
+    # the consent on record covers the facts it was given for; a stored result from before the consents were recorded (7.0.0-beta.1) counts as having been given all of them
+    given = stored.get("consents", CONSENTS)
+    uncovered = consent_allowed(_name(server), stored, given, has_ssh=_has_ssh(server), strict=False)
+    if uncovered:
+        return uncovered
     return (
-        "" if source == "rollback" else refusal_sentence(server)
-    )  # a rollback puts back a change that DID stand on this server: a remembered refusal must not stop it
+        "" if source in ("rollback", "restore") else refusal_sentence(server)
+    )  # a rollback puts back a change that DID stand on this server, and a restore is the way out the failure's own line names (Q216 AA14): a remembered refusal must not stop either
 
 
 def refusal_sentence(server: dict) -> str:
@@ -758,10 +948,42 @@ def _endpoint_facts(server: dict, service: str) -> dict:
     return {"auth": auth, "tls": tls}
 
 
-def probe(server: dict, service: str = "dhcp4", *, consent: bool = False) -> dict:
+PROBE_REFRESH_AFTER_HOURS = 24
+
+
+def refresh_probe(server: dict, service: str = "dhcp4") -> bool:
+    """Keep the FACTS fresh without asking the operator again (Q216 AA12): re-run the probe for a server whose operator has consented, leaving `consented_at` and `consents` exactly as they are while `bound`
+    is unchanged. True when the stored facts were replaced. A daemon (or a host's helper) that does not answer keeps the previous facts and their age - reachability is runtime (BB2 b) - and a fact that
+    now stands outside the consent given closes the gate with its own sentence (`probe_gate`)."""
+    sid = server.get("id")
+    stored = stored_probe(sid)
+    if not stored or not stored.get("consented_at") or service not in SERVICE_KEY:
+        return False
+    if stored.get("bound") and stored["bound"] != _bound(server):
+        return False  # a re-pointed server is for its operator to check again
+    cfg, _digest, _why = _get(server, service)
+    if cfg is None:
+        return False
+    fresh = probe(server, service, persist=False)
+    if _has_ssh(server) and fresh.get("include") is None and stored.get("include") is not None:
+        return False  # the host did not answer this time: what was known stays known
+    return store_probe(sid, fresh)
+
+
+def refresh_if_stale(server: dict, service: str = "dhcp4") -> bool:
+    """The change set's Plan: facts older than a day are refreshed before the gate is asked."""
+    stored = stored_probe(server.get("id"))
+    age = _age_days((stored or {}).get("at"))
+    if not stored or age is None or age * 24 < PROBE_REFRESH_AFTER_HOURS:
+        return False
+    return refresh_probe(server, service)
+
+
+def probe(server: dict, service: str = "dhcp4", *, consent: bool = False, consents=(), persist: bool = True) -> dict:
     """The facts an operator reads before the first change over the API, from a GUARDED `config-get` (never `config-hash-get`, which the Control Agent also answers), a `config-test` of the running
     configuration, how the endpoint is authenticated, and - where SSH exists - the helper's `config-write-check` and a compare of the file with the daemon. Stored (BB3 d) and returned.
-    `consent` records the operator's named consent (`consented_at`) when the facts allow it."""
+    `consent` records the operator's named consent (`consented_at`, and the `consents` it was given with) ONLY when `consent_allowed` answers "" for the consents the caller carries - the switch's terms
+    exactly (Q216 AA1). `persist=False` returns the facts without storing them (the refresh decides)."""
     sid = server.get("id")
     prev = stored_probe(sid) or {}
     out = {"at": _now_iso(), "service": service, "bound": _bound(server)}
@@ -813,10 +1035,16 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False) -> dic
         out["refused"] = refused
     if prev.get("consented_at"):
         out["consented_at"] = prev["consented_at"]
+        if "consents" in prev:
+            out["consents"] = prev["consents"]
     if consent:
-        if out["config_api"] and not out.get("include"):
+        given = sorted(set(consents or ()) & set(CONSENTS))
+        gap = consent_allowed(_name(server), out, given, has_ssh=_has_ssh(server))
+        if not gap:
             out["consented_at"] = _now_iso()
+            out["consents"] = given
         else:
-            out["consent_refused"] = "the daemon could not be read over its API, or the file carries an include"
-    store_probe(sid, out)
+            out["consent_refused"] = gap
+    if persist:
+        store_probe(sid, out)
     return out

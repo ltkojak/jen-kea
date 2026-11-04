@@ -1001,7 +1001,9 @@ def apply_config(
     ):
         # (fix row 1) asked of a NEW write only: a rollback, and investigation logging's own revert, must always be able to put the file back
         # Q212 (BB2 e): the file path writing onto a server whose transport is the API. The file this write replaces must carry what the daemon runs, or an `unverified` apply (or a hand
-        # `config-set`) would be erased by the next logging toggle; both digests are named. Asked only when BOTH answer and differ.
+        # `config-set`) would be erased by the next write of the file; both digests are named. Asked only when BOTH answer and differ. NOT asked of investigation logging's own writes (the condition
+        # above): the toggle must always be able to take the marker out and the host's deadline must never wait on a compare - and `investigation_logging._change` says so in the operator's line
+        # (Q216 AA25), because a toggle can still erase what a hand `config-set` left the file without.
         differs = _api.api_daemon_differs(server, service)
         if differs:
             return {"ok": False, "code": "error", "detail": differs, "via": "guard"}

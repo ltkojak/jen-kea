@@ -193,7 +193,8 @@
         <tr><td class="stat-label u-d8c022">Role</td>
             <td><span class="badge badge-tone-blue">{{ s.server.role|title }}</span></td></tr>
         <tr><td class="stat-label u-d8c022">Changes go</td>
-            <td><span class="badge {{ 'badge-tone-blue' if s.transport == 'api' else ('badge-reserved' if s.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ s.transport }}" title="{{ s.transport_why }}">{% if s.transport == 'api' %}API{% if s.transport_unauthenticated %}, unauthenticated{% endif %}{% else %}{{ s.transport }}{% endif %}</span>
+            <td><span class="badge {{ 'badge-tone-blue' if s.transport == 'api' else ('badge-reserved' if s.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ s.transport }}" title="{{ s.transport_why }}">{% if s.transport == 'api' %}API{% if s.transport_unauthenticated %}, unauthenticated{% endif %}{% if s.transport_blocked %}, blocked{% endif %}{% else %}{{ s.transport }}{% endif %}</span>
+                {% if s.transport_blocked %}<span class="u-41e804" data-transport-blocked> — {{ s.transport_why }}</span>{% endif %}
                 {% if s.transport_refused %}<span class="u-41e804" data-transport-refused> — {{ s.transport_refused }}</span>{% endif %}</td></tr>
         <tr><td class="stat-label u-d8c022">Version</td>
             <td class="mono u-6cb285">{{ s.version or '—' }}</td></tr>

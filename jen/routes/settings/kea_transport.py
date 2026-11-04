@@ -14,11 +14,13 @@ from flask_login import current_user, login_required
 import jen.models.user as __user
 import jen.services.capabilities as __caps
 import jen.services.kea_api_config as __api
+import jen.services.kea_changeset as __cs
 import jen.services.kea_host as __host
 import jen.services.kea_transport_switch as __switch
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import recent_auth_required as _recent_auth_required
+from jen.services.access import step_up_redirect as _step_up_redirect
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -49,14 +51,30 @@ def probe_kea_config(server_id):
     if server is None:
         return jsonify({"ok": False, "error": "That server is not configured."}), 404
     consent = request.form.get("consent") == "1"
-    facts = __api.probe(server, "dhcp4", consent=consent)
-    if consent and facts.get("consented_at") and not facts.get("consent_refused"):
+    consents = {name for name in __api.CONSENTS if request.form.get(name) == "1"}
+    if consent:
+        # (Q216 AA1) a consent is an act, not a click that reads: it needs a recent confirmation of the password, and it is given for the facts the operator READ - the page carries the stored probe's `at`
+        stepped = _step_up_redirect(10, fetch=True)
+        if stepped is not None:
+            return stepped
+        stored = __api.stored_probe(server_id) or {}
+        if not stored or request.form.get("at", "") != str(stored.get("at") or ""):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "The facts changed since you read them (or were never read): check the API configuration, read what it says, then allow changes.",
+                }
+            ), 409
+    facts = __api.probe(server, "dhcp4", consent=consent, consents=consents)
+    __caps.invalidate(server_id)
+    if consent and facts.get("consent_refused"):
+        return jsonify({"ok": False, "error": facts["consent_refused"], "probe": facts}), 200
+    if consent and facts.get("consented_at"):
         __user.audit(
             "KEA_API_CONSENT",
             server.get("name") or str(server_id),
-            "changes over the API allowed after reading the check",
+            f"changes over the API allowed after reading the check; consents: {', '.join(facts.get('consents') or []) or 'none'}",
         )
-    __caps.invalidate(server_id)
     return jsonify({"ok": True, "probe": facts, "transport": __api.declared_transport(server)})
 
 
@@ -84,6 +102,29 @@ def switch_kea_transport(server_id):
     return _back()
 
 
+@bp.route("/settings/infrastructure/settle-pending-change/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def settle_pending_change(server_id):
+    """Settle a change Jen's own process left half-done by content (Q216 AA19): a read only SAYS what it would be settled as; the settlement - `config-write` and the record - is made here and by the
+    Plan of the next change, both under the change lock. Audited, with what was done."""
+    server = _server(server_id)
+    if server is None:
+        return _gone()
+    name = server.get("name") or str(server_id)
+    try:
+        with __cs.change_lock():
+            lines = __api.settle_pending(server, "dhcp4")
+    except __cs.ChangeBusy:
+        flash(__cs.BUSY_SENTENCE, "error")
+        return _back()
+    __user.audit("KEA_PENDING_CHANGE_SETTLED", name, "; ".join(lines)[:500])
+    __caps.invalidate(server_id)
+    flash(f"{name}: {' '.join(lines)}", "success")
+    return _back()
+
+
 def _grant(server_id, op, verb, action):
     server = _server(server_id)
     if server is None:
@@ -100,6 +141,11 @@ def _grant(server_id, op, verb, action):
         return _back()
     if result.get("changed") is False:
         flash(f"{server.get('name') or 'The server'}: {result.get('detail') or 'nothing to change'}", "success")
+        __user.audit(  # (Q216 AA24) a press of the button is on the record whether or not it changed anything
+            action,
+            server.get("name") or str(server_id),
+            f"no change: {result.get('detail') or 'already as asked'}",
+        )
         return _back()
     after = result.get("after") or {}
     flash(
@@ -143,8 +189,16 @@ def config_write_fixed(server_id):
     server = _server(server_id)
     if server is None:
         return _gone()
-    if not __api.stored_probe(server_id) or not (__api.stored_probe(server_id) or {}).get("refused"):
+    stored = __api.stored_probe(server_id) or {}
+    if not stored.get("refused"):
         flash(f"{server.get('name') or 'The server'} has no remembered refusal.", "info")
+        return _back()
+    if server.get("ssh_host") and isinstance(stored.get("write"), dict):
+        # (Q216 AA9) the host can PROVE the permission: a claim is for a server where nothing can
+        flash(
+            f"{server.get('name') or 'The server'}: run Check API configuration instead - the host can prove whether the daemon may write its file.",
+            "error",
+        )
         return _back()
     __api.clear_refusal(server_id)
     __user.audit(

@@ -224,6 +224,25 @@ class TestAllowAndDeny:
         assert held == [str(conf)]
 
 
+class TestQ216TheOpsBindTheServiceToTheFilesOwnName:
+    """Build 20 (Q216 AA24): `config-write-check dhcp6 /etc/kea/kea-dhcp4.conf` was answered with the dhcp6 unit's account for the dhcp4 file. Where the file names a service (Kea's own file names) the
+    `service` must be that one; a custom file name names no service and is not refused."""
+
+    @pytest.mark.parametrize("op", ["op_config_write_check", "op_allow_config_write", "op_deny_config_write"])
+    def test_a_mismatch_is_not_allowed(self, helper, op):
+        out, _path = getattr(helper, op)({"service": "dhcp6", "path": "/etc/kea/kea-dhcp4.conf"})
+        assert out == {"ok": False, "error": "not-allowed"}
+
+    def test_the_names_agree(self, helper):
+        assert helper._conf_names_another_service("dhcp4", "/etc/kea/kea-dhcp4.conf") is False
+        assert helper._conf_names_another_service("d2", "/etc/kea/kea-dhcp-ddns.conf") is False
+        assert helper._conf_names_another_service("dhcp6", "/etc/kea/kea-dhcp4.conf") is True
+        assert helper._conf_names_another_service("dhcp4", "/etc/kea/kea-dhcp-ddns.conf") is True
+
+    def test_a_custom_file_name_names_no_service(self, helper):
+        assert helper._conf_names_another_service("dhcp4", "/etc/kea/site.conf") is False
+
+
 class TestTheTickKeepsVerifying:
     """`--self-restore` after a restore (build 19): until Jen forgets the session or its deadline + 15 minutes, every tick asks again whether the FILE or the RUNNING daemon carries the
     investigation marker, and puts the logger back again when it does - F6's close."""

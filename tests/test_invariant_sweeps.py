@@ -495,6 +495,9 @@ S10_MODULES = (
     "jen/services/kea_host.py",
     "jen/services/kea_changeset.py",  # Q202 (AR8): the incident store the rotation's bookkeeping rides on
     "jen/services/kea_tls.py",  # Q202 (AR8): the certificate records a rotation, a recovery and the setup decide on
+    "jen/services/config_revisions.py",  # Q216 (AA11): the store a pending change and its settlement ride on - an unreadable store is never "nothing pending"
+    "jen/services/kea_api_config.py",  # Q216 (AA11): the module that sends `config-set` and decides what a probe and a pending row mean
+    "jen/services/kea_transport_switch.py",  # Q216 (AA11): the switch that makes a file the daemon's configuration
 )
 
 # (module, function, exception, effect): why the empty value is fail-closed there
@@ -758,6 +761,54 @@ S10_ALLOWED = {
     ),
     ("jen/services/kea_tls.py", "_group_certificate.loaded", "(OSError, ValueError)", "return None"): (
         "a certificate that does not load is no evidence: `record_group_refusal` refuses a group with files and none, and `record_destination_refusal` leaves that to it (Q201 AQ2)"
+    ),
+    ("jen/services/config_revisions.py", "_current_username", "Exception", 'return ""'): (
+        "the name stamped on a revision row is bookkeeping for people reading Config history; nothing decides on it (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "record", "Exception", "return None"): (
+        "a history row that could not be WRITTEN is bookkeeping - the decision whether a change may be sent reads `pending()`, which raises RevisionStoreUnreadable on a store that cannot be asked, and `pending_block` refuses on it before `apply` records anything (Q216 AA11)"
+    ),
+    ("jen/services/config_revisions.py", "latest", "Exception", "return None"): (
+        "the newest revision is read for the history page, a baseline capture and a restore picker; an unreadable store shows no row and decides nothing - the write gate is `pending()` (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "latest_of_kind", "Exception", "return None"): (
+        "no `kea` row means the digest check of `api_daemon_differs` falls back to containment, the 7.0.0-beta.1 rule, which still refuses a file that holds what the daemon does not run; the write gate is `pending()`, which raises (Q216 AA11)"
+    ),
+    ("jen/services/config_revisions.py", "finish", "Exception", "return False"): (
+        "a pending row that could not be finished STAYS pending: `pending_block` keeps refusing the next change until it is settled - fail closed (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "discard_pending", "Exception", "return 0"): (
+        "a pending row that could not be discarded stays on record and keeps blocking the next change - fail closed (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "discard", "Exception", "return False"): (
+        "a pending row that could not be discarded stays on record and keeps blocking the next change - fail closed (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "list_revisions", "Exception", "return []"): (
+        "the Config history page shows nothing when the store cannot be read; it decides nothing and the probe's `authored` fact falls back to false, which only adds a sentence (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "recent_with_config", "Exception", "return []"): (
+        "the restore picker and the drift view show nothing when the store cannot be read; a restore needs the revision it names and refuses without it (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "count", "Exception", "return 0"): (
+        "a count shown on a page; nothing decides on it (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "get", "Exception", "return None"): (
+        "a revision that cannot be read is a restore that is refused as 'not found' - fail closed (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "previous", "Exception", "return None"): (
+        "the diff against the previous revision is a display; a missing one shows no diff and decides nothing (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "prune", "Exception", "return 0"): (
+        "pruning old rows is housekeeping; a failure keeps every row (Q216)"
+    ),
+    ("jen/services/kea_api_config.py", "_classify_pending", "(TypeError, ValueError)", "return"): (
+        "a pending row whose body is not JSON is classified as nothing HERE - a read only says; `pending_block` finds the same row still pending and refuses every change until it is resolved from Config history (Q216 AA19)"
+    ),
+    ("jen/services/kea_api_config.py", "stored_probe", "(TypeError, ValueError)", "return None"): (
+        "no readable stored probe means `probe_gate` answers 'run Check API configuration first' and the card shows the same: an unreadable result is never consent - fail closed (Q212, Q216)"
+    ),
+    ("jen/services/kea_api_config.py", "_age_days", "(TypeError, ValueError)", "return None"): (
+        "a timestamp that cannot be read is an age nobody knows: `probe_gate` treats it as stale and refuses, `refresh_if_stale` leaves it to the gate - fail closed (Q216)"
     ),
 }
 

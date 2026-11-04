@@ -107,7 +107,7 @@ class TestTheGate:
         assert result.status == "aborted" and result.last_code == "needs-probe"
         assert daemon.commands == []  # not even the plan read
         probes.clear()
-        api.probe(server, "dhcp4", consent=True)
+        api.probe(server, "dhcp4", consent=True, consents=api.CONSENTS)
         assert cs.apply_change("dhcp4", lifetime(9), "x", servers=[server]).status == "ok"
 
 
@@ -206,13 +206,13 @@ class TestProbe:
             lambda s, svc: {"ok": True, "may_write": True, "includes": ["/etc/kea/extra.json"], "account": None},
         )
         monkeypatch.setattr(kea_host, "read_config_versioned", lambda *a, **k: (None, None))
-        out = api.probe(server, "dhcp4", consent=True)
+        out = api.probe(server, "dhcp4", consent=True, consents=api.CONSENTS)
         assert out["include"] == ["/etc/kea/extra.json"] and "consented_at" not in out and out["consent_refused"]
 
     def test_consent_is_recorded_only_when_the_facts_allow_it_and_survives_a_later_probe(
         self, daemon, server, store, probes
     ):
-        assert "consented_at" in api.probe(server, "dhcp4", consent=True)
+        assert "consented_at" in api.probe(server, "dhcp4", consent=True, consents=api.CONSENTS)
         assert "consented_at" in api.probe(server, "dhcp4")  # a click that only reads does not take the consent back
 
     def test_a_history_with_a_jen_authored_revision_says_so(self, daemon, server, store, probes):
@@ -229,13 +229,13 @@ class TestTheProbeIsBoundToItsEndpoint:
     """Fix row 6: ids are reused and `api_url` can be re-pointed; consent given to one Kea never carries to another that inherits its number."""
 
     def test_a_server_that_now_points_elsewhere_is_gated(self, daemon, server, store, probes):
-        api.probe(server, "dhcp4", consent=True)
+        api.probe(server, "dhcp4", consent=True, consents=api.CONSENTS)
         assert api.probe_gate(server) == ""
         moved = {**server, "api_url": "http://127.0.0.1:1/"}
         assert "different Kea" in api.probe_gate(moved)
 
     def test_a_probe_of_the_new_endpoint_starts_without_the_old_consent_or_refusal(self, daemon, server, store, probes):
-        api.probe(server, "dhcp4", consent=True)
+        api.probe(server, "dhcp4", consent=True, consents=api.CONSENTS)
         api.remember_refusal(server, "denied")
         moved = {**server, "api_url": daemon.url.replace("127.0.0.1", "localhost")}
         out = api.probe(moved, "dhcp4")
@@ -305,5 +305,13 @@ class TestTheCapabilityAndTheBadge:
     def test_config_inputs_read_the_dict_and_the_stored_probe(self, monkeypatch):
         monkeypatch.setattr(api, "stored_probe", lambda sid: {"config_api": True})
         got = caps.config_inputs({"id": 3, "config_transport": "api"})
-        assert got == {"config_transport": "api", "config_declared": "api", "config_probe": {"config_api": True}}
+        assert got == {
+            "config_transport": "api",
+            "config_declared": "api",
+            "config_probe": {"config_api": True},
+            "config_gate": api.probe_gate(
+                {"id": 3, "config_transport": "api"}
+            ),  # (Q216 AA13) the gate's own answer rides along
+        }
+        assert got["config_gate"], "a stored result with no timestamp is a closed gate"
         assert caps.config_inputs(None) == {}

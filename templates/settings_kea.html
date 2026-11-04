@@ -272,9 +272,14 @@
     <div id="config-card-{{ c.id }}" class="mt-3">
         <div class="u-85c718">
             {{ c.name }}
-            <span class="badge {{ 'badge-tone-blue' if c.transport == 'api' else ('badge-reserved' if c.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ c.transport }}">{{ c.transport }}</span>
+            <span class="badge {{ 'badge-tone-blue' if c.transport == 'api' else ('badge-reserved' if c.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ c.transport }}">{{ c.transport }}{% if c.blocked %}, blocked{% endif %}</span>
         </div>
         <p class="form-hint">{{ c.why }}</p>
+        {% if c.pending_unreadable %}<div class="alert alert-warning" data-transport-pending-unreadable>{{ icon("triangle-alert") }} The record of an earlier change cannot be read, so nothing is sent to this server until it can.</div>{% endif %}
+        {% if c.pending %}<div class="alert alert-warning" data-transport-pending>{{ icon("triangle-alert") }} A change this server's process left half-done is on record.{% if current_user.role == 'superadmin' %}
+            <form method="POST" action="/settings/infrastructure/settle-pending-change/{{ c.id }}" class="u-cccfa4" data-confirm="Settle the unfinished change on {{ c.name }}? Jen compares what the daemon runs with the change and finishes or removes it. This is audited.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Settle it now</button>
+            </form>{% endif %}</div>{% endif %}
         {% if c.refused %}<div class="alert alert-warning" data-transport-refused>{{ icon("triangle-alert") }} {{ c.refused }}</div>{% endif %}
         {% if c.probe %}
         <table class="u-95cc13" data-config-facts>
@@ -297,8 +302,16 @@
         {% if current_user.role == 'superadmin' %}
         <div class="u-8a77e5">
             <button type="button" class="btn btn-sm btn-secondary" data-config-probe="{{ c.id }}">Check API configuration</button>
-            <label><input type="checkbox" data-config-consent="{{ c.id }}"> I have read the facts above and allow changes over the API</label>
             <span class="form-hint" data-config-probe-result="{{ c.id }}"></span>
+            {% if c.probe %}
+            <div class="form-hint" data-config-consent-group="{{ c.id }}" data-at="{{ c.probe.at }}">
+                <label><input type="checkbox" data-config-consent="{{ c.id }}"> I have read the facts above and allow changes over the API</label><br>
+                <label><input type="checkbox" data-config-named="{{ c.id }}" value="consent_rendering"> Kea will write its file in its own form: comments and key order are not kept</label>
+                {% if not c.ssh %}<br><label><input type="checkbox" data-config-named="{{ c.id }}" value="confirm_no_include"> {{ c.name }} has no SSH host: I confirm its file carries no include and no edit the daemon has not loaded</label>{% endif %}
+                {% if c.probe.auth == 'none' %}<br><label><input type="checkbox" data-config-named="{{ c.id }}" value="consent_unauthenticated"> This endpoint has no authentication; anything that can reach it can change this daemon's configuration</label>{% endif %}
+                {% if c.ssh and c.probe.agree is false %}<br><label><input type="checkbox" data-config-named="{{ c.id }}" value="discard_file_edit"> The file carries a configuration the daemon is not running; discard that edit</label>{% endif %}
+            </div>
+            {% endif %}
         </div>
         <form method="POST" action="/settings/infrastructure/kea-transport/{{ c.id }}" class="u-d2c171" data-confirm="Switch {{ c.name }}? This is audited.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -324,7 +337,7 @@
             {% else %}<span class="form-hint">The grant needs the Kea host helper build {{ config_write_min_build }} on this host (press Update helper above).</span>{% endif %}
         </div>
         {% endif %}
-        {% if c.refused and not c.ssh %}
+        {% if c.can_claim_fixed %}
         <form method="POST" action="/settings/infrastructure/config-write-fixed/{{ c.id }}" class="u-8a77e5" data-confirm="Clear the refusal on your word? Nothing proves the daemon may write its file now; the next change will find out.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">I have fixed it</button>
         </form>
@@ -1082,14 +1095,17 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
         if (!btn) return;
         var id = btn.getAttribute('data-config-probe');
         var box = document.querySelector('[data-config-consent="' + id + '"]');
+        var group = document.querySelector('[data-config-consent-group="' + id + '"]');
         var out = document.querySelector('[data-config-probe-result="' + id + '"]');
+        var fields = {consent: box && box.checked ? '1' : '0', at: group ? group.getAttribute('data-at') : ''};
+        document.querySelectorAll('[data-config-named="' + id + '"]').forEach(function (n) { if (n.checked) fields[n.value] = '1'; });
         btn.disabled = true;
         out.textContent = ' Checking…';
         try {
             var resp = await jenFetch('/settings/infrastructure/probe-kea-config/' + id, {
                 method: 'POST',
                 headers: {'X-CSRFToken': {{ csrf_token()|tojson }}, 'Content-Type': 'application/x-www-form-urlencoded'},
-                body: new URLSearchParams({consent: box && box.checked ? '1' : '0'}),
+                body: new URLSearchParams(fields),
             });
             var data = await resp.json();
             if (data.ok) {

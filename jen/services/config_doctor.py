@@ -772,7 +772,23 @@ def _check_config_transport(jen_cfg) -> list[Finding]:
         if not jen_cfg.has_option(section, "config_transport"):
             continue
         value = jen_cfg.get(section, "config_transport", fallback="", raw=True).strip()
+        if value == "":
+            continue  # (Q216 AA8) a blank value is ABSENT, as `declared_transport` reads it: `file` where there is SSH, `off` where there is none - not an unrecognized spelling
         if value in ("api", "file", "off"):
+            if value == "api":
+                url_section = "kea" if section == "kea" else section
+                if not jen_cfg.get(url_section, "api_url", fallback="", raw=True).strip():
+                    out.append(
+                        _finding(
+                            "config-transport-api-without-address",
+                            "warn",
+                            "The API transport needs an address",
+                            f"[{section}] config_transport is `api`, but this server has no api_url, so a change to it cannot be sent: the whole change set stops with an error that names neither the server nor the cause.",
+                            f"[{section}] api_url",
+                            fix_url="/settings/kea",
+                            why="The API transport asks the daemon itself; without its address there is nothing to ask. Add the API URL, or switch the server to the file transport from its card.",
+                        )
+                    )
             ssh_key = "host" if section == "kea" else "ssh_host"
             ssh_section = "kea_ssh" if section == "kea" else section
             if value == "file" and not jen_cfg.get(ssh_section, ssh_key, fallback="", raw=True).strip():

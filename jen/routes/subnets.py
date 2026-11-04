@@ -1488,7 +1488,16 @@ def dhcp_class_preview():
 
     test_result = None
     if not error:
-        ssh_server = next((s for s in extensions.KEA_SERVERS if __host.read_kind(s, "dhcp4")), None)
+        # (Q216 AA18) `read_kind` is never falsy for dhcp4 - an `off` server with no SSH still reads over its API - so "a server to validate against" is one a change could reach: a write target, or a
+        # host with SSH. The branch that says there is none is reachable again.
+        ssh_server = next(
+            (
+                s
+                for s in extensions.KEA_SERVERS
+                if __host.read_kind(s, "dhcp4") and (s.get("ssh_host") or __changeset._transport(s, "dhcp4") != "off")
+            ),
+            None,
+        )
         if ssh_server is None:
             test_result = {
                 "ok": None,
@@ -2483,15 +2492,20 @@ def import_windows_apply(source):
             flash(_conflict_flash(primary.get("name", "the primary server")), "error")
             return redirect(review_url)
         if apply_result["code"] != "ok":
+            noted = True
             if apply_result.get("needs_hands"):
-                __changeset.record_attention(
+                noted = __changeset.record_attention(
                     primary.get("id"),
                     "dhcp4",
                     f"{src['label']} import",
                     "config-api-unverified",
                     server_name=primary.get("name", ""),
                 )
-            flash(f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}", "error")
+            flash(
+                f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}"
+                + ("" if noted else " Jen could not record that the daemon is unproved; check it on the daemon."),
+                "error",
+            )
             return redirect(review_url)
         entry["report"].append("Applied over the daemon's own API; no restart was needed.")
         __changeset.resolve_attention(

@@ -2143,3 +2143,64 @@ class TestTheKeaPackageInstallAsksForARecentPassword:
             if p.name != "base.html" and "window.location.assign(d.reauth)" in p.read_text(encoding="utf-8")
         ]
         assert not others, others
+
+
+class TestAnApiServerIsNamedNotAuthored:
+    """Q216 (the second pass's P3b): Author Kea Config writes Jen's whole FILE and the API carries none of the file's layout, so a server whose transport is `api` is named as not a target - on the page, in the
+    preview, and by the POST before anything is built or sent."""
+
+    SENTENCE = "switch it to the file transport under Settings"  # (the apostrophe in "Kea's API" is escaped on a page)
+    FORM = {
+        "interfaces": "eth0",
+        "control_socket": "/run/kea6.sock",
+        "db_host": "h",
+        "db_user": "u",
+        "db_name": "kea",
+        "subnets": "1 = V6LAN, 2001:db8::/64",
+    }
+
+    def _api_server(self, monkeypatch):
+        server = {
+            "id": 1,
+            "name": "s1",
+            "ssh_host": "1.2.3.4",
+            "kea_conf": "/etc/kea/kea-dhcp4.conf",
+            "config_transport": "api",
+        }
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        return server
+
+    def test_the_page_says_so(self, logged_in_client, monkeypatch):
+        import jen.services.kea6 as kea6_module
+
+        self._api_server(monkeypatch)
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("", "")] * 6))
+        body = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6").get_data(as_text=True)
+        assert "data-author-api-server" in body and self.SENTENCE in body
+
+    def test_the_preview_names_it_and_never_checks_it(self, logged_in_client, monkeypatch):
+        import jen.services.kea6 as kea6_module
+
+        self._api_server(monkeypatch)
+        fake_ssh = FakeSSHClient([])
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        data = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6/preview", data=self.FORM).get_json()
+        assert data["servers"][0]["ok"] is False and self.SENTENCE in data["servers"][0]["message"]
+        assert data["all_passed"] is False and fake_ssh.calls == []
+
+    def test_the_post_refuses_before_a_helper_is_asked_or_anything_is_sent(self, logged_in_client, monkeypatch):
+        from jen.services import kea_changeset, kea_host
+
+        self._api_server(monkeypatch)
+        sent = []
+        monkeypatch.setattr(
+            kea_host, "helper_build", lambda server: sent.append("helper") or {"code": "ok", "build": 99}
+        )
+        monkeypatch.setattr(kea_changeset, "apply_change", lambda *a, **k: sent.append("apply_change"))
+        monkeypatch.setattr("jen.services.kea.kea_command", lambda *a, **k: sent.append("kea_command") or {"result": 0})
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data=self.FORM, follow_redirects=True)
+        text = resp.get_data(as_text=True)
+        assert self.SENTENCE in text and "Nothing was written" in text and sent == []

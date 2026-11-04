@@ -128,10 +128,19 @@ class ServerCapabilities:
     config_declared: str = "off"  # the setting as `kea_api_config.declared_transport` reads it
     config_probed: bool = False  # a stored probe exists
     config_probe_error: str = ""  # Kea's own text when the last probe was refused
+    config_gate: str = ""  # `kea_api_config.probe_gate`'s answer for this server: why a change over the API would be refused NOW ("" when it would not) - the badge and the sentence read it (Q216 AA13)
+
+    @property
+    def transport_blocked(self) -> bool:
+        """An `api` server whose gate is closed: the badge and the sentence say so in the same words, never "healthy" over a gate that refuses."""
+        return self.config_transport == "api" and bool(self.config_gate)
 
     def transport_why(self) -> str:
-        """ONE word for one state everywhere (badge, result line, sentence): the sentence that goes with `config_transport`."""
+        """ONE word for one state everywhere (badge, result line, sentence): the sentence that goes with `config_transport`. For `api` it is derived from the GATE's answer (Q216 AA13): stale, not
+        consented, re-pointed, refused, not readable - the same state the change set will meet."""
         if self.config_transport == "api":
+            if self.config_gate:
+                return f"changes cannot go over the API yet: {self.config_gate}"
             if self.config_probed and not self.config_api:
                 return "the daemon did not answer the last check; a change will abort until it does"
             return "changes go over the daemon's own API: no SSH, no restart"
@@ -339,6 +348,7 @@ def derive(
     config_transport: str = "off",
     config_declared: str = "off",
     config_probe: dict | None = None,
+    config_gate: str = "",
 ) -> ServerCapabilities:
     """Every capability from plain inputs — no I/O, no Flask, no DB. Q212: `config_transport` / `config_declared` are what `kea_changeset._transport` and
     `kea_api_config.declared_transport` answered for the server, and `config_probe` is the STORED probe result (never a live call: Health builds capabilities with no Kea call)."""
@@ -384,6 +394,7 @@ def derive(
         config_declared=config_declared if config_declared in ("api", "file", "off") else "off",
         config_probed=bool(config_probe),
         config_probe_error=str((config_probe or {}).get("refused") or "")[:200],
+        config_gate=str(config_gate or "")[:400],
     )
 
 
@@ -398,6 +409,7 @@ def config_inputs(server: dict | None) -> dict:
         "config_transport": _cs._transport(server, "dhcp4"),
         "config_declared": _api.declared_transport(server),
         "config_probe": _api.stored_probe(server.get("id")),
+        "config_gate": _api.probe_gate(server) if _cs._transport(server, "dhcp4") == "api" else "",
     }
 
 

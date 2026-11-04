@@ -17,6 +17,7 @@ import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
 import jen.services.kea6 as __kea6
+import jen.services.kea_api_config as __api
 import jen.services.kea_authoring as __authoring
 import jen.services.kea_changeset as __changeset
 import jen.services.kea_host as __host
@@ -206,6 +207,7 @@ def author_kea_config(service):
         endpoint_error=endpoint_error,
         any_http=any_http,
         bind_candidates=bind_candidates,
+        api_servers=_authoring_api_servers(),
         cert_required=cert_required,
         subnet_lines=subnet_lines,
         has_existing_subnets=bool(existing_subnets),
@@ -484,6 +486,21 @@ def _author_server_state(server, service):
     return True, sha or "", None
 
 
+AUTHORING_API_SENTENCE = (
+    "this server takes changes over Kea's API; switch it to the file transport under Settings → Kea to author its file"
+)
+
+
+def _authoring_api_servers() -> list[dict]:
+    """(Q216 AA - the second pass's P3b) Author Kea Config writes Jen's whole FILE (the include, the hooks path, the loggers) and the API carries none of the file's layout: a server whose transport is
+    `api` is named as not a target - on the page, in the preview, and by the POST before anything is built - with this one sentence."""
+    return [
+        {"name": s.get("name") or s.get("ssh_host") or "server", "sentence": AUTHORING_API_SENTENCE}
+        for s in extensions.KEA_SERVERS
+        if s.get("ssh_host") and __api.declared_transport(s) == "api"
+    ]
+
+
 @bp.route("/settings/infrastructure/author-kea/<service>/preview", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -501,6 +518,9 @@ def author_kea_config_preview(service):
         if not server.get("ssh_host"):
             continue
         name = server.get("name", server["ssh_host"])
+        if __api.declared_transport(server) == "api":
+            server_results.append({"name": name, "ok": False, "message": f"{name}: {AUTHORING_API_SENTENCE}."})
+            continue
         config, tls_paths, warning, cfg_err = _author_kea_config_for(service, server, common, subnets)
         if cfg_err:
             server_results.append({"name": name, "ok": False, "message": cfg_err})
@@ -584,6 +604,13 @@ def author_kea_config_post(service):
     if not servers:
         flash("No Kea server has SSH configured.", "error")
         return redirect(url_for("settings.settings_kea"))
+    api_servers = _authoring_api_servers()
+    if api_servers:  # before a helper is asked, before a candidate is built, before `apply_change`: nothing is sent
+        flash(
+            "; ".join(f"{s['name']}: {s['sentence']}" for s in api_servers) + ". Nothing was written.",
+            "error",
+        )
+        return redirect(url_for("settings.author_kea_config", service=service))
 
     # v5.68.0-beta.16 (Q151) - the rollback of a file Jen created is the helper's `remove-config` (build 13+), and the legacy script cannot roll
     # anything back: every target must have a current helper BEFORE anything is previewed for write or preflighted, and the whole change set runs

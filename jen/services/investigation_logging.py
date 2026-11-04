@@ -540,7 +540,33 @@ def _change(
             },
             transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path in 7.0.0-beta.1 (Q212)
         )
+    if result is not None and result.status == "ok" and _declared_api(server):
+        result.lines.append(
+            (
+                "warning",
+                f"ℹ️ {_name(server)}: this server's changes go over the API, and logging's own write to its file is not compared with what the daemon runs first "
+                "(the deadline must never wait on it) - a change made on the daemon by hand that its file lacked is not carried by the file.",
+            )
+        )
     return result, use_reload, support
+
+
+def _declared_api(server: dict) -> bool:
+    from jen.services import kea_api_config as _api  # lazy: that module imports this one's neighbors (`kea_host`)
+
+    return _api.declared_transport(server) == "api"  # (pure: a setting read, no I/O)
+
+
+def _record_daemon_after_reload(server: dict) -> None:
+    """(Q216 BF2) A server whose configuration transport is `api` had its FILE written by this module and its daemon told to re-read it: what the daemon runs NOW is recorded as a `kea` row, as the
+    change set does after a restart, so the next API read does not capture Jen's own toggle as "changed outside Jen". Best effort, never raises: a daemon that does not answer records nothing."""
+    try:
+        from jen.services import kea_api_config as _api
+
+        if _api.declared_transport(server) == "api":
+            _api.record_after_file_write(server, "dhcp4", "investigation logging", source="jen")
+    except Exception as e:
+        logger.debug(f"investigation_logging: the daemon's configuration after the reload was not recorded: {e}")
 
 
 def _daemon_step(
@@ -555,6 +581,7 @@ def _daemon_step(
     if use_reload:
         reply = _kea.kea_command("config-reload", server=server)
         if reply.get("result") == 0:
+            _record_daemon_after_reload(server)
             return {"ok": True, "mode": "reload", "lines": ["Kea re-read its config without a restart."]}
         refused = reply.get("text") or "refused"
         if verify is not None and verify():
@@ -809,7 +836,15 @@ UNSTORED = "Jen could not record this (its database did not take the write); the
 SETTINGS_UNAVAILABLE = "Jen's settings could not be read (its database is unavailable)"
 
 
-def _did_not_take(server, record, sid, entry, lines, step_lines, *, contradiction=False) -> dict:
+def _still_running(held: dict | None) -> bool:
+    """(Q216 AA22) Is `held` - the entry that was stored for this server BEFORE a turn-on began - a session the daemon still runs? Its last observation was `debug`, or `other` with the marker still in the
+    file: that observation is the one thing the entry knows, and a failed turn-on's look at the daemon (through an API that may answer for another Kea) does not outrank it."""
+    if not held or held.get("removed"):
+        return False
+    return held.get("daemon") == "debug" or (held.get("daemon") == "other" and held.get("file", "debug") == "debug")
+
+
+def _did_not_take(server, record, sid, entry, lines, step_lines, *, contradiction=False, held=None) -> dict:
     """The daemon did not (visibly) take the DEBUG file: put it straight back, WITHOUT a restart - and then LOOK, because a reload whose reply was
     lost may have been applied. Seen restored: the entry is dropped ("not activated"). Seen at DEBUG: kept, the sweep finishes it. Seen at anything
     else: kept and LEFT ALONE. With `contradiction` (a reload or restart that was asked of a DEBUG file and answered "restored") the entry is kept
@@ -825,6 +860,22 @@ def _did_not_take(server, record, sid, entry, lines, step_lines, *, contradictio
             stored = _put(record, sid, entry)
             tail = [f"Logging was not activated: {CONTRADICTION}."] + ([] if stored else [UNSTORED])
             return {"ok": False, "mode": "", "lines": head + tail, "until": ""}
+        if state == "restored" and _still_running(held):
+            # (Q216 AA22, seed 207) the entry under this id is a session whose daemon was seen at DEBUG: the turn-on that did not take does not end it. The stored entry is put back as it was,
+            # saying what happened to this attempt; the sweep restores it at its deadline.
+            kept = dict(held)
+            kept["error"] = "a later turn-on did not take; this session is still on"
+            stored = _put(record, sid, kept)
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": head
+                + [
+                    "Logging was not turned on again; the session that was already on is still kept and Jen restores it at its deadline."
+                ]
+                + ([] if stored else [UNSTORED]),
+                "until": "",
+            }
         if state == "restored":
             if _drop(record, sid):
                 return {"ok": False, "mode": "", "lines": head + ["Logging was not activated."], "until": ""}
@@ -1017,7 +1068,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
         if not armed:
             if written:
                 _abandon_host_arm(server)
-            return _did_not_take(server, record, sid, entry, lines, arm_lines)
+            return _did_not_take(server, record, sid, entry, lines, arm_lines, held=held)
 
         if not use_reload:  # the change set restarted the daemon: file and daemon moved together - and the daemon is looked at, not assumed
             entry["restarted"] = True
@@ -1035,7 +1086,9 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                     )
                     + " - the change did not take."
                 ]
-                return _did_not_take(server, record, sid, entry, lines, step_lines, contradiction=(state == "restored"))
+                return _did_not_take(
+                    server, record, sid, entry, lines, step_lines, contradiction=(state == "restored"), held=held
+                )
             entry.update(pending=None if state == "debug" else "reload", mode="restart")
             if not _put(record, sid, entry):
                 return _undo_activation(server, record, "Jen could not record that logging is on")
@@ -1097,9 +1150,11 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 "mode": "",
                 "lines": [f"Kea said it reloaded, but its running logger is {shown} - the change did not take."],
             }
-            return _did_not_take(server, record, sid, entry, lines, step["lines"], contradiction=(state == "restored"))
+            return _did_not_take(
+                server, record, sid, entry, lines, step["lines"], contradiction=(state == "restored"), held=held
+            )
         # The daemon did not (visibly) take it: put the file straight back, WITHOUT a restart - and then look
-        return _did_not_take(server, record, sid, entry, lines, step["lines"])
+        return _did_not_take(server, record, sid, entry, lines, step["lines"], held=held)
 
 
 OBSERVE_AFTER_HUP_S = 6  # a SIGHUP is not acknowledged: look this long for the daemon to show the restored level before calling it still at DEBUG
@@ -1621,21 +1676,26 @@ def restore_window(server: dict, now: datetime | None = None) -> str:
     record = _record()
     if record.get("damaged"):
         return ""  # `file_write_refusal` answers for a record that cannot be read
-    entry = record["servers"].get(str(server.get("id")))
-    if not entry or entry.get("removed"):
-        return ""
-    if entry.get("file", "debug") != "debug" and entry.get("daemon", "debug") != "debug":
-        return ""
-    due = _edit._parse_until(entry.get("until"))
-    if due is None:
-        return ""
+    # (Q216 AA15) the entry is about a KEA, as in `file_write_refusal`: this server's own live entry, or one under another id that names this Kea (SSH host and config path), removed or not
+    sid = str(server.get("id"))
+    own = record["servers"].get(sid)
+    candidates = [own] if own and not own.get("removed") else []
+    candidates += [
+        e for k, e in record["servers"].items() if k != sid and e.get("ssh_host") and _entry_matches(e, server)
+    ]
     now = now or datetime.now(timezone.utc)
-    if abs((due - now).total_seconds()) <= 2 * SWEEP_INTERVAL_SECONDS:
-        return f"the host is restoring logging at {due.isoformat(timespec='seconds')}; try again after it"
-    if due <= now:
-        # (found by the walk, seed 283) past the window but still UNRESOLVED: the host's restore may be failing and retrying every minute, and it can land at any moment - including between Jen's
-        # `config-hash-get` and its `config-set`. Until the entry is resolved the host's restore is pending, whatever the clock says.
-        return f"logging was due to be restored at {due.isoformat(timespec='seconds')} and the host has not finished; try again after it has"
+    for entry in candidates:
+        if entry.get("file", "debug") != "debug" and entry.get("daemon", "debug") != "debug":
+            continue
+        due = _edit._parse_until(entry.get("until"))
+        if due is None:
+            continue
+        if abs((due - now).total_seconds()) <= 2 * SWEEP_INTERVAL_SECONDS:
+            return f"the host is restoring logging at {due.isoformat(timespec='seconds')}; try again after it"
+        if due <= now:
+            # (found by the walk, seed 283) past the window but still UNRESOLVED: the host's restore may be failing and retrying every minute, and it can land at any moment - including between Jen's
+            # `config-hash-get` and its `config-set`. Until the entry is resolved the host's restore is pending, whatever the clock says.
+            return f"logging was due to be restored at {due.isoformat(timespec='seconds')} and the host has not finished; try again after it has"
     return ""
 
 

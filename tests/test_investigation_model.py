@@ -243,7 +243,7 @@ class Walk:
         self.sync()
         # the wire: every Kea call is answered by the PHYSICAL fake at the address the server names
         monkeypatch.setattr(inv._kea, "kea_command", self._kea_command)
-        _api_world.install_store(
+        self.rev_store = _api_world.install_store(
             monkeypatch
         )  # Q212: the module records its revisions (a pending row, a `kea` row) in memory
         _api_world.install_probes(monkeypatch)  # ... and reads the stored probe: every server's operator has consented
@@ -1316,8 +1316,36 @@ class Walk:
             ]
             entry = next((e for e in owed if e.get("file", "debug") == "debug"), None)
             erases = bool(entry and not has_marker(candidate))
-            with _changeset_mod.change_lock():
-                res = _api.apply(api_server, "dhcp4", candidate, digest, "walk", before_cfg=cfg)
+            # Q216 (AA11) the fault `store_unreadable`: the record of pending changes cannot be READ for this one write. Its own draw on the API source, after every other.
+            unreadable = self.api_rng.random() < 0.15
+            sent_before = list(fake.calls)
+            self.rev_store.unreadable = unreadable
+            try:
+                with _changeset_mod.change_lock():
+                    res = _api.apply(api_server, "dhcp4", candidate, digest, "walk", before_cfg=cfg)
+            finally:
+                self.rev_store.unreadable = False
+            if unreadable:
+                self.say(
+                    f"api_write {flavor} on {server['id']}: the revision store could not be read: code={res.get('code')}"
+                )
+                sent = [c for c in fake.calls[len(sent_before) :] if c in ("config-set", "config-write")]
+                refused_elsewhere = res.get("code") in (
+                    "guard",
+                    "investigation-on",
+                    "conflict",
+                    "noanswer",
+                )  # an earlier, legitimate refusal (the marker, the window, the digest)
+                if (
+                    res.get("ok")
+                    or sent
+                    or (not refused_elsewhere and "cannot be read" not in str(res.get("detail", "")))
+                ):
+                    self.fail(
+                        "I13",
+                        f"an API write ({flavor}) to server {server['id']} while the record of pending changes could not be read was not refused (ok={res.get('ok')}, sent={sent}, detail={res.get('detail')!r})",
+                    )
+                return
             self.say(f"api_write {flavor} on {server['id']}: code={res.get('code')} erases_marker={erases}")
             if res.get("ok") and (erases or state != "ok"):
                 self.fail(
@@ -1895,6 +1923,32 @@ class TestTheWalkFindsTheBuild19Race:
         walk_world(seed, STEPS).run()
 
 
+class TestTheStoreFaultBites:
+    """Q216 AA11: the walk's `store_unreadable` fault (a revision store that cannot be READ for one API write) goes red when `pending()` answers None for it - the old behavior."""
+
+    RED = []
+
+    @pytest.mark.parametrize("seed", range(24))
+    def test_i13_is_red_when_an_unreadable_store_reads_as_nothing_pending(self, seed, walk_world, monkeypatch):
+        from tests import _kea_api_world as api_world
+
+        def old_pending(self, server_id, service):
+            rows = [r for r in self._of(server_id, service) if r["source"] == "pending"]
+            return copy.deepcopy(rows[-1]) if rows else None
+
+        monkeypatch.setattr(api_world.Store, "pending", old_pending)
+        monkeypatch.setattr(Walk, "API_WRITE_SHARE", 0.6)
+        try:
+            walk_world(seed, STEPS).run()
+        except InvariantViolated as red:
+            assert "I13 violated" in str(red), str(red)[:500]
+            TestTheStoreFaultBites.RED.append(seed)
+
+    def test_it_goes_red_at_least_once(self):
+        print(f"MODEL I13 MUTATION: {len(TestTheStoreFaultBites.RED)} of 24 seeds red: {TestTheStoreFaultBites.RED}")
+        assert TestTheStoreFaultBites.RED
+
+
 class TestSeedsThatCaughtARealDefect:
     """A seed that failed during development stays as a fixed regression (Q163 self-check c). Under the harness as shipped these four are the walks that go red
     when the fix of a defect the walk found is taken out again (the mutation check): 13 and 165 when the restore's one restart is unbounded, 24 and 98 when
@@ -2408,6 +2462,32 @@ class TestWhatTheWalkFound:
         kea.file = cfg
         assert kea.host_tick() is None, "the tick found a marker that is not the finished session's and left it"
         assert has_marker(kea.file)
+
+    def test_a_turn_on_that_does_not_take_never_drops_a_session_the_daemon_still_runs__seed_207(self, world):
+        """Q216 AA22 (the walk's I7 at seed 207, found by Opus's pass, reproduced twice). A session is on and observed at DEBUG; a person deletes the file's loggers by hand; a turn-on to extend it
+        is refused by the host (the new entry's restore object is not the recorded one) and Jen's look at the daemon goes through an API that answers for ANOTHER Kea - 'restored'. The old code dropped
+        the entry of the session that was still running; it is kept, saying what happened to the attempt."""
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        assert _stored_servers(world)["1"]["daemon"] == "debug"
+        kea.file["Dhcp4"].pop("loggers")  # a person deleted the file's loggers by hand
+        kea.second = _cfg()  # the API now answers for a Kea with no loggers: "restored", as far as a new entry whose restore object is "created" can tell
+        out = inv.turn_on(world.servers[0], 15)
+        assert not out["ok"]
+        stored = _stored_servers(world).get("1")
+        assert stored is not None and stored["daemon"] == "debug", (
+            "the entry of a session the daemon still runs is kept"
+        )
+        assert "still on" in stored["error"]
+
+    def test_the_guard_is_what_keeps_it__mutation(self, world, monkeypatch):
+        monkeypatch.setattr(inv, "_still_running", lambda held: False)
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        kea.file["Dhcp4"].pop("loggers")
+        kea.second = _cfg()
+        inv.turn_on(world.servers[0], 15)
+        assert "1" not in _stored_servers(world), "without the guard the old drop is back"
 
     def test_the_walk_composes_the_window__seed_0_goes_red_on_build_19s_rule_and_green_on_build_20s(
         self, walk_world, monkeypatch

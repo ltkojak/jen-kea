@@ -166,6 +166,9 @@ def servers():
         probe = __api.stored_probe(s["server"].get("id")) or {}
         s["transport"] = caps.config_transport
         s["transport_why"] = caps.transport_why()
+        s["transport_blocked"] = (
+            caps.transport_blocked
+        )  # (Q216 AA13) the gate's own state: the badge never says "healthy" over a gate that refuses
         s["transport_unauthenticated"] = caps.config_transport == "api" and probe.get("auth") == "none"
         s["transport_refused"] = __api.refusal_sentence(s["server"])
     single_server = len(extensions.KEA_SERVERS) == 1

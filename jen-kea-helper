@@ -415,6 +415,16 @@ def _allowed_conf_path(p):
     return bool(_CONF_BASENAME_RE.match(posixpath.basename(p)))
 
 
+_STANDARD_CONF_SERVICE = {"kea-dhcp4.conf": "dhcp4", "kea-dhcp6.conf": "dhcp6", "kea-dhcp-ddns.conf": "d2"}
+
+
+def _conf_names_another_service(service, path):
+    """True when `path` is one of Kea's own file names (`kea-dhcp4.conf`, ...) and it names a DIFFERENT service than `service` (build 20, Q216): `config-write-check dhcp6 /etc/kea/kea-dhcp4.conf` would
+    report the dhcp6 unit's account for the dhcp4 file. A custom file name names no service, so nothing is refused for it."""
+    named = _STANDARD_CONF_SERVICE.get(posixpath.basename(path or ""))
+    return named is not None and named != service
+
+
 def _allowed_log_path(p):
     """True iff `p` is an absolute, already-normalised `*.log` path under
     /var/log (with symlinks in the existing prefix resolved)."""
@@ -1162,7 +1172,7 @@ def op_config_write_check(payload):
     is root, and root writes anyway), whether that account may write the file, and any `<?include "..."?>` directive the file carries (the daemon reports the MERGED configuration and
     `config-write` renders one flat file: Jen does not recommend the API transport while an include is present). Changes nothing."""
     service, path = payload.get("service"), payload.get("path")
-    if not _valid_service(service) or not _allowed_conf_path(path):
+    if not _valid_service(service) or not _allowed_conf_path(path) or _conf_names_another_service(service, path):
         return {"ok": False, "error": "not-allowed"}, None
     try:
         raw, st = _open_conf(path)
@@ -1191,7 +1201,7 @@ def op_config_write_check(payload):
 
 def _set_conf_access(payload, grant):
     service, path = payload.get("service"), payload.get("path")
-    if not _valid_service(service) or not _allowed_conf_path(path):
+    if not _valid_service(service) or not _allowed_conf_path(path) or _conf_names_another_service(service, path):
         return {"ok": False, "error": "not-allowed"}, None
     account = _unit_account(service)
     if account is not None and "refused" in account:

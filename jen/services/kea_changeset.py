@@ -412,6 +412,9 @@ def _run_change_unlocked(
         try:
             read_errors: list[str] = []
             if kind == "api":
+                _api.refresh_if_stale(
+                    server, service
+                )  # (Q216 AA12) facts older than a day are re-read before the gate is asked; consent is never re-asked
                 gated = _api.probe_gate(
                     server
                 )  # no write without the probe's facts and the operator's consent; a remembered refusal (BB9 a) is needs-hands BEFORE the first read
@@ -425,6 +428,14 @@ def _run_change_unlocked(
                         needs_hands=[name] if refused else [],
                         needs_hands_ids=[server.get("id")] if refused else [],
                     )
+                if service == "dhcp4":
+                    # (Q216 BF6) the host's restore window is asked at PLAN, as the probe gate is: a mixed set inside it would write its file targets and then be refused by the api target
+                    from jen.services import investigation_logging as _inv  # lazy: that module imports this one
+
+                    window = _inv.restore_window(server)
+                    if window:
+                        lines.append(("error", f"❌ {name}: {window} (nothing was written to any server)"))
+                        return ChangeSetResult("aborted", "investigation-on", lines)
                 notes: list[str] = []
                 cfg, sha = _api.read(server, service, errors=read_errors, notes=notes)
                 lines.extend(("warning", f"ℹ️ {name}: {note}") for note in notes)
