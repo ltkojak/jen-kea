@@ -1194,7 +1194,11 @@ class TestADeletionIsADifference:
         """The recorded files carry key paths and nothing else (no values), sorted, indexes blanked."""
         for path in sorted(api.KEA_DEFAULTS_DIR.glob("kea_defaults_*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
-            assert set(data) <= {"kea", "paths"} and data["paths"] == sorted(set(data["paths"])), path.name
+            assert set(data) <= {"kea", "paths", "populated"} and data["paths"] == sorted(set(data["paths"])), path.name
+            assert set(data.get("populated", {})) <= set(data["paths"]), path.name
+            assert all(
+                isinstance(v, list) and all(isinstance(i, str) for i in v) for v in data.get("populated", {}).values()
+            ), path.name  # lists of names, never values of a setting
             assert all(isinstance(p, str) and "[0]" not in p for p in data["paths"]), path.name
 
 
