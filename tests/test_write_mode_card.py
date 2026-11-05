@@ -168,6 +168,22 @@ class TestTheCardIsOneChoice:
         _cards, quiet = wm.render(monkeypatch, [wm.S_API], {2: _facts()})
         assert "Record consent" in quiet and re.search(r'data-wm-target="api"[^>]*disabled', quiet)
 
+    def test_the_pending_alert_prints_what_the_settlement_waits_on(self, monkeypatch):
+        """Q218 BH1 e: the alert names what *Settle it now* would stop on, above the button, and the confirm text says the file is compared too."""
+        note = "a change of 2026-11-05 07:00:00 is live and its file write waits: the file on kea-b carries an edit the daemon has not loaded (at Dhcp4.user-context) - restart Kea there first, or discard it from the server's Write mode card"
+        _cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts()}, pending=True, pending_note=note)
+        alert = html[html.index("data-transport-pending>") : html.index("Settle it now</button>")]
+        assert "its file write waits" in alert and "Dhcp4.user-context" in alert and "Settle it now" not in alert[:-5]
+        assert "with the file on the host" in alert and "a file edit the daemon never loaded stops it" in alert
+        _cards, quiet = wm.render(monkeypatch, [wm.S_API], {2: _facts()})
+        assert "data-transport-pending>" not in quiet
+        _cards, down = wm.render(
+            monkeypatch, [wm.S_API], {2: _facts()}, pending=True, pending_note=OSError("no answer")
+        )
+        assert (
+            "data-transport-pending>" in down and "data-transport-pending-note" not in down
+        )  # the alert stands without the note
+
     def test_the_file_panel_offers_the_discard_box_to_a_server_that_is_not_in_file_mode(self, monkeypatch):
         """Q217, second pass row 3: `_to_file` demands `discard_file_edit` when the file differs; the box is on the panel for any server with SSH that is not already File over SSH."""
         _cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts()})

@@ -152,12 +152,22 @@ def latest(server_id: int, service: str, exclude_kind: str | None = None) -> dic
     return _decrypted(row)
 
 
+#: The two sources that are the record of a change the daemon MAY be running (Q218 BH2, CFG-006): never pruned, never "the last known state". `pending` is a candidate written before `config-set`;
+#: `damaged` is a pending row whose body could not be read as a configuration.
+IN_FLIGHT_SOURCES = ("pending", "damaged")
+_NOT_IN_FLIGHT = "source NOT IN ('pending', 'damaged')"
+
+
 def latest_of_kind(server_id: int, service: str, hash_kind: str) -> dict | None:
-    """The newest revision of one `hash_kind` (Q212): a `kea` digest is compared only with a `kea` digest, a `raw` file hash only with a `raw` one."""
+    """The newest SETTLED revision of one `hash_kind` (Q212): a `kea` digest is compared only with a `kea` digest, a `raw` file hash only with a `raw` one. A `pending` or `damaged` row is the record
+    of a change the daemon may be running, never the last state it is known to have had (Q218 BH2 e, CFG-006): a damaged row keeps the BEFORE digest, so a reader that took it for the last known
+    state would compare the daemon with a configuration the daemon left."""
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s ORDER BY id DESC LIMIT 1",
+                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s AND "
+                + _NOT_IN_FLIGHT
+                + " ORDER BY id DESC LIMIT 1",
                 (server_id, service, hash_kind),
             )
             row = cur.fetchone()
@@ -165,6 +175,31 @@ def latest_of_kind(server_id: int, service: str, hash_kind: str) -> dict | None:
         logger.warning(f"config_revisions.latest_of_kind failed: {e}")
         return None
     return _decrypted(row)
+
+
+def by_digest(server_id: int, service: str, sha256: str, hash_kind: str = "kea") -> dict | None:
+    """The newest SETTLED revision of `hash_kind` whose `sha256` is `sha256` (Q218 BH1 b): the configuration the daemon ran when it had that digest - what a settlement proves a file against. A
+    `pending` or `damaged` row is excluded (its `sha256` is the BEFORE digest of a change in flight, and its body is the change). None when there is none, and None when the store cannot be asked:
+    the one caller answers both as "the file cannot be proved" and refuses to overwrite it."""
+    if not sha256:
+        return None
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s AND sha256=%s AND "
+                + _NOT_IN_FLIGHT
+                + " ORDER BY id DESC LIMIT 1",
+                (server_id, service, hash_kind, sha256),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.warning(f"config_revisions.by_digest failed: {e}")
+        return None
+    try:
+        return _decrypted(row)
+    except Exception as e:  # a row whose body cannot be decrypted proves nothing
+        logger.warning(f"config_revisions.by_digest could not decrypt its row: {e}")
+        return None
 
 
 def pending(server_id: int, service: str) -> dict | None:
@@ -339,20 +374,24 @@ def diff(a_text: str, b_text: str, a_label: str = "previous", b_label: str = "th
 
 def prune(server_id: int, service: str, keep: int | None = None) -> int:
     """Delete all but the newest `keep` revisions for this (server,
-    service). Returns the number removed."""
+    service). Returns the number removed. A `pending` or `damaged` row is never deleted and is not
+    counted among the `keep` (Q218 BH2 d, CFG-006): it is the one record of a change the daemon may be
+    running, and fifty newer rows must not take it - nor may it push a settled revision out."""
     keep = _keep() if keep is None else max(1, int(keep))
     try:
         with _jen_db() as db, db.cursor() as cur:
-            # id of the oldest row we keep; everything below it goes.
+            # id of the oldest SETTLED row we keep; every settled row below it goes.
             cur.execute(
-                "SELECT id FROM kea_config_revisions WHERE server_id=%s AND service=%s ORDER BY id DESC LIMIT 1 OFFSET %s",
+                "SELECT id FROM kea_config_revisions WHERE server_id=%s AND service=%s AND "
+                + _NOT_IN_FLIGHT
+                + " ORDER BY id DESC LIMIT 1 OFFSET %s",
                 (server_id, service, keep - 1),
             )
             row = cur.fetchone()
             if row is None:
                 return 0  # fewer than `keep` rows
             cur.execute(
-                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s",
+                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s AND " + _NOT_IN_FLIGHT,
                 (server_id, service, row["id"]),
             )
             return cur.rowcount

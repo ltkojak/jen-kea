@@ -372,11 +372,16 @@ def defaults_for(server: dict, service: str = "dhcp4") -> tuple[frozenset | None
     return paths, facts
 
 
-def compare(server: dict, service: str, file_cfg: dict | None, live_cfg: dict | None) -> tuple[bool, str]:
+def compare(
+    server: dict, service: str, file_cfg: dict | None, live_cfg: dict | None, *, also: dict | None = None
+) -> tuple[bool, str]:
     """`(agree, where)` - the ONE question every caller asks of a file and a daemon (Q217 AB6): `file_in_daemon` in both directions with the daemon's own defaults vector, and `difference_text` for
-    the first place they differ. `agree` is True and `where` is "" when the file is the daemon's."""
+    the first place they differ. `agree` is True and `where` is "" when the file is the daemon's. `also` (Q218 BH1) is a second configuration the file may equal instead - the one the daemon runs NOW,
+    when `live_cfg` is the state before a change: `where` always names the first difference from `live_cfg`."""
     defaults, _facts = defaults_for(server, service)
     if file_in_daemon(file_cfg, live_cfg, service, defaults=defaults):
+        return True, ""
+    if also is not None and file_in_daemon(file_cfg, also, service, defaults=defaults):
         return True, ""
     return False, difference_text(file_cfg, live_cfg, service, defaults=defaults)
 
@@ -440,9 +445,9 @@ def _capture(server: dict, service: str, cfg: dict, digest: str) -> None:
     if sid is None:
         return
     try:
+        if _rev.pending(sid, service) is not None:
+            return  # a pending change is not a baseline: the daemon runs its candidate (`latest_of_kind` no longer returns a pending or a damaged row, Q218 BH2 e)
         last = _rev.latest_of_kind(sid, service, "kea")
-        if last is not None and last.get("source") == PENDING:
-            return
         if last is None:
             _rev.record(
                 sid,
@@ -489,12 +494,99 @@ def read(
     return cfg, digest
 
 
-def write_file(server: dict, service: str = "dhcp4") -> dict:
-    """`config-write` of what runs, no filename - the switch's and the probe's own call. `ok`, `write-failed` (Kea's own words) or `noanswer`."""
+def unloaded_edit_sentence(server: dict, where: str = "") -> str:
+    """THE sentence for a file that carries something the daemon has not loaded (the Plan's refusal and the sender's): it names the host and, when known, the first path."""
+    host = server.get("name") or server.get("ssh_host") or "the host"
+    return (
+        f"the file on {host} carries an edit the daemon has not loaded"
+        + (f" ({where})" if where else "")
+        + " - restart Kea there first, or discard it from the server's Write mode card"
+    )
+
+
+def file_against(
+    server: dict, service: str, before: dict | None, running: dict | None = None, *, capture: bool = True
+) -> tuple[str, str]:
+    """`(state, where)` for the file on a server's host: `"agree"` (it carries `before`, or `running`), `"differs"` (with the first path) or `"unreadable"`. The read is a CAPTURING one by default: a
+    file the store has not seen becomes an `external` row in Config history BEFORE anything can overwrite it (Q218 BH1 a)."""
+    file_cfg, _raw = _host.read_config_versioned(server, service, capture=capture)
+    if file_cfg is None:
+        return "unreadable", ""
+    base = before if before is not None else running
+    if base is None:
+        return "differs", ""
+    agrees, where = compare(server, service, file_cfg, base, also=running if before is not None else None)
+    return ("agree", "") if agrees else ("differs", where)
+
+
+def _ask_the_file(
+    server: dict,
+    service: str,
+    before: dict | None,
+    *,
+    discard: bool = False,
+    running: dict | None = None,
+    unproved: str = "",
+) -> dict | None:
+    """CFG-005 - the question every `config-write` asks first: does the file the daemon's rendering would REPLACE carry what Jen knows, or an edit the daemon never loaded? `None` when the write may
+    go; else the refusal `{"ok": False, "code": "unloaded-edit", ...}`. A server with no SSH host has no file to ask. With one, the file is READ (capturing: an edit is in Config history before it can be
+    lost) and compared with `before` - the configuration the daemon ran when the change was built - or with `running`, the one it runs now (a file that IS the daemon's configuration loses nothing to its
+    own rendering). `discard` is the one way past a difference, and a caller passes it only when `discard_file_edit` was given on THIS act. A file that cannot be read is never overwritten, and a caller
+    with no `before` at all is refused: there is nothing to prove the file against. `unproved` replaces the difference sentence when the caller has no state before the change to name a path against."""
+    if not _has_ssh(server):
+        return None
+    host = server.get("name") or server.get("ssh_host") or "the host"
+    if before is None and running is None:
+        return _result(
+            False,
+            "unloaded-edit",
+            f"the file on {host} cannot be proved against any state, so it is not overwritten - restart Kea there to load it, or discard its edit from the server's Write mode card",
+        )
+    state, where = file_against(server, service, before, running)
+    if state == "agree":
+        return None
+    if state == "unreadable":
+        return _result(
+            False,
+            "unloaded-edit",
+            f"the file on {host} could not be read, so a write cannot be proved against it (check the SSH connection)",
+        )
+    if discard:
+        return None
+    return _result(False, "unloaded-edit", unproved or unloaded_edit_sentence(server, where))
+
+
+def _send_write(server: dict, service: str, attempts: int) -> tuple[dict | None, bool, bool]:
+    """THE sender of `config-write` (CFG-005; the only `_cmd(..., "config-write")` in the tree, held by `TestTheModuleIsTheOneSender`): re-sent when no answer came, up to `attempts` times (it is
+    idempotent: it writes what runs). `(last reply, answered 0, an earlier attempt got NO answer - it may have written)`. Nothing calls this without having asked the file first."""
+    reply, silent = None, False
+    for _ in range(attempts):
+        reply = _cmd(server, service, "config-write")
+        if _ok(reply) or _answered(reply):
+            break
+        silent = True
+    return reply, _ok(reply or {}), silent and _answered(reply or {})
+
+
+def write_file(
+    server: dict,
+    service: str = "dhcp4",
+    *,
+    before: dict | None,
+    discard: bool = False,
+    running: dict | None = None,
+    unproved: str = "",
+) -> dict:
+    """`config-write` of what runs, no filename - the switch's and the settlement's own call, and the ONE place that sends it outside `apply`'s step (6) (CFG-005, Q218 BH1). `before` is the
+    configuration the daemon ran when the change was built, which the file must carry (`None` only for a server with no SSH host); `discard` writes over a difference the capturing read has just put
+    in Config history. `ok`, `write-failed` (Kea's own words), `noanswer`, or `unloaded-edit` with NOTHING sent."""
     if service not in SERVICE_KEY:
         return _result(False, "noservice", f"{service} is not configured over the API")
-    reply = _cmd(server, service, "config-write")
-    if _ok(reply):
+    refusal = _ask_the_file(server, service, before, discard=discard, running=running, unproved=unproved)
+    if refusal is not None:
+        return refusal
+    reply, ok, _maybe = _send_write(server, service, 1)
+    if ok:
         return _result(True, "ok")
     if not _answered(reply):
         return _result(False, "noanswer", _text(reply))
@@ -592,9 +684,67 @@ def _pending_candidate(row: dict, service: str = "dhcp4") -> dict | None:
         parsed = json.loads(row["config"])
     except (TypeError, ValueError, KeyError):
         return None
-    if not isinstance(parsed, dict) or not _section(parsed, service):
-        return None
+    section = _section(parsed, service) if isinstance(parsed, dict) else None
+    if not isinstance(section, dict) or not section:
+        return None  # (Q218 BH2 f) a service section that is a list, a string, a number or a boolean is no configuration: damaged, never "unresolved" for ever
     return parsed
+
+
+def _unproved_before_sentence(server: dict) -> str:
+    host = server.get("name") or server.get("ssh_host") or "the host"
+    return (
+        "the file cannot be proved against the state before the change - "
+        f"restart Kea on {host} to load the file, or discard the file's edit from the server's Write mode card"
+    )
+
+
+def _before_state(server: dict, service: str, row: dict) -> dict | None:
+    """The configuration the daemon ran BEFORE a pending change (Q218 BH1 b): the newest settled `kea` revision whose digest is the row's BEFORE digest (`config_revisions.by_digest`), parsed. None
+    when no revision proves it (the store was asked and has none, or could not be asked, or the body is no configuration): a settlement then cannot prove the file and does not overwrite it."""
+    sha = row.get("sha256")
+    sid = server.get("id")
+    if sid is None or not sha:
+        return None
+    prior = _rev.by_digest(sid, service, sha)
+    if prior is None:
+        return None
+    try:
+        parsed = json.loads(prior["config"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    section = _section(parsed, service) if isinstance(parsed, dict) else None
+    return parsed if isinstance(section, dict) and section else None
+
+
+def _file_waits(server: dict, service: str, row: dict, running: dict) -> str:
+    """READ ONLY (no capture, no write): what a settlement of this LIVE pending row would wait on - `""` when its `config-write` would overwrite nothing (the file is the state before the change, or what
+    the daemon runs), else the sentence the settlement itself would print. A server with no SSH host has no file."""
+    if not _has_ssh(server):
+        return ""
+    before = _before_state(server, service, row)
+    state, where = file_against(server, service, before, running, capture=False)
+    if state == "agree":
+        return ""
+    host = server.get("name") or server.get("ssh_host") or "the host"
+    if state == "unreadable":
+        return (
+            f"the file on {host} could not be read, so a write cannot be proved against it (check the SSH connection)"
+        )
+    return unloaded_edit_sentence(server, where) if before is not None else _unproved_before_sentence(server)
+
+
+def pending_note(server: dict, service: str = "dhcp4") -> str:
+    """The line the read says about a pending change (`_classify_pending`), for the card to print above *Settle it now* (Q218 BH1 e): `""` when nothing is pending, the daemon did not answer or the record
+    cannot be read. A read: nothing is sent and no row changes."""
+    cfg, digest, _why = _get(server, service)
+    if cfg is None:
+        return ""
+    notes: list[str] = []
+    try:
+        _classify_pending(server, service, cfg, digest, notes)
+    except _rev.RevisionStoreUnreadable:
+        return ""
+    return notes[0] if notes else ""
 
 
 def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes: list | None) -> None:
@@ -617,8 +767,13 @@ def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes:
             f"a change of {at} never reached the daemon; its record is removed at the next change or when you settle it"
         )
     elif _carries(_section(cfg, service), _section(candidate, service)):
+        waits = _file_waits(
+            server, service, row, cfg
+        )  # (Q218 BH1 e) the settlement's own question, asked as a read: the card says what it waits on
         notes.append(
-            f"a change of {at} is live and its file write is not proved yet; the next change finishes it, or you can settle it from the server's card"
+            f"a change of {at} is live and its file write waits: {waits}"
+            if waits
+            else f"a change of {at} is live and its file write is not proved yet; the next change finishes it, or you can settle it from the server's card"
         )
     else:
         notes.append(
@@ -700,10 +855,29 @@ def _reconcile_pending(
             if notes is not None:
                 notes.append(f"a change of {at} is live and its file write waits: {waits}")
             return cfg, digest, False
-        wrote = write_file(server, service)
+        # (Q218 BH1 b) the file is asked BEFORE it is replaced: against the state the daemon ran before the change (the newest settled `kea` revision with the row's before digest) or against what the
+        # daemon runs now; a file that is neither is an edit the daemon never loaded, and a settlement that cannot prove the file never overwrites it
+        before = _before_state(server, service, row) if _has_ssh(server) else None
+        wrote = write_file(
+            server,
+            service,
+            before=before if before is not None else (cfg if _has_ssh(server) else None),
+            running=cfg,
+            unproved=_unproved_before_sentence(server) if before is None else "",
+        )
+        if wrote.get("code") == "unloaded-edit":
+            if notes is not None:
+                notes.append(f"a change of {at} is live and its file write waits: {wrote.get('detail')}")
+            return cfg, digest, False
         again, digest2, _ = _get(server, service)
         if wrote.get("ok") and again is not None and digest2:
-            _rev.finish(row["id"], source="jen", sha256=digest2, cfg=again)
+            finished = _rev.finish(row["id"], source="jen", sha256=digest2, cfg=again)
+            if not finished:  # (Q218 BH2 a) the third store write of this function: a False is no settlement
+                if notes is not None:
+                    notes.append(
+                        f"a change of {at} is live and its file was written, but its record could not be finished - try again (the daemon runs {digest2})"
+                    )
+                return again, digest2, False
             if notes is not None:
                 notes.append(f"a change of {at} was finished now")
             return again, digest2, True
@@ -809,14 +983,8 @@ def _after_a_set_without_an_answer(
 
 
 def _write_with_retries(server: dict, service: str) -> tuple[dict | None, bool, bool]:
-    """`config-write`, re-sent when no answer came (it is idempotent: it writes what runs). (last reply, answered 0, an earlier attempt got NO answer - it may have written)."""
-    reply, silent = None, False
-    for _ in range(WRITE_ATTEMPTS):
-        reply = _cmd(server, service, "config-write")
-        if _ok(reply) or _answered(reply):
-            break
-        silent = True
-    return reply, _ok(reply or {}), silent and _answered(reply or {})
+    """`config-write` of `apply`'s step (6), re-sent when no answer came: `_send_write` with `WRITE_ATTEMPTS`. `apply` asks the file (`_ask_the_file`) immediately before it."""
+    return _send_write(server, service, WRITE_ATTEMPTS)
 
 
 def _has_ssh(server: dict) -> bool:
@@ -880,6 +1048,12 @@ def apply(
     guarded = _api_only_guard(service, before_cfg, cfg)  # (2)
     if guarded:
         return _result(False, "guard", guarded)
+    daemon_now = None
+    if source == "rollback" and _has_ssh(server):
+        # (Q218 BH1 b) a rollback's `before_cfg` is the candidate Jen built (no written-out defaults for what it added): the file it is compared with at step (6) is the state the daemon runs NOW
+        daemon_now, _now_digest, why = _get(server, service)
+        if daemon_now is None:
+            return _result(False, "noanswer", f"the running configuration of {_name(server)} could not be read ({why})")
 
     if source != "restore":
         unreadable = record_unreadable(server, service)
@@ -894,6 +1068,14 @@ def apply(
     pending_id = None
     if sid is not None:  # (3)
         pending_id = _rev.record(sid, service, cfg, expect_hash or "", summary, hash_kind="kea", source=PENDING)
+        if (
+            pending_id is None
+        ):  # (Q218 BH2 b) a change nobody can find the record of is never sent: the daemon would run it with nothing on file to settle it by
+            return _result(
+                False,
+                "unreadable",
+                "the record of this change could not be written to Config history; nothing was sent - the database refused the row",
+            )
 
     def _drop_pending():
         if pending_id is not None:
@@ -932,6 +1114,17 @@ def apply(
                 _drop_pending()
             return stop
 
+    if _has_ssh(
+        server
+    ):  # (6) the file `config-write` is about to replace carries the state this change was built from, or is the state the daemon ran: else an edit the daemon never loaded
+        refusal = _ask_the_file(server, service, before_cfg, running=daemon_now)
+        if refusal is not None:
+            return _unproved(  # the daemon took the change and the file waits: nothing is undone, and the pending row STAYS - `_reconcile_pending` settles it by content
+                "unverified",
+                f"the change is live in the daemon on {_name(server)} but its file was not written: {refusal.get('detail')}; the record of the change stays",
+                before_hash=expect_hash or now,
+                after_hash=h1,
+            )
     wrote, wrote_ok, maybe_written = _write_with_retries(server, service)  # (6)
     unwritten = ""
     if not wrote_ok:
@@ -984,13 +1177,23 @@ def apply(
     elif unwritten:
         return _unproved("unverified", f"{_name(server)}: {unwritten}", after_hash=h1)
 
+    finished = True
     if pending_id is not None:  # (9)
-        _rev.finish(pending_id, source=source, sha256=h1, cfg=got)
-        _rev.discard_pending(
-            sid, service
-        )  # (fix row 2) an unresolved row an earlier crash left is superseded by a change that stood
+        finished = _rev.finish(pending_id, source=source, sha256=h1, cfg=got)
+        if finished:
+            _rev.discard_pending(
+                sid, service
+            )  # (fix row 2) an unresolved row an earlier crash left is superseded by a change that stood
     if raw_sha and sid is not None and not str(raw_sha).startswith(_host._CANONICAL_SENTINEL_PREFIX):
         _rev.record(sid, service, got, raw_sha, summary or f"{source} {service}", hash_kind="raw", source=source)
+    if not finished:
+        # (Q218 BH2 c) the pending row is the ONE record of what the daemon runs: it is not discarded, and the change is not "ok" - the next change, or Settle it now, finishes it by content
+        return _unproved(
+            "unverified",
+            "the change is live and its file written, but its record could not be finished; the next change, or Settle it now, finishes it by content",
+            before_hash=expect_hash or now,
+            after_hash=h1,
+        )
     return _result(True, "ok", sha256=h1, **({"note": note} if note else {}))
 
 
@@ -1028,10 +1231,11 @@ def api_daemon_differs(server: dict, service: str) -> str:
     sid = server.get("id")
     try:
         last = _rev.latest_of_kind(sid, service, "kea") if sid is not None else None
+        in_flight = sid is not None and _rev.pending(sid, service) is not None
     except Exception as e:  # a history read never decides this question: containment below is the fallback
         logger.warning("kea_api_config: api_daemon_differs could not read the history of %s: %s", sid, type(e).__name__)
-        last = None
-    if last is not None and last.get("source") != PENDING and last.get("sha256") and last["sha256"] != digest:
+        last, in_flight = None, False
+    if not in_flight and last is not None and last.get("sha256") and last["sha256"] != digest:
         # (Q216 AA - the blind spot) a hand `config-set` of a key the FILE omits (one of the 45 defaults `config-get` writes out) is invisible to containment; the DIGEST of the last configuration Jen
         # recorded for this daemon is the check, and containment is the fallback for a server with no `kea` row yet (docs/ARCHITECTURE.md 3.17 says that is its limit)
         return (

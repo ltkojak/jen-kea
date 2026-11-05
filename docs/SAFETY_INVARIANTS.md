@@ -328,6 +328,29 @@ updater's allowlist.
 - `tests/test_kea_api_config.py::TestKeaWritesItsDefaultsOut`
 - `tests/kea_compat/test_config_write.py::test_12_the_defaults_kea_writes_out` (the daemon's own answer, per Kea minor)
 
+### CFG-005 - A `config-write` is sent only after the file it replaces has been read into Config history and compared with the configuration the change was built from
+**Rule.** The daemon's `config-write` renders ITS configuration over the file on its host, so whatever the file carries that the daemon never loaded is destroyed. It is therefore sent only by `kea_api_config` (`_send_write`, the one sender), and only after `_ask_the_file`: on a server with an SSH host the file is READ (capturing: an edit is an `external` row in Config history before it can be lost) and compared, in both directions, with the configuration the change was built from - the state before it - or with what the daemon runs now (a file that IS the daemon's configuration loses nothing). A difference is refused with the path (`unloaded-edit`, nothing sent) unless `discard_file_edit` was given on THIS act and the facts called for it; a file that cannot be read, or a caller with no state to prove it against, is refused too. A settlement of a pending change (the Plan's, and *Settle it now*) proves the file against the newest settled `kea` revision with the row's before digest, and when none is on record it does not overwrite the file.
+**Established.** Q218 (AC1, AC2, AC14).
+**Enforced at.** `jen/services/kea_api_config.py` (`write_file`, `_ask_the_file`, `_send_write`, `_reconcile_pending`, `apply` step (6)), `jen/services/config_revisions.py` (`by_digest`), `jen/services/kea_transport_switch.py` (`_to_api`, `_to_file`: the only callers that pass `discard`).
+**Tests.**
+- `tests/test_kea_api_config.py::TestWriteFileAsksTheFile`
+- `tests/test_kea_api_config.py::TestTheLiveBranchWaitsOnTheFile`
+- `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_every_write_file_caller_passes_before`
+- `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_config_write_has_one_sender_and_it_is_asked_first`
+- `tests/test_kea_changeset_transports.py::TestTheSettlementAsksTheFileFirst`
+- `tests/test_transport_switch.py::TestToApi::test_a_discarded_edit_is_in_config_history_before_the_write`
+- `tests/test_transport_switch.py::TestToApi::test_api_to_api_records_and_does_not_render`
+
+### CFG-006 - A pending or damaged revision is the record of a change the daemon may be running: its write precedes the send, its finish precedes `ok`, the prune never removes it, no reader takes it for the last known state
+**Rule.** A change over the API is recorded as a `pending` revision BEFORE `config-set` and turned into the daemon's own record once the daemon proves it. A record that cannot be WRITTEN stops the change with nothing sent (`unreadable`); a record that cannot be FINISHED is not `ok` (`unverified`) and the row is not discarded - it is the one record of what the daemon runs, and the next change or *Settle it now* finishes it by content; a settlement whose finish fails is not settled. The retention prune never deletes a `pending` or `damaged` row and does not count one among the rows kept; `latest_of_kind` and `by_digest` never return one, so no reader compares the daemon with a digest a damaged row kept. A service section that is no object is a damaged row, not an unresolved candidate.
+**Established.** Q218 (AC3, AC5, AC24, AC28; hypothesis D of Q217's second pass).
+**Enforced at.** `jen/services/kea_api_config.py` (`apply` steps (3) and (9), `_reconcile_pending`, `_pending_candidate`, `_capture`, `api_daemon_differs`), `jen/services/config_revisions.py` (`prune`, `latest_of_kind`, `by_digest`).
+**Tests.**
+- `tests/test_kea_api_config.py::TestTheRecordIsAPreconditionOfTheSendAndOfOk`
+- `tests/test_kea_api_config.py::TestAPendingOrDamagedRowIsNeverTheLastKnownState`
+- `tests/test_kea_api_config.py::TestADamagedPendingRecord`
+- `tests/test_config_revisions.py::TestPruneKeepsTheRecordOfAChange`
+
 ### FILE-001 - A secret is private from its first byte; a privileged write never resolves a service-owned parent by pathname
 **Rule.** No secret is written by a plain `open`, redirect or `cp`; a `.prev` is made only by the certificate set's commit; root never copies anything into the app tree from the config or content directories.
 **Established.** Q150, Q151, Q155.

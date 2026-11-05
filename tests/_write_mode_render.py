@@ -52,8 +52,9 @@ def _env() -> Environment:
     return env
 
 
-def render(monkeypatch, servers, probes=None, helper=None, superadmin=True, gate=""):
-    """(cards, html) for `servers`; `probes` is {server_id: stored probe}."""
+def render(monkeypatch, servers, probes=None, helper=None, superadmin=True, gate="", pending=False, pending_note=""):
+    """(cards, html) for `servers`; `probes` is {server_id: stored probe}. `pending` stands a pending change on record for every server and `pending_note` is what the read says about it (Q218 BH1 e);
+    a `pending_note` that is an Exception is raised, as a host that does not answer would."""
     from jen import extensions
     from jen.routes.settings import infrastructure as infra
     from jen.services import config_revisions as rev
@@ -67,7 +68,14 @@ def render(monkeypatch, servers, probes=None, helper=None, superadmin=True, gate
     monkeypatch.setattr(api, "stored_probe", lambda sid: copy.deepcopy(probes.get(sid)))
     monkeypatch.setattr(api, "probe_gate", lambda srv, source="jen": gate)
     monkeypatch.setattr(kea_host, "helper_status", lambda: helper if helper is not None else HELPER_OK)
-    monkeypatch.setattr(rev, "pending", lambda sid, svc: None)
+    monkeypatch.setattr(rev, "pending", lambda sid, svc: {"id": 1} if pending else None)
+
+    def note(srv, svc="dhcp4"):
+        if isinstance(pending_note, Exception):
+            raise pending_note
+        return pending_note
+
+    monkeypatch.setattr(api, "pending_note", note)
     cards = infra._config_cards()
     html = _env().get_template("card").render(config_cards=cards, current_user=user)
     return cards, html

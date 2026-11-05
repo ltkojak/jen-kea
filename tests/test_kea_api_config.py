@@ -308,27 +308,35 @@ class TestAWriteTimeoutIsNeverOk:
         assert result["code"] == "unverified" and not result["ok"] and result["needs_hands"]
         assert "file may not carry" in result["detail"]
 
+    def _file_then(self, monkeypatch, fake, later):
+        """The host's file: what it holds before the daemon is asked to write it (the state before the change, which step (6) asks about), then `later()` - the helper's answer once the write was tried."""
+        reads = {"n": 0}
+
+        def read(*a, **k):
+            reads["n"] += 1
+            if reads["n"] == 1:
+                return {"Dhcp4": copy.deepcopy(fake.file)}, "r" * 64
+            return {"Dhcp4": later()}, "r" * 64
+
+        monkeypatch.setattr(host, "read_config_versioned", read)
+
     def test_with_ssh_the_files_own_answer_decides(self, fake, server, monkeypatch):
         fake.hang = {"config-write": "before"}
         server["ssh_host"] = "10.0.0.9"
         # the helper reads a file that carries what runs: proved
-        monkeypatch.setattr(
-            host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(fake.running)}, "r" * 64)
-        )
+        self._file_then(monkeypatch, fake, lambda: copy.deepcopy(fake.running))
         result, _c, _d = _apply(server)
         assert result["ok"] and result["code"] == "ok"
 
     def test_with_ssh_a_file_that_differs_is_unverified(self, fake, server, monkeypatch):
         server["ssh_host"] = "10.0.0.9"
-        monkeypatch.setattr(host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": {"stale": True}}, "r" * 64))
+        self._file_then(monkeypatch, fake, lambda: {"stale": True})
         result, _c, _d = _apply(server)
         assert result["code"] == "unverified" and "does not carry what the daemon runs" in result["detail"]
 
     def test_with_ssh_a_file_that_agrees_records_a_raw_row_beside_the_kea_row(self, fake, server, store, monkeypatch):
         server["ssh_host"] = "10.0.0.9"
-        monkeypatch.setattr(
-            host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(fake.running)}, "r" * 64)
-        )
+        world.host_reads_the_fakes_file(monkeypatch, fake)
         result, _c, _d = _apply(server)
         assert result["ok"]
         kinds = sorted(r["hash_kind"] for r in store.rows if r["source"] == "jen")
@@ -481,6 +489,55 @@ class TestTheModuleIsTheOneSender:
                 if f'"{w}"' in text or f"'{w}'" in text:
                     found.setdefault(w, set()).add(path.relative_to(ROOT).as_posix())
         assert found == {w: {"jen/services/kea_api_config.py"} for w in words}, found
+
+    def test_every_write_file_caller_passes_before(self):
+        """Q218 BH1 a (CFG-005): `write_file(server, service, *, before, ...)` has no default for `before`, and the whole tree is walked: every caller names it, so a new caller cannot forget the question."""
+        callers = []
+        for path in sorted((ROOT / "jen").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+                if name == "write_file":
+                    callers.append((path.relative_to(ROOT).as_posix(), node.lineno, {k.arg for k in node.keywords}))
+        assert callers, "the walk found no caller at all"
+        assert all("before" in kws for _p, _l, kws in callers), callers
+        assert sorted({p for p, _l, _k in callers}) == [
+            "jen/services/kea_api_config.py",
+            "jen/services/kea_transport_switch.py",
+        ], callers
+        assert len(callers) == 3, callers  # the settlement's live branch, `_to_api` (both its entries) and `_to_file`
+
+    def test_config_write_has_one_sender_and_it_is_asked_first(self):
+        """Q218 BH1 b: the only `_cmd(..., "config-write")` in the tree is `_send_write`; it is called by `write_file` and by `_write_with_retries` only, `_write_with_retries` by `apply` only, and each
+        of those asks the file (`_ask_the_file`) on a line BEFORE the call."""
+        tree = ast.parse((ROOT / "jen/services/kea_api_config.py").read_text(encoding="utf-8"))
+        funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+        def calls(fn, target):
+            return [
+                n.lineno
+                for n in ast.walk(fn)
+                if isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", "")) == target
+            ]
+
+        senders = [
+            name
+            for name, fn in funcs.items()
+            if any(
+                isinstance(n, ast.Call)
+                and getattr(n.func, "id", "") == "_cmd"
+                and any(isinstance(a, ast.Constant) and a.value == "config-write" for a in n.args)
+                for n in ast.walk(fn)
+            )
+        ]
+        assert senders == ["_send_write"], senders
+        assert {n for n, fn in funcs.items() if calls(fn, "_send_write")} == {"write_file", "_write_with_retries"}
+        assert {n for n, fn in funcs.items() if calls(fn, "_write_with_retries")} == {"apply"}
+        for name, sent in (("write_file", "_send_write"), ("apply", "_write_with_retries")):
+            asked, went = calls(funcs[name], "_ask_the_file"), calls(funcs[name], sent)
+            assert asked and went and min(asked) < min(went), (name, asked, went)
 
     def test_the_module_has_no_ssh_import_and_posts_only_through_kea_command(self):
         tree = ast.parse((ROOT / "jen/services/kea_api_config.py").read_text(encoding="utf-8"))
@@ -678,7 +735,19 @@ class TestADamagedPendingRecord:
     """Q217 AB10-AB12: ONE parser for a pending row's body, and a damaged row is a fourth state - never `AttributeError`, never "that change is live" from an empty section, never "there is no pending
     change" while one blocks. The 3 x 3 matrix Opus ran: bodies x (read, pending_block, settle_pending)."""
 
-    BODIES = ["7", '"a config"', "[1, 2]", '{"Dhcp4": {}}', "{}", "null", "{not json"]
+    BODIES = [
+        "7",
+        '"a config"',
+        "[1, 2]",
+        '{"Dhcp4": {}}',
+        "{}",
+        "null",
+        "{not json",
+        '{"Dhcp4": [1]}',  # (Q218 BH2 f, AC24) a truthy service section that is no object: damaged, never "unresolved" for ever
+        '{"Dhcp4": "x"}',
+        '{"Dhcp4": 7}',
+        '{"Dhcp4": true}',
+    ]
 
     def _damaged(self, fake, server, store, body, sha="before-digest"):
         row_id = store.record(
@@ -1299,3 +1368,275 @@ class TestADefaultIsJudgedByItsValueToo:
                 node = node[step]
             node.pop(path[-1])
             assert api.file_in_daemon(file_cfg, live, "dhcp4", defaults=shipped) is False, path
+
+
+EDIT_KEY = "user-context"
+EDIT = {"jen-note": "the operator's own edit, never loaded by the daemon"}
+
+
+class TestWriteFileAsksTheFile:
+    """Q218 BH1 a (CFG-005): `write_file` READS the file first (capturing: an edit is in Config history before it can be lost) and sends `config-write` only when the file carries what Jen knows."""
+
+    @pytest.fixture
+    def ssh(self, fake, server, store, monkeypatch):
+        server["ssh_host"] = "10.0.0.9"
+        self.seen = world.host_reads_the_fakes_file(monkeypatch, fake, store)
+        host.read_config_versioned(
+            server, "dhcp4"
+        )  # an earlier read of the clean file: the baseline the store already has when an edit appears
+        self.seen["reads"].clear()
+        return server
+
+    def test_a_file_that_is_the_state_before_is_written_over(self, fake, ssh):
+        cfg, _digest = _plan(ssh)
+        fake.commands.clear()
+        out = api.write_file(ssh, "dhcp4", before=cfg)
+        assert out["ok"] and "config-write" in fake.commands
+        assert self.seen["reads"] == [True], "the sender's read is the capturing one"
+
+    def test_an_edit_the_daemon_never_loaded_is_refused_by_name_and_nothing_is_sent(self, fake, ssh, store):
+        cfg, _digest = _plan(ssh)
+        fake.file[EDIT_KEY] = copy.deepcopy(EDIT)
+        fake.commands.clear()
+        out = api.write_file(ssh, "dhcp4", before=cfg)
+        assert not out["ok"] and out["code"] == "unloaded-edit"
+        assert "Dhcp4.user-context" in out["detail"] and "carries an edit the daemon has not loaded" in out["detail"]
+        assert "config-write" not in fake.commands and EDIT_KEY in fake.file
+        external = [r for r in store.rows if r["source"] == "external"]
+        assert external and EDIT_KEY in json.loads(external[-1]["config"])["Dhcp4"], "the edit is in Config history"
+
+    def test_discard_writes_over_it_and_the_edit_was_in_config_history_before_the_write(self, fake, ssh, store):
+        cfg, _digest = _plan(ssh)
+        fake.file[EDIT_KEY] = copy.deepcopy(EDIT)
+        at_the_write = {}
+
+        def look(f):
+            at_the_write["rows"] = [(r["source"], r["hash_kind"]) for r in store.rows]
+
+        fake.hooks["config-write"] = look
+        out = api.write_file(ssh, "dhcp4", before=cfg, discard=True)
+        assert out["ok"] and EDIT_KEY not in fake.file
+        assert ("external", "raw") in at_the_write["rows"], (
+            "the discarded edit was recorded BEFORE config-write went out"
+        )
+
+    def test_a_file_that_is_what_the_daemon_runs_loses_nothing_to_its_own_rendering(self, fake, ssh):
+        cfg, _digest = _plan(ssh)
+        stale_before = copy.deepcopy(cfg)
+        stale_before["Dhcp4"]["valid-lifetime"] = 1  # a `before` the file does not carry ...
+        out = api.write_file(ssh, "dhcp4", before=stale_before, running=cfg)  # ... but the file IS what runs
+        assert out["ok"]
+
+    def test_no_ssh_host_means_no_file_to_ask(self, fake, server, monkeypatch):
+        reads = []
+        monkeypatch.setattr(host, "read_config_versioned", lambda *a, **k: reads.append(a) or (None, None))
+        fake.commands.clear()
+        out = api.write_file(server, "dhcp4", before=None)
+        assert out["ok"] and reads == [] and "config-write" in fake.commands
+
+    def test_before_none_with_an_ssh_host_is_refused_and_nothing_is_sent(self, fake, ssh):
+        fake.commands.clear()
+        out = api.write_file(ssh, "dhcp4", before=None)
+        assert not out["ok"] and out["code"] == "unloaded-edit" and "cannot be proved" in out["detail"]
+        assert "config-write" not in fake.commands and self.seen["reads"] == []
+
+    def test_a_file_that_cannot_be_read_is_never_overwritten_not_even_with_discard(self, fake, server, monkeypatch):
+        server["ssh_host"] = "10.0.0.9"
+        monkeypatch.setattr(host, "read_config_versioned", lambda *a, **k: (None, None))
+        cfg, _digest = _plan(server)
+        fake.commands.clear()
+        out = api.write_file(server, "dhcp4", before=cfg, discard=True)
+        assert not out["ok"] and out["code"] == "unloaded-edit" and "could not be read" in out["detail"]
+        assert "config-write" not in fake.commands
+
+    def test_a_refused_write_is_still_keas_own_words(self, fake, ssh):
+        cfg, _digest = _plan(ssh)
+        fake.write_fails = "Permission denied"
+        out = api.write_file(ssh, "dhcp4", before=cfg)
+        assert out["code"] == "write-failed" and "Permission denied" in out["detail"]
+
+
+class TestTheLiveBranchWaitsOnTheFile:
+    """Q218 BH1 b (AC1, AC2): a settlement of a LIVE pending row asks the file against the state before the change - the newest settled `kea` revision with the row's before digest - or what the daemon
+    runs now; an edit, or a file nothing can prove, is never overwritten and the row stays."""
+
+    @pytest.fixture
+    def ssh(self, fake, server, store, monkeypatch):
+        server["ssh_host"] = "10.0.0.9"
+        self.seen = world.host_reads_the_fakes_file(monkeypatch, fake, store)
+        host.read_config_versioned(
+            server, "dhcp4"
+        )  # an earlier read of the clean file: the baseline the store already has when an edit appears
+        self.seen["reads"].clear()
+        return server
+
+    def _live(self, fake, server, store, *, record_before=True):
+        cfg, digest = _plan(server)
+        if record_before:
+            store.record(SID, "dhcp4", cfg, digest, "the state before", hash_kind="kea", source="baseline")
+        cand = _candidate(cfg)
+        row_id = store.record(SID, "dhcp4", cand, digest, "interrupted", hash_kind="kea", source="pending")
+        fake.set_running(cand["Dhcp4"])  # the daemon took it; the FILE is still the state before
+        return cfg, digest, row_id
+
+    def test_the_file_is_the_state_before_so_the_settlement_writes_and_finishes(self, fake, ssh, store):
+        self._live(fake, ssh, store)
+        lines, settled = api.settle_pending(ssh, "dhcp4")
+        assert settled and "finished" in lines[0] and fake.file == fake.running
+        assert store.pending(SID, "dhcp4") is None
+
+    def test_an_edit_the_daemon_never_loaded_waits_and_the_row_stays(self, fake, ssh, store):
+        self._live(fake, ssh, store)
+        fake.file[EDIT_KEY] = copy.deepcopy(EDIT)
+        fake.commands.clear()
+        lines, settled = api.settle_pending(ssh, "dhcp4")
+        assert settled is False and "is live and its file write waits" in lines[0] and "Dhcp4.user-context" in lines[0]
+        assert "config-write" not in fake.commands and EDIT_KEY in fake.file
+        assert store.pending(SID, "dhcp4") is not None
+        assert any(r["source"] == "external" for r in store.rows), "the edit is in Config history"
+
+    def test_no_revision_proves_the_before_state_so_the_file_is_not_overwritten(self, fake, ssh, store):
+        self._live(fake, ssh, store, record_before=False)
+        fake.commands.clear()
+        lines, settled = api.settle_pending(ssh, "dhcp4")
+        assert settled is False and "cannot be proved against the state before the change" in lines[0]
+        assert "restart Kea on" in lines[0] and "config-write" not in fake.commands
+        assert store.pending(SID, "dhcp4") is not None
+
+    def test_no_revision_but_a_file_that_is_what_the_daemon_runs_loses_nothing(self, fake, ssh, store):
+        self._live(fake, ssh, store, record_before=False)
+        fake.file = copy.deepcopy(fake.running)  # the host's file already carries the change
+        lines, settled = api.settle_pending(ssh, "dhcp4")
+        assert settled and "finished" in lines[0]
+
+    def test_a_pending_or_damaged_row_is_not_a_proof_of_the_state_before(self, fake, ssh, store):
+        cfg, digest, _row = self._live(fake, ssh, store, record_before=False)
+        store.record(SID, "dhcp4", cfg, digest, "damaged", hash_kind="kea", source="damaged")
+        assert api._before_state(ssh, "dhcp4", store.pending(SID, "dhcp4")) is None
+
+    def test_a_server_with_no_ssh_host_settles_as_before(self, fake, server, store):
+        self._live(fake, server, store, record_before=False)
+        lines, settled = api.settle_pending(server, "dhcp4")
+        assert settled and "finished" in lines[0] and fake.file == fake.running
+
+    def test_a_finish_that_fails_in_the_live_branch_is_not_settled(self, fake, ssh, store, monkeypatch):
+        row_id = self._live(fake, ssh, store)[2]
+        monkeypatch.setattr(api._rev, "finish", lambda *a, **k: False)
+        lines, settled = api.settle_pending(ssh, "dhcp4")
+        assert settled is False and "could not be finished" in lines[0] and "try again" in lines[0]
+        assert next(r for r in store.rows if r["id"] == row_id)["source"] == "pending"
+        assert "finished now" not in api.pending_block(
+            ssh, "dhcp4"
+        )  # the next Plan is not refused with a success sentence
+
+    def test_a_read_says_what_the_settlement_waits_on_and_sends_only_config_get(self, fake, ssh, store):
+        self._live(fake, ssh, store)
+        fake.file[EDIT_KEY] = copy.deepcopy(EDIT)
+        fake.commands.clear()
+        notes = []
+        api.read(ssh, "dhcp4", capture=False, notes=notes)
+        assert "config-write" not in fake.commands and "config-set" not in fake.commands
+        assert notes and "is live and its file write waits" in notes[0] and "Dhcp4.user-context" in notes[0]
+        assert self.seen["reads"] == [False], "a read is not a write path: no capture"
+        assert api.pending_note(ssh, "dhcp4") == notes[0]
+
+
+class TestTheRecordIsAPreconditionOfTheSendAndOfOk:
+    """Q218 BH2 (AC3, AC5, CFG-006): a change nobody can find the record of is never sent, and a change whose record could not be finished is not 'ok' and keeps its row."""
+
+    def test_a_record_that_cannot_be_written_sends_nothing(self, fake, server, store, monkeypatch):
+        monkeypatch.setattr(api._rev, "record", lambda *a, **k: None)
+        cfg, digest = _plan(server)
+        fake.commands.clear()
+        out = api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
+        assert not out["ok"] and out["code"] == "unreadable" and "nothing was sent" in out["detail"]
+        assert not out.get("needs_hands")
+        assert not any(c in fake.commands for c in ("config-set", "config-write")) and store.rows == []
+
+    def test_a_finish_that_fails_at_step_nine_leaves_the_row_and_the_next_plan_finishes_it(
+        self, fake, server, store, monkeypatch
+    ):
+        server["ssh_host"] = "10.0.0.9"
+        world.host_reads_the_fakes_file(monkeypatch, fake, store)
+        real, calls = api._rev.finish, {"n": 0}
+
+        def flaky(rev_id, **kw):
+            calls["n"] += 1
+            return False if calls["n"] == 1 else real(rev_id, **kw)
+
+        monkeypatch.setattr(api._rev, "finish", flaky)
+        cfg, digest = _plan(server)
+        store.record(SID, "dhcp4", cfg, digest, "the state before", hash_kind="kea", source="baseline")
+        out = api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
+        assert out["code"] == "unverified" and out["needs_hands"] and "could not be finished" in out["detail"]
+        assert store.pending(SID, "dhcp4") is not None, "the row is the one record of what the daemon runs"
+        assert any(r["hash_kind"] == "raw" and r["source"] == "jen" for r in store.rows), (
+            "the file's raw row is recorded"
+        )
+        # the next Plan (the gate) settles it by content: the daemon carries the change and the file IS what runs
+        assert api.pending_block(server, "dhcp4") == ""
+        assert store.pending(SID, "dhcp4") is None
+        assert any(r["source"] == "jen" and r["hash_kind"] == "kea" for r in store.rows)
+
+    def test_a_finish_that_fails_leaves_no_ok_over_a_pending_row(self, fake, server, store, monkeypatch):
+        monkeypatch.setattr(api._rev, "finish", lambda *a, **k: False)
+        out, _c, _d = _apply(server)
+        assert not out["ok"] and out["code"] == "unverified"
+        assert store.pending(SID, "dhcp4") is not None
+
+
+class TestAPendingOrDamagedRowIsNeverTheLastKnownState:
+    """Q218 BH2 e (hypothesis D of Q217's second pass)."""
+
+    def test_a_damaged_row_does_not_make_the_daemon_differ_from_a_digest_it_left(self, fake, server, store):
+        cfg, digest = _plan(server)
+        store.record(SID, "dhcp4", cfg, digest, "the state before", hash_kind="kea", source="baseline")
+        server["config_transport"] = "api"
+        row_id = store.record(SID, "dhcp4", {"Dhcp4": {"x": 1}}, "older-digest", "x", hash_kind="kea", source="pending")
+        assert api._rev.mark_damaged(row_id)
+        # the daemon runs `digest`: the newest SETTLED kea row is the one with that digest; the damaged row's digest is nobody's state
+        assert api.api_daemon_differs(server, "dhcp4") == ""
+        assert store.latest_of_kind(SID, "dhcp4", "kea")["sha256"] == digest
+
+    def test_latest_of_kind_skips_pending_and_damaged(self, store):
+        store.record(SID, "dhcp4", {"Dhcp4": {}}, "settled", "x", hash_kind="kea", source="jen")
+        store.record(SID, "dhcp4", {"Dhcp4": {}}, "p", "x", hash_kind="kea", source="pending")
+        store.record(SID, "dhcp4", {"Dhcp4": {}}, "d", "x", hash_kind="kea", source="damaged")
+        assert store.latest_of_kind(SID, "dhcp4", "kea")["sha256"] == "settled"
+        assert store.by_digest(SID, "dhcp4", "p") is None and store.by_digest(SID, "dhcp4", "d") is None
+        assert store.by_digest(SID, "dhcp4", "settled")["source"] == "jen"
+
+
+class TestApplyAsksTheFileAtStepSix:
+    """Q218 BH1 b: `apply`'s own `config-write` (step 6) asks the file as the sender does. The daemon has taken the change when it is asked, so a refusal is `unverified` - nothing is undone, the pending row
+    STAYS, and the sentence names the edit."""
+
+    @pytest.fixture
+    def ssh(self, fake, server, store, monkeypatch):
+        server["ssh_host"] = "10.0.0.9"
+        world.host_reads_the_fakes_file(monkeypatch, fake, store)
+        host.read_config_versioned(server, "dhcp4")  # the baseline of the clean file
+        return server
+
+    def test_an_edit_that_appeared_after_the_plan_is_refused_at_step_six_and_the_row_stays(self, fake, ssh, store):
+        cfg, digest = _plan(ssh)
+        fake.file[EDIT_KEY] = copy.deepcopy(EDIT)  # the operator edits the file between the Plan and the write
+        fake.commands.clear()
+        out = api.apply(ssh, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
+        assert out["code"] == "unverified" and out["needs_hands"] and not out["ok"]
+        assert "its file was not written" in out["detail"] and "Dhcp4.user-context" in out["detail"]
+        assert "config-set" in fake.commands and "config-write" not in fake.commands
+        assert fake.running["valid-lifetime"] == 7200, "nothing is undone: the daemon runs the change"
+        assert EDIT_KEY in fake.file, "and the operator's edit is still on the host"
+        assert store.pending(SID, "dhcp4") is not None, "the pending row is the state `_reconcile_pending` settles by content"
+        assert any(r["source"] == "external" for r in store.rows)
+
+    def test_a_rollback_is_proved_against_the_state_the_daemon_runs_not_its_sparse_candidate(self, fake, ssh, store):
+        cfg, digest = _plan(ssh)
+        first = api.apply(ssh, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
+        assert first["ok"]
+        after, after_digest = _plan(ssh)
+        sparse = _candidate(cfg)  # what `Target.after_cfg` holds: the candidate Jen built, not what the daemon reported back
+        out = api.revert(ssh, "dhcp4", cfg, after_digest, "rollback: x", before_cfg=sparse)
+        assert out["ok"], out
+        assert fake.running["valid-lifetime"] == cfg["Dhcp4"]["valid-lifetime"] and fake.file == fake.running

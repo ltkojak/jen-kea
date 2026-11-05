@@ -40,7 +40,22 @@ class Store:
         return copy.deepcopy(rows[-1]) if rows else None
 
     def latest_of_kind(self, server_id, service, hash_kind):
-        rows = [r for r in self._of(server_id, service) if r["hash_kind"] == hash_kind]
+        # (Q218 BH2 e) the real one never returns a pending or a damaged row: it is the record of a change in flight, not the last known state
+        rows = [
+            r
+            for r in self._of(server_id, service)
+            if r["hash_kind"] == hash_kind and r["source"] not in ("pending", "damaged")
+        ]
+        return copy.deepcopy(rows[-1]) if rows else None
+
+    def by_digest(self, server_id, service, sha256, hash_kind="kea"):
+        if not sha256:
+            return None
+        rows = [
+            r
+            for r in self._of(server_id, service)
+            if r["hash_kind"] == hash_kind and r["sha256"] == sha256 and r["source"] not in ("pending", "damaged")
+        ]
         return copy.deepcopy(rows[-1]) if rows else None
 
     def pending(self, server_id, service):
@@ -92,6 +107,7 @@ def install_store(monkeypatch):
         "record",
         "latest",
         "latest_of_kind",
+        "by_digest",
         "pending",
         "finish",
         "discard",
@@ -126,3 +142,34 @@ def install_probes(monkeypatch, *, valid=True):
     monkeypatch.setattr(api, "stored_probe", stored)
     monkeypatch.setattr(api, "store_probe", store)
     return data
+
+
+def host_reads_the_fakes_file(monkeypatch, fake, store=None, server_id=None):
+    """Q218 - the Kea HOST's file for a test whose daemon is `fake` (tests/e2e/_fake_kea_server.py::StatefulKeaServer): `kea_host.read_config_versioned` answers the fake's own held FILE (`fake.file`,
+    which `config-write` overwrites with what runs, as Kea does), never a canned value, so "the operator's edit is gone" is observed and not inferred. With a `store`, a CAPTURING read records what the
+    real one records - a `baseline` for a file never seen, an `external` row for content the store has not seen (the sha is the content's own). Returns `{"reads": [capture flags], "sha": fn}`."""
+    import hashlib
+
+    from jen.services import kea_host as host
+
+    seen = {"reads": []}
+
+    def sha_of(cfg):
+        return hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
+
+    def read(server, service="dhcp4", *, errors=None, timeout=None, helper_only=False, capture=True):
+        cfg = {"Dhcp4": copy.deepcopy(fake.file)}
+        sha = sha_of(cfg)
+        seen["reads"].append(capture)
+        if capture and store is not None:
+            sid = server_id if server_id is not None else server.get("id")
+            raws = [r for r in store.rows if r["server_id"] == sid and r["hash_kind"] == "raw"]
+            if not raws:
+                store.record(sid, service, cfg, sha, "initial baseline", hash_kind="raw", source="baseline")
+            elif not any(r["sha256"] == sha for r in raws):
+                store.record(sid, service, cfg, sha, "changed outside Jen", hash_kind="raw", source="external")
+        return cfg, sha
+
+    monkeypatch.setattr(host, "read_config_versioned", read)
+    seen["sha"] = sha_of
+    return seen

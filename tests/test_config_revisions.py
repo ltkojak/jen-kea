@@ -153,6 +153,48 @@ class TestPrune:
         assert len(rev.list_revisions(_SID, "dhcp6")) == 1
 
 
+class TestPruneKeepsTheRecordOfAChange:
+    """Q218 BH2 d, e (CFG-006, AC28): a `pending` or `damaged` row is the one record of a change the daemon may be running. The retention prune never removes it and does not count it among the rows
+    kept, and no reader takes it for the last settled state."""
+
+    @pytest.mark.parametrize("in_flight", ["pending", "damaged"])
+    def test_keep_one_over_an_in_flight_row_with_fifty_settled_rows_above_it(self, in_flight):
+        old = rev.record(_SID, "dhcp4", _cfg(0), "before", "the record", hash_kind="kea", source=in_flight)
+        for i in range(50):
+            rev.record(_SID, "dhcp4", _cfg(i + 1), f"s{i}", f"rev {i}", hash_kind="kea", source="jen")
+        removed = rev.prune(_SID, "dhcp4", keep=1)
+        kept = {r["id"]: r["source"] for r in rev.list_revisions(_SID, "dhcp4")}
+        assert old in kept and kept[old] == in_flight, "the record of the change is still there"
+        assert removed == 49 and sum(1 for s in kept.values() if s == "jen") == 1
+
+    def test_a_row_in_flight_is_not_what_pushes_a_settled_revision_out(self):
+        for i in range(3):
+            rev.record(_SID, "dhcp4", _cfg(i), f"s{i}", f"rev {i}", hash_kind="kea", source="jen")
+        rev.record(_SID, "dhcp4", _cfg(9), "p", "in flight", hash_kind="kea", source="pending")
+        rev.record(_SID, "dhcp4", _cfg(10), "d", "damaged", hash_kind="kea", source="damaged")
+        assert (
+            rev.prune(_SID, "dhcp4", keep=3) == 0
+        )  # the three settled rows are all there are of them: keep=3 keeps them all
+        assert len(rev.list_revisions(_SID, "dhcp4")) == 5
+
+    def test_latest_of_kind_skips_pending_and_damaged(self):
+        rev.record(_SID, "dhcp4", _cfg(1), "settled", "x", hash_kind="kea", source="jen")
+        rev.record(_SID, "dhcp4", _cfg(2), "p", "x", hash_kind="kea", source="pending")
+        rev.record(_SID, "dhcp4", _cfg(3), "d", "x", hash_kind="kea", source="damaged")
+        assert rev.latest_of_kind(_SID, "dhcp4", "kea")["sha256"] == "settled"
+
+    def test_by_digest_finds_the_settled_revision_and_never_a_row_in_flight(self):
+        settled = rev.record(_SID, "dhcp4", _cfg(1), "same", "x", hash_kind="kea", source="baseline")
+        rev.record(_SID, "dhcp4", _cfg(2), "same", "x", hash_kind="kea", source="pending")
+        rev.record(
+            _SID, "dhcp4", _cfg(3), "same", "x", hash_kind="raw", source="jen"
+        )  # another kind of digest is not comparable
+        found = rev.by_digest(_SID, "dhcp4", "same")
+        assert found["id"] == settled and json.loads(found["config"]) == _cfg(1)
+        assert rev.by_digest(_SID, "dhcp4", "unknown") is None and rev.by_digest(_SID, "dhcp4", "") is None
+        assert rev.by_digest(_SID, "dhcp6", "same") is None
+
+
 class TestDiff:
     def test_unified_diff_lines_have_no_trailing_newline(self):
         out = rev.diff("a\nb\nc", "a\nB\nc")

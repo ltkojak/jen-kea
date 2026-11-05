@@ -184,6 +184,10 @@ class TestTheTenStateTable:
         facts = self._facts(delta)
         server = _server(daemon, ssh)
         monkeypatch.setattr(sw._api, "probe", lambda srv, svc: dict(facts))
+        # (Q218) the sender reads the file too: it is what the facts say it is - the daemon's own configuration, or one that carries an edit the daemon never loaded
+        edited = {"Dhcp4": {**copy.deepcopy(daemon.running), "user-context": {"edit": 1}}}
+        file_cfg = edited if facts["agree"] is False else {"Dhcp4": copy.deepcopy(daemon.running)}
+        monkeypatch.setattr(kea_host, "read_config_versioned", lambda *a, **k: (copy.deepcopy(file_cfg), "r" * 64))
         result = sw._to_api(server, "off", set(consents), "tester")
         assert result["ok"] is allowed, result["line"]
         if not allowed:
@@ -232,8 +236,9 @@ class TestTheFactsAreKeptFreshWithoutAskingAgain:
         check = {"ok": True, "may_write": True, "includes": [], "mode": "0660", "account": {"name": "_kea"}}
         check.update(override)
         monkeypatch.setattr(kea_host, "config_write_check", lambda s, svc: dict(check))
+        # the host's FILE is the fake's held file (Q218: the sender asks it before `config-write`, so a stub that answered "what runs" at every call would read as an edit the daemon never loaded)
         monkeypatch.setattr(
-            kea_host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(daemon.running)}, "r" * 64)
+            kea_host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(daemon.file)}, "r" * 64)
         )
 
     def _consented(self, daemon, probes, monkeypatch):

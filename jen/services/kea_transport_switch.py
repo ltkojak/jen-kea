@@ -79,43 +79,69 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     blocked = _write_guard(server, name, live)
     if blocked:
         return _refuse(blocked)
-    wrote = _api.write_file(server, SERVICE)
-    if not wrote["ok"]:
-        _api.remember_refusal(server, wrote.get("detail", ""))
-        return _refuse(
-            f"{name}: the daemon refused to write its file ({wrote.get('detail') or 'no answer'}); nothing was switched"
+    # (Q218 BH1 a, d) the discard is a consent of THIS act for a fact the facts called for; `before` is what the daemon runs - at a switch the file and the daemon are meant to be one
+    discard = "discard_file_edit" in (set(consents) & set(_api.consents_called_for(facts, has_ssh=has_ssh)))
+    discarded_at = None
+    wrote_a_file = True
+    if current == "api":
+        # a server already in Live API RECORDS a consent; it renders nothing, unless the file carries an edit and the operator said to discard it
+        wrote_a_file = False
+        if has_ssh and discard:
+            state, _where = _api.file_against(server, SERVICE, live)
+            if state == "differs":
+                wrote_a_file = True
+                newest = _rev.latest(sid, SERVICE, exclude_kind="kea") if sid is not None else None
+                discarded_at = (newest or {}).get("id")
+    if wrote_a_file:
+        wrote = _api.write_file(server, SERVICE, before=live, discard=discard)
+        if not wrote["ok"]:
+            if (
+                wrote.get("code") == "unloaded-edit"
+            ):  # nothing was sent and Kea refused nothing: no refusal is remembered
+                return _refuse(f"{name}: {wrote.get('detail')}; nothing was switched")
+            _api.remember_refusal(server, wrote.get("detail", ""))
+            return _refuse(
+                f"{name}: the daemon refused to write its file ({wrote.get('detail') or 'no answer'}); nothing was switched"
+            )
+        cfg, digest, why = _api._get(server, SERVICE)
+        if cfg is None:
+            return _refuse(
+                f"{name}: the daemon did not confirm its configuration after the write ({why}); nothing was switched"
+            )
+        revision = (
+            _rev.record(
+                sid,
+                SERVICE,
+                cfg,
+                digest,
+                f"transport switched {current} -> api by {actor}",
+                hash_kind="kea",
+                source="switch",
+            )
+            if sid is not None
+            else None
         )
-    cfg, digest, why = _api._get(server, SERVICE)
-    if cfg is None:
-        return _refuse(
-            f"{name}: the daemon did not confirm its configuration after the write ({why}); nothing was switched"
-        )
-    revision = (
-        _rev.record(
-            sid,
-            SERVICE,
-            cfg,
-            digest,
-            f"transport switched {current} -> api by {actor}",
-            hash_kind="kea",
-            source="switch",
-        )
-        if sid is not None
-        else None
-    )
+    else:
+        revision = None
     # the operator's consent is on record from this moment: the gate in `apply` reads it
     stored = _api.stored_probe(sid) or facts
     stored["consented_at"] = _api._now_iso()
     stored["consents"] = sorted(set(consents) & set(_api.CONSENTS))
     stored.pop("consent_refused", None)
     _api.store_probe(sid, stored)
-    verb = (
-        "consent recorded for Live API" if current == "api" else "switched to Live API"
-    )  # (Q217, second pass row 2) a server already in Live API records a consent in place
+    if current == "api":  # (Q218 BH1 d) a consent recorded in place says so, and says what it discarded
+        line = f"{name}: consent recorded for Live API"
+        if wrote_a_file:
+            line += (
+                f", and the file's edit was discarded (Config history #{discarded_at})"
+                if discarded_at
+                else ", and the file's edit was discarded"
+            )
+        return _done(line, revision=revision, discarded=wrote_a_file)
     return _done(
-        f"{name}: {verb}; Kea rendered its file; revision #{revision} is the baseline"
+        f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
         if revision
-        else f"{name}: {verb}; Kea rendered its file",
+        else f"{name}: switched to Live API; Kea rendered its file",
         revision=revision,
     )
 
@@ -147,7 +173,9 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         blocked = _write_guard(server, name, live)
         if blocked:
             return _refuse(blocked)
-        _api.write_file(server, SERVICE)
+        _api.write_file(
+            server, SERVICE, before=live, discard=True
+        )  # (Q218 BH1 b) `discard_file_edit` is in THIS act's consents (the refusal above); the sender's capturing read puts the edit in Config history first
         file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
         if file_cfg is None or not _api.compare(server, SERVICE, file_cfg, live)[0]:
             return _refuse(

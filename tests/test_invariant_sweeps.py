@@ -774,6 +774,9 @@ S10_ALLOWED = {
     ("jen/services/config_revisions.py", "latest_of_kind", "Exception", "return None"): (
         "no `kea` row means the digest check of `api_daemon_differs` falls back to containment, the 7.0.0-beta.1 rule, which still refuses a file that holds what the daemon does not run; the write gate is `pending()`, which raises (Q216 AA11)"
     ),
+    ("jen/services/config_revisions.py", "by_digest", "Exception", "return None"): (
+        "None is 'no revision proves the file's before state': the one caller, a settlement's live branch, answers it by NOT sending `config-write` - fail closed (Q218 BH1 b)"
+    ),
     ("jen/services/config_revisions.py", "finish", "Exception", "return False"): (
         "a pending row that could not be finished STAYS pending: `pending_block` keeps refusing the next change until it is settled - fail closed (Q216)"
     ),
@@ -800,6 +803,12 @@ S10_ALLOWED = {
     ),
     ("jen/services/config_revisions.py", "prune", "Exception", "return 0"): (
         "pruning old rows is housekeeping; a failure keeps every row (Q216)"
+    ),
+    ("jen/services/kea_api_config.py", "_before_state", "(TypeError, ValueError, KeyError)", "return None"): (
+        "None is 'no revision proves the state before the change': the settlement then does not overwrite the file and the row stays - fail CLOSED (Q218 BH1 b)"
+    ),
+    ("jen/services/kea_api_config.py", "pending_note", "_rev.RevisionStoreUnreadable", 'return ""'): (
+        "the card's note is a display above a button; the gate (`record_unreadable`, `pending_block`) refuses on a store that cannot be read and sends nothing (Q216 AA11)"
     ),
     ("jen/services/kea_api_config.py", "stored_probe", "(TypeError, ValueError)", "return None"): (
         "no readable stored probe means `probe_gate` answers 'run readiness check first' and the card shows the same: an unreadable result is never consent - fail closed (Q212, Q216)"

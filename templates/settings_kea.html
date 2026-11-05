@@ -278,8 +278,8 @@
         <p class="form-hint">{{ c.why }}</p>
         {% if c.full %}
         {% if c.pending_unreadable %}<div class="alert alert-warning" data-transport-pending-unreadable>{{ icon("triangle-alert") }} The record of an earlier change cannot be read, so nothing is sent to this server until it can.</div>{% endif %}
-        {% if c.pending %}<div class="alert alert-warning" data-transport-pending>{{ icon("triangle-alert") }} A change this server's process left half-done is on record.
-            <form method="POST" action="/settings/infrastructure/settle-pending-change/{{ c.id }}" class="u-cccfa4" data-confirm="Settle the unfinished change on {{ c.name }}? Jen compares what the daemon runs with the change and finishes or removes it. This is audited.">
+        {% if c.pending %}<div class="alert alert-warning" data-transport-pending>{{ icon("triangle-alert") }} A change this server's process left half-done is on record.{% if c.pending_note %} <span data-transport-pending-note>{{ c.pending_note }}</span>{% endif %}
+            <form method="POST" action="/settings/infrastructure/settle-pending-change/{{ c.id }}" class="u-cccfa4" data-confirm="Settle the unfinished change on {{ c.name }}? Jen compares what the daemon runs with the change and with the file on the host, and finishes or removes the change; a file edit the daemon never loaded stops it. This is audited.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-secondary">Settle it now</button>
             </form></div>{% endif %}
         {% if c.refused %}<div class="alert alert-warning" data-transport-refused>{{ icon("triangle-alert") }} {{ c.refused }}</div>{% endif %}

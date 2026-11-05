@@ -298,11 +298,7 @@ def _unloaded_edit(server: dict, service: str, cfg: dict, name: str) -> str:
         server, service, file_cfg, cfg
     )  # (Q217 BG3 b, AB6) both directions, and the first place they differ
     if not agrees:
-        return (
-            f"the file on {host} carries an edit the daemon has not loaded ({where}) - restart Kea there first, or discard it from the server's Write mode card"
-            if where
-            else f"the file on {host} carries an edit the daemon has not loaded - restart Kea there first, or discard it from the server's Write mode card"
-        )
+        return _api.unloaded_edit_sentence(server, where)  # (Q218 BH1) one sentence, the sender's
     return ""
 
 

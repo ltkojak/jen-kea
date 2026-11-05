@@ -167,6 +167,73 @@ class TestToApi:
         )
         assert r["ok"], r  # no `confirm_no_include`: the host answered it
 
+    def test_api_to_api_records_and_does_not_render(self, daemon, store, probes, written, monkeypatch):
+        """Q218 BH1 d (AC14): the button says Record consent and does that - `config-write` goes out only when the file carries an edit AND the operator said to discard it."""
+        world.host_reads_the_fakes_file(monkeypatch, daemon, store, server_id=5)
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0640", "account": {"name": "_kea"}},
+        )
+        r = sw.switch(srv(daemon, "api", ssh=True), "api", consents=ALL - {"confirm_no_include"}, actor="root")
+        assert r["ok"] and "consent recorded for Live API" in r["line"] and "discarded" not in r["line"], r
+        assert "config-write" not in daemon.commands and probes[5]["consented_at"]
+
+    def test_a_discarded_edit_is_in_config_history_before_the_write(self, daemon, store, probes, written, monkeypatch):
+        """Q218 BH1 a, d: the edit a consent discards is an `external` row BEFORE the `config-write` that replaces it - to Live API (from the file path and in place) and to File over SSH."""
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0640", "account": {"name": "_kea"}},
+        )
+        edit = {"user-context": {"jen-note": "an edit the daemon never loaded"}}
+        for current, target in (("file", "api"), ("api", "api"), ("api", "file")):
+            store.rows.clear()
+            daemon.commands.clear()
+            daemon.set_running(copy.deepcopy(TWO_SUBNET_DHCP4))
+            daemon.file = copy.deepcopy(daemon.running)
+            world.host_reads_the_fakes_file(monkeypatch, daemon, store, server_id=5)
+            kea_host.read_config_versioned(srv(daemon, current, ssh=True), "dhcp4")  # the baseline of the clean file
+            daemon.file.update(copy.deepcopy(edit))
+            seen = {}
+            daemon.hooks["config-write"] = lambda f, seen=seen: seen.setdefault(
+                "rows", [(x["source"], x["hash_kind"]) for x in store.rows]
+            )
+            consents = (ALL - {"confirm_no_include"}) | {"discard_file_edit"}
+            r = sw.switch(srv(daemon, current, ssh=True), target, consents=consents, actor="root")
+            assert r["ok"], (current, target, r)
+            assert ("external", "raw") in seen["rows"], (
+                current,
+                target,
+                "the edit was in Config history before the write",
+            )
+            assert "user-context" not in daemon.file
+            if current == target == "api":
+                assert "the file's edit was discarded" in r["line"], r
+
+    def test_without_discard_an_edit_that_appears_after_the_check_is_refused_and_nothing_is_sent(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        """Q218 BH1 a, CFG-005: the facts the consents were given for said the file agreed; an edit that appeared since is refused by the sender (and no refusal is remembered as Kea's)."""
+        world.host_reads_the_fakes_file(monkeypatch, daemon, store, server_id=5)
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0640", "account": {"name": "_kea"}},
+        )
+        real_probe = api.probe
+
+        def probe_then_edit(server, service="dhcp4", **kw):
+            facts = real_probe(server, service, **kw)
+            daemon.file["user-context"] = {"jen-note": "appeared after the check"}
+            return facts
+
+        monkeypatch.setattr(api, "probe", probe_then_edit)
+        r = sw.switch(srv(daemon, "file", ssh=True), "api", consents=ALL - {"confirm_no_include"})
+        assert not r["ok"] and "carries an edit the daemon has not loaded" in r["line"], r
+        assert "config-write" not in daemon.commands and "refused" not in (probes.get(5) or {})
+        assert written == []
+
 
 class TestToFile:
     def test_api_to_file_needs_ssh(self, daemon, store, probes, written):

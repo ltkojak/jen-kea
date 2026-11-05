@@ -215,6 +215,12 @@ def _config_cards() -> list:
             pending_unreadable = False
         except __rev.RevisionStoreUnreadable:
             pending, pending_unreadable = False, True
+        pending_note = ""
+        if pending:  # (Q218 BH1 e) what the settlement waits on, said above the button: a read of the daemon and of the file, only when something is pending
+            try:
+                pending_note = __api.pending_note(server, "dhcp4")
+            except Exception as e:  # a card is a display: a host that does not answer shows the alert without the note
+                logger.warning("write mode card: the pending note of %s could not be read: %s", sid, type(e).__name__)
         # row 1 - the helper (only a host reached over SSH needs one)
         if not ssh:
             row1 = {
@@ -304,6 +310,7 @@ def _config_cards() -> list:
                 "can_claim_fixed": bool(refused)
                 and (not ssh or not helper_ok or not (isinstance(write_fact, dict) and "may_write" in write_fact)),
                 "pending": pending,
+                "pending_note": pending_note,
                 "pending_unreadable": pending_unreadable,
             }
         )
