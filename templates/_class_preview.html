@@ -11,7 +11,7 @@
 </div>
 {% if test_result %}
 {% if test_result.get('no_target') %}
-<div class="card" style="border-color:var(--danger);padding:8px;margin-top:8px;" data-no-write-target>
+<div class="card u-badcab"  data-no-write-target>
     {{ icon("circle-x") }} {{ test_result.detail }}
 </div>
 {% elif test_result.ok %}
@@ -23,7 +23,7 @@
     {{ icon("info") }} {{ test_result.detail }}
 </div>
 {% else %}
-<div class="card" style="border-color:var(--danger);padding:8px;margin-top:8px;">
+<div class="card u-badcab">
     {{ icon("circle-x") }} Kea rejected this config: {{ test_result.detail }}
 </div>
 {% endif %}

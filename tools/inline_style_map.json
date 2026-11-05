@@ -15,6 +15,7 @@
  "border-color:rgba(0,180,216,0.3)": "u-e25041",
  "border-color:var(--border);margin:18px 0": "u-6caa47",
  "border-color:var(--danger);background:rgba(200,50,50,0.08)": "u-3bceda",
+ "border-color:var(--danger);padding:8px;margin-top:8px": "u-badcab",
  "border-color:var(--warning)": "u-fd6601",
  "border-top:1px solid var(--border)": "u-2eea7e",
  "border:1px solid var(--danger);color:var(--danger);background:transparent": "u-be83f6",

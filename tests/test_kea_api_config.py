@@ -319,9 +319,8 @@ class TestAWriteTimeoutIsNeverOk:
         """The host's file: what it holds when the proof asks (a capturing read: the Plan's and step (6)'s), then `later()` - the helper's answer to step (8)'s verify, once the write was tried."""
 
         def read(*a, **k):
-            if k.get("capture", True):
-                return {"Dhcp4": copy.deepcopy(fake.file)}, "r" * 64
-            return {"Dhcp4": later()}, "r" * 64
+            cfg = {"Dhcp4": copy.deepcopy(fake.file)} if k.get("capture", True) else {"Dhcp4": later()}
+            return cfg, world.sha_of(cfg)  # the sha follows the bytes, as a real file's does
 
         monkeypatch.setattr(host, "read_config_versioned", read)
 
