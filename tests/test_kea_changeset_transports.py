@@ -608,3 +608,28 @@ class TestTheSettlementAsksTheFileFirst:
         result = cs.apply_change("dhcp4", lifetime(7200), "a subnet edit", servers=[ssh_server])
         assert result.status != "ok" and "config-write" not in daemon.commands
         assert "cannot be proved against the state before the change" in " ".join(t for _k, t in result.lines)
+
+
+class TestTheFirstWriteTarget:
+    """Q218 BH6 h (AC27): the import reads, validates and applies on the first server that takes changes - not `KEA_SERVERS[0]`, which may be Read-only while the second is on Live API."""
+
+    def test_the_first_server_that_is_not_read_only(self, monkeypatch):
+        servers = [
+            {"id": 1, "name": "kea-a", "api_url": "http://a/", "config_transport": "off"},
+            {"id": 2, "name": "kea-b", "api_url": "http://b/", "config_transport": "api"},
+            {"id": 3, "name": "kea-c", "api_url": "http://c/", "ssh_host": "10.0.0.3"},
+        ]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        assert cs.first_write_target("dhcp4")["id"] == 2
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers[:1])
+        assert cs.first_write_target("dhcp4") is None
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        assert cs.first_write_target("dhcp4") is None
+        # dhcp6 has no API transport: a server with no SSH host takes nothing there
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        assert cs.first_write_target("dhcp6")["id"] == 3
+
+    def test_no_import_route_reads_the_first_server_in_the_list(self):
+        source = (ROOT / "jen" / "routes" / "subnets.py").read_text(encoding="utf-8")
+        assert "extensions.KEA_SERVERS[0]" not in source.replace("`KEA_SERVERS[0]`", "")
+        assert source.count("first_write_target(") == 3  # the import preview, its apply and the reservations step

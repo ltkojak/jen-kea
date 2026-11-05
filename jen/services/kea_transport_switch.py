@@ -124,9 +124,13 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     else:
         revision = None
     # the operator's consent is on record from this moment: the gate in `apply` reads it
+    # (Q218 BH3 a, AC4) what is recorded is what the FRESH facts call for - `consents_called_for` is the one table - never every name the form happened to send: a stray box is dropped and named
+    called = set(_api.consents_called_for(facts, has_ssh=has_ssh))
+    recorded = sorted(set(consents) & called)
+    ignored = sorted(set(consents) - called)
     stored = _api.stored_probe(sid) or facts
     stored["consented_at"] = _api._now_iso()
-    stored["consents"] = sorted(set(consents) & set(_api.CONSENTS))
+    stored["consents"] = recorded
     stored.pop("consent_refused", None)
     _api.store_probe(sid, stored)
     if current == "api":  # (Q218 BH1 d) a consent recorded in place says so, and says what it discarded
@@ -137,12 +141,14 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 if discarded_at
                 else ", and the file's edit was discarded"
             )
-        return _done(line, revision=revision, discarded=wrote_a_file)
+        return _done(line, revision=revision, discarded=wrote_a_file, consents=recorded, ignored=ignored)
     return _done(
         f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
         if revision
         else f"{name}: switched to Live API; Kea rendered its file",
         revision=revision,
+        consents=recorded,
+        ignored=ignored,
     )
 
 
@@ -154,6 +160,9 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
     unreadable = _api.record_unreadable(server, SERVICE)
     if unreadable:
         return _refuse(f"{name}: {unreadable}; nothing was changed")
+    acted: list[
+        str
+    ] = []  # the consents this act USED (Q218 BH3 e): the audit row prints what was done, not what was submitted
     file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
     if file_cfg is None:
         return _refuse(
@@ -173,6 +182,7 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         blocked = _write_guard(server, name, live)
         if blocked:
             return _refuse(blocked)
+        acted.append("discard_file_edit")
         _api.write_file(
             server, SERVICE, before=live, discard=True
         )  # (Q218 BH1 b) `discard_file_edit` is in THIS act's consents (the refusal above); the sender's capturing read puts the edit in Config history first
@@ -203,6 +213,8 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         if revision
         else f"{name}: switched to File over SSH",
         revision=revision,
+        consents=acted,
+        ignored=sorted(set(consents) - set(acted)),
     )
 
 
@@ -225,7 +237,9 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
             elif target == "file":
                 result = _to_file(server, current, consents, actor)
             else:
-                result = _done(f"{name}: now Read-only; the daemon keeps serving")
+                result = _done(
+                    f"{name}: now Read-only; the daemon keeps serving", consents=[], ignored=sorted(consents)
+                )
             if not result["ok"]:
                 return result
             try:
@@ -239,5 +253,8 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
         return _refuse(_cs.BUSY_SENTENCE)
     result.setdefault("from", current)
     result["to"] = target
-    result["consents"] = sorted(consents)
+    result.setdefault(
+        "consents", []
+    )  # (Q218 BH3 e) each transition says what it RECORDED or USED; this is the fallback for one that said nothing
+    result.setdefault("ignored", [])
     return result

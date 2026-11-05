@@ -3760,7 +3760,7 @@ a = {**servers["kea-a"], "config_transport": "api"}
 a.pop("ssh_host", None)  # kea-a is changed over its API with no SSH (the operator's "no SSH" case); kea-b keeps the file path
 b = {**servers["kea-b"], "config_transport": "file"}
 now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now})  # the operator has read the card's facts once
+api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now, "bound": api._bound(a)})  # the operator has read the card's facts once (a stored result names the endpoint it was read from: Q218 BH3 d)
 
 real_action, seen = kea_host.service_action, {"b": 0}
 
@@ -3800,7 +3800,7 @@ from jen.services import kea_api_config as api
 a = {**[s for s in extensions.KEA_SERVERS if s["name"] == "kea-a"][0], "config_transport": "api"}
 a.pop("ssh_host", None)
 now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now})
+api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now, "bound": api._bound(a)})
 try:
     before = api.hash(a, "dhcp4")
     first = cs.apply_change("dhcp4", mutate, "system-test write refused", servers=[a])

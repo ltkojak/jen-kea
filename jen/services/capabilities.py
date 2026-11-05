@@ -151,6 +151,17 @@ class ServerCapabilities:
             return "File over SSH needs an SSH host (Settings → Kea → SSH); until it has one this server is read-only"
         return MODE_SENTENCES["off"]
 
+    def transport_why_for(self, superadmin: bool) -> str:
+        """The sentence for a READER of the page (Q218 BH4 a, AC7): a superadmin reads the gate's own words (`transport_why` - they name the daemon's account, the file's mode, an include's path, an
+        endpoint with no authentication); an admin or a viewer reads the mode's sentence and, when the gate is closed, that a change to it over the API will stop until a superadmin has read the
+        card. No gate text and no host fact reaches them; the badge's ", blocked" is a state, not a fact."""
+        if superadmin or not self.transport_blocked:
+            return self.transport_why()
+        return (
+            MODE_SENTENCES[self.config_transport].rstrip(".")
+            + ", and a change to it over the API will stop until a superadmin has read its Write mode card."
+        )
+
     def why(self, name: str) -> str:
         """The one sentence the UI shows for capability `name`: what's
         missing and where to fix it when it's off, a plain "available"

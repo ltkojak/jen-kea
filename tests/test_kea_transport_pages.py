@@ -139,8 +139,12 @@ class TestTheCardOffersOnlyWhatTheFactsAllow:
         assert "/settings/infrastructure/config-write-fixed/2" in html
 
 
-class TestTheGateSentencesAreAnAdminsToRead:
-    """Second pass, row 1: the gate's sentences name host paths, the daemon's account and a file mode; a viewer sees a neutral phrase."""
+class TestTheGateSentencesAreASuperadminsToRead:
+    """Q218 BH4 a (AC7; Q216 second pass row 1): the gate's sentences name host paths, the daemon's account, a file mode and whether a named endpoint has authentication. They are a SUPERADMIN's, on the
+    Servers page and on the Write mode card; an admin or a viewer reads the mode's sentence and that a change will stop until a superadmin has read the card."""
+
+    NEEDLES = ("secret-site-extra.json", "_kea", "0660", "no authentication")
+    STOP = "will stop until a superadmin has read its Write mode card"
 
     def _stored(self, monkeypatch):
         monkeypatch.setattr(
@@ -151,9 +155,10 @@ class TestTheGateSentencesAreAnAdminsToRead:
                     "at": "2026-11-04T10:00:00+00:00",
                     "config_api": True,
                     "consented_at": "2026-11-04T10:00:00+00:00",
+                    "bound": api._bound(SERVER_API),
                     "include": ["/etc/kea/secret-site-extra.json"],
                     "agree": True,
-                    "write": {"may_write": True},
+                    "write": {"may_write": True, "account": "_kea", "mode": "0660"},
                 }
                 if sid == 1
                 else None
@@ -161,20 +166,39 @@ class TestTheGateSentencesAreAnAdminsToRead:
         )
         monkeypatch.setattr(api, "_age_days", lambda iso: 0.1)
 
-    def test_an_admin_reads_the_sentence(self, logged_in_client, three, monkeypatch):
+    def test_a_superadmin_reads_the_sentence(self, logged_in_client, three, monkeypatch):
         self._stored(monkeypatch)
         _only(monkeypatch, SERVER_API)
         html = logged_in_client.get("/servers").data.decode()
         assert "secret-site-extra.json" in html
+        card = (
+            logged_in_client.get("/settings/kea")
+            .data.decode()
+            .split('id="config-card-1"')[1]
+            .split('id="config-card-2"')[0]
+        )
+        assert "secret-site-extra.json" in card
 
-    def test_a_viewer_reads_a_neutral_phrase(self, client, db, three, monkeypatch):
+    @pytest.mark.parametrize("role", ["admin", "viewer"])
+    def test_an_admin_and_a_viewer_read_the_mode_and_that_a_change_will_stop(
+        self, client, db, three, monkeypatch, role
+    ):
         from tests.conftest import restricted_client
 
         self._stored(monkeypatch)
-        restricted_client(client, db, None, role="viewer", username="viewer-q216")
+        restricted_client(client, db, None, role=role, username=f"reader-q218-{role}")
         _only(monkeypatch, SERVER_API)
         html = client.get("/servers").data.decode()
-        assert "secret-site-extra.json" not in html and "Live API is not ready yet" in html
+        assert self.STOP in html
+        for needle in self.NEEDLES:
+            assert needle not in html, (role, needle)
+        if role == "admin":  # the card is an admin's to open
+            card = (
+                client.get("/settings/kea").data.decode().split('id="config-card-1"')[1].split('id="config-card-2"')[0]
+            )
+            assert self.STOP in card and "Current: Live API, blocked" in card
+            for needle in self.NEEDLES:
+                assert needle not in card, (role, "card", needle)
 
 
 class TestAViewerIsNotToldAnEndpointHasNoAuthentication:
@@ -209,6 +233,52 @@ class TestAViewerIsNotToldAnEndpointHasNoAuthentication:
         restricted_client(client, db, None, role="viewer", username="viewer-q217")
         html = client.get("/servers").data.decode()
         assert "unauthenticated" not in html and "Live API" in html
+
+
+class TestTheServersPageNamesEveryServersMode:
+    """Q218 BH4 b (AC21): the Write mode row was inside `{% if single_server %}`, so a fleet of two or three - the deployment 7.0 is for - was never told how changes reach any of its servers."""
+
+    WORDS = {"api": "Live API", "file": "File over SSH", "off": "Read-only"}
+
+    @pytest.mark.parametrize("n", [1, 2, 3])
+    @pytest.mark.parametrize("role", ["superadmin", "admin", "viewer"])
+    def test_every_server_names_its_mode_in_every_role(self, client, db, three, monkeypatch, n, role):
+        from tests.conftest import restricted_client
+
+        servers = [SERVER_API, SERVER_FILE, SERVER_LEGACY][:n]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        monkeypatch.setattr(
+            kea_svc,
+            "get_all_server_status",
+            lambda: [
+                {"server": s, "up": True, "ha_state": None, "version": "3.0.5", "role": s["role"]} for s in servers
+            ],
+        )
+        restricted_client(client, db, None, role=role, username=f"fleet-q218-{role}-{n}")
+        html = client.get("/servers").data.decode()
+        assert html.count('data-transport="') == n, (n, role)
+        for word in ("api", "file", "off")[: len(servers)]:
+            assert f'data-transport="{word}"' in html and self.WORDS[word] in html, (n, role, word)
+
+    @pytest.mark.parametrize("n", [1, 3])
+    def test_the_badge_and_the_card_say_the_same_word_with_one_and_with_three_servers(
+        self, logged_in_client, three, monkeypatch, n
+    ):
+        servers = [SERVER_API, SERVER_FILE, SERVER_LEGACY][:n]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        monkeypatch.setattr(
+            kea_svc,
+            "get_all_server_status",
+            lambda: [
+                {"server": s, "up": True, "ha_state": None, "version": "3.0.5", "role": s["role"]} for s in servers
+            ],
+        )
+        page = logged_in_client.get("/servers").data.decode()
+        card = logged_in_client.get("/settings/kea").data.decode()
+        for word in ("api", "file", "off")[: len(servers)]:
+            assert (
+                f'data-transport="{word}"' in page and f'data-transport="{word}"' in card and self.WORDS[word] in card
+            )
 
 
 class TestARestoreOverTheApi:

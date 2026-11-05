@@ -149,6 +149,13 @@ def _transport(server: dict, service: str) -> str:
     return "api"
 
 
+def first_write_target(service: str = "dhcp4") -> dict | None:
+    """The first server, in configuration order, whose write mode for `service` is not Read-only (Q218 BH6 h, AC27): the one an import is read from, validated against and applied to. `None` when
+    the whole fleet is Read-only (or there is no server). Never `KEA_SERVERS[0]` - a fleet whose first server is Read-only and whose second is on Live API has a write target, and the import
+    must find it."""
+    return next((s for s in extensions.KEA_SERVERS or [] if _transport(s, service) != "off"), None)
+
+
 def _transport_for_run(server: dict, service: str, force: str | None) -> str:
     """`_transport`, or - for a caller that passed `transport="file"` - the file path for a server that has SSH and is not switched off: a change to the control sockets is never sent over the
     socket it changes, and investigation logging's marker is restored by the HOST from the file (INV-001)."""

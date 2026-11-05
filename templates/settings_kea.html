@@ -355,14 +355,14 @@
                             <span class="wm-text"><strong>3.</strong> Accept what changes</span>
                             <div class="wm-consents">
                                 {% for n in c.consents %}
-                                <label><input type="checkbox" name="{{ n.name }}" value="1" form="wm-form-{{ c.id }}" data-wm-consent="{{ c.id }}"> {{ n.text }}</label>
+                                <label><input type="checkbox" name="{{ n.name }}" value="1" form="wm-form-{{ c.id }}" data-wm-consent="{{ c.id }}" {% if m.value != c.transport %}disabled{% endif %}> {{ n.text }}</label>
                                 {% endfor %}
                             </div>
                         </li>
                     </ol>
                     <div class="wm-switch">
                         <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-primary" data-wm-switch="{{ c.id }}" data-wm-target="api" data-holds="{{ '1' if c.holding else '' }}" {% if m.value == c.transport and not c.blocked %}data-current="1"{% endif %} {% if (m.value == c.transport and not c.blocked) or c.holding %}disabled{% endif %}>{% if m.value == c.transport %}Record consent{% else %}Switch to live API{% endif %}</button>
-                        <span class="form-hint" data-wm-holding="{{ c.id }}">{% if m.value == c.transport and not c.blocked %}This is the current mode.{% else %}{{ c.holding }}{% endif %}</span>
+                        <span class="form-hint" data-wm-holding="{{ c.id }}">{% if m.value == c.transport and not c.blocked %}This is the current mode.{% elif m.value == c.transport %}{{ c.holding or c.why }}{% else %}{{ c.holding or 'Accept what changes in step 3, then switch.' }}{% endif %}</span>
                     </div>
                     <div class="form-hint">Audited. Reversible from this card.</div>
                     {% elif m.value == 'file' %}
@@ -374,7 +374,7 @@
                     </ol>
                     <p class="form-hint">Jen compares the file with what the daemon runs before it writes anything; a file edit the daemon never loaded is kept.</p>
                     {% if c.ssh and c.transport != 'file' %}
-                    <div class="wm-consents"><label><input type="checkbox" name="discard_file_edit" value="1" form="wm-form-{{ c.id }}"> {{ c.consent_texts.discard_file_edit }}</label></div>
+                    <div class="wm-consents"><label><input type="checkbox" name="discard_file_edit" value="1" form="wm-form-{{ c.id }}" {% if m.value != c.transport %}disabled{% endif %}> {{ c.consent_texts.discard_file_edit }}</label></div>
                     {% endif %}
                     <div class="wm-switch">
                         <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-secondary" data-wm-switch="{{ c.id }}" data-wm-target="file" {% if m.value == c.transport or not c.ssh %}disabled{% endif %}>Switch to file over SSH</button>
@@ -1148,7 +1148,10 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
         var id = card.getAttribute('data-wm-card');
         var mode = selected(card);
         card.querySelectorAll('[data-mode-panel]').forEach(function (p) {
-            p.classList.toggle('wm-hidden', p.getAttribute('data-mode-panel') !== mode);
+            var hidden = p.getAttribute('data-mode-panel') !== mode;
+            p.classList.toggle('wm-hidden', hidden);
+            // Q218 (BH3 b, AC4): the three panels share one form, and a hidden box is still a box that submits. Only the SELECTED mode's boxes are enabled, so a consent the facts never called for cannot ride along.
+            p.querySelectorAll('input[type="checkbox"]').forEach(function (box) { box.disabled = hidden; });
         });
         var form = card.querySelector('[data-wm-form]');
         var radio = card.querySelector('[data-wm-radio]:checked');
@@ -1162,7 +1165,7 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
         var first = null;
         boxes.forEach(function (b) { if (!first && !b.checked) first = b; });
         sw.disabled = !!first;
-        if (say) say.textContent = first ? 'Waiting on step 3: accept “' + first.parentNode.textContent.trim() + '”' : '';
+        if (say) say.textContent = first ? 'Waiting on step 3: accept “' + first.parentNode.textContent.trim() + '”' : 'Ready to switch.';
         var row3 = card.querySelector('[data-wm-row="3"]');
         if (row3) row3.setAttribute('data-state', first ? 'idle' : 'ok');
     }

@@ -17,11 +17,20 @@ are rewritten with LF, which git's autocrlf normalizes as usual.
 
 from __future__ import annotations
 
+import datetime
 import pathlib
 import re
 import sys
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(-(beta|rc)\.\d+)?$")
+
+
+def dated_in_utc(entry: str, new: str, now: datetime.datetime | None = None) -> str:
+    """The entry with its heading dated in UTC (Q218 BH6 i): a release publishes in UTC, and a heading written by hand in local time was a day early (7.0.0-beta.3's was dated 2026-11-04 and
+    published 2026-11-05T06:07Z). The heading is `## [X.Y.Z-beta.N] - YYYY-MM-DD`; a heading with no date gets one."""
+    today = (now or datetime.datetime.now(datetime.timezone.utc)).astimezone(datetime.timezone.utc).date().isoformat()
+    heading = re.compile(rf"^## \[{re.escape(new)}\](?: - \d{{4}}-\d{{2}}-\d{{2}})?", re.M)
+    return heading.sub(f"## [{new}] - {today}", entry, count=1)
 
 
 def main(argv: list[str]) -> int:
@@ -38,6 +47,7 @@ def main(argv: list[str]) -> int:
     if not entry.startswith(f"## [{new}]"):
         print(f"{entry_path} must start with '## [{new}]'")
         return 2
+    entry = dated_in_utc(entry, new)
     if not entry.endswith("\n\n"):
         entry = entry.rstrip("\n") + "\n\n"
 

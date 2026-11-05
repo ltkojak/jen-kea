@@ -214,9 +214,11 @@ class TestAConsentWithoutTheFactsOnThePageIsNotGiven:
         }
         assert api.probe_gate(_server(daemon, True)) == ""
 
-    def test_a_beta1_consent_covers_the_rendering_only(self, daemon, probes):
-        """Q217 AB2 (Opus's beta.2 row): a stored result with no `consents` list counts as the file rewrite accepted - nothing else. An endpoint that lost its authentication, or a file that no longer
-        matches, blocks until the card's step 3 is ticked again."""
+    def test_a_beta1_consent_covers_the_rendering_and_the_no_ssh_confirmation_only(self, daemon, probes):
+        """Q217 AB2 (Opus's beta.2 row), pinned honestly by Q218 BH3 f (AC9): a stored result with no `consents` list counts as TWO consents given - the file rewrite, and for a server with no SSH host the
+        structural confirmation that there is no include (nothing can acquire one Jen could see, so no later fact can change it) - and nothing else. An endpoint that lost its authentication, or a
+        file that no longer matches, blocks until the card's step 3 is ticked again."""
+        assert api.LEGACY_CONSENTS == ("consent_rendering", "confirm_no_include")
         base = {"at": _iso(), "consented_at": _iso(), **GOOD}
         probes[4] = dict(base)
         assert api.probe_gate(_server(daemon, True)) == ""  # the facts it was given for
@@ -226,6 +228,56 @@ class TestAConsentWithoutTheFactsOnThePageIsNotGiven:
         assert "carries a configuration the daemon is not running" in api.probe_gate(_server(daemon, True))
         probes[4] = dict(base, auth="none", consents=["consent_rendering", "consent_unauthenticated"])
         assert api.probe_gate(_server(daemon, True)) == ""  # ticked again on the card: recorded with a list
+        # a server with NO SSH host: the confirmation that there is no include is covered by construction ...
+        no_ssh = {**base, "include": None, "agree": None, "write": "unknown until the first change"}
+        probes[4] = dict(no_ssh)
+        assert api.probe_gate(_server(daemon, False)) == ""
+        # ... and the same server after its endpoint lost its authentication is blocked
+        probes[4] = dict(no_ssh, auth="none")
+        assert "no authentication" in api.probe_gate(_server(daemon, False))
+
+
+class TestAStoredResultThatNamesNoEndpointIsCheckedAgain:
+    """Q218 BH3 d (AC6): `bound` says which Kea a stored result was read from. A result with none skipped the re-point check in the gate and the refresh, and the refresh then wrote the NEW endpoint as
+    `bound` with the consent carried across - a consent given for one Kea covering another."""
+
+    def _beta_shaped(self, daemon, probes, monkeypatch):
+        server = {**_server(daemon, True), "api_user": "jen", "api_pass": "pw"}
+        monkeypatch.setattr(
+            api, "_bound", world.REAL_BOUND
+        )  # the fixture stands one endpoint in for every server; this test is about the endpoint
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0660", "account": {"name": "_kea"}},
+        )
+        monkeypatch.setattr(
+            kea_host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(daemon.running)}, "r" * 64)
+        )
+        assert api.probe(server, "dhcp4", consent=True, consents=("consent_rendering",))["consented_at"]
+        probes[4]["bound"] = ""  # the shape of a result from before `bound` existed
+        return server
+
+    def test_a_record_with_no_bound_is_a_repoint_to_both_readers_and_the_refresh_does_not_bind_it(
+        self, daemon, probes, monkeypatch
+    ):
+        server = self._beta_shaped(daemon, probes, monkeypatch)
+        moved = dict(server, api_url=server["api_url"] + "/")
+        for s in (server, moved):
+            assert "checked before this version recorded which Kea" in api.probe_gate(s), s["api_url"]
+        before = copy.deepcopy(probes[4])
+        assert api.refresh_probe(moved, "dhcp4") is False and api.refresh_probe(server, "dhcp4") is False
+        assert probes[4] == before and not probes[4].get("bound"), "the refresh bound nothing"
+        # a readiness check on the NEW endpoint carries no consent across from a result that named none
+        out = api.probe(moved, "dhcp4")
+        assert out["bound"] == world.REAL_BOUND(moved) and "consented_at" not in out and "consents" not in out
+
+    def test_the_control_a_record_with_bound_catches_the_repoint(self, daemon, probes, monkeypatch):
+        server = self._beta_shaped(daemon, probes, monkeypatch)
+        probes[4]["bound"] = world.REAL_BOUND(server)
+        moved = dict(server, api_url=server["api_url"] + "/")
+        assert api.probe_gate(server) == "" and "different Kea" in api.probe_gate(moved)
+        assert api.refresh_probe(moved, "dhcp4") is False
 
 
 class TestTheFactsAreKeptFreshWithoutAskingAgain:

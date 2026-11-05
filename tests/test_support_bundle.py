@@ -332,3 +332,78 @@ class TestRoute:
     def test_system_page_offers_the_button(self, logged_in_client):
         page = logged_in_client.get("/settings/system").get_data(as_text=True)
         assert "/settings/system/support-bundle" in page and "Support bundle" in page
+
+
+class TestServersJsonNamesTheWriteMode:
+    """Q218 BH6 e (AC19): the exported layer of "how a change reaches a server" - a support bundle said nothing about it. `servers.json` carries the write mode, the configured value and the stored readiness
+    facts (flags and strings), and never a configuration body or a value under a secret key."""
+
+    def _servers(self, monkeypatch, probe):
+        from jen import extensions
+        from jen.services import kea_api_config as api
+        from jen.services import kea_host, kea_tls
+
+        servers = [
+            {
+                "id": 7,
+                "name": "kea-a",
+                "api_url": "http://10.0.0.7:8000/",
+                "api_pass": "SENTINEL_API_PASS_q218",
+                "ssh_host": "10.0.0.7",
+                "config_transport": "api",
+            },
+            {"id": 8, "name": "kea-b", "api_url": "http://10.0.0.8:8000/"},
+        ]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        monkeypatch.setattr(kea_host, "helper_status", dict)
+        monkeypatch.setattr(kea_tls, "issued_server_copies", list)
+        monkeypatch.setattr(api, "stored_probe", lambda sid: probe if sid == 7 else None)
+        return sb._collect_servers()
+
+    def test_servers_json_names_the_write_mode_and_no_secret(self, monkeypatch):
+        probe = {
+            "at": "2026-11-05T10:00:00+00:00",
+            "bound": "abc123",
+            "config_api": True,
+            "auth": "password",
+            "agree": False,
+            "agree_at": "at Dhcp4.lease-database: the file and the daemon differ (the values are not shown)",
+            "include": [],
+            "write": {"may_write": True, "account": "_kea", "mode": "0660"},
+            "consents": ["consent_rendering"],
+            "consented_at": "2026-11-05T10:01:00+00:00",
+            "refused": "Unable to open file for writing",
+            "password": "SENTINEL_PROBE_PASSWORD_q218",  # a key the bundle does not list: never copied
+            "config": {"Dhcp4": {"lease-database": {"password": "SENTINEL_CONFIG_BODY_q218"}}},
+        }
+        rows = self._servers(monkeypatch, probe)
+        a, b = rows
+        assert a["write_mode"] == "Live API" and a["config_transport"] == "api"
+        facts = a["write_mode_facts"]
+        assert (
+            facts["agree"] is False
+            and "Dhcp4.lease-database" in facts["agree_at"]
+            and facts["consents"] == ["consent_rendering"]
+        )
+        assert facts["write"]["account"] == "_kea" and facts["refused"] == "Unable to open file for writing"
+        assert a["write_mode_checked"] is True
+        assert b["write_mode"] == "Read-only" and b["write_mode_facts"] == {} and b["write_mode_checked"] is False
+        text = json.dumps(rows)
+        for sentinel in ("SENTINEL_API_PASS_q218", "SENTINEL_PROBE_PASSWORD_q218", "SENTINEL_CONFIG_BODY_q218"):
+            assert sentinel not in text, sentinel
+        assert "password" not in set(facts) and "config" not in set(facts)
+
+    def test_a_stored_result_that_cannot_be_read_is_named_not_empty(self, monkeypatch):
+        from jen.services import kea_api_config as api
+
+        rows = self._servers(monkeypatch, {})
+        monkeypatch.setattr(api, "stored_probe", lambda sid: (_ for _ in ()).throw(RuntimeError("no store")))
+        from jen import extensions
+
+        (broken, _other) = [sb._write_mode_of(s) for s in extensions.KEA_SERVERS]
+        assert broken["write_mode_facts_error"] == "RuntimeError" and "write_mode_facts" not in broken
+        assert rows  # the collector itself still answers
+
+    def test_the_readme_says_so(self):
+        text = sb.readme_text("7.0.0", "beta", "host", "2026-11-05 10:00 UTC", [])
+        assert "write mode and readiness facts" in text

@@ -89,6 +89,28 @@ def _config_shas(service):
     return shas
 
 
+NO_IMPORT_TARGET = "No Kea server takes configuration changes: every server is Read-only. Switch one under Settings → Kea → Write mode (or give it an SSH host) before you can preview or apply an import."
+NO_WRITE_TARGET_ROW = {
+    "name": "no server",
+    "ok": False,
+    "message": "no server takes this change: every server is Read-only (switch one under Settings → Kea → Write mode)",
+}
+NO_WRITE_TARGET_ROW6 = {
+    "name": "no server",
+    "ok": False,
+    "message": "no server takes this change: none has an SSH host (dhcp6 is changed over SSH; Settings → Kea → SSH)",
+}
+
+
+def _preview_answer(diff, server_results, *, v6=False):
+    """The JSON a subnet preview answers (Q218 BH6 g, AC26): the servers the change will be written to, each with its verdict. A fleet with NO write target has no verdict to give, and "all of none passed" is
+    not a pass: it answers `all_passed: false` with one row that says why, so Apply stays disabled and the operator reads the reason."""
+    rows = list(server_results) or [dict(NO_WRITE_TARGET_ROW6 if v6 else NO_WRITE_TARGET_ROW)]
+    return jsonify(
+        {"ok": True, "no_changes": False, "diff": diff, "servers": rows, "all_passed": all(r["ok"] for r in rows)}
+    )
+
+
 def _conflict_flash(server_name):
     return (
         f"The Kea config on {server_name} changed since you opened this form — "
@@ -819,8 +841,7 @@ def edit_subnet_preview(subnet_id):
             logger.exception("subnet edit check failed on %s", name)
             server_results.append({"name": name, "ok": False, "message": "The check failed - see the Jen log."})
 
-    all_passed = all(r["ok"] for r in server_results) if server_results else True
-    return jsonify({"ok": True, "no_changes": False, "diff": diff, "servers": server_results, "all_passed": all_passed})
+    return _preview_answer(diff, server_results)
 
 
 @bp.route("/subnets/edit/<int:subnet_id>", methods=["POST"])
@@ -1906,8 +1927,7 @@ def edit_subnet6_preview(subnet_id):
             logger.exception("subnet edit check failed on %s", name)
             server_results.append({"name": name, "ok": False, "message": "The check failed - see the Jen log."})
 
-    all_passed = all(r["ok"] for r in server_results) if server_results else True
-    return jsonify({"ok": True, "no_changes": False, "diff": diff, "servers": server_results, "all_passed": all_passed})
+    return _preview_answer(diff, server_results, v6=True)
 
 
 @bp.route("/subnets/edit6/<int:subnet_id>", methods=["POST"])
@@ -2324,18 +2344,20 @@ def import_windows_preview(source):
     entry["subnet_names"] = subnet_names
     entry["selections"] = selections
 
-    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
-    if primary is None or __changeset._transport(primary, "dhcp4") == "off":
-        flash(
-            "The primary Kea server needs SSH configured (or its write mode switched to Live API) before you can preview or apply an import.",
-            "error",
-        )
+    primary = __changeset.first_write_target(
+        "dhcp4"
+    )  # (Q218 BH6 h, AC27) the first server that takes changes - not `KEA_SERVERS[0]`, which may be Read-only while the next one is on Live API
+    if primary is None:
+        flash(NO_IMPORT_TARGET, "error")
         return redirect(review_url)
     kind = __changeset._transport(primary, "dhcp4")
 
     existing_cfg, _sha = __host.read_via_transport(primary, "dhcp4")
     if existing_cfg is None:
-        flash("Could not read the primary server's Kea configuration.", "error")
+        flash(
+            f"Could not read the Kea configuration of {primary.get('name') or 'the first server that takes changes'}.",
+            "error",
+        )
         return redirect(review_url)
 
     new_cfg, reservations, subnets_to_declare, report = __win.to_kea(plan, existing_cfg, subnet_names, selections)
@@ -2454,12 +2476,9 @@ def import_windows_apply(source):
         flash("Preview the import — with a passing config test — before applying it.", "error")
         return redirect(review_url)
 
-    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
-    if primary is None or __changeset._transport(primary, "dhcp4") == "off":
-        flash(
-            "The primary Kea server needs SSH configured (or its write mode switched to Live API) before you can apply an import.",
-            "error",
-        )
+    primary = __changeset.first_write_target("dhcp4")  # (Q218 BH6 h, AC27)
+    if primary is None:
+        flash(NO_IMPORT_TARGET, "error")
         return redirect(review_url)
     kind = __changeset._transport(primary, "dhcp4")
     if entry.get("preview_kind", "file") != kind:
@@ -2612,9 +2631,12 @@ def import_windows_apply_reservations(source):
         flash("The imported config hasn't been applied yet — use Apply.", "error")
         return redirect(review_url)
 
-    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
+    primary = __changeset.first_write_target("dhcp4")  # (Q218 BH6 h, AC27) the server the import was applied to
     if primary is None or not primary.get("ssh_host"):
-        flash("The primary Kea server needs SSH configured before you can add reservations.", "error")
+        flash(
+            f"{primary.get('name') if primary else 'The first server that takes changes'} needs an SSH host before you can add reservations (this step is file-only).",
+            "error",
+        )
         return redirect(
             review_url
         )  # (the retry exists for a failed RESTART: an import applied over the API has none, so this step is file-only)

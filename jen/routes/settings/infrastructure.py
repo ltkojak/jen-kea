@@ -193,7 +193,7 @@ def _config_cards() -> list:
             "declared": caps.config_declared,
             "mode_word": __words.mode_word(caps.config_transport),
             "blocked": caps.transport_blocked,
-            "why": caps.transport_why(),
+            "why": caps.transport_why_for(full),  # (Q218 BH4 a) the gate's words are a superadmin's
             "ssh": ssh,
             "full": full,
             "modes": [

@@ -116,3 +116,38 @@ def test_a_superadmin_moves_a_server_from_the_file_to_live_api_and_back(logged_i
     page.get_by_role("button", name="Confirm").click()
     page.wait_for_load_state("load")
     assert "Current: File over SSH" in page.locator("#config-card-1 [data-wm-chip]").inner_text()
+
+
+def test_a_box_in_the_hidden_panel_is_not_a_consent(logged_in_page, base_url, file_mode_primary):
+    """Q218 BH3 b (AC4): the three panels share one form, and a box in a hidden panel is still a box that submits. Tick the File panel's discard box, change the mind to Live API, switch: the box is disabled
+    with its panel, the request does not carry it, and the audit row shows only the consent the facts called for."""
+    from jen.config import app_config
+    from jen.models.db import jen_db
+
+    app_config.write_values(
+        [("kea", "config_transport", "off")], typed={"kea"}
+    )  # Read-only: the File panel offers the discard box
+    page = logged_in_page
+    page.goto(f"{base_url}/settings/kea")
+    card = page.locator("#config-card-1")
+    card.locator('input[name="transport"][value="api"]').check()
+    card.locator('[data-wm-check="1"]').click()
+    page.wait_for_load_state("load")
+    card = page.locator("#config-card-1")
+
+    card.locator('input[name="transport"][value="file"]').check()
+    box = card.locator('[data-mode-panel="file"] input[name="discard_file_edit"]')
+    box.check()
+    assert box.is_enabled()
+    card.locator('input[name="transport"][value="api"]').check()
+    assert box.is_disabled(), "the box went with its panel"
+
+    card.locator('input[name="consent_rendering"]').check()
+    card.locator('[data-wm-switch="1"][data-wm-target="api"]').click()
+    page.get_by_role("button", name="Confirm").click()
+    page.wait_for_load_state("load")
+    assert "Current: Live API" in page.locator("#config-card-1 [data-wm-chip]").inner_text()
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT details FROM audit_log WHERE action='KEA_TRANSPORT_SWITCHED' ORDER BY id DESC LIMIT 1")
+        details = cur.fetchone()["details"]
+    assert "consents: consent_rendering" in details and "discard_file_edit" not in details, details

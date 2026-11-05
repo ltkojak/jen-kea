@@ -167,6 +167,45 @@ class TestToApi:
         )
         assert r["ok"], r  # no `confirm_no_include`: the host answered it
 
+    def test_a_consent_the_facts_never_called_for_is_not_recorded(self, daemon, store, probes, written):
+        """Q218 BH3 a (AC4): the service records what the FRESH facts call for (`consents_called_for`, the one table), never every name the form happened to send; a stray is dropped and named. Here the
+        endpoint has a password (no `consent_unauthenticated`) and the server no SSH (no `discard_file_edit`)."""
+        server = srv(daemon, api_user="jen", api_pass="pw")
+        stray = ALL | {"discard_file_edit"}
+        r = sw.switch(server, "api", consents=stray, actor="root")
+        assert r["ok"], r
+        assert r["consents"] == ["confirm_no_include", "consent_rendering"], r["consents"]
+        assert r["ignored"] == ["consent_unauthenticated", "discard_file_edit"], r["ignored"]
+        assert probes[5]["consents"] == r["consents"], "what is on record is what the result says"
+        assert api.probe_gate(srv(daemon, "api", api_user="jen", api_pass="pw")) == ""
+
+    def test_a_stray_discard_box_never_covers_a_file_edit_that_appears_later(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        """Q218 BH3 a: with SSH and a file that agrees, a ticked `discard_file_edit` is not recorded - so a hand edit that appears afterward BLOCKS the gate instead of being covered."""
+        host(monkeypatch, daemon)
+        server = srv(daemon, "file", ssh=True, api_user="jen", api_pass="pw")
+        r = sw.switch(server, "api", consents={"consent_rendering", "discard_file_edit"}, actor="root")
+        assert r["ok"] and r["consents"] == ["consent_rendering"] and r["ignored"] == ["discard_file_edit"], r
+        stored = probes[5]
+        assert api.probe_gate(dict(server, config_transport="api")) == ""
+        stored["agree"] = False  # the facts a later refresh would read: a hand edit
+        probes[5] = stored
+        assert "carries a configuration the daemon is not running" in api.probe_gate(
+            dict(server, config_transport="api")
+        )
+
+    def test_a_switch_to_file_or_off_says_what_it_used_not_what_was_submitted(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        host(monkeypatch, daemon)
+        r = sw.switch(srv(daemon, "api", ssh=True), "off", consents={"consent_rendering"})
+        assert r["ok"] and r["consents"] == [] and r["ignored"] == ["consent_rendering"]
+        r = sw.switch(srv(daemon, "api", ssh=True), "file", consents={"discard_file_edit"})
+        assert (
+            r["ok"] and r["consents"] == [] and r["ignored"] == ["discard_file_edit"]
+        )  # the file agreed: nothing was discarded
+
     def test_api_to_api_records_and_does_not_render(self, daemon, store, probes, written, monkeypatch):
         """Q218 BH1 d (AC14): the button says Record consent and does that - `config-write` goes out only when the file carries an edit AND the operator said to discard it."""
         world.host_reads_the_fakes_file(monkeypatch, daemon, store, server_id=5)

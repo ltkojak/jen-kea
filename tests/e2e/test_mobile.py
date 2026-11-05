@@ -261,6 +261,9 @@ class TestSettingsCardsCollapsibleOnPhone:
         for anchor in ("kea-api", "kea-ssh", "kea-servers", "kea-ddns", "kea6", "kea-packages", "kea-drift"):
             expect(desktop.locator(f"#{anchor} > :not(.card-header)").first).to_be_visible()
 
+    # THE RULE FOR EVERY CONSTANT BELOW (Q218 BH6 c, AC12): a card change moves the baseline in a FIXUP made after the first CI run, from CI's MEASURED height (the settings-kea.png of the desktop pass,
+    # device_scale_factor 1, so PNG pixels == scrollHeight pixels) - never a guess - and the baseline is chosen so the ceiling (0.7 x baseline) clears the measured height by AT LEAST 20 px; the comment
+    # beside the constant prints the measured height and the slack. (beta.3's constant passed by 0.4 px: a ceiling that close fails on the next sentence anyone adds.)
     # v5.56.4 (Q72c) — the two-column Settings layout at >=1280px. The
     # baseline is settings-kea.png's actual pixel height from the
     # v5.56.3-beta.1 CI artifact (1440x2546, device_scale_factor 1 so PNG

@@ -42,18 +42,28 @@ def _facts(delta=None, **extra):
     return out
 
 
+def _fleet(first, size):
+    """A fleet of `size` servers whose first is `first` and whose others are Read-only (Q218 BH4 b, AC21: a page block is tested at the fleet size the product is for - one AND three)."""
+    return [first] + [
+        {"id": 10 + i, "name": f"kea-fleet-{i}", "api_url": f"http://fleet{i}/", "config_transport": "off"}
+        for i in range(size - 1)
+    ]
+
+
 class TestTheWordsAreTheOperators:
+    @pytest.mark.parametrize("fleet", [1, 3], ids=["one server", "three servers"])
     @pytest.mark.parametrize("ssh", [True, False], ids=["with ssh", "no ssh"])
     @pytest.mark.parametrize("declared", ["api", "file", "off"])
-    def test_one_word_on_the_radio_the_chip_the_badge_and_the_sentence(self, monkeypatch, declared, ssh):
+    def test_one_word_on_the_radio_the_chip_the_badge_and_the_sentence(self, monkeypatch, declared, ssh, fleet):
         server = {"id": 1, "name": "kea-x", "api_url": "http://x", "config_transport": declared}
         if ssh:
             server["ssh_host"] = "10.0.0.1"
         effective = cs._transport(server, "dhcp4")  # `file` without SSH reads as off, everywhere
-        cards, html = wm.render(monkeypatch, [server], {1: _facts({"agree": True})})
+        cards, html = wm.render(monkeypatch, _fleet(server, fleet), {1: _facts({"agree": True})})
         word = words.MODE_WORDS[effective]
-        assert wm.checked_modes(html) == [effective]
+        assert wm.checked_modes(html) == [effective] + ["off"] * (fleet - 1)
         assert f"Current: {word}" in html and f"<strong>{word} (current)</strong>" in html
+        assert len(cards) == fleet and html.count("Current: ") == fleet  # every server's card names its mode
         c = caps.derive(ssh=ssh, config_transport=effective, config_declared=declared, config_probe=_facts())
         assert c.config_transport == effective
         assert words.mode_word(c.config_transport) == word == cards[0]["mode_word"]
@@ -240,6 +250,165 @@ class TestAnAdminAndAViewerSeeTheHeader:
             "full",
             "modes",
         }
+
+    # the nine states the gate can refuse in (Opus's V2: pass/lineage/verify217/V2_roles.py), each with the consents on record that leave THAT one uncovered
+    GATE_STATES = [
+        (
+            "the daemon did not answer",
+            {"config_api": False, "read_error": "connection refused to 10.0.0.2:8000"},
+            api.CONSENTS,
+        ),
+        (
+            "config-test refused the running config",
+            {"test_ok": False, "test_detail": "bad subnet 10.0.0.0/24"},
+            api.CONSENTS,
+        ),
+        ("the file carries an include", {"include": ["/etc/kea/extra.conf"]}, api.CONSENTS),
+        (
+            "the host's facts could not be read",
+            {"agree": None, "include": None, "write": {"unavailable": "helper-too-old"}},
+            api.CONSENTS,
+        ),
+        (
+            "the file and the daemon differ",
+            {"agree": False, "agree_at": "at Dhcp4.subnet4[0].valid-lifetime: the file says 3600, the daemon 7200"},
+            ["consent_rendering"],
+        ),
+        (
+            "the daemon may not write its file",
+            {"write": {"may_write": False, "mode": "0640", "account": "_kea", "daemon_is_root": False}},
+            ["consent_rendering", "discard_file_edit"],
+        ),
+        ("the file rewrite is not accepted yet", {}, []),
+        ("the endpoint has no authentication", {"auth": "none"}, ["consent_rendering"]),
+        ("nothing stands in the way", {}, api.CONSENTS),
+    ]
+    HOST_FACTS = (
+        "_kea",
+        "0640",
+        "0660",
+        "no authentication",
+        "unauthenticated",
+        "10.0.0.2",
+        "/etc/kea/extra.conf",
+        "Dhcp4.subnet4[0]",
+        "helper-too-old",
+        "bad subnet",
+        "build 20",
+    )
+
+    @pytest.mark.parametrize("fleet", [1, 3], ids=["one server", "three servers"])
+    def test_no_gate_fact_reaches_an_admin_in_any_state(self, monkeypatch, fleet):
+        """Q218 BH4 a (AC7): `card["why"]` is set before the early return for a non-superadmin and the template prints it outside `{% if c.full %}`, so the gate's own sentence - the daemon's account, the
+        file's mode, an include's path, "no authentication" - reached an admin. The nine states, the REAL gate (not a stub), the needle list scoped to the card's block."""
+        for label, over, consents in self.GATE_STATES:
+            facts = _facts(dict(over), consents=list(consents))
+            monkeypatch.setattr(api, "stored_probe", lambda sid, f=facts: copy.deepcopy(f))
+            monkeypatch.setattr(api, "_bound", lambda s: "x")  # the facts' own `bound`
+            real = api.probe_gate(wm.S_API)
+            _cards, admin = wm.render(monkeypatch, _fleet(wm.S_API, fleet), {2: facts}, superadmin=False, gate=real)
+            for needle in self.HOST_FACTS:
+                assert needle not in admin, (label, needle, real)
+            cards, _html = wm.render(monkeypatch, _fleet(wm.S_API, fleet), {2: facts}, superadmin=False, gate=real)
+            if real:
+                assert cards[0]["blocked"] is True and cards[0]["why"].endswith(
+                    "will stop until a superadmin has read its Write mode card."
+                ), (label, cards[0]["why"])
+                assert real not in cards[0]["why"]
+                super_cards, super_html = wm.render(monkeypatch, [wm.S_API], {2: facts}, superadmin=True, gate=real)
+                assert real in super_cards[0]["why"], (label, "a superadmin reads the gate's own words")
+            else:
+                assert cards[0]["why"] == words.MODE_SENTENCES["api"], label
+
+    def test_the_chip_keeps_its_blocked_state_for_an_admin(self, monkeypatch):
+        facts = _facts({"auth": "none"}, consents=["consent_rendering"])
+        _cards, html = wm.render(
+            monkeypatch, [wm.S_API], {2: facts}, superadmin=False, gate="this endpoint has no authentication"
+        )
+        assert "Current: Live API, blocked" in html and "no authentication" not in html
+
+    def test_no_holding_sentence_is_empty(self, monkeypatch):
+        """Q218 BH4 c (AC25): the sentence beside a switch button is never empty - a current mode whose gate is closed prints the gate's sentence, not `holding`."""
+        for gate in ("", "this endpoint has no authentication"):
+            _cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts(auth="none")}, gate=gate)
+            for sentence in re.findall(r'<span class="form-hint" data-wm-holding="\d+">(.*?)</span>', html, re.S):
+                assert sentence.strip(), (gate, "an empty sentence beside the button")
+        _cards, html = wm.render(
+            monkeypatch, [wm.S_API], {2: _facts(auth="none")}, gate="this endpoint has no authentication"
+        )
+        sentence = re.search(r'data-wm-holding="2">(.*?)</span>', html, re.S).group(1)
+        assert "no authentication" in sentence
+
+
+class TestOneEnabledInputPerConsentNamePerForm:
+    """Q218 BH3 b (AC4): the three mode panels share one form, and a hidden box still submits. Only the selected mode's boxes are enabled on the server render, and the script toggles them with the radio."""
+
+    @pytest.mark.parametrize("fleet", [1, 3], ids=["one server", "three servers"])
+    @pytest.mark.parametrize("transport", ["api", "file", "off"])
+    @pytest.mark.parametrize("ssh", [True, False], ids=["with ssh", "no ssh"])
+    def test_one_enabled_input_per_consent_name_per_form(self, monkeypatch, transport, ssh, fleet):
+        server = {"id": 1, "name": "kea-x", "api_url": "http://x", "config_transport": transport}
+        if ssh:
+            server["ssh_host"] = "10.0.0.1"
+        _cards, html = wm.render(monkeypatch, _fleet(server, fleet), {1: _facts({"agree": False}, auth="none")})
+        names = {}
+        for form_id, card in re.findall(r'id="config-card-(\d+)"(.*?)(?=id="config-card-|\Z)', html, re.S):
+            per_form = {}
+            for tag in re.findall(r'<input type="checkbox"[^>]*>', card):
+                name = re.search(r'name="(\w+)"', tag).group(1)
+                per_form[name] = per_form.get(name, 0) + (1 if " disabled" not in tag else 0)
+            assert all(count <= 1 for count in per_form.values()), (transport, ssh, form_id, per_form)
+            names.update(per_form)
+        assert names, (transport, ssh)
+        # and only the selected mode's panel has any enabled box
+        enabled_in = {
+            panel
+            for panel in ("api", "file")
+            for tag in re.findall(r'<input type="checkbox"[^>]*>', _panel(html, panel))
+            if " disabled" not in tag
+        }
+        assert enabled_in <= {transport}, (transport, ssh, enabled_in)
+
+    def test_the_script_toggles_the_boxes_with_the_radio(self):
+        template = (ROOT / "templates" / "settings_kea.html").read_text(encoding="utf-8")
+        assert "box.disabled = hidden" in template and "[data-mode-panel]" in template
+
+
+def _panel(html, mode):
+    start = html.find(f'data-mode-panel="{mode}"')
+    if start == -1:
+        return ""
+    end = html.find('data-mode-panel="', start + 10)
+    return html[start : end if end != -1 else len(html)]
+
+
+class TestTheServersPageNamesEveryServersMode:
+    """Q218 BH4 b (AC21): the Write mode row is ONE macro, called by the single-server table and by every multi-server card, so a fleet of two or three is told how changes reach each server."""
+
+    def test_both_views_call_the_one_macro(self):
+        servers = (ROOT / "templates" / "servers.html").read_text(encoding="utf-8")
+        macro = (ROOT / "templates" / "_write_mode_badge.html").read_text(encoding="utf-8")
+        assert servers.count("write_mode_badge(s") == 2, (
+            "one call in the single-server view and one in the multi-server card"
+        )
+        assert "{% macro write_mode_badge(" in macro and macro.count('data-transport="') == 1
+        assert (
+            'data-transport="' not in servers and "data-transport-blocked" not in servers
+        )  # nothing of the row is written twice
+        single = servers.split("<!-- Single server view -->")[1].split("<!-- Multi-server / HA view -->")[0]
+        multi = servers.split("<!-- Multi-server / HA view -->")[1]
+        assert "write_mode_badge(s)" in single and "write_mode_badge(s, 'stat-label')" in multi
+
+    def test_the_macro_keeps_the_role_split(self):
+        macro = (ROOT / "templates" / "_write_mode_badge.html").read_text(encoding="utf-8")
+        assert "{% if current_user.is_admin_or_above %}href=" in macro
+        assert "s.transport_unauthenticated" in macro and "s.transport_refused" in macro
+
+
+class TestTheServersRouteReadsNothingForAnAdminThatIsAHostFact:
+    def test_the_route_asks_for_the_reader_s_sentence(self):
+        source = (ROOT / "jen" / "routes" / "servers.py").read_text(encoding="utf-8")
+        assert "caps.transport_why_for(" in source and "caps.transport_why()" not in source
 
 
 class TestWhatTheFactsSayAboutTheirCause:

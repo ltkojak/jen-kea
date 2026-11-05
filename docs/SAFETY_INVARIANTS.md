@@ -309,14 +309,18 @@ updater's allowlist.
 - `tests/test_transport_switch.py`
 
 ### CFG-003 - A consent is given on the switch, for the facts whose time the form carries, by a superadmin with a recent confirmation; the gate's table is the oracle
-**Rule.** The act of accepting what a switch to Live API changes (Kea rewrites the file in its own format; an endpoint with no authentication; a file edit discarded; no SSH so no include) is the POST that switches, not a click that reads: it is a superadmin's, it needs a recent confirmation of the password, it is given for the readiness check whose time (`probe_at`) the form carries - a check that ran again since is refused - and `kea_api_config.consent_gap` is the one table that says which consents the facts call for, asked by the switch, by the gate every change meets and by the card that offers the boxes. A consent is never recorded by the readiness check.
-**Established.** Q216 (AA1) and Q217 (BG2).
+**Rule.** The act of accepting what a switch to Live API changes (Kea rewrites the file in its own format; an endpoint with no authentication; a file edit discarded; no SSH so no include) is the POST that switches, not a click that reads: it is a superadmin's, it needs a recent confirmation of the password, it is given for the readiness check whose time (`probe_at`) the form carries - a check that ran again since is refused - and `kea_api_config.consent_gap` is the one table that says which consents the facts call for, asked by the switch, by the gate every change meets and by the card that offers the boxes. A consent is never recorded by the readiness check, and only the consents the facts call for are recorded (`consents_called_for` is the one table: a box the form sent that the facts never asked for is dropped and named, so it can never cover a fact that appears later). A consent of any kind - whatever the target - is given for the readiness check whose time the form carries, and a stored result that names no endpoint (`bound` absent) is checked again, never taken for the current one.
+**Established.** Q216 (AA1), Q217 (BG2) and Q218 (AC4, AC6, AC18).
 **Enforced at.** `jen/routes/settings/kea_transport.py` (`switch_kea_transport`: `probe_at`, the step-up), `jen/services/kea_transport_switch.py` (`_to_api`), `jen/services/kea_api_config.py` (`consent_gap`, `consents_called_for`, `probe_gate`).
 **Tests.**
 - `tests/test_kea_transport_routes.py` (`TestAConsentIsAnActNotAClick`)
 - `tests/test_kea_consent.py` (`TestTheTenStateTable`)
-- `tests/test_write_mode_card.py` (`TestTheCardIsOneChoice`, `TestAnAdminAndAViewerSeeTheHeader`)
+- `tests/test_write_mode_card.py` (`TestTheCardIsOneChoice`, `TestAnAdminAndAViewerSeeTheHeader`, `TestOneEnabledInputPerConsentNamePerForm`)
 - `tests/test_transport_switch.py`
+- `tests/test_transport_switch.py::TestToApi::test_a_consent_the_facts_never_called_for_is_not_recorded`
+- `tests/test_kea_transport_routes.py::TestAConsentIsAnActNotAClick::test_probe_at_is_checked_for_every_act_that_carries_a_consent`
+- `tests/test_kea_consent.py::TestAStoredResultThatNamesNoEndpointIsCheckedAgain`
+- `tests/e2e/test_write_mode_journeys.py::test_a_box_in_the_hidden_panel_is_not_a_consent`
 
 ### CFG-004 - A file is the daemon's configuration only when each says everything the other says (but Kea's own written-out defaults)
 **Rule.** Whether the file on a Kea host is the configuration its daemon runs is asked in BOTH directions: everything the file says is carried by the daemon, AND every key the daemon runs that is not one of Kea's own written-out defaults (the daemon's own answer, recorded per minor version) is in the file. A key deleted from the file is a difference, never an agreement, so a `config-write` cannot destroy the deletion without the named consent; a file or a daemon that cannot be read is not a difference in either direction (the write's own guards decide).

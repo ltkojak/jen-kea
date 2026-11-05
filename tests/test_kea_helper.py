@@ -209,28 +209,23 @@ class TestVersion:
 
 
 class TestBuildBumpReminder:
-    """v5.66.0-beta.2 (Q104) — tests/kea_helper_build.json pins {"build": N, "sha256": <hash
-    of jen-kea-helper at that build>}. A change to the file that does NOT also bump
-    HELPER_BUILD past the pinned value fails here — updating the pin (both the hash and the
-    build number) is how a change acknowledges it bumped the build, the same discipline
-    RELEASE_SIGNERS twins enforce for the signing key elsewhere in this suite."""
+    """v5.66.0-beta.2 (Q104), made strict by Q218 BH6 f (AC20) — tests/kea_helper_build.json pins {"build": N, "sha256": <hash of jen-kea-helper at that build>}.
+    The file's sha MUST equal the pin's and the pin's build MUST equal HELPER_BUILD, so EVERY change to `jen-kea-helper` fails here until the pin is moved - and moving it (with the
+    build bumped) is the acknowledgment. The earlier test passed when `pin.build < HELPER_BUILD`, a branch that never failed again after its first bump (the pin sat at build 18 while the
+    helper went to 21): a ratchet with a 'greater than' branch goes slack after the first bump. A helper change in a later Q moves the pin in the SAME commit."""
 
-    def test_file_hash_matches_the_pin_or_the_build_was_bumped_past_it(self, helper):
+    def test_file_hash_equals_the_pin_and_the_pin_equals_the_build(self, helper):
         import hashlib
 
         pin_path = pathlib.Path(__file__).resolve().parent / "kea_helper_build.json"
         pin = json.loads(pin_path.read_text(encoding="utf-8"))
         actual_sha = hashlib.sha256(_SCRIPT_PATH.read_bytes()).hexdigest()
-        if actual_sha == pin["sha256"]:
-            assert pin["build"] == helper.HELPER_BUILD, (
-                f"jen-kea-helper is byte-identical to the pinned build ({pin['build']}) but "
-                f"HELPER_BUILD reads {helper.HELPER_BUILD} — the two must never disagree"
-            )
-            return
-        assert pin["build"] < helper.HELPER_BUILD, (
-            f"jen-kea-helper changed (sha256 {actual_sha} != pinned {pin['sha256']}) but "
-            f"HELPER_BUILD ({helper.HELPER_BUILD}) was not bumped past the pinned build "
-            f"({pin['build']}) — bump HELPER_BUILD and update tests/kea_helper_build.json"
+        assert actual_sha == pin["sha256"], (
+            f"jen-kea-helper changed (sha256 {actual_sha} != pinned {pin['sha256']}): bump HELPER_BUILD and move tests/kea_helper_build.json "
+            "(its build AND its sha256) in the same commit"
+        )
+        assert pin["build"] == helper.HELPER_BUILD, (
+            f"the pin says build {pin['build']} and HELPER_BUILD reads {helper.HELPER_BUILD} - the two must never disagree"
         )
 
 

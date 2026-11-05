@@ -611,6 +611,9 @@ def _daemon_step(
             }
         restarted = _host.service_action(server, "dhcp4", "restart")
         if restarted.get("ok"):
+            _record_daemon_after_reload(
+                server
+            )  # (Q218 BH6 b, AC11) a restart is the daemon taking its file, as a reload is
             return {
                 "ok": True,
                 "mode": "restart",
@@ -626,6 +629,7 @@ def _daemon_step(
         }
     restarted = _host.service_action(server, "dhcp4", "restart")
     if restarted.get("ok"):
+        _record_daemon_after_reload(server)  # (Q218 BH6 b, AC11)
         return {"ok": True, "mode": "restart", "lines": ["Kea was restarted."]}
     return {
         "ok": False,
@@ -702,6 +706,9 @@ def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
             code_messages={},
             transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path in 7.0.0-beta.1 (Q212)
         )
+    _record_daemon_after_reload(
+        server
+    )  # (Q218 BH6 b, AC11) every branch that writes the file records what the daemon runs afterward, as its three siblings do: the next API read must not capture this write as "changed outside Jen"
     return result.status in ("ok", "nothing"), [text for _kind, text in result.lines]
 
 

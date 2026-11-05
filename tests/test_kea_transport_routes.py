@@ -164,6 +164,45 @@ class TestAConsentIsAnActNotAClick:
         logged_in_client.post("/settings/infrastructure/kea-transport/3", data={"transport": "off"})
         assert worked == ["switch"]
 
+    @pytest.mark.parametrize("target", ["file", "off", "api"])
+    def test_probe_at_is_checked_for_every_act_that_carries_a_consent(self, logged_in_client, worked, target):
+        """Q218 BH3 c (AC18): a consent is given for the facts whose time the form carries, whatever the target - `discard_file_edit` on a switch to File over SSH was bound to no facts' time."""
+        r = logged_in_client.post(
+            "/settings/infrastructure/kea-transport/3",
+            data={"transport": target, "probe_at": "OLD", "discard_file_edit": "1"},
+            follow_redirects=True,
+        )
+        assert worked == [] and b"readiness check was refreshed" in r.data
+        logged_in_client.post(
+            "/settings/infrastructure/kea-transport/3",
+            data={"transport": target, "probe_at": "T", "discard_file_edit": "1"},
+        )
+        assert worked == ["switch"], "the same act with the facts' own time goes through"
+
+    def test_the_audit_row_prints_the_recorded_consents(self, logged_in_client, worked, monkeypatch):
+        """Q218 BH3 e (AC13): the row names what was RECORDED (and what was ignored), never the set the form submitted."""
+        rows = []
+        monkeypatch.setattr("jen.models.user.audit", lambda action, entity, details="": rows.append((action, details)))
+        monkeypatch.setattr(
+            "jen.services.kea_transport_switch.switch",
+            lambda server, target, consents=(), actor="": {
+                "ok": True,
+                "level": "success",
+                "line": "switched",
+                "from": "off",
+                "to": "api",
+                "consents": ["consent_rendering"],
+                "ignored": ["discard_file_edit"],
+            },
+        )
+        logged_in_client.post(
+            "/settings/infrastructure/kea-transport/3",
+            data={"transport": "api", "probe_at": "T", "consent_rendering": "1", "discard_file_edit": "1"},
+        )
+        details = [d for a, d in rows if a == "KEA_TRANSPORT_SWITCHED"]
+        assert details and "consents: consent_rendering" in details[0] and "ignored: discard_file_edit" in details[0]
+        assert "consents: consent_rendering, discard_file_edit" not in details[0]
+
 
 class TestIHaveFixedItIsForAServerNothingCanProve:
     def test_a_server_whose_host_can_prove_it_is_sent_to_the_check(self, logged_in_client, worked, monkeypatch):

@@ -873,11 +873,37 @@ def _rich_candidate(authored):
     return rich
 
 
+EIGHT_TOP_LEVEL_KEYS = (
+    "control-sockets",
+    "hooks-libraries",
+    "hosts-database",
+    "interfaces-config",
+    "lease-database",
+    "loggers",
+    "subnet4",
+    "valid-lifetime",
+)
+
+
+def _minimal_candidate(authored):
+    """The LEAST Kea 3.x boots with (Q218 BH5 a, AC10): `interfaces-config` with an empty list, a `memfile` `lease-database` that persists nothing, the job's own `control-socket(s)` (the API this row
+    speaks over) - and no `subnet4`, no `loggers`, no `hooks-libraries`, no `hosts-database`, no `valid-lifetime`. A key the bare file and the rich candidate BOTH send can never be recorded as a default
+    (a default is a key the daemon adds to what was sent); this one omits eight of them."""
+    minimal = {"interfaces-config": {"interfaces": []}, "lease-database": {"type": "memfile", "persist": False}}
+    for key in ("control-socket", "control-sockets"):
+        if key in authored:
+            minimal[key] = copy.deepcopy(authored[key])
+    return minimal
+
+
 def test_12_the_defaults_kea_writes_out(facts):
-    """Q217 AB6: the SOURCE of `jen/data/kea_defaults_<major.minor>.json`. A rich configuration is sent (`config-set`), `config-get` is read, and every key path that appeared and was not sent is a
-    default Kea writes out. The row FAILS when a recorded vector for this minor exists and differs from the daemon's answer (a Kea release that adds a default is caught by the weekly run), and
-    records the answer in the facts either way - the file is written from the artifact, never by hand. Then the three controls the entry names: the job's own file is the daemon's, the rich file with
-    a client class DELETED is not, and the job's own file (every default left out) is the daemon's configuration from before."""
+    """Q217 AB6, Q218 BH5 a: the SOURCE of `jen/data/kea_defaults_<major.minor>.json`. THREE configurations are recorded and their additions united: the job's own (bare) file at the start, a rich
+    candidate (`config-set`, then `config-get`), and a MINIMAL one (the least Kea boots with: eight top-level keys are omitted, so each can be seen written out when the daemon writes it). Every key path
+    that appeared and was not sent is a default Kea writes out. The structural limit that remains: a key EVERY recorded configuration sends cannot be known to be a default (`interfaces-config`,
+    `lease-database`, the control socket here), and `_added_by_the_daemon` is judged object by object. The row FAILS when a recorded vector for this minor exists and differs from the daemon's answer (a Kea
+    release that adds a default is caught by the weekly run), and records the answer in the facts either way - the file is written from the artifact, never by hand, and `defaults_eight_keys` says which
+    of the eight top-level keys the daemon writes out when omitted. Then the controls the entry names: the job's own file is the daemon's, the rich file with a client class DELETED is not, and the job's own
+    file (every default left out) is the daemon's configuration from before."""
     from jen.services import kea_api_config as api
 
     assert ORIGINAL is not None, "test_01 did not record the original configuration"
@@ -898,11 +924,29 @@ def test_12_the_defaults_kea_writes_out(facts):
         running = _get()
         # two recordings, one union: what the daemon wrote into the job's own (bare) file at the start, and into the rich candidate. A singleton such as the top-level `option-data` is decorated in the
         # rich one and bare in the first; a nested list entry is decorated and bare in the rich one itself.
+        # the third recording (Q218 BH5 a): the minimal candidate, sent after the rich one has been read; the controls below use the rich answer, and the `finally` puts the original back
+        minimal = _minimal_candidate(authored)
+        tested_min = __kea.kea_command("config-test", arguments={"Dhcp4": minimal})
+        facts["defaults_minimal_config_test"] = _brief(tested_min)
+        assert tested_min.get("result") == 0, f"the daemon refused the minimal candidate: {_brief(tested_min)}"
+        __real._ok(__kea.kea_command("config-set", arguments={"Dhcp4": minimal}))
+        running_min = _get()
         populated = {}
         defaults = sorted(
             _added_by_the_daemon(authored, ORIGINAL[0]["Dhcp4"], "", populated)
             | _added_by_the_daemon(rich, running["Dhcp4"], "", populated)
+            | _added_by_the_daemon(minimal, running_min["Dhcp4"], "", populated)
         )
+        # the eight keys' verdicts: sent by the minimal configuration (so unknowable from it), or written out by the daemon when omitted
+        renamed = {"hosts-database": "hosts-databases"}
+        facts["defaults_eight_keys"] = {
+            key: (
+                {"sent_by_the_minimal_configuration": True}
+                if key in minimal or (key == "control-sockets" and "control-socket" in minimal)
+                else {"written_out_when_omitted": (renamed.get(key, key) in running_min["Dhcp4"])}
+            )
+            for key in EIGHT_TOP_LEVEL_KEYS
+        }
         populated = {k: populated[k] for k in sorted(populated)}
         facts["defaults_vector"] = {"kea": version, "paths": defaults, "populated": populated}
         facts["defaults_vector_path_count"] = len(defaults)

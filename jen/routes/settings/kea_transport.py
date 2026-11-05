@@ -67,7 +67,8 @@ def switch_kea_transport(server_id):
         return _gone()
     target = request.form.get("transport", "").strip()
     consents = {name for name in SWITCH_CONSENTS if request.form.get(name) == "1"}
-    if target == "api":
+    if target == "api" or consents:
+        # (Q218 BH3 c, AC18) a consent is given for the facts whose time the form carries, whatever the target: the one the card showed is the one that was read, or nothing is changed
         stored = __api.stored_probe(server_id) or {}
         if not stored or request.form.get("probe_at", "") != str(stored.get("at") or ""):
             flash(
@@ -82,6 +83,7 @@ def switch_kea_transport(server_id):
             "KEA_TRANSPORT_SWITCHED",
             server.get("name") or str(server_id),
             f"write mode {__write_mode.mode_word(result.get('from'))} -> {__write_mode.mode_word(result.get('to'))}; consents: {', '.join(result.get('consents') or []) or 'none'}"
+            + (f"; ignored: {', '.join(result['ignored'])}" if result.get("ignored") else "")
             + (f"; baseline revision #{result['revision']}" if result.get("revision") else ""),
         )
         __caps.invalidate(server_id)

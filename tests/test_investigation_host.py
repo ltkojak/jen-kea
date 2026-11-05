@@ -1107,3 +1107,73 @@ class TestTheHostLineIsTrueWhenTheTimerIsDownAndWhenTheSocketWasNotUsed:
         inv.sweep(now=NOW)
         (row,) = inv.active()
         assert "the host could not ask Kea directly: no control socket in the config" in row["host_error"], row
+
+
+class TestEveryBranchThatWritesTheFileRecordsTheDaemon:
+    """Q218 BH6 b (AC11): a server whose transport is `api` must not have Jen's own toggle read as "changed outside Jen" by the next API read. The reload recorded the daemon (BF2) and so did two other
+    branches; the revert of a refused turn-on and a restart (the fallback when a reload is refused, and the only way for a daemon with no `config-reload`) did not."""
+
+    def _graph(self):
+        import ast
+        import pathlib
+
+        tree = ast.parse(pathlib.Path(inv.__file__).read_text(encoding="utf-8"))
+        funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        calls = {
+            name: {getattr(c.func, "id", getattr(c.func, "attr", "")) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+            for name, fn in funcs.items()
+        }
+        return funcs, calls
+
+    def _reaches(self, calls, name, targets, seen=None):
+        seen = seen or set()
+        if name in seen or name not in calls:
+            return False
+        seen.add(name)
+        return bool(calls[name] & targets) or any(
+            self._reaches(calls, c, targets, seen) for c in calls[name] if c in calls
+        )
+
+    def test_every_branch_that_writes_the_file_records_the_daemon(self):
+        funcs, calls = self._graph()
+        writers = {"apply_change"}  # the file writer: the change set's, on the `file` transport
+        reloads = {
+            "service_action",
+            "_daemon_step",
+        }  # the daemon re-reading its file: a restart, or the step that sends `config-reload` (the change set records its own restarts)
+        recorder = {"_record_daemon_after_reload"}
+        missing = [
+            name
+            for name in funcs
+            if name != "_record_daemon_after_reload"
+            and self._reaches(calls, name, writers)
+            and self._reaches(calls, name, reloads)
+            and not self._reaches(calls, name, recorder)
+        ]
+        assert not missing, (
+            f"a branch writes the file and has the daemon re-read it without recording what the daemon runs: {missing}"
+        )
+        # the two this row names, directly
+        for name in ("_revert_file", "_daemon_step"):
+            assert "_record_daemon_after_reload" in calls[name], name
+
+    def test_a_refused_reload_that_falls_back_to_a_restart_records_the_daemon(self, world, monkeypatch):
+        from tests import _kea_api_world as api_world
+
+        api_world.install_store(monkeypatch)
+        api_world.install_probes(monkeypatch)
+        recorded = []
+        monkeypatch.setattr(inv, "_record_daemon_after_reload", lambda server: recorded.append(server.get("id")))
+        monkeypatch.setattr(inv._host, "service_action", lambda server, svc, action: {"ok": True})
+        monkeypatch.setattr(inv._kea, "kea_command", lambda command, *a, **kw: {"result": 1, "text": "refused"})
+        server = world.servers[0]
+        assert inv._daemon_step(server, use_reload=True, allow_restart=True)["mode"] == "restart"
+        assert inv._daemon_step(server, use_reload=False, allow_restart=True)["mode"] == "restart"
+        assert recorded == [server.get("id"), server.get("id")]
+
+    def test_the_revert_of_a_refused_turn_on_records_the_daemon(self, world, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(inv, "_record_daemon_after_reload", lambda server: recorded.append(server.get("id")))
+        server = world.servers[0]
+        restored, _lines = inv._revert_file(server, "investigation logging on failed: log level put back")
+        assert recorded == [server.get("id")] and isinstance(restored, bool)

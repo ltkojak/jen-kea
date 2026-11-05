@@ -117,7 +117,7 @@ def readme_text(version: str, channel: str, hostname: str, when: str, notes: lis
         "",
         "  jen.json                 version, channel, Python, serving mode, paths",
         "  config.ini.redacted      jen.config with every secret value masked",
-        "  servers.json             each Kea server: URLs, mode, helper version, TLS copies",
+        "  servers.json             each Kea server: URLs, write mode and readiness facts, helper version, TLS copies",
         "  health.json              Health Center results",
         "  drift.json               subnet-map drift",
         "  kea/<server>-<svc>.json  the LATEST config revision per server/daemon, secrets masked",
@@ -266,6 +266,47 @@ def _collect_config_text() -> str:
         return f.read()
 
 
+#: The stored readiness facts of a server that a bundle carries (Q218 BH6 e, AC19): flags and strings, never a configuration body and never a value under a secret key. `agree_at` is the path the compare
+#: named, redacted at the time it was written (`kea_api_config.difference_text`); `refused` is Kea's own text, cut to 300 characters when it was stored.
+WRITE_MODE_FACT_KEYS = (
+    "at",
+    "bound",
+    "config_api",
+    "auth",
+    "tls",
+    "agree",
+    "agree_at",
+    "include",
+    "include_unavailable",
+    "write",
+    "consents",
+    "consented_at",
+    "refused",
+    "defaults",
+)
+
+
+def _write_mode_of(server: dict) -> dict:
+    """The write mode of a server, for `servers.json` (the exported layer of "the file is the daemon's configuration", Q154's six): the configured value, the word the operator reads, and the stored
+    readiness facts. A stored result that cannot be read is named, never an empty object that reads as "never checked"."""
+    from jen.services import kea_api_config as api
+    from jen.services import kea_changeset as changeset
+    from jen.services import write_mode
+
+    out = {
+        "config_transport": server.get("config_transport"),
+        "write_mode": write_mode.mode_word(changeset._transport(server, "dhcp4")),
+    }
+    try:
+        probe = api.stored_probe(server.get("id")) or {}
+        out["write_mode_facts"] = {k: probe[k] for k in WRITE_MODE_FACT_KEYS if k in probe}
+        out["write_mode_checked"] = bool(probe)
+    except Exception as e:  # a settings row that cannot be read is said so, in words
+        logger.warning(f"support bundle: the readiness facts of server {server.get('id')} were not read: {e}")
+        out["write_mode_facts_error"] = type(e).__name__
+    return out
+
+
 def _collect_servers() -> list[dict]:
     from jen.services import kea_host, kea_tls
 
@@ -288,6 +329,7 @@ def _collect_servers() -> list[dict]:
             "ssh_user": s.get("ssh_user"),
             "ssh_key_path": s.get("ssh_key"),
             "kea_conf": s.get("kea_conf"),
+            **_write_mode_of(s),
             "helper": helper.get(sid),
             "tls_copies": [
                 {"service": c.get("service"), "path": c.get("path"), "days_left": c.get("days_left")}

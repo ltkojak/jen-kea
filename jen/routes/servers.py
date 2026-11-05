@@ -173,11 +173,9 @@ def servers():
             caps.transport_blocked
         )  # (Q216 AA13) the gate's own state: the badge never says "healthy" over a gate that refuses
         # (second pass, row 1) the gate's sentences name host paths (an include), the daemon's account and a file mode: an admin's to read, as the incident detail lines on this page are
-        s["transport_why"] = (
-            caps.transport_why()
-            if current_user.is_admin_or_above or not caps.transport_blocked
-            else "Live API is not ready yet"
-        )
+        s["transport_why"] = caps.transport_why_for(
+            bool(getattr(current_user, "is_superadmin", False))
+        )  # (Q218 BH4 a) the gate's words - the daemon's account, a file's mode, an include's path - are a superadmin's, on this page as on the card
         # (Q217 BG4 a, AB5) whether a named endpoint has no authentication is an admin's to read, like the two lines around it
         s["transport_unauthenticated"] = (
             current_user.is_admin_or_above and caps.config_transport == "api" and probe.get("auth") == "none"

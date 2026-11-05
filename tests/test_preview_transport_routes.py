@@ -95,3 +95,45 @@ class TestAClassPreviewOnAnApiServerWithNoSsh:
         )
         r = logged_in_client.post("/subnets/classes/preview", data=self.FORM)
         assert r.status_code == 200 and b"Kea accepted this config" in r.data and "config-test" in daemon.commands
+
+
+class TestZeroWriteTargets:
+    """Q218 BH6 g (AC26): a preview over a fleet with no write target answered "all passed" - `all()` of nothing - so Apply stayed enabled over a change no server takes. It answers one row that says why."""
+
+    ROW = {
+        "name": "no server",
+        "ok": False,
+        "message": "no server takes this change: every server is Read-only (switch one under Settings → Kea → Write mode)",
+    }
+
+    def test_a_subnet_preview_over_a_read_only_fleet_does_not_pass(self, logged_in_client, monkeypatch, daemon):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [_server(daemon, config_transport="off")])
+        r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.99.0.10-10.99.0.200"})
+        data = r.get_json()
+        assert data["all_passed"] is False and data["servers"] == [self.ROW], data
+        assert "config-test" not in daemon.commands
+
+    def test_the_v6_answer_says_what_a_v6_fleet_needs(self, app):
+        from jen.routes import subnets
+
+        with app.app_context():
+            body = subnets._preview_answer([], [], v6=True).get_json()
+        assert body["all_passed"] is False and "none has an SSH host" in body["servers"][0]["message"]
+        with app.app_context():
+            ok = subnets._preview_answer([], [{"name": "a", "ok": True, "message": "ok"}]).get_json()
+        assert ok["all_passed"] is True and ok["servers"][0]["name"] == "a"
+
+    def test_the_class_preview_over_a_read_only_fleet_validates_nothing_and_says_so(
+        self, logged_in_client, monkeypatch, daemon
+    ):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [_server(daemon, config_transport="off")])
+        r = logged_in_client.post(
+            "/subnets/classes/preview",
+            data={"is_new": "1", "orig_name": "", "name": "voice", "mode": "advanced", "test": "1 == 1"},
+        )
+        assert (
+            r.status_code == 200
+            and b"Kea accepted this config" not in r.data
+            and b"No Kea server to validate" in r.data
+        )
+        assert "config-test" not in daemon.commands

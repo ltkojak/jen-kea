@@ -383,6 +383,36 @@ class TestUnverifiedIsNotUndone:
         assert result["code"] == "unverified" and result["needs_hands"]
         assert fake.commands.count("config-set") == 1  # nothing was sent to put anything back
 
+    def _file_reads(self, monkeypatch, fake, later):
+        """The first read of the file (step 6's question, before the write) is the file as it is; the next is `later(fake)` (step 8's verify, after the daemon proved the write)."""
+        reads = {"n": 0}
+
+        def read(*a, **k):
+            reads["n"] += 1
+            return ({"Dhcp4": copy.deepcopy(fake.file)}, "r" * 64) if reads["n"] == 1 else later(fake)
+
+        monkeypatch.setattr(host, "read_config_versioned", read)
+
+    def test_a_file_that_cannot_be_read_back_is_ok_with_a_note(self, fake, server, store, monkeypatch):
+        """Q218 BH6 a (AC8; Q217 AB8's fix, pinned): the daemon's own digest proved the write, so a file that cannot be READ BACK afterward is not a difference - `ok` with a note, no hands, and no raw
+        row; a file that reads but differs is `unverified` with hands; the canonical sentinel (a helper with no raw hash) is `ok` and records no `raw` row."""
+        server["ssh_host"] = "10.0.0.9"
+        self._file_reads(monkeypatch, fake, lambda f: (None, None))
+        result, _c, _d = _apply(server)
+        assert result["ok"] and result["code"] == "ok" and "could not be read back" in result["note"]
+        assert not result.get("needs_hands") and not any(r["hash_kind"] == "raw" for r in store.rows)
+
+        self._file_reads(monkeypatch, fake, lambda f: ({"Dhcp4": {"stale": True}}, "r" * 64))
+        result, _c, _d = _apply(server)
+        assert result["code"] == "unverified" and result["needs_hands"]
+        assert "does not carry what the daemon runs" in result["detail"]
+
+        store.rows.clear()
+        sentinel = host._CANONICAL_SENTINEL_PREFIX + "0" * 64
+        self._file_reads(monkeypatch, fake, lambda f: ({"Dhcp4": copy.deepcopy(f.running)}, sentinel))
+        result, _c, _d = _apply(server)
+        assert result["ok"] and not any(r["hash_kind"] == "raw" for r in store.rows)
+
 
 class TestThePendingRecord:
     def test_written_before_the_set_and_cleared_after_the_verify(self, fake, server, store):
@@ -729,6 +759,47 @@ class TestTheFirstDifferenceIsNamed:
             ({}, {"b": 1}),
         ):
             assert (api.first_difference(running, candidate) == "") is api._carries(running, candidate)
+
+    def test_a_non_scalar_prints_its_shape_never_its_content(self):
+        """Q218 BH5 b (AC15): a difference of KIND is named at the PARENT, where `_secret_path` cannot see a secret one level below: a container prints its shape and the scalar on the other side only its
+        type, so nothing under a secret key (or where one would sit) is ever printed."""
+        secret = {"password": "hunter2-secret", "user": "kea"}
+        for live_value, file_value in (
+            (secret, "plain"),
+            ("plain", secret),
+            ([secret], "plain"),
+            ({"nested": {"password": "hunter2-secret"}}, 7),
+            (secret, ["x"]),
+        ):
+            text = api.difference_text(
+                {"Dhcp4": {"lease-database": file_value}}, {"Dhcp4": {"lease-database": live_value}}, "dhcp4"
+            )
+            assert text.startswith("at Dhcp4.lease-database:"), text
+            assert "hunter2" not in text and "plain" not in text and "kea" not in text, text
+        assert (
+            api.difference_text({"Dhcp4": {"lease-database": secret}}, {"Dhcp4": {"lease-database": "plain"}}, "dhcp4")
+            == "at Dhcp4.lease-database: the file says an object with 2 keys, the daemon a string"
+        )
+        # two scalars still print, and a path that names a secret never does
+        assert "the file says 3600, the daemon 7200" in api.difference_text(
+            {"Dhcp4": {"valid-lifetime": 3600}}, {"Dhcp4": {"valid-lifetime": 7200}}, "dhcp4"
+        )
+
+    def test_a_renamed_key_against_another_count_names_the_count(self):
+        """Q218 BH5 c (AC16): one singular `hosts-database` in the file against two backends on the daemon was reported as "the daemon nothing" - the renamed-key branch only descended when the list had
+        exactly one element. The verdict (a difference) was right; the sentence names the count now."""
+        one = {"Dhcp4": {"hosts-database": {"type": "mysql", "name": "kea"}}}
+        two = {"Dhcp4": {"hosts-databases": [{"type": "mysql", "name": "kea"}, {"type": "mysql", "name": "other"}]}}
+        assert api.file_in_daemon(one, two, "dhcp4") is False
+        assert (
+            api.difference_text(one, two, "dhcp4")
+            == "at Dhcp4.hosts-database: the file says one hosts-database, the daemon runs 2 hosts-databases"
+        )
+        none = {"Dhcp4": {"hosts-databases": []}}
+        assert "the daemon runs 0 hosts-databases" in api.difference_text(one, none, "dhcp4")
+        # the control: exactly one is still descended into, and carried
+        same = {"Dhcp4": {"hosts-databases": [{"type": "mysql", "name": "kea", "port": 3306}]}}
+        assert api.file_in_daemon(one, same, "dhcp4") is True
 
 
 class TestADamagedPendingRecord:
@@ -1250,6 +1321,27 @@ class TestADeletionIsADifference:
     def test_a_vector_that_cannot_be_read_asks_nothing(self, tmp_path):
         (tmp_path / "kea_defaults_3.0.json").write_text("{not json")
         assert api.load_vector("3.0.1", tmp_path) == (None, "")
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            '{"paths": "abc"}',  # a string iterates as characters: a tiny wrong set
+            '{"paths": {"a": 1}}',  # an object iterates as its keys
+            '{"paths": [1, 2]}',  # numbers are not key paths
+            '{"paths": ["a"], "populated": ["a"]}',
+            '{"paths": ["a"], "populated": {"a": "not a list"}}',
+            "[1, 2]",
+            "7",
+            "null",
+        ],
+    )
+    def test_a_vector_of_the_wrong_shape_asks_nothing(self, tmp_path, body):
+        """Q218 BH5 d (AC23): a vector whose `paths` is a string or an object loaded as a tiny wrong set; its shape is checked, and one that is not `paths: [str]` and `populated: {str: [..]}` asks nothing."""
+        (tmp_path / "kea_defaults_3.0.json").write_text(body)
+        assert api.load_vector("3.0.1", tmp_path) == (None, "")
+        (tmp_path / "kea_defaults_3.0.json").write_text('{"paths": ["a", "b.c"], "populated": {"b.c": ["x"]}}')
+        paths, name = api.load_vector("3.0.1", tmp_path)
+        assert paths == frozenset({"a", "b.c"}) and name == "3.0" and paths.populated == {"b.c": ["x"]}
 
     def test_compare_uses_the_daemons_vector_and_names_the_place(self, fake, server, monkeypatch):
         monkeypatch.setattr(api, "defaults_for", lambda s, svc="dhcp4": (self.DEFAULTS, {"version": "3.0.1"}))

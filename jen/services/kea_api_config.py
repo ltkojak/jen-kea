@@ -154,6 +154,12 @@ def _walk(running: object, candidate: object, under: str | None = None, path: st
                 if found is None:
                     continue
                 return found
+            if isinstance(renamed, list):
+                return (
+                    here,
+                    v,
+                    renamed,
+                )  # (Q218 BH5 c, AC16) the daemon runs MORE (or fewer) than the one the file says: named by its count, never "nothing"
             if (
                 under == "interfaces-config"
                 and k in OMITTED_AT_DEFAULT
@@ -273,6 +279,25 @@ def _secret_path(path: str) -> bool:
     return any(is_secret_key(segment) for segment in re.split(r"[.\[\]]+", path) if segment)
 
 
+def _is_container(value: object) -> bool:
+    return isinstance(value, (dict, list))
+
+
+def _kind(value: object) -> str:
+    """What a value IS, never what it says: the shape of a container, the type of a scalar (`nothing` for a key that is absent)."""
+    if value is _MISSING:
+        return "nothing"
+    if isinstance(value, (dict, list)):
+        return _leaf(value)
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, (int, float)):
+        return "a number"
+    if isinstance(value, str):
+        return "a string"
+    return "a null" if value is None else "a value"
+
+
 def _leaf(value: object) -> str:
     if value is _MISSING:
         return "nothing"
@@ -301,6 +326,12 @@ def difference_text(
     path, mine, theirs = found
     if _secret_path(path):
         return f"at {path}: the file and the daemon differ (the values are not shown)"
+    key = re.split(r"[.\[\]]+", path)[-1] if path else ""
+    if key in RENAMED_KEYS and isinstance(theirs, list) and mine is not _MISSING:
+        return f"at {path}: the file says one {key}, the daemon runs {len(theirs)} {RENAMED_KEYS[key]}"  # (Q218 BH5 c)
+    if _is_container(mine) != _is_container(theirs):
+        # (Q218 BH5 b, AC15) a difference of KIND is named at the parent, and the scalar on one side may sit where the other side keeps a secret one level below: a container prints its shape and the scalar only its type
+        return f"at {path}: the file says {_kind(mine)}, the daemon {_kind(theirs)}"
     return f"at {path}: the file says {_leaf(mine)}, the daemon {_leaf(theirs)}"
 
 
@@ -339,8 +370,18 @@ def load_vector(version: str, directory: pathlib.Path | None = None) -> tuple[fr
         return None, ""
     try:
         data = json.loads(best[1].read_text(encoding="utf-8"))
-        paths = DefaultsSet(str(p) for p in data["paths"])
-        paths.populated = {str(k): v for k, v in (data.get("populated") or {}).items() if isinstance(v, list)}
+        raw_paths, raw_populated = data["paths"], data.get("populated", {})
+        if (
+            not isinstance(raw_paths, list)
+            or not all(isinstance(p, str) for p in raw_paths)
+            or not isinstance(raw_populated, dict)
+            or not all(isinstance(v, list) for v in raw_populated.values())
+        ):
+            raise ValueError(
+                "the vector's shape is not `paths: [str]` and `populated: {str: list}`"
+            )  # (Q218 BH5 d, AC23)
+        paths = DefaultsSet(raw_paths)
+        paths.populated = {str(k): v for k, v in raw_populated.items()}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         logger.warning("kea_api_config: the defaults vector %s cannot be read", best[1].name)
         return None, ""  # a vector that cannot be read asks nothing: the first direction still decides
@@ -1405,7 +1446,10 @@ def probe_gate(server: dict, source: str = "jen") -> str:
     stored = stored_probe(server.get("id"))
     if not stored:
         return PROBE_SENTENCE
-    if stored.get("bound") and stored["bound"] != _bound(server):
+    if not stored.get("bound"):
+        # (Q218 BH3 d, AC6) a stored result that names no endpoint cannot say which Kea it was read from: it is checked again, never taken for the current one
+        return f"{_name(server)} was checked before this version recorded which Kea it was - {PROBE_SENTENCE.replace('first', 'again')}"
+    if stored["bound"] != _bound(server):
         return f"{_name(server)} now points at a different Kea than the one that was checked - {PROBE_SENTENCE.replace('first', 'again')}"
     age = _age_days(stored.get("at"))
     if age is None or age > PROBE_MAX_AGE_DAYS:
@@ -1482,8 +1526,8 @@ def refresh_probe(server: dict, service: str = "dhcp4") -> bool:
     stored = stored_probe(sid)
     if not stored or not stored.get("consented_at") or service not in SERVICE_KEY:
         return False
-    if stored.get("bound") and stored["bound"] != _bound(server):
-        return False  # a re-pointed server is for its operator to check again
+    if not stored.get("bound") or stored["bound"] != _bound(server):
+        return False  # a re-pointed server is for its operator to check again - and so is a result that names no endpoint (Q218 BH3 d): the refresh never binds a consent to a Kea nobody checked
     cfg, _digest, _why = _get(server, service)
     if cfg is None:
         return False
@@ -1520,8 +1564,8 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False, consen
     sid = server.get("id")
     prev = stored_probe(sid) or {}
     out = {"at": _now_iso(), "service": service, "bound": _bound(server)}
-    if prev.get("bound") and prev["bound"] != out["bound"]:
-        prev = {}  # a different endpoint: nothing carries over (consent, a remembered refusal)
+    if prev.get("bound") != out["bound"]:
+        prev = {}  # a different endpoint - or a result that names none (Q218 BH3 d): nothing carries over (consent, a remembered refusal)
     cfg, _digest, why = _get(server, service)
     out["config_api"] = cfg is not None
     if cfg is None:

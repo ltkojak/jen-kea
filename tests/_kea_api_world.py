@@ -7,6 +7,12 @@ Q212 - what the tests of `jen/services/kea_api_config.py` and of the change set'
 import copy
 import json
 
+from jen.services import kea_api_config as _real_api
+
+REAL_BOUND = (
+    _real_api._bound
+)  # the real `bound` hash, kept before `install_probes` stands one endpoint in for every server (Q218 BH3 d)
+
 
 class Store:
     """An in-memory `config_revisions` for one server: the functions the module and the file reader call, with the stored body a canonical JSON string as the real one decrypts to."""
@@ -126,14 +132,20 @@ def install_probes(monkeypatch, *, valid=True):
     from jen.services import kea_api_config as api
 
     data = {}
+    # (Q218 BH3 d) a stored result that names no endpoint is checked again, so the fake stands one endpoint in for every server (`bound` is a hash of the address, and a test that is not about the re-point
+    # has no business computing it): a record a test stores WITHOUT the key reads as bound to that endpoint, a record with `"bound": ""` is the no-endpoint shape, and a test about the re-point itself
+    # puts `api._bound` back (`monkeypatch.setattr(api, "_bound", real_bound)`).
+    monkeypatch.setattr(api, "_bound", lambda server: "t")
 
     def stored(server_id):
         if server_id in data:
-            return copy.deepcopy(data[server_id])
+            out = copy.deepcopy(data[server_id])
+            out.setdefault("bound", "t")
+            return out
         if not valid:
             return None
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        return {"at": now, "config_api": True, "consented_at": now}
+        return {"at": now, "config_api": True, "consented_at": now, "bound": "t"}
 
     def store(server_id, value):
         data[server_id] = copy.deepcopy(value)
