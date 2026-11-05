@@ -238,8 +238,9 @@ class TestEditSubnetPreviewRoute:
         r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
         assert r.status_code == 200
         data = r.get_json()
-        assert data["servers"] == []
-        assert data["all_passed"] is True
+        # (Q218 BH6 g, AC26) "all of none passed" is not a pass: a fleet with no write target answers one row that says why
+        assert [row["name"] for row in data["servers"]] == ["no server"] and data["servers"][0]["ok"] is False
+        assert data["all_passed"] is False
 
     def _one_server(self, monkeypatch):
         from jen import extensions

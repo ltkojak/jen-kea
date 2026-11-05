@@ -176,6 +176,7 @@ class TestTheGateSentencesAreASuperadminsToRead:
             .data.decode()
             .split('id="config-card-1"')[1]
             .split('id="config-card-2"')[0]
+            .split("<!-- SSH")[0]
         )
         assert "secret-site-extra.json" in card
 
@@ -194,7 +195,11 @@ class TestTheGateSentencesAreASuperadminsToRead:
             assert needle not in html, (role, needle)
         if role == "admin":  # the card is an admin's to open
             card = (
-                client.get("/settings/kea").data.decode().split('id="config-card-1"')[1].split('id="config-card-2"')[0]
+                client.get("/settings/kea")
+                .data.decode()
+                .split('id="config-card-1"')[1]
+                .split('id="config-card-2"')[0]
+                .split("<!-- SSH")[0]
             )
             assert self.STOP in card and "Current: Live API, blocked" in card
             for needle in self.NEEDLES:
@@ -364,7 +369,7 @@ class TestTheBadgeLinkIsForTheRolesThatCanOpenTheCard:
         """Q217, second pass row 11: the Servers badge carries its href only for an admin or above."""
         import pathlib
 
-        src = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "servers.html").read_text(
+        src = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "_write_mode_badge.html").read_text(
             encoding="utf-8"
-        )
+        )  # (Q218 BH4 b) the Write mode row is one macro now, called by both views of the Servers page
         assert '{% if current_user.is_admin_or_above %}href="/settings/kea#config-card-' in src
