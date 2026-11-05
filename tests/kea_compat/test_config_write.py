@@ -876,7 +876,11 @@ def test_12_the_defaults_kea_writes_out(facts):
     __real._ok(__kea.kea_command("config-set", arguments={"Dhcp4": rich}))
     try:
         running = _get()
-        defaults = sorted(_added_by_the_daemon(rich, running["Dhcp4"]))
+        # two recordings, one union: what the daemon wrote into the job's own (bare) file at the start, and into the rich candidate. A singleton such as the top-level `option-data` is decorated in the
+        # rich one and bare in the first; a nested list entry is decorated and bare in the rich one itself.
+        defaults = sorted(
+            _added_by_the_daemon(authored, ORIGINAL[0]["Dhcp4"]) | _added_by_the_daemon(rich, running["Dhcp4"])
+        )
         facts["defaults_vector"] = {"kea": version, "paths": defaults}
         facts["defaults_vector_path_count"] = len(defaults)
         major, minor = int(m.group(1)), int(m.group(2))
