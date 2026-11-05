@@ -130,7 +130,7 @@ class TestQ216AFileWriteOnAnApiServerRecordsTheDaemon:
         assert not [r for r in store.rows if r["source"] == "external"]
 
     def test_a_reload_records_the_daemons_digest(self, world, monkeypatch):
-        """Q217 AB1 - `record_after_file_write` pinned from the reload caller: the row carries the digest the daemon itself answers with now."""
+        """Q217 AB1 - `record_daemon_after_file_change` pinned from the reload caller: the row carries the digest the daemon itself answers with now."""
         from jen.services import kea_api_config as api
         from tests import _kea_api_world as api_world
 
@@ -160,7 +160,7 @@ class TestQ216AFileWriteOnAnApiServerRecordsTheDaemon:
         def boom(*a, **k):
             raise RuntimeError("no store")
 
-        monkeypatch.setattr(api, "record_after_file_write", boom)
+        monkeypatch.setattr(api, "record_daemon_after_file_change", boom)
         server = {**world.servers[0], "config_transport": "api"}
         with caplog.at_level(logging.WARNING):
             inv._record_daemon_after_reload(server)
@@ -586,7 +586,7 @@ class TestTheWrappersAroundTheHelperOps:
             kea_host.INVESTIGATION_MIN_HELPER_BUILD == 18
         )  # the investigation ops arrived at 18 and still need only 18
         assert (
-            kea_host.JEN_HELPER_SHIPPED_BUILD == 21 and kea_host.CONFIG_WRITE_MIN_HELPER_BUILD == 19
+            kea_host.JEN_HELPER_SHIPPED_BUILD == 22 and kea_host.CONFIG_WRITE_MIN_HELPER_BUILD == 19
         )  # builds 20 and 21 changed the tick and a wall, not the ops: the ops still need only 19
 
 

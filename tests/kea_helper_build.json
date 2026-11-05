@@ -1,4 +1,10 @@
-{
-  "build": 21,
-  "sha256": "0cb830fcf281e8b1f7ff916c940afa6de480c51cffdf80a4f660f71b37f85274"
-}
+[
+  {
+    "build": 21,
+    "sha256": "0cb830fcf281e8b1f7ff916c940afa6de480c51cffdf80a4f660f71b37f85274"
+  },
+  {
+    "build": 22,
+    "sha256": "66c33a13d6fe1545e8d51907c872997445991ade74602e30157590acec5bd320"
+  }
+]

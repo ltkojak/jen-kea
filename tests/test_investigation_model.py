@@ -438,6 +438,21 @@ class Walk:
         fake = self.ssh_fake(server)
         if fake is None:
             raise kea_host.HelperError("ssh: no route to host")
+        if op == "config-loaded":
+            # Q219: the host answers the proof's one call (`kea_host.read_config_proof`): the file, and the host's own clock. The file was written BEFORE the daemon's last load exactly when the daemon runs what the
+            # file says about the logger (the host's restore wrote the file and the daemon has not taken it yet = after the load)
+            loaded = at_debug(fake.loaded) == has_marker(fake.file)
+            now = 1_800_000_000
+            return {
+                "ok": True,
+                "config": copy.deepcopy(fake.file),
+                "sha256": "sha",
+                "size": 1,
+                "mtime": now - 100 if loaded else now - 5,
+                "now": now,
+                "daemon": {"pid": 1, "uptime": 3600, "reload": 50},
+                "socket_note": "",
+            }
         assert op == "apply-config", op
         if fake.fail_writes_after is not None and fake.writes >= fake.fail_writes_after:
             return {"ok": False, "error": "write", "detail": "the helper could not write the file"}

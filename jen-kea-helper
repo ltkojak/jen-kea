@@ -312,6 +312,7 @@ import copy
 import errno
 import hashlib
 import json
+import math
 import os
 import posixpath
 import re
@@ -327,7 +328,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 21
+HELPER_BUILD = 22
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -1040,6 +1041,58 @@ def op_read_config(payload):
         return {"ok": True, "config": json.loads(raw), "sha256": hashlib.sha256(raw).hexdigest()}, path
     except (ValueError, RecursionError) as e:
         return {"ok": False, "error": "invalid-json", "detail": str(e)}, path
+
+
+def op_config_loaded(payload):
+    """Build 22 (Q219): `read-config`'s answer PLUS what proves the file is one the daemon has loaded - the file's `size` and `mtime` and the host's `now` from ONE clock, and the daemon's own `pid`,
+    `uptime` and `reload` (seconds since its last configuration commit, Kea's `getLastCommitTime`) from `status-get` on its control socket. The proof is `mtime <= now - reload`: the file was written
+    before the daemon last loaded a configuration. `now` is taken BEFORE the daemon is asked, so `now - reload` is never later than the true commit time, and `mtime` rounds UP (`math.ceil`), so a
+    write in the same second as the commit is refused: both errors are in the fail-closed direction. No control socket, no answer, or an answer without `reload` is `daemon: null` with `socket_note`
+    saying which - never a guess. The errors are `read-config`'s."""
+    service = payload.get("service")
+    path = payload.get("path")
+    if not _valid_service(service) or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    try:
+        raw, st = _open_conf(path)
+    except _ConfLink:
+        return {"ok": False, "error": "symlink", "path": path}, path
+    except FileNotFoundError:
+        return {"ok": False, "error": "missing"}, path
+    except OSError as e:
+        return {"ok": False, "error": "unreadable", "detail": str(e)}, path
+    try:
+        config = json.loads(raw)
+    except (ValueError, RecursionError) as e:
+        return {"ok": False, "error": "invalid-json", "detail": str(e)}, path
+    now = int(time.time())
+    daemon, socket_note = None, ""
+    sock, note = _control_socket(config)
+    if sock is None:
+        socket_note = note or _NOTE_NO_SOCKET
+    else:
+        reply = _ask_daemon(sock, "status-get")
+        if reply is None:
+            socket_note = "the socket did not answer"
+        elif reply.get("result") != 0:
+            socket_note = f"status-get answered {reply.get('result')}"
+        else:
+            arguments = reply.get("arguments") if isinstance(reply.get("arguments"), dict) else {}
+            reload = arguments.get("reload")
+            if isinstance(reload, bool) or not isinstance(reload, int):
+                socket_note = "status-get carries no reload"
+            else:
+                daemon = {"pid": arguments.get("pid"), "uptime": arguments.get("uptime"), "reload": reload}
+    return {
+        "ok": True,
+        "config": config,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "size": len(raw),
+        "mtime": math.ceil(st.st_mtime),
+        "now": now,
+        "daemon": daemon,
+        "socket_note": socket_note,
+    }, path
 
 
 def op_test_config(payload):
@@ -2739,6 +2792,7 @@ def _self_restore(force=False):
 _OPS = {
     "version": op_version,
     "read-config": op_read_config,
+    "config-loaded": op_config_loaded,
     "test-config": op_test_config,
     "apply-config": op_apply_config,
     "remove-config": op_remove_config,

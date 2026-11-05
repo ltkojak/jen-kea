@@ -79,21 +79,22 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     blocked = _write_guard(server, name, live)
     if blocked:
         return _refuse(blocked)
-    # (Q218 BH1 a, d) the discard is a consent of THIS act for a fact the facts called for; `before` is what the daemon runs - at a switch the file and the daemon are meant to be one
-    discard = "discard_file_edit" in (set(consents) & set(_api.consents_called_for(facts, has_ssh=has_ssh)))
+    # (Q218 BH1 a, d) the discard is a consent of THIS act for a fact the facts called for; the file must be one the daemon has loaded or Jen rendered (`file_proof`, Q219) or the discard says otherwise
+    called_before = set(_api.consents_called_for(facts, has_ssh=has_ssh))
+    discard = "discard_file_edit" in (set(consents) & called_before)
     discarded_at = None
     wrote_a_file = True
     if current == "api":
         # a server already in Live API RECORDS a consent; it renders nothing, unless the file carries an edit and the operator said to discard it
         wrote_a_file = False
         if has_ssh and discard:
-            state, _where = _api.file_against(server, SERVICE, live)
-            if state == "differs":
+            proof = _api.file_proof(server, SERVICE)
+            if proof["how"] == "none":
                 wrote_a_file = True
                 newest = _rev.latest(sid, SERVICE, exclude_kind="kea") if sid is not None else None
                 discarded_at = (newest or {}).get("id")
     if wrote_a_file:
-        wrote = _api.write_file(server, SERVICE, before=live, discard=discard)
+        wrote = _api.write_file(server, SERVICE, discard=discard)
         if not wrote["ok"]:
             if (
                 wrote.get("code") == "unloaded-edit"
@@ -121,16 +122,19 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
             if sid is not None
             else None
         )
-        _api.record_file_after_write(
-            server, SERVICE, f"transport switched {current} -> api by {actor}", source="switch"
-        )  # (Q218 D8) Jen's own rendering is not "changed outside Jen"
+        _api.record_rendering_after_write(
+            server, SERVICE, f"transport switched {current} -> api by {actor}"
+        )  # (Q218 D8, Q219) Jen's own rendering is not "changed outside Jen", and it is the file `file_proof`'s (R) accepts
+        # (Q219 BI3 a, AD2) the act itself changed the facts: the file IS the daemon's rendering now. The consent is written over THESE facts, never over the ones read before the write
+        facts = _api.probe(server, SERVICE)
     else:
         revision = None
     # the operator's consent is on record from this moment: the gate in `apply` reads it
-    # (Q218 BH3 a, AC4) what is recorded is what the FRESH facts call for - `consents_called_for` is the one table - never every name the form happened to send: a stray box is dropped and named
-    called = set(_api.consents_called_for(facts, has_ssh=has_ssh))
-    recorded = sorted(set(consents) & called)
-    ignored = sorted(set(consents) - called)
+    # (Q218 BH3 a, AC4) what is USED is what the facts the switch was given for called for - `consents_called_for` is the one table - never every name the form happened to send: a stray box is
+    # dropped and named. (Q219 Decided 7) what is STORED is what the facts AFTER the act still call for: a consent the act used up (the discard) is never left on record to open the gate on a later edit
+    used = sorted(set(consents) & called_before)
+    ignored = sorted(set(consents) - called_before)
+    recorded = sorted(set(used) & set(_api.consents_called_for(facts, has_ssh=has_ssh)))
     stored = _api.stored_probe(sid) or facts
     stored["consented_at"] = _api._now_iso()
     stored["consents"] = recorded
@@ -144,13 +148,13 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 if discarded_at
                 else ", and the file's edit was discarded"
             )
-        return _done(line, revision=revision, discarded=wrote_a_file, consents=recorded, ignored=ignored)
+        return _done(line, revision=revision, discarded=wrote_a_file, consents=used, ignored=ignored)
     return _done(
         f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
         if revision
         else f"{name}: switched to Live API; Kea rendered its file",
         revision=revision,
-        consents=recorded,
+        consents=used,
         ignored=ignored,
     )
 
@@ -172,12 +176,13 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
             f"{name}: the file on the host could not be read (is the helper installed? Settings → Kea → SSH); nothing was changed"
         )
     live, digest, why = _api._get(server, SERVICE)
-    if live is not None and not _api.compare(server, SERVICE, file_cfg, live)[0]:
-        # (fix row 5) compare FIRST: the file carries something the daemon does not run (a hand edit, or a change the daemon never wrote). Overwriting it is a named consent; a daemon that was never
-        # granted the write (so `config-write` is refused) still leaves `api` once they agree, and the compare decides again after the best-effort write
+    proof = _api.file_proof(server, SERVICE) if live is not None else None
+    if proof is not None and not proof["ok"]:
+        # (fix row 5, Q219) the proof FIRST: the file is not one the daemon has loaded or Jen rendered (a hand edit, or a change the daemon never wrote). Overwriting it is a named consent; a daemon that
+        # was never granted the write (so `config-write` is refused) still leaves `api` once the proof holds, and it is asked again after the best-effort write
         if "discard_file_edit" not in consents:
             return _refuse(
-                f"{name}: the file and the daemon differ (the daemon {_short(digest)}, the file {_short(raw)}); they must agree before the file becomes the thing Jen edits - restart Kea there, restore from Config history, or tick 'discard the file's edit' to overwrite it with what the daemon runs",
+                f"{name}: the file and the daemon differ (the daemon {_short(digest)}, the file {_short(raw)}): {proof['why']}; they must agree before the file becomes the thing Jen edits - restart Kea there, restore from Config history, or tick 'discard the file's edit' to overwrite it with what the daemon runs",
                 needs="discard_file_edit",
                 before_hash=digest,
                 after_hash=raw,
@@ -186,11 +191,14 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         if blocked:
             return _refuse(blocked)
         acted.append("discard_file_edit")
-        _api.write_file(
-            server, SERVICE, before=live, discard=True
+        wrote = _api.write_file(
+            server, SERVICE, discard=True
         )  # (Q218 BH1 b) `discard_file_edit` is in THIS act's consents (the refusal above); the sender's capturing read puts the edit in Config history first
+        if wrote.get("ok"):
+            _api.record_rendering_after_write(server, SERVICE, f"transport switched {current} -> file by {actor}")
         file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
-        if file_cfg is None or not _api.compare(server, SERVICE, file_cfg, live)[0]:
+        again = _api.file_proof(server, SERVICE, capture=False)
+        if file_cfg is None or not again["ok"]:
             return _refuse(
                 f"{name}: the file still differs from the daemon after the write was tried (the daemon {_short(digest)}, the file {_short(raw)}); nothing was changed",
                 before_hash=digest,
@@ -235,6 +243,14 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
         return _done(f"{name} is already in write mode {_words.mode_word(target)}", unchanged=True)
     try:
         with _cs.change_lock():
+            if target in ("api", "file"):
+                # (Q219 Decided 7) a switch over an unsettled change is refused with the pending sentence: the daemon may run a change whose file write never happened, and a switch would render over it
+                unreadable = _api.record_unreadable(server, SERVICE)
+                if unreadable:
+                    return _refuse(f"{name}: {unreadable}; nothing was changed")
+                blocked = _api.pending_block(server, SERVICE)
+                if blocked:
+                    return _refuse(f"{name}: {blocked}; nothing was changed")
             if target == "api":
                 result = _to_api(server, current, consents, actor)
             elif target == "file":
@@ -252,6 +268,9 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
                 return _refuse(
                     f"{name}: the switch was done but the setting could not be saved ({e}); the transport did not change - run the switch again"
                 )
+            if current == "api" and target != "api":
+                # (Q219 BI3 b, AD3) a remembered refusal of `config-write` belongs to Live API: it is cleared when the server leaves it, after the setting is written
+                result["refusal_cleared"] = bool(_api.clear_refusal(server.get("id")))
     except _cs.ChangeBusy:
         return _refuse(_cs.BUSY_SENTENCE)
     result.setdefault("from", current)

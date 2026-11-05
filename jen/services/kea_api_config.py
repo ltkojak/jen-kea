@@ -235,12 +235,13 @@ def _is_default(path: str, value: object, defaults: frozenset, chain: tuple = ()
     scalars = getattr(defaults, "scalars", None)
     if scalars is None:
         return True
-    if blank in scalars and _same_scalar(scalars[blank], value):
-        return True
     key = re.split(r"[.\[\]]+", path)[-1]
-    return any(
-        isinstance(scope, dict) and key in scope and _same_scalar(scope[key], value) for scope in reversed(chain[:-1])
-    )
+    for scope in reversed(chain[:-1]):
+        if isinstance(scope, dict) and key in scope:
+            return _same_scalar(
+                scope[key], value
+            )  # (Q219, AD1) Kea inherits an omitted scalar from the NEAREST scope above that carries it: that scope decides, never a value some recording saw
+    return blank in scalars and _same_scalar(scalars[blank], value)
 
 
 def _lacks(running: object, candidate: object, defaults: frozenset, path: str = "", scope: tuple = ()):
@@ -442,25 +443,13 @@ def defaults_for(server: dict, service: str = "dhcp4") -> tuple[frozenset | None
     return paths, facts
 
 
-def compare(
-    server: dict, service: str, file_cfg: dict | None, live_cfg: dict | None, *, also: dict | None = None
-) -> tuple[bool, str]:
-    """`(agree, where)` - the ONE question every caller asks of a file and a daemon (Q217 AB6): `file_in_daemon` in both directions with the daemon's own defaults vector, and `difference_text` for
-    the first place they differ. `agree` is True and `where` is "" when the file is the daemon's. `also` (Q218 BH1) is a second configuration the file may equal instead - the one the daemon runs NOW,
-    when `live_cfg` is the state before a change: `where` always names the first difference from `live_cfg`."""
+def compare(server: dict, service: str, file_cfg: dict | None, live_cfg: dict | None) -> tuple[bool, str]:
+    """`(same, where)` - the first place a file and a daemon differ, as a sentence, and NOTHING ELSE (Q219): since beta.5 this model of Kea's written-out defaults decides no write. `file_proof` asks the host
+    and the daemon themselves (when was the file written, when did the daemon last load a configuration, what did Jen last render, what did the Plan prove); this walk only names a path for the sentence,
+    best effort, and `file_proof` is its one caller (`TestTheModuleIsTheOneSender`). `where` is "" when the walk finds no difference."""
     defaults, _facts = defaults_for(server, service)
-    if file_in_daemon(file_cfg, live_cfg, service, defaults=defaults):
-        return True, ""
-    if also is not None and file_in_daemon(file_cfg, also, service, defaults=defaults):
-        return True, ""
-    return False, difference_text(file_cfg, live_cfg, service, defaults=defaults)
-
-
-def same_modulo_defaults(a_cfg: dict | None, b_cfg: dict | None, service: str) -> bool:
-    """Either configuration carries the other: the verification of Kea's own `config-write` (a rendering of what runs, defaults included or not)."""
-    return _carries(_section(a_cfg, service), _section(b_cfg, service)) or _carries(
-        _section(b_cfg, service), _section(a_cfg, service)
-    )
+    where = difference_text(file_cfg, live_cfg, service, defaults=defaults)
+    return where == "", where
 
 
 def _canonical(cfg: dict | None, service: str) -> str:
@@ -564,78 +553,162 @@ def read(
     return cfg, digest
 
 
-def unloaded_edit_sentence(server: dict, where: str = "") -> str:
-    """THE sentence for a file that carries something the daemon has not loaded (the Plan's refusal and the sender's): it names the host and, when known, the first path."""
+PROOF_HOWS = ("rendering", "planned", "loaded", "no-file", "unreadable", "none")
+NO_PLANNED_SENTENCE = "the file on {host} cannot be proved against the file this change was planned over; restart Kea there to load the file as it stands, then Settle it now"
+
+
+def _utc(ts: int) -> str:
+    """A time as the proof prints it (Q219, Decided 1): UTC, to the second."""
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _proof(
+    ok: bool,
+    how: str,
+    *,
+    sha256: str | None = None,
+    mtime: int | None = None,
+    loaded_at: int | None = None,
+    started_at: int | None = None,
+    where: str = "",
+    why: str = "",
+) -> dict:
+    return {
+        "ok": ok,
+        "how": how,
+        "sha256": sha256,
+        "mtime": mtime,
+        "loaded_at": loaded_at,
+        "started_at": started_at,
+        "where": where,
+        "why": why,
+    }
+
+
+def _int_or_none(value) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def file_proof(server: dict, service: str = "dhcp4", *, planned_sha: str | None = None, capture: bool = True) -> dict:
+    """THE one definition of "the file on the host is one the daemon has loaded, or Jen rendered, or the Plan proved" (Q219, CFG-004): the question every `config-write` asks before it replaces a file.
+    It reads the file ONCE (`kea_host.read_config_proof`: the content, its sha256 and - from a helper at build 22 - the file's mtime and the host's `now` and the daemon's own `status-get`, all from the
+    host's one clock), then, in this order, the first that holds decides:
+      (R) `rendering` - the file's sha256 is the newest `rendering` row's: the file Kea itself wrote after a change over the API;
+      (P) `planned`   - `planned_sha` is the file's sha256: byte for byte the file the Plan proved before any `config-set`;
+      (L) `loaded`    - the daemon last loaded a configuration at or after the file was written (`mtime <= now - reload`), the file is in the daemon one way (a reload that did not take is not a
+                        load), and no `pending` change is on record (then the daemon's last commit is Jen's own `config-set` and the time proves nothing).
+    A file that cannot be read is `unreadable` (never overwritten, CFG-005); a server with no SSH host has no file (`no-file`, ok). None of (R), (P), (L) is `none`, with the TIMES in `why` - and a path
+    in `where`, best effort, from the one walk that names it (`compare`): a model of Kea's defaults never decides. `capture=False` is for a caller that only reads."""
+    if not _has_ssh(server) or service not in SERVICE_KEY:
+        return _proof(True, "no-file")
     host = server.get("name") or server.get("ssh_host") or "the host"
-    return (
-        f"the file on {host} carries an edit the daemon has not loaded"
-        + (f" ({where})" if where else "")
-        + " - restart Kea there first, or discard it from the server's Write mode card"
-    )
-
-
-def file_against(
-    server: dict, service: str, before: dict | None, running: dict | None = None, *, capture: bool = True
-) -> tuple[str, str]:
-    """`(state, where)` for the file on a server's host: `"agree"` (it carries `before`, or `running`), `"differs"` (with the first path) or `"unreadable"`. The read is a CAPTURING one by default: a
-    file the store has not seen becomes an `external` row in Config history BEFORE anything can overwrite it (Q218 BH1 a)."""
-    file_cfg, _raw = _host.read_config_versioned(server, service, capture=capture)
+    file_cfg, sha, times = _host.read_config_proof(server, service, capture=capture)
     if file_cfg is None:
-        return "unreadable", ""
-    base = before if before is not None else running
-    if base is None:
-        return "differs", ""
-    agrees, where = compare(server, service, file_cfg, base, also=running if before is not None else None)
-    return ("agree", "") if agrees else ("differs", where)
+        return _proof(
+            False,
+            "unreadable",
+            why=f"the file on {host} could not be read, so a write cannot be proved against it (check the SSH connection)",
+        )
+    sid = server.get("id")
+    mtime = _int_or_none((times or {}).get("mtime"))
+    now = _int_or_none((times or {}).get("now"))
+    daemon = (times or {}).get("daemon") if isinstance((times or {}).get("daemon"), dict) else None
+    reload_s = _int_or_none((daemon or {}).get("reload"))
+    uptime_s = _int_or_none((daemon or {}).get("uptime"))
+    loaded_at = now - reload_s if now is not None and reload_s is not None else None
+    started_at = now - uptime_s if now is not None and uptime_s is not None else None
+    facts = {"sha256": sha, "mtime": mtime, "loaded_at": loaded_at, "started_at": started_at}
+
+    rendering = _rev.latest_rendering(sid, service) if sid is not None else None  # (R)
+    if rendering and sha and rendering.get("sha256") == sha:
+        return _proof(True, "rendering", **facts)
+    if planned_sha and sha and planned_sha == sha:  # (P)
+        return _proof(True, "planned", **facts)
+
+    pending_row, pending_unreadable = None, False  # (L) - the record is read ONCE
+    if sid is not None:
+        try:
+            pending_row = _rev.pending(sid, service)
+        except _rev.RevisionStoreUnreadable:
+            pending_unreadable = True
+    live = None
+    if (
+        mtime is not None
+        and loaded_at is not None
+        and mtime <= loaded_at
+        and pending_row is None
+        and not pending_unreadable
+    ):
+        live, _digest, _why = _get(server, service)
+        if live is not None and file_in_daemon(file_cfg, live, service):
+            return _proof(True, "loaded", **facts)
+
+    where = ""
+    try:
+        if live is None:
+            live, _digest, _why = _get(server, service)
+        if live is not None:
+            where = compare(server, service, file_cfg, live)[1]
+    except (
+        Exception
+    ) as e:  # naming a path never decides anything: the proof is already `none` (S10: it fails closed here)
+        logger.warning("kea_api_config: file_proof could not name a path for %s: %s", sid, type(e).__name__)
+    at = f" ({where})" if where else ""
+    way_out = "restart Kea there (or `config-reload`) to load it, or discard it from the server's Write mode card"
+    written = (
+        f"the file on {host} was written at {_utc(mtime)}"
+        if mtime is not None
+        else f"the file on {host} is not one Jen rendered or proved"
+    )
+    if times is None:
+        why = f"{written}; the daemon's own load time needs helper build 22 on {host} - press Update helper{at}"
+    elif daemon is None or loaded_at is None:
+        why = f"{written}; the daemon's own load time could not be read on {host} ({(times or {}).get('socket_note') or 'no answer'}){at}"
+    elif planned_sha:
+        why = (
+            f"the file on {host} is not the file this change was planned over (written at {_utc(mtime)}, the daemon last loaded its configuration at {_utc(loaded_at)}); "
+            f"the daemon has not loaded that edit - {way_out}"  # (no path: against a daemon that runs the change, the first difference is the change itself)
+        )
+    elif pending_row is not None or pending_unreadable:
+        why = (
+            f"{written} and the daemon last loaded its configuration at {_utc(loaded_at)}; an earlier change on {host} is unresolved, so the daemon's load time proves nothing - "
+            f"settle it first (Settle it now on the server's Write mode card)"
+        )
+    elif mtime is not None and mtime > loaded_at:
+        why = f"{written} and the daemon last loaded its configuration at {_utc(loaded_at)}; the daemon has not loaded that edit{at} - {way_out}"
+    else:
+        why = f"{written}, before the daemon's last load at {_utc(loaded_at)}, but the daemon does not run it{at} - {way_out}"
+    return _proof(False, "none", where=where, why=why, **facts)
 
 
 def _ask_the_file(
-    server: dict,
-    service: str,
-    before: dict | None,
-    *,
-    discard: bool = False,
-    running: dict | None = None,
-    unproved: str = "",
-) -> dict | None:
-    """CFG-005 - the question every `config-write` asks first: does the file the daemon's rendering would REPLACE carry what Jen knows, or an edit the daemon never loaded? `None` when the write may
-    go; else the refusal `{"ok": False, "code": "unloaded-edit", ...}`. A server with no SSH host has no file to ask. With one, the file is READ (capturing: an edit is in Config history before it can be
-    lost) and compared with `before` - the configuration the daemon ran when the change was built - or with `running`, the one it runs now (a file that IS the daemon's configuration loses nothing to its
-    own rendering). `discard` is the one way past a difference, and a caller passes it only when `discard_file_edit` was given on THIS act. A file that cannot be read is never overwritten, and a caller
-    with no `before` at all is refused: there is nothing to prove the file against. `unproved` replaces the difference sentence when the caller has no state before the change to name a path against."""
-    if not _has_ssh(server):
-        return None
-    host = server.get("name") or server.get("ssh_host") or "the host"
-    if before is None and running is None:
-        return _result(
-            False,
-            "unloaded-edit",
-            f"the file on {host} cannot be proved against any state, so it is not overwritten - restart Kea there to load it, or discard its edit from the server's Write mode card",
-        )
-    state, where = file_against(server, service, before, running)
-    if state == "agree":
-        return None
-    if state == "unreadable":
-        return _result(
-            False,
-            "unloaded-edit",
-            f"the file on {host} could not be read, so a write cannot be proved against it (check the SSH connection)",
-        )
-    if discard:
-        return None
-    return _result(False, "unloaded-edit", unproved or unloaded_edit_sentence(server, where))
+    server: dict, service: str, *, planned_sha: str | None = None, discard: bool = False, capture: bool = True
+) -> tuple[dict | None, dict]:
+    """CFG-005 - the question every `config-write` asks first, and the whole of it: `file_proof`. `(refusal, proof)`: `refusal` is `None` when the write may go, else `{"ok": False, "code": "unloaded-edit", ...}`
+    whose `detail` is the proof's `why`; `proof` is what was asked (a caller with no Plan keeps its `sha256`). A server with no SSH host has no file to ask. `discard` is the one way past a `none`, and a caller passes it only when `discard_file_edit` was given on THIS act; a
+    file that cannot be read is never overwritten, with or without it. The read is a CAPTURING one by default: an edit is a row in Config history before it can be lost."""
+    proof = file_proof(server, service, planned_sha=planned_sha, capture=capture)
+    if proof["ok"] or (discard and proof["how"] == "none"):
+        return None, proof
+    return _result(False, "unloaded-edit", proof["why"]), proof
 
 
-def record_file_after_write(server: dict, service: str, summary: str, source: str = "jen") -> bool:
-    """The file Jen's own `config-write` just rendered is a `raw` row in Config history (Q218 D8, the second pass), as `apply` step 9 records it: without it the NEXT capturing read finds a file the store
-    has not seen and records Jen's own write as `external` ("changed outside Jen"). A server with no SSH host, a read that fails and a helper that answers no raw hash record nothing."""
+def record_rendering_after_write(
+    server: dict, service: str, summary: str, *, cfg: dict | None = None, raw: str | None = None
+) -> bool:
+    """The file Kea itself just rendered is a `raw` row of source `rendering` in Config history - ALWAYS that source (Q219, Decided 14): it is what `file_proof`'s (R) reads, and a file Jen wrote over
+    SSH whose restart failed is never one. Without it the NEXT capturing read finds a file the store has not seen and records Jen's own write as `external`. `cfg` and `raw` are the file as the caller
+    already read it (apply's step 8: the bytes that were verified); with none the file is read now. A server with no SSH host, a read that fails and a helper that answers no raw hash record nothing."""
     sid = server.get("id")
     if sid is None or not _has_ssh(server):
         return False
-    file_cfg, raw = _host.read_config_versioned(server, service, capture=False)
-    if file_cfg is None or not raw or str(raw).startswith(_host._CANONICAL_SENTINEL_PREFIX):
+    if cfg is None or not raw:
+        cfg, raw = _host.read_config_versioned(server, service, capture=False)
+    if cfg is None or not raw or str(raw).startswith(_host._CANONICAL_SENTINEL_PREFIX):
         return False
-    return _rev.record(sid, service, file_cfg, raw, summary, hash_kind="raw", source=source) is not None
+    return _rev.record(sid, service, cfg, raw, summary, hash_kind="raw", source="rendering") is not None
 
 
 def _send_write(server: dict, service: str, attempts: int) -> tuple[dict | None, bool, bool]:
@@ -650,21 +723,13 @@ def _send_write(server: dict, service: str, attempts: int) -> tuple[dict | None,
     return reply, _ok(reply or {}), silent and _answered(reply or {})
 
 
-def write_file(
-    server: dict,
-    service: str = "dhcp4",
-    *,
-    before: dict | None,
-    discard: bool = False,
-    running: dict | None = None,
-    unproved: str = "",
-) -> dict:
-    """`config-write` of what runs, no filename - the switch's and the settlement's own call, and the ONE place that sends it outside `apply`'s step (6) (CFG-005, Q218 BH1). `before` is the
-    configuration the daemon ran when the change was built, which the file must carry (`None` only for a server with no SSH host); `discard` writes over a difference the capturing read has just put
-    in Config history. `ok`, `write-failed` (Kea's own words), `noanswer`, or `unloaded-edit` with NOTHING sent."""
+def write_file(server: dict, service: str = "dhcp4", *, planned_sha: str | None = None, discard: bool = False) -> dict:
+    """`config-write` of what runs, no filename - the switch's and the settlement's own call, and the ONE place that sends it outside `apply`'s step (6) (CFG-005, Q218 BH1, Q219). The file must be one
+    `file_proof` accepts: Jen's own rendering, the file the Plan proved (`planned_sha`, the settlement's - the row's `file_sha256`), or one the daemon has loaded; `discard` writes over a `none` the
+    capturing read has just put in Config history, and over nothing else. `ok`, `write-failed` (Kea's own words), `noanswer`, or `unloaded-edit` with NOTHING sent."""
     if service not in SERVICE_KEY:
         return _result(False, "noservice", f"{service} is not configured over the API")
-    refusal = _ask_the_file(server, service, before, discard=discard, running=running, unproved=unproved)
+    refusal, _proof = _ask_the_file(server, service, planned_sha=planned_sha, discard=discard)
     if refusal is not None:
         return refusal
     reply, ok, _maybe = _send_write(server, service, 1)
@@ -772,47 +837,15 @@ def _pending_candidate(row: dict, service: str = "dhcp4") -> dict | None:
     return parsed
 
 
-def _unproved_before_sentence(server: dict) -> str:
-    host = server.get("name") or server.get("ssh_host") or "the host"
-    return (
-        "the file cannot be proved against the state before the change - "
-        f"restart Kea on {host} to load the file, or discard the file's edit from the server's Write mode card"
-    )
-
-
-def _before_state(server: dict, service: str, row: dict) -> dict | None:
-    """The configuration the daemon ran BEFORE a pending change (Q218 BH1 b): the newest settled `kea` revision whose digest is the row's BEFORE digest (`config_revisions.by_digest`), parsed. None
-    when no revision proves it (the store was asked and has none, or could not be asked, or the body is no configuration): a settlement then cannot prove the file and does not overwrite it."""
-    sha = row.get("sha256")
-    sid = server.get("id")
-    if sid is None or not sha:
-        return None
-    prior = _rev.by_digest(sid, service, sha)
-    if prior is None:
-        return None
-    try:
-        parsed = json.loads(prior["config"])
-    except (TypeError, ValueError, KeyError):
-        return None
-    section = _section(parsed, service) if isinstance(parsed, dict) else None
-    return parsed if isinstance(section, dict) and section else None
-
-
-def _file_waits(server: dict, service: str, row: dict, running: dict) -> str:
-    """READ ONLY (no capture, no write): what a settlement of this LIVE pending row would wait on - `""` when its `config-write` would overwrite nothing (the file is the state before the change, or what
-    the daemon runs), else the sentence the settlement itself would print. A server with no SSH host has no file."""
+def _file_waits(server: dict, service: str, row: dict) -> str:
+    """READ ONLY (no capture, no write): what a settlement of this LIVE pending row would wait on - `""` when its `config-write` would overwrite nothing the proof does not accept, else the sentence the
+    settlement itself would print (the proof's, or the row's having no planned file: a row an earlier release wrote). A server with no SSH host has no file."""
     if not _has_ssh(server):
         return ""
-    before = _before_state(server, service, row)
-    state, where = file_against(server, service, before, running, capture=False)
-    if state == "agree":
-        return ""
-    host = server.get("name") or server.get("ssh_host") or "the host"
-    if state == "unreadable":
-        return (
-            f"the file on {host} could not be read, so a write cannot be proved against it (check the SSH connection)"
-        )
-    return unloaded_edit_sentence(server, where) if before is not None else _unproved_before_sentence(server)
+    if not row.get("file_sha256"):
+        return NO_PLANNED_SENTENCE.format(host=server.get("name") or server.get("ssh_host") or "the host")
+    refusal, _proof = _ask_the_file(server, service, planned_sha=row["file_sha256"], capture=False)
+    return "" if refusal is None else str(refusal.get("detail") or "")
 
 
 def pending_note(server: dict, service: str = "dhcp4") -> str:
@@ -850,8 +883,8 @@ def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes:
         )
     elif _carries(_section(cfg, service), _section(candidate, service)):
         waits = _file_waits(
-            server, service, row, cfg
-        )  # (Q218 BH1 e) the settlement's own question, asked as a read: the card says what it waits on
+            server, service, row
+        )  # (Q218 BH1 e, Q219) the settlement's own question, asked as a read: the card says what it waits on
         notes.append(
             f"a change of {at} is live and its file write waits: {waits}"
             if waits
@@ -937,16 +970,16 @@ def _reconcile_pending(
             if notes is not None:
                 notes.append(f"a change of {at} is live and its file write waits: {waits}")
             return cfg, digest, False
-        # (Q218 BH1 b) the file is asked BEFORE it is replaced: against the state the daemon ran before the change (the newest settled `kea` revision with the row's before digest) or against what the
-        # daemon runs now; a file that is neither is an edit the daemon never loaded, and a settlement that cannot prove the file never overwrites it
-        before = _before_state(server, service, row) if _has_ssh(server) else None
-        wrote = write_file(
-            server,
-            service,
-            before=before if before is not None else (cfg if _has_ssh(server) else None),
-            running=cfg,
-            unproved=_unproved_before_sentence(server) if before is None else "",
-        )
+        # (Q218 BH1 b, Q219) the file is asked BEFORE it is replaced, and the question is the proof: the file is byte for byte the one the Plan proved (the row's `file_sha256`), or Jen's own
+        # rendering. A row that carries none (an earlier release wrote it) cannot be proved, and a settlement that cannot prove the file never overwrites it
+        if _has_ssh(server) and not row.get("file_sha256"):
+            if notes is not None:
+                notes.append(
+                    f"a change of {at} is live and its file write waits: "
+                    + NO_PLANNED_SENTENCE.format(host=server.get("name") or server.get("ssh_host") or "the host")
+                )
+            return cfg, digest, False
+        wrote = write_file(server, service, planned_sha=row.get("file_sha256"))
         if wrote.get("code") == "unloaded-edit":
             if notes is not None:
                 notes.append(f"a change of {at} is live and its file write waits: {wrote.get('detail')}")
@@ -954,7 +987,7 @@ def _reconcile_pending(
         again, digest2, _ = _get(server, service)
         if wrote.get("ok") and again is not None and digest2:
             finished = _rev.finish(row["id"], source="jen", sha256=digest2, cfg=again)
-            record_file_after_write(server, service, f"settled a change of {at}")  # (Q218 D8)
+            record_rendering_after_write(server, service, f"settled a change of {at}")  # (Q218 D8)
             if not finished:  # (Q218 BH2 a) the third store write of this function: a False is no settlement
                 if notes is not None:
                     notes.append(
@@ -974,6 +1007,30 @@ def _reconcile_pending(
             f"a change of {at} is unresolved: the daemon runs {digest}, which is neither the state before it ({row.get('sha256') or 'unknown'}) nor the change; resolve it from Config history"
         )
     return cfg, digest, False
+
+
+def _stale_pending(server: dict, service: str) -> str:
+    """For a restore (Q219): `""` when no pending record is on file, `"stale"` when one is and the daemon does NOT carry its change (it never reached the daemon, the body is damaged, or the daemon runs neither
+    state) - the record is removed, so the restore's own can be written - `"live"` when the daemon carries it (or it is younger than a change takes), and `"unknown"` when the daemon could not be asked."""
+    sid = server.get("id")
+    if sid is None:
+        return ""
+    row = _rev.pending(sid, service)
+    if row is None:
+        return ""
+    candidate = _pending_candidate(row, service)
+    if candidate is not None:
+        cfg, digest, _why = _get(server, service)
+        if cfg is None:
+            return "unknown"
+        if _row_age_seconds(row) < PENDING_SETTLE_SECONDS:
+            return "live"
+        if not (row.get("sha256") and digest == row["sha256"]) and _carries(
+            _section(cfg, service), _section(candidate, service)
+        ):
+            return "live"
+    _rev.discard_pending(sid, service)
+    return "stale"
 
 
 def pending_block(server: dict, service: str) -> str:
@@ -1083,19 +1140,23 @@ def apply(
     source: str = "jen",
     *,
     before_cfg: dict | None = None,
+    planned_sha: str | None = None,
 ) -> dict:
     """Write `cfg` to the daemon over its own API: compare, set, write, verify - the HostResult of the file path's `apply_config`. `expect_hash` is the digest read with the configuration
-    this change was built from (the Plan read); `before_cfg` is that configuration (the undo's target and the API-only guard's reference; read here when a caller has none).
+    this change was built from (the Plan read); `before_cfg` is that configuration (the undo's target and the API-only guard's reference; read here when a caller has none). `planned_sha` (Q219) is the
+    sha256 of the FILE the Plan proved before any `config-set`: the pending row carries it, and step (6) checks the file is still that one. A caller with no Plan (a restore, an import) proves the
+    file itself before anything is sent (`guard`, nothing sent, when it cannot); a rollback has none and rests on Jen's own rendering.
 
     The sequence, in this order and no other:
       (1) `guard_kea_write` (INV-005: the investigation marker) - a refusal is `guard`, nothing sent.
       (2) the API-only guard - a socket, a hook library or a TLS path that differs from the running configuration's is `guard`.
-      (3) the pending record is written (the candidate, with the BEFORE digest), so a reader can settle a half-applied change by content.
+      (3) the pending record is written (the candidate, with the BEFORE digest and the file the Plan proved), so a reader can settle a half-applied change by content.
       (4) `config-hash-get` equals `expect_hash` or `conflict` (nothing sent); no `expect_hash` at all is `conflict` too - a compare that is not asked for is not a compare (Q216 BF3).
       (5) `config-set` -> h1. A refusal: ask the daemon; a missing answer: ask `config-get` and compare canonically.
-      (6) `config-write` (re-sent on a missing answer); a refusal undoes the set (`write-failed`); no answer is never `ok`.
+      (6) the file is still the one the Plan proved or Jen's own rendering (`file_proof`; the daemon's last commit is Jen's own `config-set`, so a load time proves nothing here), else `unverified`
+          with the record kept; then `config-write` (re-sent on a missing answer); a refusal undoes the set (`write-failed`); no answer is never `ok`.
       (7) `config-get` carries h1, or `unverified` (NOT undone: a different digest may be someone else's change).
-      (8) where SSH exists the helper reads the FILE and it must equal what `config-get` reports.
+      (8) where SSH exists the helper reads the FILE and the daemon's `config-get` must carry everything it says.
       (9) the revision recorded (the pending row, finished in place), `{"ok": True, "code": "ok", "sha256": h1}`.
     """
     if service not in SERVICE_KEY:
@@ -1131,33 +1192,59 @@ def apply(
     guarded = _api_only_guard(service, before_cfg, cfg)  # (2)
     if guarded:
         return _result(False, "guard", guarded)
-    daemon_now = None
-    if source == "rollback" and _has_ssh(server):
-        # (Q218 BH1 b) a rollback's `before_cfg` is the candidate Jen built (no written-out defaults for what it added): the file it is compared with at step (6) is the state the daemon runs NOW
-        daemon_now, _now_digest, why = _get(server, service)
-        if daemon_now is None:
-            return _result(False, "noanswer", f"the running configuration of {_name(server)} could not be read ({why})")
-
-    if source != "restore":
-        unreadable = record_unreadable(server, service)
-        if unreadable:
-            return _result(
-                False, "unreadable", unreadable
-            )  # (Q217 AB9) nothing was sent and nobody's hands are needed: the record has to be readable again
+    unreadable = record_unreadable(server, service)
+    if unreadable:
+        return _result(
+            False, "unreadable", unreadable
+        )  # (Q217 AB9) nothing was sent and nobody's hands are needed: the record has to be readable again
+    if source == "restore":
+        # (Q219 BI2 b, AD5) a restore never plants a second pending row (the store refuses one): over a LIVE record - the daemon runs a change whose file write is owed - it asks for the settlement first;
+        # over a stale one (the daemon runs neither state, the change never reached it, the body is damaged) the restore IS the way out, as it has always been, and supersedes it
+        stale = _stale_pending(server, service)
+        if stale == "live":
+            return _unproved(
+                "unverified",
+                f"settle the unresolved change on {_name(server)} first - Settle it now on its Write mode card",
+            )
+        if stale == "unknown":
+            return _unproved(
+                "unverified",
+                f"an earlier change on {_name(server)} is unresolved and the daemon did not answer, so a restore cannot be placed over it",
+            )
+    else:
         blocked = pending_block(server, service)
         if blocked:
             return _unproved("unverified", blocked)
+    if planned_sha is None and source != "rollback" and _has_ssh(server):
+        # (Q219) a caller with no Plan (a restore, an import) proves the file itself, BEFORE anything is sent: the proof is true now, while no pending row makes the daemon's last commit Jen's own
+        refusal, proof = _ask_the_file(server, service)
+        if refusal is not None:
+            return _result(False, "guard", refusal["detail"])
+        planned_sha = proof["sha256"]
 
     pending_id = None
     if sid is not None:  # (3)
-        pending_id = _rev.record(sid, service, cfg, expect_hash or "", summary, hash_kind="kea", source=PENDING)
+        try:
+            pending_id = _rev.record(
+                sid,
+                service,
+                cfg,
+                expect_hash or "",
+                summary,
+                hash_kind="kea",
+                source=PENDING,
+                file_sha256=planned_sha if _has_ssh(server) else None,
+            )
+        except Exception as e:  # (Q219 BI2 c, AD9) a store that RAISES is the same refusal as one that answers None
+            logger.warning("kea_api_config: the pending record could not be written: %s", type(e).__name__)
+            pending_id = None
         if (
             pending_id is None
         ):  # (Q218 BH2 b) a change nobody can find the record of is never sent: the daemon would run it with nothing on file to settle it by
             return _result(
                 False,
                 "unreadable",
-                "the record of this change could not be written to Config history; nothing was sent - the database refused the row",
+                "the record of this change could not be written to Config history; nothing was sent - the database refused the row, or an earlier change on this server is still on record",
             )
 
     def _drop_pending():
@@ -1199,12 +1286,12 @@ def apply(
 
     if _has_ssh(
         server
-    ):  # (6) the file `config-write` is about to replace carries the state this change was built from, or is the state the daemon ran: else an edit the daemon never loaded
-        refusal = _ask_the_file(server, service, before_cfg, running=daemon_now)
+    ):  # (6) the file `config-write` is about to replace is still the one the Plan proved (or Jen's own rendering): else an edit the daemon never loaded
+        refusal, _proof = _ask_the_file(server, service, planned_sha=planned_sha)
         if refusal is not None:
             return _unproved(  # the daemon took the change and the file waits: nothing is undone, and the pending row STAYS - `_reconcile_pending` settles it by content
                 "unverified",
-                f"the change is live in the daemon on {_name(server)} but its file was not written: {refusal.get('detail')}; the record of the change stays",
+                f"live in the daemon on {_name(server)}, not yet in its file: {refusal.get('detail')}; the record of the change stays",
                 before_hash=expect_hash or now,
                 after_hash=h1,
             )
@@ -1249,7 +1336,9 @@ def apply(
             # (Q217 AB8) the daemon proved the write (its digest is the set's); a file that cannot be READ BACK is not a difference - a write's own guards decide
             note = f"the file on {_name(server)} could not be read back; Config history carries what the daemon runs"
             raw_sha = None
-        elif file_cfg is None or not same_modulo_defaults(file_cfg, got, service):
+        elif file_cfg is None or not file_in_daemon(
+            file_cfg, got, service
+        ):  # Kea's own rendering carries everything the daemon runs (Q219, Decided 16)
             return _unproved(
                 "unverified",
                 f"the file on {_name(server)} does not carry what the daemon runs"
@@ -1267,8 +1356,8 @@ def apply(
             _rev.discard_pending(
                 sid, service
             )  # (fix row 2) an unresolved row an earlier crash left is superseded by a change that stood
-    if raw_sha and sid is not None and not str(raw_sha).startswith(_host._CANONICAL_SENTINEL_PREFIX):
-        _rev.record(sid, service, got, raw_sha, summary or f"{source} {service}", hash_kind="raw", source=source)
+    if raw_sha and sid is not None:
+        record_rendering_after_write(server, service, summary or f"{source} {service}", cfg=got, raw=raw_sha)
     if not finished:
         # (Q218 BH2 c) the pending row is the ONE record of what the daemon runs: it is not discarded, and the change is not "ok" - the next change, or Settle it now, finishes it by content
         return _unproved(
@@ -1287,7 +1376,7 @@ def revert(
     return apply(server, service, copy.deepcopy(cfg), expect_hash, summary, source="rollback", before_cfg=before_cfg)
 
 
-def record_after_file_write(server: dict, service: str, summary: str, source: str = "jen") -> bool:
+def record_daemon_after_file_change(server: dict, service: str, summary: str, source: str = "jen") -> bool:
     """A change reached this server by the FILE path (its daemon was restarted on the new file): record what the daemon runs NOW as a `kea` row, from `config-get`, so the next API write
     does not read this one as somebody else's change. Best effort and never raises: a daemon that does not answer records nothing, and the next read captures it as it would any hand edit."""
     sid = server.get("id")
@@ -1325,14 +1414,13 @@ def api_daemon_differs(server: dict, service: str) -> str:
             f"the daemon on {_name(server)} runs a configuration that is not the one Jen last recorded for it (the daemon {digest[:12]}, Jen's record {str(last['sha256'])[:12]}); "
             "restore or resolve it from Config history first"
         )
-    file_cfg, raw = _host.read_config_versioned(server, service, capture=False)
-    if file_cfg is None:
-        return ""
-    agrees, where = compare(server, service, file_cfg, live)
-    if agrees:
-        return ""
+    proof = file_proof(
+        server, service, capture=False
+    )  # (Q219, Decided 16) the daemon's own clock, not a model of its defaults
+    if proof["how"] != "none":
+        return ""  # a file that cannot be read is not a difference either: the write's own guards decide
     return (
-        f"the daemon on {_name(server)} runs a configuration its file does not carry ({where + '; ' if where else ''}the daemon {digest[:12]}, the file {str(raw or 'unknown')[:12]}); "
+        f"the daemon on {_name(server)} runs a configuration its file does not carry ({proof['why']}; the daemon {digest[:12]}, the file {str(proof['sha256'] or 'unknown')[:12]}); "
         "restore or resolve it from Config history first"
     )
 
@@ -1510,7 +1598,7 @@ def probe_gate(server: dict, source: str = "jen") -> str:
         )  # (the caller names the server: "❌ kea-d: ...")
     return (
         "" if source in ("rollback", "restore") else refusal_sentence(server)
-    )  # a rollback puts back a change that DID stand on this server, and a restore is the way out the failure's own line names (Q216 AA14): a remembered refusal must not stop either
+    )  # a rollback puts back a change that DID stand on this server, and a restore is the way out of a REFUSED write (Q216 AA14, Q219 BI2 d): a remembered refusal must not stop either. A restart of Kea (or a reload of its configuration) is the way out of an UNLOADED edit - the attention note names which
 
 
 def refusal_sentence(server: dict) -> str:
@@ -1647,16 +1735,28 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False, consen
             out["include_unavailable"] = str(check.get("detail") or check.get("code") or "the helper did not answer")[
                 :300
             ]
-        file_cfg, _raw = _host.read_config_versioned(server, service, capture=False)
-        if file_cfg is None or cfg is None:
-            out["agree"] = None
-        else:
-            out["agree"], where = compare(server, service, file_cfg, cfg)
-            if out["agree"] is False:
-                out["agree_at"] = where
-            out["defaults"] = defaults_for(server, service)[
-                1
-            ]  # the version and the vector the compare used (the card says when none covered it)
+        out["agree"] = None
+        out["proof"] = None
+        out["file_written_at"] = None
+        out["daemon_loaded_at"] = None
+        if cfg is not None:
+            # (Q219) the facts are the proof's: `agree` is True when the file is Jen's own rendering, the one the Plan proved or one the daemon has loaded, False when it is none of them, None when it
+            # cannot be read. While a change is pending the proof is asked against the file it planned over (Decided 5).
+            planned = None
+            if sid is not None:
+                try:
+                    planned = (_rev.pending(sid, service) or {}).get("file_sha256")
+                except _rev.RevisionStoreUnreadable:
+                    planned = None
+            proof = file_proof(server, service, planned_sha=planned, capture=False)
+            out["proof"] = proof["how"]
+            out["file_written_at"] = proof["mtime"]
+            out["daemon_loaded_at"] = proof["loaded_at"]
+            if proof["how"] in ("rendering", "planned", "loaded"):
+                out["agree"] = True
+            elif proof["how"] == "none":
+                out["agree"] = False
+                out["agree_at"] = proof["where"] or proof["why"]
         if check.get("ok") and check.get("may_write"):
             refused = None  # evidence: the host says the daemon's account may write its file
     else:

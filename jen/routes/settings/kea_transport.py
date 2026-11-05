@@ -84,6 +84,7 @@ def switch_kea_transport(server_id):
             server.get("name") or str(server_id),
             f"write mode {__write_mode.mode_word(result.get('from'))} -> {__write_mode.mode_word(result.get('to'))}; consents: {', '.join(result.get('consents') or []) or 'none'}"
             + (f"; ignored: {', '.join(result['ignored'])}" if result.get("ignored") else "")
+            + ("; refusal cleared" if result.get("refusal_cleared") else "")
             + (f"; baseline revision #{result['revision']}" if result.get("revision") else ""),
         )
         __caps.invalidate(server_id)

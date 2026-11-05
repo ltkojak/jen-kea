@@ -323,42 +323,49 @@ updater's allowlist.
 - `tests/test_kea_changeset_transports.py::TestAnAdminIsNotToldAHostFactByAChangeSetLine`
 - `tests/e2e/test_write_mode_journeys.py::test_a_box_in_the_hidden_panel_is_not_a_consent`
 
-### CFG-004 - A file is the daemon's configuration only when each says everything the other says (but Kea's own written-out defaults)
-**Rule.** Whether the file on a Kea host is the configuration its daemon runs is asked in BOTH directions: everything the file says is carried by the daemon, AND every key the daemon runs that is not one of Kea's own written-out defaults (the daemon's own answer, recorded per minor version) is in the file. A key deleted from the file is a difference, never an agreement, so a `config-write` cannot destroy the deletion without the named consent; a file or a daemon that cannot be read is not a difference in either direction (the write's own guards decide).
-**Established.** Q217 (AB6, AB8).
-**Enforced at.** `jen/services/kea_api_config.py` (`_walk`, `_lacks`, `file_in_daemon`, `compare`, `load_vector`).
+### CFG-004 - A file is the daemon's configuration when the daemon loaded it after it was written, or it is Jen's own rendering or the file the Plan proved; a model of Kea's defaults never decides
+**Rule.** Whether the file on a Kea host may be replaced by the daemon's `config-write` is answered by facts the host and the daemon give themselves, never by a model of Kea inside Jen (`file_proof`, the one definition): the file's sha256 is the newest `rendering` row's - the file Kea itself wrote after a change over the API (R); or it is byte for byte the file the Plan proved before any `config-set` (P); or the daemon last committed a configuration at or after the file was written - the host's one clock: `mtime <= now - reload`, from helper build 22's `config-loaded` - AND the file is in the daemon one way (a reload that did not take is not a load) AND no change of Jen's is pending (then the daemon's last commit is Jen's own `config-set` and the time proves nothing) (L). In that order; none of them is a refusal that prints both times. A file that cannot be read, or a host that cannot say, is never overwritten without the named consent. The comparison with Kea's written-out defaults survives for one job: naming a path in the sentence, best effort - it decides nothing, and the verdicts are identical with the vector absent and with every key a default.
+**Established.** Q217 (AB6, AB8), Q218 (D1), Q219 (AD1, AD20, AD21: the third kind - built-in, inherited, derived - a recording cannot tell apart; the fourth patch to a model is the proof).
+**Enforced at.** `jen/services/kea_api_config.py` (`file_proof`, `compare`, `_ask_the_file`), `jen/services/kea_host.py` (`read_config_proof`), `jen-kea-helper` (`op_config_loaded`, build 22), `jen/services/config_revisions.py` (`latest_rendering`).
 **Tests.**
+- `tests/test_kea_api_config.py::TestTheProofIsTheDaemonsOwnAnswer`
+- `tests/test_kea_api_config.py::TestFileProofOrder`
+- `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender`
 - `tests/test_kea_api_config.py::TestADeletionIsADifference`
-- `tests/test_kea_api_config.py::TestADefaultIsJudgedByItsValueToo`
-- `tests/test_kea_api_config.py::TestKeaWritesItsDefaultsOut`
 - `tests/test_kea_api_config.py::TestAScalarIsJudgedByItsValueToo`
-- `tests/test_kea_defaults_recording.py::TestWhatIsRecorded`
-- `tests/kea_compat/test_config_write.py::test_12_the_defaults_kea_writes_out` (the daemon's own answer, per Kea minor)
+- `tests/test_kea_helper.py::TestConfigLoadedOp`
+- `tests/test_kea_host.py::TestReadConfigProof`
+- `tests/test_config_revisions.py::TestLatestRendering`
 
-### CFG-005 - A `config-write` is sent only after the file it replaces has been read into Config history and compared with the configuration the change was built from
-**Rule.** The daemon's `config-write` renders ITS configuration over the file on its host, so whatever the file carries that the daemon never loaded is destroyed. It is therefore sent only by `kea_api_config` (`_send_write`, the one sender), and only after `_ask_the_file`: on a server with an SSH host the file is READ (capturing: an edit is an `external` row in Config history before it can be lost) and compared, in both directions, with the configuration the change was built from - the state before it - or with what the daemon runs now (a file that IS the daemon's configuration loses nothing). A difference is refused with the path (`unloaded-edit`, nothing sent) unless `discard_file_edit` was given on THIS act and the facts called for it; a file that cannot be read, or a caller with no state to prove it against, is refused too. A settlement of a pending change (the Plan's, and *Settle it now*) proves the file against the newest settled `kea` revision with the row's before digest, and when none is on record it does not overwrite the file.
-**Established.** Q218 (AC1, AC2, AC14).
-**Enforced at.** `jen/services/kea_api_config.py` (`write_file`, `_ask_the_file`, `_send_write`, `_reconcile_pending`, `apply` step (6)), `jen/services/config_revisions.py` (`by_digest`), `jen/services/kea_transport_switch.py` (`_to_api`, `_to_file`: the only callers that pass `discard`).
+### CFG-005 - A `config-write` is sent only after the file it replaces has been read into Config history and proved: the daemon loaded it, it is Jen's own rendering, or it is the file the Plan proved
+**Rule.** The daemon's `config-write` renders ITS configuration over the file on its host, so whatever the file carries that the daemon never loaded is destroyed. It is therefore sent only by `kea_api_config` (`_send_write`, the one sender), and only after `_ask_the_file`, which is `file_proof` and nothing else: on a server with an SSH host the file is READ (capturing: an edit is an `external` row in Config history before it can be lost) and proved (CFG-004). A `none` is refused with the times and the path (`unloaded-edit`, nothing sent) unless `discard_file_edit` was given on THIS act and the facts called for it; a file that cannot be read is refused with or without it. The Plan proves BEFORE any `config-set` and carries the proved file's sha256 as `planned_sha`; `apply` records it in the pending row and step (6) checks the file is still that one (or Jen's own rendering); a settlement of a pending change (the Plan's, and *Settle it now*) writes only over the file the row's `file_sha256` names, and a row that carries none - an earlier release wrote it - is refused with the restart sentence. A caller with no Plan (a restore, an import) proves the file itself before anything is sent.
+**Established.** Q218 (AC1, AC2, AC14), Q219 (AD1).
+**Enforced at.** `jen/services/kea_api_config.py` (`write_file`, `_ask_the_file`, `_send_write`, `_reconcile_pending`, `apply` steps (3) and (6)), `jen/services/kea_changeset.py` (`_unloaded_edit`: the Plan's proof), `jen/services/kea_transport_switch.py` (`_to_api`, `_to_file`: the only callers that pass `discard`).
 **Tests.**
 - `tests/test_kea_api_config.py::TestWriteFileAsksTheFile`
 - `tests/test_kea_api_config.py::TestTheLiveBranchWaitsOnTheFile`
-- `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_every_write_file_caller_passes_before`
+- `tests/test_kea_api_config.py::TestApplyAsksTheFileAtStepSix`
+- `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_every_write_file_caller_is_one_of_three_and_none_passes_a_before`
 - `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_config_write_has_one_sender_and_it_is_asked_first`
-- `tests/test_kea_changeset_transports.py::TestTheSettlementAsksTheFileFirst`
+- `tests/test_kea_changeset_transports.py::TestThePlanProvesAndTheWriteChecksTheProofHeld`
 - `tests/test_kea_api_config.py::TestAnOwnWriteIsNotChangedOutsideJen`
 - `tests/test_transport_switch.py::TestToApi::test_a_discarded_edit_is_in_config_history_before_the_write`
 - `tests/test_transport_switch.py::TestToApi::test_api_to_api_records_and_does_not_render`
 
-### CFG-006 - A pending or damaged revision is the record of a change the daemon may be running: its write precedes the send, its finish precedes `ok`, the prune never removes it, no reader takes it for the last known state
-**Rule.** A change over the API is recorded as a `pending` revision BEFORE `config-set` and turned into the daemon's own record once the daemon proves it. A record that cannot be WRITTEN stops the change with nothing sent (`unreadable`); a record that cannot be FINISHED is not `ok` (`unverified`) and the row is not discarded - it is the one record of what the daemon runs, and the next change or *Settle it now* finishes it by content; a settlement whose finish fails is not settled. The retention prune never deletes a `pending` or `damaged` row and does not count one among the rows kept; `latest_of_kind` and `by_digest` never return one, so no reader compares the daemon with a digest a damaged row kept. A service section that is no object is a damaged row, not an unresolved candidate.
-**Established.** Q218 (AC3, AC5, AC24, AC28; hypothesis D of Q217's second pass).
-**Enforced at.** `jen/services/kea_api_config.py` (`apply` steps (3) and (9), `_reconcile_pending`, `_pending_candidate`, `_capture`, `api_daemon_differs`), `jen/services/config_revisions.py` (`prune`, `latest_of_kind`, `by_digest`).
+### CFG-006 - A pending or damaged revision is the record of a change the daemon may be running: its write precedes the send, its finish precedes `ok`, the prune never removes it, no reader takes it for the last known state; there is one per server, and it carries the file the Plan proved
+**Rule.** A change over the API is recorded as a `pending` revision BEFORE `config-set` and turned into the daemon's own record once the daemon proves it. A record that cannot be WRITTEN - the store refused the row, raised, or already holds a pending row for that server and service - stops the change with nothing sent (`unreadable`); a record that cannot be FINISHED is not `ok` (`unverified`) and the row is not discarded - it is the one record of what the daemon runs, and the next change or *Settle it now* finishes it by content; a settlement whose finish fails is not settled. At most ONE pending row exists per (server, service) and the STORE keeps it so (`record` answers None for a second); a restore over a live one is refused ("settle the unresolved change first") and over a stale one supersedes it. The row carries `file_sha256`, the file the Plan proved, which the settlement checks. The retention prune never deletes a `pending` or `damaged` row and does not count one among the rows kept; `latest`, `latest_of_kind` and `by_digest` never return one, so no reader compares the daemon with a digest a damaged row kept. A service section that is no object is a damaged row, not an unresolved candidate.
+**Established.** Q218 (AC3, AC5, AC24, AC28; hypothesis D of Q217's second pass), Q219 (AD5, AD9, AD18).
+**Enforced at.** `jen/services/kea_api_config.py` (`apply` steps (3) and (9), `_reconcile_pending`, `_pending_candidate`, `_stale_pending`, `_capture`, `api_daemon_differs`), `jen/services/config_revisions.py` (`record`, `prune`, `latest`, `latest_of_kind`, `by_digest`).
 **Tests.**
 - `tests/test_kea_api_config.py::TestTheRecordIsAPreconditionOfTheSendAndOfOk`
 - `tests/test_kea_api_config.py::TestAPendingOrDamagedRowIsNeverTheLastKnownState`
+- `tests/test_kea_api_config.py::TestARestoreOverALivePendingChangeIsRefused`
+- `tests/test_kea_api_config.py::TestLiveNotYetInItsFileIsTheLine`
 - `tests/test_kea_api_config.py::TestADamagedPendingRecord`
 - `tests/test_config_revisions.py::TestPruneKeepsTheRecordOfAChange`
 - `tests/test_config_revisions.py::TestPruneKeepsTheRecordOfAChange::test_latest_skips_pending_and_damaged`
+- `tests/test_config_revisions.py::TestOnePendingRowPerServer`
+- `tests/test_migrations.py::TestMigration38RevisionsFileSha256`
 
 ### FILE-001 - A secret is private from its first byte; a privileged write never resolves a service-owned parent by pathname
 **Rule.** No secret is written by a plain `open`, redirect or `cp`; a `.prev` is made only by the certificate set's commit; root never copies anything into the app tree from the config or content directories.

@@ -216,6 +216,75 @@ class TestPruneKeepsTheRecordOfAChange:
         assert rev.by_digest(_SID, "dhcp6", "same") is None
 
 
+class TestOnePendingRowPerServer:
+    """Q219 (BI2 b, AD5): at most one `pending` row per (server, service) is the STORE's rule - `record(source="pending")` answers None when one exists, so a restore over a live pending change can no
+    longer plant a second record that every reader takes for the newest."""
+
+    def test_a_second_pending_row_is_not_written(self):
+        first = rev.record(_SID, "dhcp4", _cfg(1), "a" * 64, "the change", hash_kind="kea", source="pending")
+        second = rev.record(_SID, "dhcp4", _cfg(2), "b" * 64, "another", hash_kind="kea", source="pending")
+        assert first is not None and second is None
+        assert rev.pending(_SID, "dhcp4")["id"] == first
+        assert len([r for r in rev.list_revisions(_SID, "dhcp4") if r["source"] == "pending"]) == 1
+
+    def test_a_pending_row_of_another_server_or_service_is_not_in_the_way(self):
+        assert rev.record(_SID, "dhcp4", _cfg(1), "a" * 64, "x", hash_kind="kea", source="pending") is not None
+        assert rev.record(_SID, "dhcp6", _cfg(1), "a" * 64, "x", hash_kind="kea", source="pending") is not None
+        assert rev.record(_SID + 1, "dhcp4", _cfg(1), "a" * 64, "x", hash_kind="kea", source="pending") is not None
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM kea_config_revisions WHERE server_id=%s", (_SID + 1,))
+
+    def test_a_settled_row_never_blocks_a_pending_one_and_a_finished_one_frees_the_slot(self):
+        rev.record(_SID, "dhcp4", _cfg(1), "s" * 64, "settled", hash_kind="kea", source="jen")
+        first = rev.record(_SID, "dhcp4", _cfg(2), "a" * 64, "the change", hash_kind="kea", source="pending")
+        assert first is not None
+        assert rev.finish(first, source="jen", sha256="c" * 64)
+        assert rev.record(_SID, "dhcp4", _cfg(3), "c" * 64, "the next", hash_kind="kea", source="pending") is not None
+
+    def test_a_non_pending_row_is_never_refused_for_a_pending_one_on_record(self):
+        rev.record(_SID, "dhcp4", _cfg(1), "a" * 64, "the change", hash_kind="kea", source="pending")
+        assert rev.record(_SID, "dhcp4", _cfg(2), "f" * 64, "an external edit", hash_kind="raw", source="external")
+
+    def test_the_proved_file_rides_on_the_pending_row_only_as_given(self):
+        rid = rev.record(
+            _SID, "dhcp4", _cfg(1), "a" * 64, "the change", hash_kind="kea", source="pending", file_sha256="d" * 64
+        )
+        assert rev.pending(_SID, "dhcp4")["file_sha256"] == "d" * 64
+        rev.finish(rid, source="jen", sha256="e" * 64)
+        other = rev.record(_SID, "dhcp4", _cfg(2), "f" * 64, "no file", hash_kind="kea", source="pending")
+        assert rev.pending(_SID, "dhcp4")["id"] == other and rev.pending(_SID, "dhcp4")["file_sha256"] is None
+
+
+class TestLatestRendering:
+    """Q219 (Decided 8 and 14): `latest_rendering` is the newest `raw` row whose source is `rendering` - the file Kea wrote after a change over the API - and nothing else. A file Jen wrote over SSH
+    whose restart failed is a `jen`/`rollback`/`restore` raw row and is NEVER Jen's rendering."""
+
+    def test_only_a_rendering_row_counts(self):
+        for source in ("jen", "rollback", "restore", "baseline", "external", "switch", "pending", "damaged"):
+            rev.record(_SID, "dhcp4", _cfg(1), f"{source:0<64}"[:64], source, hash_kind="raw", source=source)
+        assert rev.latest_rendering(_SID, "dhcp4") is None
+
+    def test_a_rendering_row_of_the_wrong_hash_kind_does_not_count(self):
+        rev.record(_SID, "dhcp4", _cfg(1), "k" * 64, "the daemon's digest", hash_kind="kea", source="rendering")
+        assert rev.latest_rendering(_SID, "dhcp4") is None
+
+    def test_the_newest_rendering_wins_and_is_per_server_and_service(self):
+        rev.record(_SID, "dhcp4", _cfg(1), "1" * 64, "first", hash_kind="raw", source="rendering")
+        newest = rev.record(_SID, "dhcp4", _cfg(2), "2" * 64, "second", hash_kind="raw", source="rendering")
+        rev.record(_SID, "dhcp4", _cfg(3), "3" * 64, "a later hand edit", hash_kind="raw", source="external")
+        rev.record(_SID, "dhcp6", _cfg(4), "4" * 64, "another service", hash_kind="raw", source="rendering")
+        got = rev.latest_rendering(_SID, "dhcp4")
+        assert got["id"] == newest and got["sha256"] == "2" * 64
+        assert rev.latest_rendering(_SID + 99, "dhcp4") is None
+
+    def test_a_rendering_is_a_settled_row_the_prune_and_latest_treat_as_jens(self):
+        for n in range(4):
+            rev.record(_SID, "dhcp4", _cfg(n), f"{n}" * 64, f"r{n}", hash_kind="raw", source="rendering")
+        assert rev.latest(_SID, "dhcp4")["source"] == "rendering"
+        rev.prune(_SID, "dhcp4", keep=2)
+        assert [r["summary"] for r in rev.list_revisions(_SID, "dhcp4")] == ["r3", "r2"]
+
+
 class TestDiff:
     def test_unified_diff_lines_have_no_trailing_newline(self):
         out = rev.diff("a\nb\nc", "a\nB\nc")
@@ -397,6 +466,57 @@ class TestHistoryRestoreRoute:
         r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
         assert r.status_code == 200
         assert calls["apply"][0]["expect_sha256"] == "live-sha-on-host"
+
+
+class TestARestoreTakesTheChangeLockOnBothBranches:
+    """Q219 BI2 e (AD-Q2): the file branch of the restore took no change lock while the api branch did, so a restore could run beside a change, a switch or an import. Both answer the busy sentence."""
+
+    @pytest.mark.parametrize("transport", ["file", "api"])
+    def test_a_restore_under_a_held_lock_is_the_busy_sentence_and_nothing_is_sent(
+        self, logged_in_client, hist, monkeypatch, transport
+    ):
+        import threading
+
+        from jen import extensions
+        from jen.services import kea_changeset as cs
+
+        server = {
+            "id": _HSID,
+            "name": "kea-hist",
+            "ssh_host": "10.0.0.5",
+            "ssh_user": "kea",
+            "api_url": "http://127.0.0.1:9/",
+        }
+        if transport == "api":
+            server["config_transport"] = "api"
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1", hash_kind="raw")
+        sent = []
+        for name in ("test_config", "apply_config", "service_action"):
+            monkeypatch.setattr(
+                f"jen.services.kea_host.{name}", lambda *a, _n=name, **k: sent.append(_n) or {"ok": True}
+            )
+        monkeypatch.setattr(
+            "jen.services.kea_api_config.apply", lambda *a, **k: sent.append("api-apply") or {"ok": True}
+        )
+        monkeypatch.setattr(cs, "CHANGE_WAIT_SECONDS", 0.2)
+        release, holding = threading.Event(), threading.Event()
+
+        def hold():
+            with cs.change_lock(5):
+                holding.set()
+                release.wait(5)
+
+        t = threading.Thread(target=hold)
+        t.start()
+        holding.wait(2)
+        try:
+            r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        finally:
+            release.set()
+            t.join(3)
+        assert cs.BUSY_SENTENCE[1:].encode() in r.data, r.data[:400]
+        assert "apply_config" not in sent and "api-apply" not in sent and "service_action" not in sent
 
 
 class TestTheRestoreRouteIsHeldToItsSiblingsGate:

@@ -1400,3 +1400,90 @@ class TestMigration37SubnetNotesBadgeColor:
             assert subnet_tones.tone_for(4239) == "blue"
             cur.execute("DELETE FROM subnet_notes WHERE subnet_id=4239")
             db.commit()
+
+
+class TestMigration38RevisionsFileSha256:
+    """Q219 (v7.0.0-beta.5, BI2 a): `kea_config_revisions.file_sha256 CHAR(64) NULL` - the file the Plan proved, carried by a pending row. One DDL statement with its own guard: added when absent,
+    re-declared when it is there with another type, a rerun over the final state changes nothing, and no row is lost whichever way it is interrupted (the state before 38 is the table without the
+    column, which is also the state a crash before the version was recorded leaves)."""
+
+    @staticmethod
+    def _column(cur):
+        cur.execute(
+            "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'kea_config_revisions' AND COLUMN_NAME = 'file_sha256'"
+        )
+        return cur.fetchone()
+
+    @staticmethod
+    def _row(cur, server_id):
+        cur.execute("DELETE FROM kea_config_revisions WHERE server_id=%s", (server_id,))
+        cur.execute(
+            "INSERT INTO kea_config_revisions (server_id, service, sha256, hash_kind, config, summary, source) "
+            "VALUES (%s, 'dhcp4', %s, 'kea', '{}', 'kept across the migration', 'pending')",
+            (server_id, "a" * 64),
+        )
+
+    def test_registered_and_applied(self):
+        from jen.models.migrations import MIGRATIONS
+
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[38] == "_m038_revisions_file_sha256" and MIGRATIONS[-1][0] >= 38
+        assert 38 in applied_versions()
+
+    def test_the_column_is_a_nullable_char_64(self):
+        with jen_db() as db, db.cursor() as cur:
+            col = self._column(cur)
+        assert (
+            col
+            and col["DATA_TYPE"] == "char"
+            and int(col["CHARACTER_MAXIMUM_LENGTH"]) == 64
+            and col["IS_NULLABLE"] == "YES"
+        )
+
+    def test_an_interrupted_migration_is_finished_by_a_rerun_and_keeps_the_rows(self):
+        from jen.models.migrations import _m038_revisions_file_sha256
+
+        with jen_db() as db, db.cursor() as cur:
+            self._row(cur, 4238)
+            db.commit()
+            cur.execute("ALTER TABLE kea_config_revisions DROP COLUMN file_sha256")  # the state before 38
+            db.commit()
+            assert self._column(cur) is None
+            _m038_revisions_file_sha256(db)
+            db.commit()
+            assert self._column(cur) is not None
+            _m038_revisions_file_sha256(db)  # a rerun over the final state
+            db.commit()
+            cur.execute("SELECT summary, source, file_sha256 FROM kea_config_revisions WHERE server_id=4238")
+            assert cur.fetchone() == {"summary": "kept across the migration", "source": "pending", "file_sha256": None}
+            cur.execute("DELETE FROM kea_config_revisions WHERE server_id=4238")
+            db.commit()
+
+    def test_a_column_of_another_type_is_redeclared_and_its_values_survive(self):
+        from jen.models.migrations import _m038_revisions_file_sha256
+
+        with jen_db() as db, db.cursor() as cur:
+            self._row(cur, 4237)
+            cur.execute("ALTER TABLE kea_config_revisions MODIFY COLUMN file_sha256 VARCHAR(128) NULL")
+            cur.execute("UPDATE kea_config_revisions SET file_sha256=%s WHERE server_id=4237", ("b" * 64,))
+            db.commit()
+            _m038_revisions_file_sha256(db)
+            db.commit()
+            col = self._column(cur)
+            assert col["DATA_TYPE"] == "char" and int(col["CHARACTER_MAXIMUM_LENGTH"]) == 64
+            cur.execute("SELECT file_sha256 FROM kea_config_revisions WHERE server_id=4237")
+            assert cur.fetchone()["file_sha256"] == "b" * 64
+            cur.execute("DELETE FROM kea_config_revisions WHERE server_id=4237")
+            db.commit()
+
+    def test_a_pending_row_carries_the_proved_file_through_the_store(self):
+        from jen.services import config_revisions as rev
+
+        rid = rev.record(
+            4236, "dhcp4", {"Dhcp4": {}}, "c" * 64, "a change", hash_kind="kea", source="pending", file_sha256="d" * 64
+        )
+        try:
+            assert rid is not None and rev.pending(4236, "dhcp4")["file_sha256"] == "d" * 64
+        finally:
+            rev.discard_pending(4236, "dhcp4")

@@ -37,6 +37,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import assert_subnet_access as _assert_subnet_access
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.config_revisions import RevisionStoreUnreadable
 from jen.services.forms import flash_field
 from jen.services.leases_sql import ACTIVE_LEASE4
 
@@ -2512,6 +2513,9 @@ def import_windows_apply(source):
                 )
         except __changeset.ChangeBusy:
             flash(__changeset.BUSY_SENTENCE.capitalize() + ".", "error")
+            return redirect(review_url)
+        except RevisionStoreUnreadable:  # (Q219 BI2 c, AD9) a store that cannot be asked is a sentence, never a 500
+            flash(f"The import was not applied: {__api.unreadable_sentence(primary)}", "error")
             return redirect(review_url)
         if apply_result["code"] == "conflict":
             flash(_conflict_flash(primary.get("name", "the primary server")), "error")

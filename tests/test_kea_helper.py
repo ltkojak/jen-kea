@@ -203,30 +203,58 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 21
+        assert out["helper_build"] == helper.HELPER_BUILD == 22
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
 
 class TestBuildBumpReminder:
-    """v5.66.0-beta.2 (Q104), made strict by Q218 BH6 f (AC20) — tests/kea_helper_build.json pins {"build": N, "sha256": <hash of jen-kea-helper at that build>}.
-    The file's sha MUST equal the pin's and the pin's build MUST equal HELPER_BUILD, so EVERY change to `jen-kea-helper` fails here until the pin is moved - and moving it (with the
-    build bumped) is the acknowledgment. The earlier test passed when `pin.build < HELPER_BUILD`, a branch that never failed again after its first bump (the pin sat at build 18 while the
-    helper went to 21): a ratchet with a 'greater than' branch goes slack after the first bump. A helper change in a later Q moves the pin in the SAME commit."""
+    """v5.66.0-beta.2 (Q104), made strict by Q218 BH6 f (AC20), made a HISTORY by Q219 BI6 a (AD16) - tests/kea_helper_build.json is a list of {"build": N, "sha256": <hash of jen-kea-helper at that build>}.
+    The LAST entry's sha MUST equal the file's and its build MUST equal HELPER_BUILD, so EVERY change to `jen-kea-helper` fails here until the pin is moved; builds strictly increase and no two entries share
+    a build or a sha, so moving the pin means a NEW entry with a NEW build - never the last entry's sha moved in place under the same build, which the strict pin of beta.4 accepted. `RELEASED` carries the sha
+    of every build that shipped in a tag (21: `git show v7.0.0-beta.4:jen-kea-helper`), so a released entry cannot be rewritten either. A helper change in a later Q adds its entry in the SAME commit."""
 
-    def test_file_hash_equals_the_pin_and_the_pin_equals_the_build(self, helper):
+    RELEASED = {21: "0cb830fcf281e8b1f7ff916c940afa6de480c51cffdf80a4f660f71b37f85274"}
+
+    @staticmethod
+    def _history():
+        return json.loads(
+            (pathlib.Path(__file__).resolve().parent / "kea_helper_build.json").read_text(encoding="utf-8")
+        )
+
+    def test_the_last_entry_is_the_file_and_the_build(self, helper):
         import hashlib
 
-        pin_path = pathlib.Path(__file__).resolve().parent / "kea_helper_build.json"
-        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        history = self._history()
+        assert isinstance(history, list) and history, "the pin is a history: a list of {build, sha256}"
+        pin = history[-1]
         actual_sha = hashlib.sha256(_SCRIPT_PATH.read_bytes()).hexdigest()
         assert actual_sha == pin["sha256"], (
-            f"jen-kea-helper changed (sha256 {actual_sha} != pinned {pin['sha256']}): bump HELPER_BUILD and move tests/kea_helper_build.json "
-            "(its build AND its sha256) in the same commit"
+            f"jen-kea-helper changed (sha256 {actual_sha} != pinned {pin['sha256']}): bump HELPER_BUILD and ADD an entry to tests/kea_helper_build.json "
+            "(a new build AND its sha256) in the same commit"
         )
         assert pin["build"] == helper.HELPER_BUILD, (
             f"the pin says build {pin['build']} and HELPER_BUILD reads {helper.HELPER_BUILD} - the two must never disagree"
         )
+
+    def test_builds_strictly_increase_and_no_build_or_sha_repeats(self):
+        history = self._history()
+        builds = [h["build"] for h in history]
+        shas = [h["sha256"] for h in history]
+        assert builds == sorted(set(builds)), "builds must strictly increase, none twice"
+        assert len(set(shas)) == len(shas), "no two builds share a sha: a build is a CHANGE of the file"
+
+    def test_a_released_build_keeps_its_released_sha(self):
+        by_build = {h["build"]: h["sha256"] for h in self._history()}
+        for build, sha in self.RELEASED.items():
+            assert by_build.get(build) == sha, f"build {build} shipped with {sha}; its entry is never rewritten"
+
+    def test_moving_the_last_entry_in_place_is_caught(self, helper):
+        """The beta.4 pin accepted a sha moved in place under the same build: here a history whose newest entry carries the OLD build with a NEW sha has two entries with one build."""
+        history = self._history()
+        moved = [*history[:-1], {"build": history[-2]["build"], "sha256": history[-1]["sha256"]}]
+        builds = [h["build"] for h in moved]
+        assert builds != sorted(set(builds))
 
 
 class TestHelperVersionEnvelope:
@@ -383,6 +411,118 @@ class TestReadConfig:
         p.write_bytes(pretty.encode())
         _code, out, _ = _run(helper, "read-config", {"service": "dhcp4", "path": str(p)})
         assert out["sha256"] == hashlib.sha256(pretty.encode()).hexdigest()
+
+
+class TestConfigLoadedOp:
+    """Build 22 (Q219): `config-loaded` answers what `read-config` answers PLUS the file's size and mtime, the host's `now` and the daemon's own `status-get` - one clock on one host. The proof Live API
+    rests on (`mtime <= now - reload`) is made from this answer, so every error in it must be in the fail-closed direction: `now` is read BEFORE the daemon is asked, and `mtime` rounds UP."""
+
+    SOCKET_CONFIG = {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl.sock"}]}}
+
+    def _file(self, helper, tmp_path, monkeypatch, config=None, mtime=None):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        monkeypatch.setattr(helper, "_socket_path_ok", lambda name: True)
+        p = tmp_path / "kea-dhcp4.conf"
+        raw = json.dumps(self.SOCKET_CONFIG if config is None else config)
+        p.write_bytes(raw.encode())
+        if mtime is not None:
+            os.utime(p, (mtime, mtime))
+        return p, raw
+
+    def test_the_path_and_service_walls_are_read_configs(self, helper, tmp_path, monkeypatch):
+        self._file(helper, tmp_path, monkeypatch)
+        code, out, _ = _run(helper, "config-loaded", {"service": "dhcp4", "path": "/tmp/evil.conf"})
+        assert out == {"ok": False, "error": "not-allowed"}
+        code, out, _ = _run(helper, "config-loaded", {"service": "dhcp9", "path": str(tmp_path / "kea-dhcp4.conf")})
+        assert out == {"ok": False, "error": "not-allowed"}
+
+    def test_a_missing_file_a_symlink_and_a_bad_body_are_read_configs_errors(self, helper, tmp_path, monkeypatch):
+        p, _raw = self._file(helper, tmp_path, monkeypatch)
+        link = tmp_path / "kea-dhcp6.conf"
+        link.symlink_to(p)
+        code, out, _ = _run(helper, "config-loaded", {"service": "dhcp6", "path": str(link)})
+        assert out["ok"] is False and out["error"] == "symlink"
+        code, out, _ = _run(helper, "config-loaded", {"service": "dhcp4", "path": str(tmp_path / "nothing.conf")})
+        assert out == {"ok": False, "error": "missing"}
+        p.write_text("{ this is not json")
+        code, out, _ = _run(helper, "config-loaded", {"service": "dhcp4", "path": str(p)})
+        assert out["ok"] is False and out["error"] == "invalid-json"
+
+    def test_the_answer_carries_the_files_facts_and_the_daemons_own(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
+        p, raw = self._file(helper, tmp_path, monkeypatch, mtime=1_800_000_000)
+        monkeypatch.setattr(
+            helper,
+            "_ask_daemon",
+            lambda spec, command: (
+                {"result": 0, "arguments": {"pid": 321, "uptime": 900, "reload": 40}}
+                if (spec, command) == (("unix", "/run/kea/kea4-ctrl.sock"), "status-get")
+                else None
+            ),
+        )
+        code, out, _ = _run(helper, "config-loaded", {"service": "dhcp4", "path": str(p)})
+        assert code == 0 and out["ok"] is True
+        assert out["config"] == self.SOCKET_CONFIG and out["sha256"] == hashlib.sha256(raw.encode()).hexdigest()
+        assert out["size"] == len(raw) and out["mtime"] == 1_800_000_000
+        assert out["daemon"] == {"pid": 321, "uptime": 900, "reload": 40} and out["socket_note"] == ""
+        assert isinstance(out["now"], int) and abs(out["now"] - int(__import__("time").time())) < 5
+
+    def test_a_file_with_no_socket_is_daemon_null_with_the_note(self, helper, tmp_path, monkeypatch):
+        p, _raw = self._file(helper, tmp_path, monkeypatch, config={"Dhcp4": {}})
+        _code, out, _ = _run(helper, "config-loaded", {"service": "dhcp4", "path": str(p)})
+        assert out["ok"] is True and out["daemon"] is None and out["socket_note"] == "no control socket in the config"
+
+    @pytest.mark.parametrize(
+        "reply,note",
+        [
+            (None, "the socket did not answer"),
+            ({"result": 1, "text": "no"}, "status-get answered 1"),
+            ({"result": 0, "arguments": {"pid": 1, "uptime": 5}}, "status-get carries no reload"),
+            ({"result": 0, "arguments": {"pid": 1, "uptime": 5, "reload": "soon"}}, "status-get carries no reload"),
+            ({"result": 0, "arguments": {"pid": 1, "uptime": 5, "reload": True}}, "status-get carries no reload"),
+        ],
+    )
+    def test_a_daemon_that_does_not_answer_a_reload_is_null_never_a_guess(
+        self, helper, tmp_path, monkeypatch, reply, note
+    ):
+        p, _raw = self._file(helper, tmp_path, monkeypatch)
+        monkeypatch.setattr(helper, "_ask_daemon", lambda spec, command: reply)
+        _code, out, _ = _run(helper, "config-loaded", {"service": "dhcp4", "path": str(p)})
+        assert out["ok"] is True and out["daemon"] is None and out["socket_note"] == note
+
+    def test_now_is_read_before_the_daemon_is_asked_and_mtime_rounds_up(self, helper, tmp_path, monkeypatch):
+        """Decided 15: both errors are in the fail-closed direction - `now - reload` is never later than the daemon's true commit, and a write in the same second as the commit reads as AFTER it."""
+        import types
+
+        p, _raw = self._file(helper, tmp_path, monkeypatch, mtime=100.1)
+        order = []
+        clock = iter([1000, 1005])
+
+        def fake_time():
+            order.append("time")
+            return next(clock)
+
+        def ask(spec, command):
+            order.append("ask")
+            return {"result": 0, "arguments": {"pid": 1, "uptime": 50, "reload": 30}}
+
+        monkeypatch.setattr(
+            helper,
+            "time",
+            types.SimpleNamespace(
+                time=fake_time, monotonic=__import__("time").monotonic, sleep=__import__("time").sleep
+            ),
+        )
+        monkeypatch.setattr(helper, "_ask_daemon", ask)
+        _code, out, _ = _run(helper, "config-loaded", {"service": "dhcp4", "path": str(p)})
+        assert order == ["time", "ask"], order
+        assert out["now"] == 1000
+        assert out["mtime"] == 101  # an st_mtime of 100.1 reads 101
+
+    def test_the_op_is_in_the_table_and_the_build_is_22(self, helper):
+        assert helper._OPS["config-loaded"] is helper.op_config_loaded
+        assert helper.HELPER_BUILD == 22 and len(helper._OPS) == 18
 
 
 def _fake_kea_bin(helper, monkeypatch, tmp_path, name, exit_code=0, stdout="", stderr="", marker=None):

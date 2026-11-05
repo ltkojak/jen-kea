@@ -20,6 +20,12 @@ from tests.e2e._fake_kea_server import TWO_SUBNET_DHCP4, StatefulKeaServer
 
 
 @pytest.fixture(autouse=True)
+def file_proof_follows_the_read(monkeypatch):
+    """Q219: the proof reads the file through `kea_host.read_config_proof`; a test that stubs the plain read gets a proof derived from it (written before the daemon's last load)."""
+    world.proof_follows_the_read(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
 def _quiet(monkeypatch):
     monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: "")
     monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
@@ -28,7 +34,7 @@ def _quiet(monkeypatch):
     monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.4)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def store(monkeypatch):
     return world.install_store(monkeypatch)
 

@@ -82,7 +82,7 @@ def _mode(path):
 
 class TestTheOpsExistAtBuild19:
     def test_the_build_and_the_ops(self, helper):
-        assert helper.HELPER_BUILD == 21
+        assert helper.HELPER_BUILD == 22
         for op in ("config-write-check", "allow-config-write", "deny-config-write"):
             assert op in helper._OPS
 

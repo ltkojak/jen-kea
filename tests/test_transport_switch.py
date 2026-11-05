@@ -30,6 +30,13 @@ def _quiet(monkeypatch):
     monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.4)
 
 
+@pytest.fixture(autouse=True)
+def file_proof_follows_the_read(monkeypatch):
+    """Q219: the proof reads the file through `kea_host.read_config_proof`; the tests that stub the plain read get a proof derived from it (written before the daemon's last load). The tests about the
+    clock use `world.host_reads_the_fakes_file`, which installs the `HostClock` world instead."""
+    world.proof_follows_the_read(monkeypatch)
+
+
 @pytest.fixture
 def store(monkeypatch):
     return world.install_store(monkeypatch)
@@ -269,9 +276,69 @@ class TestToApi:
 
         monkeypatch.setattr(api, "probe", probe_then_edit)
         r = sw.switch(srv(daemon, "file", ssh=True), "api", consents=ALL - {"confirm_no_include"})
-        assert not r["ok"] and "carries an edit the daemon has not loaded" in r["line"], r
+        assert not r["ok"] and "has not loaded that edit" in r["line"], r
         assert "config-write" not in daemon.commands and "refused" not in (probes.get(5) or {})
         assert written == []
+
+    def test_the_stored_facts_after_the_switch_are_the_facts_after_its_write(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        """Q219 BI3 a (AD2): the switch's own `config-write` makes the file the daemon's rendering, so the facts the consent is written over are the facts AFTER it - `agree` True by Jen's own rendering - and
+        the consent the act used up (`discard_file_edit`) is not left on record to open the gate on a later edit."""
+        w = world.ProofWorld(daemon, srv(daemon, "file", ssh=True), store, monkeypatch)
+        server = srv(daemon, "file", ssh=True)
+        monkeypatch.setattr(
+            kea_host,
+            "config_write_check",
+            lambda s, svc: {"ok": True, "may_write": True, "includes": [], "mode": "0640", "account": {"name": "_kea"}},
+        )
+        w.hand_edit({**daemon.file, "user-context": {"jen-note": "an edit the daemon never loaded"}})
+        consents = (ALL - {"confirm_no_include"}) | {"discard_file_edit"}
+        r = sw.switch(server, "api", consents=consents, actor="root")
+        assert r["ok"], r
+        stored = probes[5]
+        assert stored["agree"] is True and stored["proof"] == "rendering", stored
+        assert {"discard_file_edit", "consent_rendering"} <= set(r["consents"]), "the audit row says what was USED"
+        assert "discard_file_edit" not in stored["consents"], "and the used-up consent is not on record"
+        assert api.probe_gate(dict(server, config_transport="api")) == ""
+
+    def test_a_switch_over_an_unsettled_change_is_refused_with_the_pending_sentence(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        """Q219 Decided 7: `switch()` asks `record_unreadable` then `pending_block` for an `api` or a `file` target; `off` asks neither."""
+        host(monkeypatch, daemon)
+        cfg = {"Dhcp4": copy.deepcopy(daemon.running)}
+        stranger = copy.deepcopy(daemon.running)
+        stranger["valid-lifetime"] = 11
+        store.record(5, "dhcp4", cfg, "a" * 64, "left by a crash", hash_kind="kea", source="pending")
+        daemon.set_running(stranger)  # neither state: the row stays and blocks
+        for target in ("api", "file"):
+            r = sw.switch(srv(daemon, "api" if target == "file" else "off", ssh=True), target, consents=ALL)
+            assert not r["ok"] and ("unresolved" in r["line"] or "neither" in r["line"]), (target, r)
+        assert written == []
+        assert sw.switch(srv(daemon, "api", ssh=True), "off")["ok"], "off asks neither"
+
+    def test_a_switch_off_live_api_clears_the_refusal(self, daemon, store, probes, written, monkeypatch):
+        """Q219 BI3 b (AD3): a remembered `config-write` refusal belongs to Live API; it is cleared when the server leaves it (after the setting is written), on every transition whose current is `api`."""
+        host(monkeypatch, daemon)
+        for target in ("off", "file"):
+            probes[5] = {
+                "at": "2099-01-01T00:00:00+00:00",
+                "config_api": True,
+                "refused": "Permission denied",
+                "bound": "t",
+            }
+            r = sw.switch(srv(daemon, "api", ssh=True), target)
+            assert r["ok"] and r.get("refusal_cleared") is True, (target, r)
+            assert "refused" not in probes[5]
+        probes[5] = {
+            "at": "2099-01-01T00:00:00+00:00",
+            "config_api": True,
+            "refused": "Permission denied",
+            "bound": "t",
+        }
+        assert sw.switch(srv(daemon, "off", ssh=True), "file")["ok"]
+        assert probes[5].get("refused") == "Permission denied", "a server that was not in Live API keeps what it had"
 
 
 class TestToFile:

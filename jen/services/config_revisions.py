@@ -11,8 +11,9 @@ of the DECRYPTED bodies is stable) and decrypted transparently by every
 reader below (a legacy plaintext row from before v5.20.0 passes through
 `decrypt_secret()` unchanged).
 
-`source ∈ {jen, external, restore, baseline, rollback, switch, pending}` (the last three: Q212 - `rollback` a revert Jen made, `switch` the baseline a transport switch
-records, `pending` a candidate written BEFORE a `config-set` and turned into `jen` once the daemon's own answer proves it):
+`source ∈ {jen, external, restore, baseline, rollback, switch, pending, rendering}` (Q212: `rollback` a revert Jen made, `switch` the baseline a transport switch
+records, `pending` a candidate written BEFORE a `config-set` and turned into `jen` once the daemon's own answer proves it; Q219: `rendering` the file Kea wrote after a change over the API -
+`raw`, and the one source `latest_rendering` reads):
 - `jen`      — a config Jen applied via a form or route.
 - `external` — the file changed on the host between Jen writes (detected
                by `read_config_versioned`, v2 helper only).
@@ -94,6 +95,7 @@ def record(
     *,
     hash_kind: str,
     source: str = "jen",
+    file_sha256: str | None = None,
 ) -> int | None:
     """Insert a revision (config canonicalised and encrypted here) and
     prune. Returns the new row id, or None on a DB error (never raises
@@ -101,15 +103,39 @@ def record(
     triggered it). `hash_kind` is required (v5.20.0) — every caller
     knows whether `sha256` is a raw-bytes hash or a canonical-JSON one;
     guessing here would be exactly the ambiguity this column exists to
-    remove."""
+    remove.
+
+    Q219 (BI2): at most one `pending` row per (server, service) is THE STORE'S rule, not a habit of its callers - recording a second answers None (and logs at warning), so a restore over
+    a live pending change can no longer plant a second record that every reader would then take for the newest. The change lock is the mutex (no `FOR UPDATE`): every writer of a pending row
+    holds it. `file_sha256` is the sha256 of the file the Plan proved before any `config-set`, carried by a pending row so the settlement writes only over that same file."""
     body = encrypt_secret(canonical(cfg))
     try:
         with _jen_db() as db, db.cursor() as cur:
+            if source == "pending":
+                cur.execute(
+                    "SELECT id FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source='pending' LIMIT 1",
+                    (server_id, service),
+                )
+                if cur.fetchone() is not None:
+                    logger.warning(
+                        f"config_revisions.record: a pending change is already on record for server {server_id}/{service}; a second is not written"
+                    )
+                    return None
             cur.execute(
                 "INSERT INTO kea_config_revisions "
-                "(server_id, service, sha256, hash_kind, config, summary, username, source) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (server_id, service, sha256 or "", hash_kind, body, (summary or "")[:255], _current_username(), source),
+                "(server_id, service, sha256, hash_kind, config, summary, username, source, file_sha256) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    server_id,
+                    service,
+                    sha256 or "",
+                    hash_kind,
+                    body,
+                    (summary or "")[:255],
+                    _current_username(),
+                    source,
+                    file_sha256 or None,
+                ),
             )
             rev_id = cur.lastrowid
         prune(server_id, service)
@@ -175,6 +201,28 @@ def latest_of_kind(server_id: int, service: str, hash_kind: str) -> dict | None:
     return _decrypted(row)
 
 
+def latest_rendering(server_id: int, service: str) -> dict | None:
+    """The newest `rendering` row of (server, service) (Q219, Decided 8 and 14): the FILE Kea itself wrote after a change over the API - `hash_kind='raw'`, `source='rendering'`, and nothing else.
+    `file_proof`'s (R): a file whose sha256 is this row's is Jen's own rendering. Neither `jen`, `rollback` nor `restore` rows count - the file path's `apply_config` records those for a file Jen wrote
+    over SSH whose restart may have failed - and neither does a pending, damaged, external or baseline row. None when there is none, and None when the store cannot be asked: the proof then falls
+    through to the host's own clock."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind='raw' AND source='rendering' ORDER BY id DESC LIMIT 1",
+                (server_id, service),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.warning(f"config_revisions.latest_rendering failed: {e}")
+        return None
+    try:
+        return _decrypted(row)
+    except Exception as e:  # a row whose body cannot be decrypted proves nothing
+        logger.warning(f"config_revisions.latest_rendering could not decrypt its row: {e}")
+        return None
+
+
 def by_digest(server_id: int, service: str, sha256: str, hash_kind: str = "kea") -> dict | None:
     """The newest SETTLED revision of `hash_kind` whose `sha256` is `sha256` (Q218 BH1 b): the configuration the daemon ran when it had that digest - what a settlement proves a file against. A
     `pending` or `damaged` row is excluded (its `sha256` is the BEFORE digest of a change in flight, and its body is the change). None when there is none, and None when the store cannot be asked:
@@ -200,7 +248,8 @@ def by_digest(server_id: int, service: str, sha256: str, hash_kind: str = "kea")
 
 def pending(server_id: int, service: str) -> dict | None:
     """The `source="pending"` revision of this (server, service) - the candidate a change over the API wrote BEFORE it sent `config-set` (Q212, BB1 c) - or None.
-    Its `sha256` is the digest the daemon had BEFORE the change. There is at most one: an apply deletes or finishes its own row, and a reader classifies a leftover (a writer settles it).
+    Its `sha256` is the digest the daemon had BEFORE the change, its `file_sha256` the file the Plan proved (Q219; None on a row an earlier release wrote). There is at most one, and the STORE
+    keeps it so (`record` answers None for a second): an apply deletes or finishes its own row, and a reader classifies a leftover (a writer settles it).
     Raises `RevisionStoreUnreadable` when the store cannot be read: None means there is no pending row, nothing else."""
     try:
         with _jen_db() as db, db.cursor() as cur:

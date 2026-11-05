@@ -271,7 +271,7 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 21  # build 21 (Q217, beta.3): the basename and state-file walls are `fullmatch`, so a trailing newline is refused. Build 20 (Q212, beta.2): the tick's re-verify reopens only the session whose marker it finds (a NEW session's marker is not a stray). Build 19 (Q212): `config-write-check`, `allow-config-write` and `deny-config-write` (who may write the daemon's own file), a backup that is never group-writable, and a timer tick that keeps verifying after a restore; build 18: v5.69.0-beta.1 (Q170): the walls (credentials, sockets, symlinks, descriptors, the bounded restore lock, the completion validator) around what the helper does as root; build 17: v5.68.0-beta.31 (Q168): a restore is recorded only on the daemon's own answer (config-get on its control socket), Kea's completion id read across rotation, or a NEW active process - a reload-start line is never evidence, an unreadable state file is never "no session"; build 16: v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
+JEN_HELPER_SHIPPED_BUILD = 22  # build 22 (Q219, beta.5): `config-loaded` - the file's size and mtime and the host's `now` from one clock, and the daemon's own `status-get` (pid, uptime, reload) on its control socket: the proof that a file is one the daemon has loaded. Build 21 (Q217, beta.3): the basename and state-file walls are `fullmatch`, so a trailing newline is refused. Build 20 (Q212, beta.2): the tick's re-verify reopens only the session whose marker it finds (a NEW session's marker is not a stray). Build 19 (Q212): `config-write-check`, `allow-config-write` and `deny-config-write` (who may write the daemon's own file), a backup that is never group-writable, and a timer tick that keeps verifying after a restore; build 18: v5.69.0-beta.1 (Q170): the walls (credentials, sockets, symlinks, descriptors, the bounded restore lock, the completion validator) around what the helper does as root; build 17: v5.68.0-beta.31 (Q168): a restore is recorded only on the daemon's own answer (config-get on its control socket), Kea's completion id read across rotation, or a NEW active process - a reload-start line is never evidence, an unreadable state file is never "no session"; build 16: v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
@@ -688,6 +688,63 @@ def _read_config_versioned(
     if not sha:
         sha = _canonical_sentinel(cfg)
     return cfg, sha
+
+
+def read_config_proof(
+    server: dict, service: str, *, capture: bool = True
+) -> tuple[dict | None, str | None, dict | None]:
+    """`(cfg, sha256, times)` of the config file in ONE helper call - the read `kea_api_config.file_proof` makes and no other (Q219, BI1 b). `times` is the host's own answer to `config-loaded` (helper build
+    22): `{"mtime", "now", "size", "daemon": {"pid", "uptime", "reload"} | None, "socket_note"}`, all read on the HOST, so the file's age and the daemon's last load are one clock. A host below build 22
+    (`unknown-op`) or with no helper at all answers through `read-config` / the legacy read with `times=None`: the legacy path does NOT assemble times from `stat` over SSH and `status-get` over the
+    Control Agent - two clocks are not one - and the proof says the daemon's own load time needs build 22. The capture rule is `read_config_versioned`'s own: the content the proof reads is in Config
+    history before anything can overwrite it. A transport error is a failed read, `(None, None, None)`, as `read_config_versioned` treats one."""
+    try:
+        return _read_config_proof(server, service, capture=capture)
+    except Exception as e:
+        if not _is_transport_error(e):
+            raise  # a bug or a database error is not an SSH failure and is not reported as one
+        logger.warning(f"config-loaded on {server.get('name') or server.get('ssh_host')}: {type(e).__name__}: {e}")
+        return None, None, None
+
+
+def _read_config_proof(
+    server: dict, service: str, *, capture: bool = True
+) -> tuple[dict | None, str | None, dict | None]:
+    path = _conf_path(server, service)
+    try:
+        resp = helper_call(server, "config-loaded", {"service": service, "path": path})
+    except HelperMissing:
+        _flag_legacy(server)
+        cfg, sha = _read_config_versioned(server, service, capture=capture)
+        return cfg, sha, None
+    except HelperUnreachable as e:
+        logger.warning(f"config-loaded could not connect to {server.get('name')}: {e}")
+        return None, None, None
+    except HelperError as e:
+        logger.warning(f"config-loaded helper error on {server.get('name')}: {e}")
+        return None, None, None
+    _record_from_resp(server.get("id"), resp)
+    if not resp.get("ok"):
+        if resp.get("error") == "unknown-op":
+            cfg, sha = _read_config_versioned(server, service, capture=capture)  # a host below build 22
+            return cfg, sha, None
+        return None, None, None
+    cfg, sha = resp.get("config"), resp.get("sha256")
+    if cfg is None:
+        return None, None, None
+    daemon = resp.get("daemon") if isinstance(resp.get("daemon"), dict) else None
+    times = {
+        "mtime": resp["mtime"] if isinstance(resp.get("mtime"), int) and not isinstance(resp["mtime"], bool) else None,
+        "now": resp["now"] if isinstance(resp.get("now"), int) and not isinstance(resp["now"], bool) else None,
+        "size": resp.get("size"),
+        "daemon": daemon,
+        "socket_note": str(resp.get("socket_note") or ""),
+    }
+    if capture:
+        _capture_baseline_or_external_change(server.get("id"), service, cfg, sha)
+    if not sha:
+        sha = _canonical_sentinel(cfg)
+    return cfg, sha, times
 
 
 def read_kind(server: dict, service: str) -> str | None:
@@ -1126,6 +1183,7 @@ def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err), "via": "helper"}
 
 
+CONFIG_LOADED_MIN_HELPER_BUILD = 22  # Q219: `config-loaded`; a host below it proves a file only when it is Jen's own rendering or the one the Plan proved, and the card says "press Update helper"
 CONFIG_WRITE_MIN_HELPER_BUILD = 19  # Q212: the three `*-config-write*` ops; a build-18 host reads as not having them and the card says "build 19 available"
 INVESTIGATION_MIN_HELPER_BUILD = 18  # v5.69.0-beta.1 (Q170): the walls around what the helper reads and connects to as root, the completion validator and the bounded restore are build 18; v5.68.0-beta.31 (Q168): the restore verified from the daemon's own answer and the one state loader are build 17 (build 16: the authoritative host record and the timer ops; build 15: the self-restore itself)
 

@@ -20,6 +20,8 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} This revision was recorded because the config on the host changed <strong>outside Jen</strong> — someone edited <code>{{ rev.service }}</code>'s config file directly.</div>
 {% elif rev.source == 'baseline' %}
 <div class="alert alert-info">{{ icon("info") }} This is the first config Jen saw on this host for <code>{{ rev.service }}</code> — recorded so history has a starting point, not a change Jen made.</div>
+{% elif rev.source == 'rendering' %}
+<div class="alert alert-info">{{ icon("info") }} This is the file Kea itself wrote for <code>{{ rev.service }}</code> after a change over the API (its own rendering, in its own form). Jen treats a file with exactly these bytes as one the daemon runs.</div>
 {% elif rev.source == 'pending' %}
 <div class="alert alert-warning">{{ icon("triangle-alert") }} This change was written before the daemon was asked and the daemon's own answer has not settled it: it may or may not be what the daemon runs. The next change, or Settle it now on the server's Write mode card, settles it by content; if it stays here, restore the revision you want.</div>
 {% elif rev.source == 'damaged' %}

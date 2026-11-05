@@ -1335,6 +1335,21 @@ def _m037_subnet_notes_badge_color(db):
     logger.info("Migration 37: subnet_notes.badge_color")
 
 
+def _m038_revisions_file_sha256(db):
+    """
+    v7.0.0-beta.5 (Q219, BI2 a) - the pending row of a change over the API carries the sha256 of the FILE the Plan proved before any `config-set` (`kea_config_revisions.file_sha256`, CHAR(64)
+    NULL): the settlement of a crashed change writes over a file only when it is still byte for byte the one the Plan proved. NULL is every row that was written before it (and every row that is not
+    a pending one); a pending row with none is refused by the settlement. ONE DDL statement, with its own guard: added only when absent, re-declared when it is there with another type, so a crash
+    before the version was recorded is finished by the next start and a rerun over the final state changes nothing. No row is touched.
+    """
+    with db.cursor() as cur:
+        if _column_missing(cur, "kea_config_revisions", "file_sha256"):
+            cur.execute("ALTER TABLE kea_config_revisions ADD COLUMN file_sha256 CHAR(64) NULL")
+        elif _column_type(cur, "kea_config_revisions", "file_sha256") != "char(64)":
+            cur.execute("ALTER TABLE kea_config_revisions MODIFY COLUMN file_sha256 CHAR(64) NULL")
+    logger.info("Migration 38: kea_config_revisions.file_sha256")
+
+
 _LEGACY_TELEGRAM_KEYS = ("telegram_token", "telegram_chat_id", "telegram_enabled")
 
 
@@ -1479,6 +1494,11 @@ MIGRATIONS = [
         37,
         "subnet_notes.badge_color: a subnet's badge tone, one of seven, NULL is blue (v5.70.0-beta.1, Q205)",
         _m037_subnet_notes_badge_color,
+    ),
+    (
+        38,
+        "kea_config_revisions.file_sha256: the file the Plan proved, carried by the pending row (v7.0.0-beta.5, Q219)",
+        _m038_revisions_file_sha256,
     ),
 ]
 

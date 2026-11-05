@@ -21,6 +21,12 @@ class FakeHelper:
         self.helper_version = 2  # what `version` and every envelope reports
         self.helper_build = None  # `helper_build` in the `version` reply (None: a pre-v7 helper that reports none)
         self.builds = {}  # server id -> build, overriding `helper_build` for that one server
+        # Q219: `config-loaded` (helper build 22). By default the host's file was written BEFORE the daemon's last load (`loaded=True`); a test about a hand edit sets `loaded = False` (the file is newer
+        # than the load), `config_loaded_unsupported` is a host below build 22 (`unknown-op`), `daemon_answers = False` a control socket that does not answer.
+        self.loaded = True
+        self.config_loaded_unsupported = False
+        self.daemon_answers = True
+        self.times_now = 1_800_000_000
 
     def helper_call(self, server, op, payload=None, timeout=60):
         from jen.services import kea_host
@@ -44,6 +50,28 @@ class FakeHelper:
             if cfg is None:
                 return {"ok": False, "error": "missing", "helper_version": self.helper_version}
             out = {"ok": True, "config": cfg, "helper_version": self.helper_version}
+            sha = self.shas.get((sid, payload.get("service")))
+            if sha is not None:
+                out["sha256"] = sha
+            return out
+
+        if op == "config-loaded" and (sid, payload.get("service")) not in self.responses:
+            if self.config_loaded_unsupported:
+                return {"ok": False, "error": "unknown-op", "helper_version": self.helper_version}
+            cfg = self.configs.get((sid, payload.get("service")))
+            if cfg is None:
+                return {"ok": False, "error": "missing", "helper_version": self.helper_version}
+            now = self.times_now
+            out = {
+                "ok": True,
+                "config": cfg,
+                "size": 1,
+                "mtime": now - 100 if self.loaded else now - 5,
+                "now": now,
+                "daemon": {"pid": 1, "uptime": 3600, "reload": 50} if self.daemon_answers else None,
+                "socket_note": "" if self.daemon_answers else "the socket did not answer",
+                "helper_version": self.helper_version,
+            }
             sha = self.shas.get((sid, payload.get("service")))
             if sha is not None:
                 out["sha256"] = sha

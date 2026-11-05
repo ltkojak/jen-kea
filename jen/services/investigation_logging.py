@@ -564,7 +564,7 @@ def _record_daemon_after_reload(server: dict) -> None:
         from jen.services import kea_api_config as _api
 
         if _api.declared_transport(server) == "api":
-            _api.record_after_file_write(server, "dhcp4", "investigation logging", source="jen")
+            _api.record_daemon_after_file_change(server, "dhcp4", "investigation logging", source="jen")
     except Exception as e:
         logger.warning(
             f"investigation_logging: the daemon's configuration after the reload was not recorded: {e}"

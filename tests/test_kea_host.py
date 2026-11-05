@@ -1455,6 +1455,127 @@ class TestReadConfigVersioned:
         assert not calls
 
 
+class TestReadConfigProof:
+    """Q219 BI1 b: `read_config_proof` is ONE helper call (`config-loaded`) whose answer carries the file's content, its sha256 and the host's own times; a host below build 22 (`unknown-op`) or with no helper
+    answers through the plain read with `times=None` - two clocks are never assembled into one - and a transport error is a failed read, never an exception."""
+
+    FILE = {"Dhcp4": {"valid-lifetime": 3600}}
+
+    def _helper(self, monkeypatch, reply, calls=None):
+        def helper_call(server, op, payload=None, timeout=60):
+            if calls is not None:
+                calls.append(op)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply(op) if callable(reply) else reply
+
+        monkeypatch.setattr(kea_host, "helper_call", helper_call)
+        monkeypatch.setattr(kea_host, "record_helper_status", lambda *a, **k: None)
+        monkeypatch.setattr(kea_host, "helper_status", dict)
+        monkeypatch.setattr(kea_host, "_capture_baseline_or_external_change", lambda *a, **k: None)
+
+    def test_one_call_carries_the_content_the_sha_and_the_times(self, monkeypatch):
+        calls = []
+        self._helper(
+            monkeypatch,
+            {
+                "ok": True,
+                "config": self.FILE,
+                "sha256": "a" * 64,
+                "size": 33,
+                "mtime": 100,
+                "now": 200,
+                "daemon": {"pid": 1, "uptime": 90, "reload": 30},
+                "socket_note": "",
+            },
+            calls,
+        )
+        cfg, sha, times = kea_host.read_config_proof(SERVER, "dhcp4")
+        assert cfg == self.FILE and sha == "a" * 64 and calls == ["config-loaded"], calls
+        assert times == {
+            "mtime": 100,
+            "now": 200,
+            "size": 33,
+            "daemon": {"pid": 1, "uptime": 90, "reload": 30},
+            "socket_note": "",
+        }
+
+    def test_a_host_that_has_no_daemon_answer_says_so_with_its_note(self, monkeypatch):
+        self._helper(
+            monkeypatch,
+            {
+                "ok": True,
+                "config": self.FILE,
+                "sha256": "a" * 64,
+                "mtime": 100,
+                "now": 200,
+                "daemon": None,
+                "socket_note": "the socket did not answer",
+            },
+        )
+        _cfg, _sha, times = kea_host.read_config_proof(SERVER, "dhcp4")
+        assert times["daemon"] is None and times["socket_note"] == "the socket did not answer"
+
+    def test_a_host_below_build_22_answers_unknown_op_and_the_read_is_the_plain_one_with_no_times(self, monkeypatch):
+        calls = []
+
+        def reply(op):
+            if op == "config-loaded":
+                return {"ok": False, "error": "unknown-op"}
+            return {"ok": True, "config": self.FILE, "sha256": "b" * 64}
+
+        self._helper(monkeypatch, reply, calls)
+        cfg, sha, times = kea_host.read_config_proof(SERVER, "dhcp4")
+        assert cfg == self.FILE and sha == "b" * 64 and times is None
+        assert calls == ["config-loaded", "read-config"], "the legacy path does not assemble times from two clocks"
+
+    def test_no_helper_at_all_is_the_legacy_read_with_no_times(self, monkeypatch):
+        self._helper(monkeypatch, kea_host.HelperMissing("sudo: a password is required"))
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda server: None)
+        monkeypatch.setattr(
+            kea_host, "_open_ssh", lambda server: (_ for _ in ()).throw(kea_host.HelperUnreachable("no ssh"))
+        )
+        assert kea_host.read_config_proof(SERVER, "dhcp4") == (None, None, None)
+
+    @pytest.mark.parametrize(
+        "reply",
+        [{"ok": False, "error": "missing"}, {"ok": False, "error": "invalid-json"}, {"ok": False, "error": "symlink"}],
+    )
+    def test_a_refusal_other_than_unknown_op_is_a_failed_read(self, monkeypatch, reply):
+        self._helper(monkeypatch, reply)
+        assert kea_host.read_config_proof(SERVER, "dhcp4") == (None, None, None)
+
+    def test_a_transport_error_is_a_failed_read_never_an_exception(self, monkeypatch):
+        self._helper(monkeypatch, TimeoutError("timed out"))
+        assert kea_host.read_config_proof(SERVER, "dhcp4") == (None, None, None)
+
+    def test_a_bug_is_not_an_ssh_failure(self, monkeypatch):
+        self._helper(monkeypatch, RuntimeError("a bug"))
+        with pytest.raises(RuntimeError):
+            kea_host.read_config_proof(SERVER, "dhcp4")
+
+    def test_the_capture_rule_is_the_plain_reads_and_capture_false_records_nothing(self, monkeypatch):
+        captured = []
+        self._helper(
+            monkeypatch, {"ok": True, "config": self.FILE, "sha256": "a" * 64, "mtime": 1, "now": 2, "daemon": None}
+        )
+        monkeypatch.setattr(kea_host, "_capture_baseline_or_external_change", lambda *a: captured.append(a))
+        kea_host.read_config_proof(SERVER, "dhcp4", capture=False)
+        assert captured == []
+        kea_host.read_config_proof(SERVER, "dhcp4")
+        assert captured == [(1, "dhcp4", self.FILE, "a" * 64)], (
+            "the content the proof reads is in Config history before anything can overwrite it"
+        )
+
+    def test_the_times_the_host_gave_are_integers_or_none(self, monkeypatch):
+        self._helper(
+            monkeypatch,
+            {"ok": True, "config": self.FILE, "sha256": "a" * 64, "mtime": "soon", "now": True, "daemon": None},
+        )
+        _cfg, _sha, times = kea_host.read_config_proof(SERVER, "dhcp4")
+        assert times["mtime"] is None and times["now"] is None
+
+
 class TestApplyGuarded:
     def test_expect_sha256_is_passed_to_the_helper(self, monkeypatch, quiet_status):
         made = _connect_seq(monkeypatch, [(json.dumps({"ok": True, "sha256": "written", "helper_version": 2}), "")])
@@ -2285,7 +2406,7 @@ class TestMissingBinaryTellsTheRealReason:
         import re
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper").read_text(encoding="utf-8")
-        assert int(re.search(r"^HELPER_BUILD = (\d+)$", src, re.M).group(1)) == kea_host.JEN_HELPER_SHIPPED_BUILD == 21
+        assert int(re.search(r"^HELPER_BUILD = (\d+)$", src, re.M).group(1)) == kea_host.JEN_HELPER_SHIPPED_BUILD == 22
 
 
 class TestReadConfigForAValueNotForHistory:

@@ -1047,6 +1047,9 @@ def _restore_over_api(server, server_id, rev_id, service, cfg, back):
     except __changeset.ChangeBusy:
         flash(__changeset.BUSY_SENTENCE[:1].upper() + __changeset.BUSY_SENTENCE[1:] + ".", "error")
         return back
+    except __rev.RevisionStoreUnreadable:  # (Q219 BI2 c, AD9) a store that cannot be asked is a sentence, never a 500
+        flash(__api.unreadable_sentence(server) + ".", "error")
+        return back
     if res.get("code") == "conflict":
         flash(
             f"The configuration on {name} changed while this restore was being made - it was NOT applied. Reload and try again.",
@@ -1054,7 +1057,13 @@ def _restore_over_api(server, server_id, rev_id, service, cfg, back):
         )
         return back
     if not res.get("ok"):
-        flash(f"Restore failed on {name}: {res.get('detail') or 'unknown error'}", "error")
+        detail = res.get("detail") or "unknown error"
+        if detail.startswith("live in the daemon on "):
+            flash(
+                detail[:1].upper() + detail[1:] + ".", "warning"
+            )  # (Q219 BI2 d, AD18) the change stood: it is live and its file waits - never "failed"
+        else:
+            flash(f"Restore failed on {name}: {detail}", "error")
         if res.get("needs_hands"):
             stored = __changeset.record_attention(
                 server_id, service, f"restore of revision #{rev_id}", "config-api-unverified", server_name=name
@@ -1071,37 +1080,8 @@ def _restore_over_api(server, server_id, rev_id, service, cfg, back):
     return back
 
 
-@bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/restore", methods=["POST"])
-@login_required
-@_superadmin_required
-@_recent_auth_required(
-    minutes=10
-)  # Q203 AS2: the unmasked download of the same revision asks for it; the write of that revision into the daemon's file asks no less
-def config_history_restore(server_id, rev_id):
-    server, deny = _history_gate(server_id)
-    if deny:
-        return deny
-    rev, deny = _get_revision_or_flash(server_id, rev_id)
-    if deny:
-        return deny
-    service = rev["service"]
-    back = redirect(url_for("servers.config_history", server_id=server_id, service=service))
-
-    transport = __changeset._transport(server, service)
-    if str(server.get("config_transport") or "").strip() == "off":
-        flash(f"{server['name']} is Read-only: pick File over SSH or Live API on its Write mode card first.", "error")
-        return back
-    if transport == "off":
-        flash("SSH is not configured for this server.", "error")
-        return back
-    try:
-        cfg = json.loads(rev["config"])
-    except ValueError:
-        flash("This revision's stored config is not valid JSON — cannot restore.", "error")
-        return back
-    if transport == "api":
-        return _restore_over_api(server, server_id, rev_id, service, cfg, back)
-
+def _restore_over_file(server, server_id, rev_id, service, cfg, back):
+    """The file branch of a restore (Q203 AS2): a revision written over the host's config file, then a restart. Called with the change lock held (Q219 BI2 e)."""
     # Q203 AS2: the material-before-reference preflight every other writer of a control socket runs - a revision that names Jen's certificate files is refused while they are absent,
     # and not restarted into a config the daemon cannot load.
     tls_paths = __authoring.referenced_tls_paths(cfg, __tls.remote_tls_paths(service))
@@ -1171,3 +1151,43 @@ def config_history_restore(server_id, rev_id):
         )
     __user.audit("RESTORE_KEA_CONFIG", server["name"], f"service={service} revision={rev_id}")
     return back
+
+
+@bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/restore", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(
+    minutes=10
+)  # Q203 AS2: the unmasked download of the same revision asks for it; the write of that revision into the daemon's file asks no less
+def config_history_restore(server_id, rev_id):
+    server, deny = _history_gate(server_id)
+    if deny:
+        return deny
+    rev, deny = _get_revision_or_flash(server_id, rev_id)
+    if deny:
+        return deny
+    service = rev["service"]
+    back = redirect(url_for("servers.config_history", server_id=server_id, service=service))
+
+    transport = __changeset._transport(server, service)
+    if str(server.get("config_transport") or "").strip() == "off":
+        flash(f"{server['name']} is Read-only: pick File over SSH or Live API on its Write mode card first.", "error")
+        return back
+    if transport == "off":
+        flash("SSH is not configured for this server.", "error")
+        return back
+    try:
+        cfg = json.loads(rev["config"])
+    except ValueError:
+        flash("This revision's stored config is not valid JSON — cannot restore.", "error")
+        return back
+    if transport == "api":
+        return _restore_over_api(server, server_id, rev_id, service, cfg, back)
+
+    # (Q219 BI2 e, AD-Q2) the file branch takes the change lock as the api branch does: a restore never runs beside a change, a switch or an import
+    try:
+        with __changeset.change_lock():
+            return _restore_over_file(server, server_id, rev_id, service, cfg, back)
+    except __changeset.ChangeBusy:
+        flash(__changeset.BUSY_SENTENCE[:1].upper() + __changeset.BUSY_SENTENCE[1:] + ".", "error")
+        return back

@@ -91,6 +91,8 @@ class Target:
     revert_failed: bool = False
     # Q212: how THIS target is read, tested, written and put back - "file" (the host's config file, then a restart) or "api" (the daemon's own API, live at once, no restart)
     transport: str = "file"
+    # Q219: the sha256 of the FILE the Plan proved on this server before any `config-set` (an api target with an SSH host): the pending row carries it and step (6) of `apply` checks the file is still that one
+    planned_sha: str | None = None
 
     @property
     def key(self):
@@ -308,22 +310,16 @@ def _run_change(service: str, mutate_fn, summary: str, **kwargs) -> ChangeSetRes
         return ChangeSetResult("aborted", "busy", [("error", f"❌ {BUSY_SENTENCE}")])
 
 
-def _unloaded_edit(server: dict, service: str, cfg: dict, name: str) -> str:
-    """For an api target WITH SSH: the file on the host must carry what the daemon runs, or `config-write` would overwrite a hand edit without a word (the F8 hazard). "" when they agree."""
+def _unloaded_edit(server: dict, service: str, cfg: dict, name: str) -> tuple[str, str | None]:
+    """For an api target WITH SSH: the file on the host must be one the daemon has loaded, Jen's own rendering - the proof (`kea_api_config.file_proof`) - or `config-write` would overwrite a hand edit
+    without a word (the F8 hazard). `(sentence, sha256)`: `""` and the sha256 of the file the Plan proved when it is, else the proof's sentence and None. Asked BEFORE any `config-set`: the daemon's
+    last commit is then not Jen's own, and the time the daemon last loaded a configuration proves what it proves (Q219)."""
     if not server.get("ssh_host") or service not in _api.SERVICE_KEY:
-        return ""
-    file_cfg, _raw = _host.read_config_versioned(server, service, capture=False)
-    host = server.get("name") or server.get("ssh_host")
-    if file_cfg is None:
-        return (
-            f"the file on {host} could not be read, so a change cannot be proved against it (check the SSH connection)"
-        )
-    agrees, where = _api.compare(
-        server, service, file_cfg, cfg
-    )  # (Q217 BG3 b, AB6) both directions, and the first place they differ
-    if not agrees:
-        return _api.unloaded_edit_sentence(server, where)  # (Q218 BH1) one sentence, the sender's
-    return ""
+        return "", None
+    proof = _api.file_proof(server, service)
+    if not proof["ok"]:
+        return proof["why"], None
+    return "", proof["sha256"]
 
 
 def _run_change_unlocked(
@@ -443,6 +439,7 @@ def _run_change_unlocked(
         name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
         try:
             read_errors: list[str] = []
+            planned_sha: str | None = None
             if kind == "api":
                 _api.refresh_if_stale(
                     server, service
@@ -486,7 +483,7 @@ def _run_change_unlocked(
                     return ChangeSetResult(
                         "aborted", "needs-hands", lines, needs_hands=[name], needs_hands_ids=[server.get("id")]
                     )
-                unloaded = _unloaded_edit(server, service, cfg, name)
+                unloaded, planned_sha = _unloaded_edit(server, service, cfg, name)
                 if unloaded:
                     lines.append(("error", f"❌ {name}: {unloaded}"))
                     return ChangeSetResult("aborted", "error", lines)
@@ -537,6 +534,7 @@ def _run_change_unlocked(
                             else tuple(tls_paths or ())
                         ),
                         transport=kind,
+                        planned_sha=planned_sha if kind == "api" else None,
                     )
                 )
                 continue
@@ -582,7 +580,16 @@ def _run_change_unlocked(
     # file targets first (written, not yet live), then api targets (live at once): the window in which servers disagree is the restarts only
     for t in [t for t in targets if t.transport != "api"] + [t for t in targets if t.transport == "api"]:
         if t.transport == "api":
-            res = _safe(_api.apply, t.server, service, t.after_cfg, t.before_sha, summary, before_cfg=t.before_cfg)
+            res = _safe(
+                _api.apply,
+                t.server,
+                service,
+                t.after_cfg,
+                t.before_sha,
+                summary,
+                before_cfg=t.before_cfg,
+                planned_sha=t.planned_sha,
+            )
         else:
             res = _safe(
                 _host.apply_config,
@@ -777,7 +784,7 @@ def _run_change_unlocked(
         if (
             _declared(t.server) == "api" and restart
         ):  # a FILE write onto a server whose transport is api: record what its daemon runs now, so the next API write is not read as external
-            _safe(_api.record_after_file_write, t.server, service, summary)
+            _safe(_api.record_daemon_after_file_change, t.server, service, summary)
     return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets], covered_ids=[t.key for t in targets])
 
 
@@ -1073,7 +1080,7 @@ ATTENTION_CATEGORIES = {
     "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
     "tls-superseded": "A server that is not dialed over https now may still run a certificate from a CA Jen has since replaced. When it is dialed over https again, remove its direct socket and set it up again.",
     "record-forgotten": "Jen's record of a certificate was forgotten on the operator's word while the daemon may still present it; its expiry is not watched. A later setup of the socket, or its removal, ends this.",
-    "config-api-unverified": "A configuration Jen wrote over the daemon's own API (a restored revision, or an import) was not confirmed by the daemon's own answer, so the daemon may or may not be running it, and its file may or may not carry it. Ask the daemon, then restore the revision you want from Config history.",
+    "config-api-unverified": "A configuration Jen wrote over the daemon's own API (a change, a restored revision, or an import) was not confirmed by the daemon's own answer, or the daemon took it and its file was not written, so the daemon may or may not be running it, and its file may or may not carry it. Ask the daemon. If it runs the change and the file waits, an edit on the host the daemon never loaded is the way out of it: restart Kea there (or reload its configuration), then Settle it now on the server's Write mode card; after a write Kea itself REFUSED, restore the revision you want from Config history.",
     "config-restart-failed": "A config Jen wrote to the Kea host (a restored revision, or an import) is on disk, but the daemon did not restart on it, so it may be stopped or still running the config it had before. A restart that works ends this.",
     "rotation-pending": "A CA rotation changed what this server's daemon depends on and has not finished recording it. Health names it; the next Rotate, or Forget stale records, finishes it from Jen's files - it is not acknowledged away.",
 }

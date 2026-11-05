@@ -338,7 +338,7 @@ class TestAFilePathWriteToAnApiServerComparesFirst:
         assert any(r["hash_kind"] == "kea" and r["source"] == "jen" for r in store.rows)
 
     def test_a_restart_records_the_daemons_digest(self, daemon, helper, store):
-        """Q217 AB1 - `record_after_file_write` pinned from the change set's caller: the `kea` row carries the digest the daemon answers with after the restart."""
+        """Q217 AB1 - `record_daemon_after_file_change` pinned from the change set's caller: the `kea` row carries the digest the daemon answers with after the restart."""
         server = self._wire(daemon, helper, {"Dhcp4": copy.deepcopy(daemon.running)})
         assert cs.apply_change("dhcp4", lifetime(5), "logging on", servers=[server], transport="file").status == "ok"
         row = [r for r in store.rows if r["hash_kind"] == "kea" and r["source"] == "jen"][-1]
@@ -355,9 +355,10 @@ class TestAnApiServerWithSshIsCheckedForAnUnloadedEdit:
     def test_a_file_that_carries_an_edit_the_daemon_has_not_loaded_aborts(self, daemon, helper, store):
         server = api_server(daemon, ssh_host="10.0.0.1")
         helper.configs[(1, "dhcp4")] = {"Dhcp4": {"valid-lifetime": 1}}
+        helper.loaded = False  # written after the daemon's last load
         result = cs.apply_change("dhcp4", lifetime(5), "x", servers=[server])
         assert result.status == "aborted"
-        assert any("carries an edit the daemon has not loaded" in t for _k, t in result.lines)
+        assert any("has not loaded that edit" in t and "Dhcp4.valid-lifetime" in t for _k, t in result.lines)
         assert "config-set" not in daemon.commands
 
     def test_an_unreadable_file_aborts_too(self, daemon, helper, store):
@@ -536,58 +537,64 @@ EDIT_KEY = "user-context"
 EDIT = {"jen-note": "the operator's own edit, never loaded by the daemon"}
 
 
-class TestTheSettlementAsksTheFileFirst:
-    """Q218 BH1 c (AC1, the P1): the WORLD where both guards fire - a live pending row (a process died between `config-set` and the verify) AND a hand edit of the file on the Kea host. The Plan used to settle
-    the row (a `config-write`) BEFORE it asked about the edit, so the question was asked of a file already replaced and the set went on over a destroyed edit. Now the sender asks."""
+class TestThePlanProvesAndTheWriteChecksTheProofHeld:
+    """Q218 BH1 c (AC1, the P1), rewritten by Q219 (BI1 e, AD1): the WORLD where both guards fire - a live pending row (a process died between `config-set` and the verify) AND a hand edit of the file on the
+    Kea host - and the world the model of Kea's defaults could not tell (a scalar deleted from the file). The Plan proves the file BEFORE any `config-set` and keeps its sha; the pending row carries it; the write
+    checks it held. The sender asks, and what it asks is the host's and the daemon's own clock."""
 
     @pytest.fixture
     def ssh_server(self, daemon, store, monkeypatch):
-        server = api_server(daemon, ssh_host="10.0.0.1")
+        server = api_server(daemon)
         monkeypatch.setattr(kea_host, "guard_kea_write", lambda *a, **k: "")
-        self.seen = world.host_reads_the_fakes_file(monkeypatch, daemon, store, server_id=1)
-        kea_host.read_config_versioned(
-            server, "dhcp4"
-        )  # the baseline of the clean file: what the store already has when an edit appears
-        self.seen["reads"].clear()
+        self.w = world.ProofWorld(daemon, server, store, monkeypatch)
+        self.w.start(world.ProofWorld.ad1_running(daemon.running))
+        self.seen = self.w.seen
         return server
 
-    def _live_pending(self, daemon, server, store, *, record_before=True):
-        cfg, digest = api.read(
-            server, "dhcp4", capture=record_before
-        )  # a capturing read records the state before as a `kea` row
+    def _live_pending(self, daemon, server, store, *, planned=True):
+        cfg, digest = api.read(server, "dhcp4", capture=True)
         cand = copy.deepcopy(cfg)
         cand["Dhcp4"]["subnet4"].append(
             {"id": 96, "subnet": "10.96.0.0/24", "pools": [{"pool": "10.96.0.1-10.96.0.9"}]}
         )
-        store.record(1, "dhcp4", cand, digest, "a change the crash left", hash_kind="kea", source="pending")
-        daemon.set_running(cand["Dhcp4"])  # the daemon took it; the file is still the state before
+        sha = self.seen["sha"]({"Dhcp4": daemon.file}) if planned else None
+        store.record(
+            server["id"],
+            "dhcp4",
+            cand,
+            digest,
+            "a change the crash left",
+            hash_kind="kea",
+            source="pending",
+            file_sha256=sha,
+        )
+        daemon.set_running(cand["Dhcp4"])  # the daemon took it; the file is still the one the Plan proved
         return cfg, digest
 
     def test_a_live_pending_row_and_a_hand_edit_write_nothing_and_name_the_edit(self, daemon, ssh_server, store):
         self._live_pending(daemon, ssh_server, store)
-        daemon.file[EDIT_KEY] = copy.deepcopy(EDIT)
+        self.w.hand_edit({**daemon.file, EDIT_KEY: copy.deepcopy(EDIT)})
         daemon.commands.clear()
         result = cs.apply_change("dhcp4", lifetime(7200), "a subnet edit", servers=[ssh_server])
         assert result.status != "ok", result.lines
         assert "config-write" not in daemon.commands and "config-set" not in daemon.commands
         assert EDIT_KEY in daemon.file, "the operator's edit is still on the host"
         text = " ".join(t for _k, t in result.lines)
-        assert "Dhcp4.user-context" in text and "carries an edit the daemon has not loaded" in text
+        assert "not the file this change was planned over" in text and "has not loaded that edit" in text
         assert store.pending(1, "dhcp4") is not None, "the row stays: the daemon runs the change, the file waits"
         external = [r for r in store.rows if r["source"] == "external"]
         assert external and EDIT_KEY in json.loads(external[-1]["config"])["Dhcp4"], "and the edit is in Config history"
 
-    def test_the_control_with_no_pending_row_is_the_q216_refusal(self, daemon, ssh_server, store):
-        daemon.file[EDIT_KEY] = copy.deepcopy(EDIT)
+    def test_the_control_with_no_pending_row_is_the_proof_refusal(self, daemon, ssh_server, store):
+        self.w.hand_edit({**daemon.file, EDIT_KEY: copy.deepcopy(EDIT)})
         daemon.commands.clear()
         result = cs.apply_change("dhcp4", lifetime(7200), "a subnet edit", servers=[ssh_server])
         assert result.status == "aborted"
-        assert "config-write" not in daemon.commands and EDIT_KEY in daemon.file
-        assert any("Dhcp4.user-context" in t for _k, t in result.lines)
+        assert "config-write" not in daemon.commands and "config-set" not in daemon.commands
+        assert EDIT_KEY in daemon.file
+        assert any("Dhcp4.user-context" in t and "has not loaded that edit" in t for _k, t in result.lines)
 
-    def test_the_second_control_a_pending_row_and_a_file_equal_to_the_state_before_settles_and_goes_on(
-        self, daemon, ssh_server, store
-    ):
+    def test_the_second_control_a_pending_row_and_the_planned_file_settles_and_goes_on(self, daemon, ssh_server, store):
         self._live_pending(daemon, ssh_server, store)
         result = cs.apply_change("dhcp4", lifetime(7200), "a subnet edit", servers=[ssh_server])
         assert result.status == "ok", result.lines
@@ -596,18 +603,60 @@ class TestTheSettlementAsksTheFileFirst:
 
     def test_settle_it_now_asks_the_same_question(self, daemon, ssh_server, store):
         self._live_pending(daemon, ssh_server, store)
-        daemon.file[EDIT_KEY] = copy.deepcopy(EDIT)
+        self.w.hand_edit({**daemon.file, EDIT_KEY: copy.deepcopy(EDIT)})
         daemon.commands.clear()
         lines, settled = api.settle_pending(ssh_server, "dhcp4")
         assert settled is False and "config-write" not in daemon.commands and EDIT_KEY in daemon.file
-        assert "Dhcp4.user-context" in lines[0]
+        assert "not the file this change was planned over" in lines[0]
 
-    def test_a_pending_row_with_no_revision_of_the_state_before_is_refused_by_the_plan(self, daemon, ssh_server, store):
-        self._live_pending(daemon, ssh_server, store, record_before=False)
+    def test_a_pending_row_from_before_this_release_is_refused_by_the_plan(self, daemon, ssh_server, store):
+        self._live_pending(daemon, ssh_server, store, planned=False)
         daemon.commands.clear()
         result = cs.apply_change("dhcp4", lifetime(7200), "a subnet edit", servers=[ssh_server])
         assert result.status != "ok" and "config-write" not in daemon.commands
-        assert "cannot be proved against the state before the change" in " ".join(t for _k, t in result.lines)
+        text = " ".join(t for _k, t in result.lines)
+        assert "cannot be proved against the file this change was planned over" in text and "restart Kea there" in text
+
+    def test_the_ad1_world_through_the_plan_a_scalar_deleted_and_not_loaded_writes_nothing(
+        self, daemon, ssh_server, store
+    ):
+        edited = world.without(daemon.file, "subnet4", 0, "valid-lifetime")
+        self.w.hand_edit(edited)
+        daemon.commands.clear()
+        result = cs.apply_change("dhcp4", lifetime(5400), "a lifetime", servers=[ssh_server])
+        assert result.status == "aborted" and result.last_code == "error", result.lines
+        assert "config-set" not in daemon.commands and "config-write" not in daemon.commands
+        assert "valid-lifetime" not in daemon.file["subnet4"][0], "the operator's deletion is still on the host"
+        text = " ".join(t for _k, t in result.lines)
+        assert "written at " in text and "the daemon last loaded its configuration at " in text
+
+    def test_the_ad1_world_after_a_reload_is_accepted_with_one_write(self, daemon, ssh_server, store):
+        self.w.hand_edit(world.without(daemon.file, "subnet4", 0, "valid-lifetime"))
+        self.w.reload()
+        daemon.commands.clear()
+        result = cs.apply_change("dhcp4", lifetime(5400), "a lifetime", servers=[ssh_server])
+        assert result.status == "ok", result.lines
+        assert daemon.commands.count("config-write") == 1 and daemon.file["valid-lifetime"] == 5400
+
+    def test_an_edit_between_the_plan_and_the_set_is_unverified_and_the_row_keeps_the_planned_sha(
+        self, daemon, ssh_server, store
+    ):
+        planned = self.seen["sha"]({"Dhcp4": daemon.file})
+        original = daemon._answer
+
+        def answer(command, arguments):
+            reply = original(command, arguments)
+            if command == "config-set" and reply.get("result") == 0:
+                self.w.hand_edit({**daemon.file, EDIT_KEY: copy.deepcopy(EDIT)})
+            return reply
+
+        daemon._answer = answer
+        daemon.commands.clear()
+        result = cs.apply_change("dhcp4", lifetime(5400), "a lifetime", servers=[ssh_server])
+        assert result.status != "ok" and "config-write" not in daemon.commands
+        assert any("not yet in its file" in t for _k, t in result.lines), result.lines
+        row = store.pending(1, "dhcp4")
+        assert row is not None and row["file_sha256"] == planned
 
 
 class TestTheFirstWriteTarget:

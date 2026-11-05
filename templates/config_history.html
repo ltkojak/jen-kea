@@ -49,6 +49,8 @@
                     <span class="badge badge-tone-blue" title="a change Jen put back because a later step failed">rollback</span>
                     {% elif r.source == 'switch' %}
                     <span class="badge u-851d78" title="the baseline recorded when this server's transport was switched">switch</span>
+                    {% elif r.source == 'rendering' %}
+                    <span class="badge u-851d78" title="the file Kea wrote after a change over the API">rendering</span>
                     {% elif r.source == 'pending' %}
                     <span class="badge badge-dynamic" title="written before the daemon was asked; settled by its own answer on the next read">pending</span>
                     {% elif r.source == 'damaged' %}

@@ -777,6 +777,9 @@ S10_ALLOWED = {
     ("jen/services/config_revisions.py", "by_digest", "Exception", "return None"): (
         "None is 'no revision proves the file's before state': the one caller, a settlement's live branch, answers it by NOT sending `config-write` - fail closed (Q218 BH1 b)"
     ),
+    ("jen/services/config_revisions.py", "latest_rendering", "Exception", "return None"): (
+        "None is 'no rendering on record': the proof's (R) does not hold and the file is accepted only by the Plan's sha or the host's own clock - a rendering that cannot be read never ACCEPTS a file - fail CLOSED (Q219)"
+    ),
     ("jen/services/config_revisions.py", "finish", "Exception", "return False"): (
         "a pending row that could not be finished STAYS pending: `pending_block` keeps refusing the next change until it is settled - fail closed (Q216)"
     ),
@@ -803,9 +806,6 @@ S10_ALLOWED = {
     ),
     ("jen/services/config_revisions.py", "prune", "Exception", "return 0"): (
         "pruning old rows is housekeeping; a failure keeps every row (Q216)"
-    ),
-    ("jen/services/kea_api_config.py", "_before_state", "(TypeError, ValueError, KeyError)", "return None"): (
-        "None is 'no revision proves the state before the change': the settlement then does not overwrite the file and the row stays - fail CLOSED (Q218 BH1 b)"
     ),
     ("jen/services/kea_api_config.py", "pending_note", "_rev.RevisionStoreUnreadable", 'return ""'): (
         "the card's note is a display above a button; the gate (`record_unreadable`, `pending_block`) refuses on a store that cannot be read and sends nothing (Q216 AA11)"

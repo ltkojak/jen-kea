@@ -83,6 +83,7 @@ class TestTheHelpersOperationsAreAllNamedOnTheAboutPage:
         "config-write-check": "check, grant and withdraw the daemon's right to write its own config file",
         "allow-config-write": "check, grant and withdraw the daemon's right to write its own config file",
         "deny-config-write": "check, grant and withdraw the daemon's right to write its own config file",
+        "config-loaded": "read when a config file was written beside when the daemon last loaded one",
     }
 
     def test_the_phrase_table_covers_exactly_the_helpers_ops(self):
