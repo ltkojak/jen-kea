@@ -787,25 +787,44 @@ def test_11_what_config_get_renames(facts):
     assert _hash(), "the daemon does not answer after row 11"
 
 
-def _key_paths(obj, path=""):
-    """Every KEY path of `obj` (containers and leaves), list indexes blanked to `[]` and relative to the section - the shape of `kea_api_config.load_vector`'s paths. A key Kea renames is also
-    walked under the name it comes back as, so an alias is never mistaken for a default."""
+def _all_paths(value, path):
+    """Every key path at and below `value` (list indexes blanked), `path` itself included."""
+    out = {path}
+    if isinstance(value, dict):
+        for k, v in value.items():
+            out |= _all_paths(v, f"{path}.{k}")
+    elif isinstance(value, list):
+        for item in value:
+            out |= _all_paths(item, path + "[]")
+    return out
+
+
+def _added_by_the_daemon(sent, running, path=""):
+    """The key paths (list indexes blanked, relative to the section - the shape of `kea_api_config.load_vector`'s paths) the DAEMON added to an object that did not say them: for each object, the keys of
+    the running side that the sent side lacks, and everything below them. Judged object by object, not by path alone: `subnet4[].reservations` is sent on one subnet and written out as a default on the
+    next, and the second is what makes it a default. A key Kea renames is matched to its alias, so an alias is never mistaken for an addition."""
     from jen.services import kea_api_config as api
 
     out = set()
-    if isinstance(obj, dict):
-        for k, v in obj.items():
+    if isinstance(sent, dict) and isinstance(running, dict):
+        matched = set()
+        for k, v in sent.items():
             here = f"{path}.{k}" if path else k
-            out.add(here)
-            out |= _key_paths(v, here)
+            if k in running:
+                matched.add(k)
+                out |= _added_by_the_daemon(v, running[k], here)
+                continue
             alias = api.RENAMED_KEYS.get(k)
-            if alias:
-                alias_here = f"{path}.{alias}" if path else alias
-                out.add(alias_here)
-                out |= _key_paths([v], alias_here)
-    elif isinstance(obj, list):
-        for item in obj:
-            out |= _key_paths(item, path + "[]")
+            renamed = running.get(alias) if alias else None
+            if isinstance(renamed, list) and len(renamed) == 1:
+                matched.add(alias)
+                out |= _added_by_the_daemon(v, renamed[0], here)
+        for k, v in running.items():
+            if k not in matched:
+                out |= _all_paths(v, f"{path}.{k}" if path else k)
+    elif isinstance(sent, list) and isinstance(running, list) and len(sent) == len(running):
+        for s_item, r_item in zip(sent, running, strict=True):
+            out |= _added_by_the_daemon(s_item, r_item, path + "[]")
     return out
 
 
@@ -821,6 +840,8 @@ def _rich_candidate(authored):
     subnet["reservations"] = [{"hw-address": "aa:bb:cc:dd:ee:01", "ip-address": str(net.network_address + 5)}]
     subnet["relay"] = {"ip-addresses": [str(net.network_address + 1)]}
     subnet["user-context"] = {"note": "compat"}
+    # a bare sibling of the decorated subnet, so what the daemon writes into a subnet that said nothing is seen
+    rich["subnet4"].append({"id": 97, "subnet": "10.97.0.0/24", "pools": [{"pool": "10.97.0.10 - 10.97.0.20"}]})
     rich["option-data"] = [{"name": "domain-name-servers", "data": "10.98.0.53"}]
     rich["client-classes"] = [{"name": "compat-class", "test": "substring(option[60].hex,0,4) == 'VoIP'"}]
     rich["shared-networks"] = [
@@ -855,9 +876,7 @@ def test_12_the_defaults_kea_writes_out(facts):
     __real._ok(__kea.kea_command("config-set", arguments={"Dhcp4": rich}))
     try:
         running = _get()
-        sent = _key_paths(rich)
-        got = _key_paths(running["Dhcp4"])
-        defaults = sorted(got - sent)
+        defaults = sorted(_added_by_the_daemon(rich, running["Dhcp4"]))
         facts["defaults_vector"] = {"kea": version, "paths": defaults}
         facts["defaults_vector_path_count"] = len(defaults)
         major, minor = int(m.group(1)), int(m.group(2))
