@@ -1080,79 +1080,6 @@ def _restore_over_api(server, server_id, rev_id, service, cfg, back):
     return back
 
 
-def _restore_over_file(server, server_id, rev_id, service, cfg, back):
-    """The file branch of a restore (Q203 AS2): a revision written over the host's config file, then a restart. Called with the change lock held (Q219 BI2 e)."""
-    # Q203 AS2: the material-before-reference preflight every other writer of a control socket runs - a revision that names Jen's certificate files is refused while they are absent,
-    # and not restarted into a config the daemon cannot load.
-    tls_paths = __authoring.referenced_tls_paths(cfg, __tls.remote_tls_paths(service))
-    test = __host.test_via_transport(server, service, cfg, tls_paths=tls_paths)
-    if not test["ok"]:
-        flash(
-            f"Restore aborted — {server['name']} rejected revision #{rev_id}: {test.get('detail') or 'unknown error'}",
-            "error",
-        )
-        return back
-
-    try:
-        latest = __rev.latest(server_id, service)
-    except SecretDecryptError as exc:
-        flash(str(exc), "error")
-        return back
-    # v5.20.0 — a "raw" latest sha is directly comparable to what a
-    # helper v2 apply-config will re-hash; a "canonical"/"legacy" one is
-    # NOT (it hashes a different thing entirely, so comparing it would
-    # either always mismatch or coincidentally "match" nothing real).
-    # With no raw baseline to check against yet, read the LIVE sha right
-    # before the write instead of skipping the guard outright — the same
-    # short-window pattern the add/delete routes already use.
-    if latest and latest.get("hash_kind") == "raw":
-        expect = latest["sha256"]
-    else:
-        _live_cfg, expect = __host.read_config_versioned(server, service)
-    res = __host.apply_config(
-        server,
-        service,
-        cfg,
-        expect_sha256=expect,
-        summary=f"restore of #{rev_id}",
-        source="restore",
-        tls_paths=tls_paths,
-    )
-    if res.get("code") == "conflict":
-        flash(
-            f"The Kea config on {server['name']} changed since this page loaded — restore was NOT applied. "
-            "Reload and try again.",
-            "error",
-        )
-        return back
-    if not res.get("ok"):
-        flash(f"Restore failed on {server['name']}: {res.get('detail') or 'unknown error'}", "error")
-        return back
-
-    restart = __host.service_action(server, service, "restart")
-    if restart["ok"]:
-        flash(f"Restored revision #{rev_id} to {server['name']} and restarted Kea.", "success")
-        # Q203 AS2: a restart that worked ends an earlier restore's unproved restart of THIS daemon
-        __changeset.resolve_attention(server_id, service, categories=("config-restart-failed",))
-    else:
-        # Q203 AS2: the revision is on the host and the daemon did not start on it - it may be stopped, or still running what it had. That is a durable fact (the Servers banner and Health's
-        # row read it from Jen's own note), not a flash that is gone with the next page; the next restart that works, or a superadmin's acknowledgment, ends it.
-        stored = __changeset.record_attention(
-            server_id,
-            service,
-            f"restore of revision #{rev_id}",
-            "config-restart-failed",
-            server_name=server.get("name", ""),
-        )
-        flash(
-            f"Restored revision #{rev_id} to {server['name']} — restart Kea manually ({restart.get('detail') or ''})."
-            + ("" if stored else " Jen could not record that the daemon is unproved; check it on the host."),
-            "warning",
-        )
-    __user.audit("RESTORE_KEA_CONFIG", server["name"], f"service={service} revision={rev_id}")
-    return back
-
-
 @bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/restore", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -1187,7 +1114,75 @@ def config_history_restore(server_id, rev_id):
     # (Q219 BI2 e, AD-Q2) the file branch takes the change lock as the api branch does: a restore never runs beside a change, a switch or an import
     try:
         with __changeset.change_lock():
-            return _restore_over_file(server, server_id, rev_id, service, cfg, back)
+            # Q203 AS2: the material-before-reference preflight every other writer of a control socket runs - a revision that names Jen's certificate files is refused while they are absent,
+            # and not restarted into a config the daemon cannot load.
+            tls_paths = __authoring.referenced_tls_paths(cfg, __tls.remote_tls_paths(service))
+            test = __host.test_via_transport(server, service, cfg, tls_paths=tls_paths)
+            if not test["ok"]:
+                flash(
+                    f"Restore aborted — {server['name']} rejected revision #{rev_id}: {test.get('detail') or 'unknown error'}",
+                    "error",
+                )
+                return back
+
+            try:
+                latest = __rev.latest(server_id, service)
+            except SecretDecryptError as exc:
+                flash(str(exc), "error")
+                return back
+            # v5.20.0 — a "raw" latest sha is directly comparable to what a
+            # helper v2 apply-config will re-hash; a "canonical"/"legacy" one is
+            # NOT (it hashes a different thing entirely, so comparing it would
+            # either always mismatch or coincidentally "match" nothing real).
+            # With no raw baseline to check against yet, read the LIVE sha right
+            # before the write instead of skipping the guard outright — the same
+            # short-window pattern the add/delete routes already use.
+            if latest and latest.get("hash_kind") == "raw":
+                expect = latest["sha256"]
+            else:
+                _live_cfg, expect = __host.read_config_versioned(server, service)
+            res = __host.apply_config(
+                server,
+                service,
+                cfg,
+                expect_sha256=expect,
+                summary=f"restore of #{rev_id}",
+                source="restore",
+                tls_paths=tls_paths,
+            )
+            if res.get("code") == "conflict":
+                flash(
+                    f"The Kea config on {server['name']} changed since this page loaded — restore was NOT applied. "
+                    "Reload and try again.",
+                    "error",
+                )
+                return back
+            if not res.get("ok"):
+                flash(f"Restore failed on {server['name']}: {res.get('detail') or 'unknown error'}", "error")
+                return back
+
+            restart = __host.service_action(server, service, "restart")
+            if restart["ok"]:
+                flash(f"Restored revision #{rev_id} to {server['name']} and restarted Kea.", "success")
+                # Q203 AS2: a restart that worked ends an earlier restore's unproved restart of THIS daemon
+                __changeset.resolve_attention(server_id, service, categories=("config-restart-failed",))
+            else:
+                # Q203 AS2: the revision is on the host and the daemon did not start on it - it may be stopped, or still running what it had. That is a durable fact (the Servers banner and Health's
+                # row read it from Jen's own note), not a flash that is gone with the next page; the next restart that works, or a superadmin's acknowledgment, ends it.
+                stored = __changeset.record_attention(
+                    server_id,
+                    service,
+                    f"restore of revision #{rev_id}",
+                    "config-restart-failed",
+                    server_name=server.get("name", ""),
+                )
+                flash(
+                    f"Restored revision #{rev_id} to {server['name']} — restart Kea manually ({restart.get('detail') or ''})."
+                    + ("" if stored else " Jen could not record that the daemon is unproved; check it on the host."),
+                    "warning",
+                )
+            __user.audit("RESTORE_KEA_CONFIG", server["name"], f"service={service} revision={rev_id}")
+            return back
     except __changeset.ChangeBusy:
         flash(__changeset.BUSY_SENTENCE[:1].upper() + __changeset.BUSY_SENTENCE[1:] + ".", "error")
         return back

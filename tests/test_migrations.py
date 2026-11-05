@@ -89,6 +89,7 @@ class TestKeaConfigRevisionsTable:
             "username",
             "source",
             "created_at",
+            "file_sha256",  # Q219, migration 38: the file the Plan proved, carried by a pending row
         }
         assert "mediumtext" in cols["config"]["Type"].lower()
         assert cols["service"]["Type"].lower() == "varchar(8)"

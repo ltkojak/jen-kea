@@ -351,9 +351,17 @@ class TestARestoreOverTheApi:
 
 
 class TestTheHistoryLabelsTheNewSources:
-    @pytest.mark.parametrize("source", ["rollback", "switch", "pending", "damaged"])
+    @pytest.fixture(autouse=True)
+    def _no_pending_row_left_over(self):
+        """Q219: the store keeps ONE pending row per server, so a pending row an earlier test recorded makes the next `record(source="pending")` answer None - these tests start and end clean."""
+        rev.discard_pending(1, "dhcp4")
+        yield
+        rev.discard_pending(1, "dhcp4")
+
+    @pytest.mark.parametrize("source", ["rollback", "switch", "pending", "damaged", "rendering"])
     def test_each_source_has_its_own_badge(self, logged_in_client, three, source):
-        rev.record(1, "dhcp4", {"Dhcp4": {}}, "d" * 64, f"a {source} row", hash_kind="kea", source=source)
+        rid = rev.record(1, "dhcp4", {"Dhcp4": {}}, "d" * 64, f"a {source} row", hash_kind="kea", source=source)
+        assert rid is not None
         html = logged_in_client.get("/servers/1/config-history?service=dhcp4").data.decode()
         assert f">{source}</span>" in html
 
@@ -362,6 +370,11 @@ class TestTheHistoryLabelsTheNewSources:
         html = logged_in_client.get(f"/servers/1/config-history/{rid}").data.decode()
         assert "daemon's own answer has not settled it" in html and "Recorded from the daemon's own answer" in html
         assert json.loads(rev.get(rid)["config"]) == {"Dhcp4": {}}
+
+    def test_the_detail_page_says_what_a_rendering_is(self, logged_in_client, three):
+        rid = rev.record(1, "dhcp4", {"Dhcp4": {}}, "e" * 64, "rendered", hash_kind="raw", source="rendering")
+        html = logged_in_client.get(f"/servers/1/config-history/{rid}").data.decode()
+        assert "the file Kea itself wrote" in html
 
 
 class TestTheBadgeLinkIsForTheRolesThatCanOpenTheCard:

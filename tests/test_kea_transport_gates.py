@@ -138,7 +138,7 @@ class TestRoutesAskTheTransportNotTheFlag:
             (
                 "jen/routes/servers.py",
                 "config_history_restore",
-            ),  # the file branch of the restore (the api branch reads through kea_api_config)
+            ),  # the file branch of the restore, under the change lock since Q219 (the api branch reads through kea_api_config)
         }
         extra = sorted(set(direct) - allowed)
         assert extra == [], f"direct file reads in routes: {extra}"
