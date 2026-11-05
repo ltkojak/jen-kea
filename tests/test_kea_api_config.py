@@ -407,7 +407,9 @@ class TestThePendingRecord:
         assert fake.commands == ["config-get"], "a read sends config-get and nothing else (Q216 AA19)"
         assert fake.file != fake.running and store.pending(SID, "dhcp4") is not None
         assert new == fake.digest() and notes and "is live" in notes[0]
-        lines = api.settle_pending(server, "dhcp4")  # the settlement: under the lock, from the card or the Plan
+        lines, _settled = api.settle_pending(
+            server, "dhcp4"
+        )  # the settlement: under the lock, from the card or the Plan
         assert fake.file == fake.running  # config-write was sent
         assert lines and "finished" in lines[0] and store.pending(SID, "dhcp4") is None
         assert [r["source"] for r in store.rows] == ["jen"]
@@ -418,7 +420,7 @@ class TestThePendingRecord:
         fake.commands.clear()
         api.read(server, "dhcp4", capture=False, notes=notes)
         assert fake.commands == ["config-get"] and notes and "never reached" in notes[0] and store.rows != []
-        lines = api.settle_pending(server, "dhcp4")
+        lines, _settled = api.settle_pending(server, "dhcp4")
         assert store.rows == [] and "never reached" in lines[0]
 
     def test_neither_state_stays_pending_and_blocks_an_apply_but_not_a_restore(self, fake, server, store):
@@ -493,6 +495,9 @@ class TestTheModuleIsTheOneSender:
             "copy",
             "json",
             "logging",
+            "re",  # the pool-path rule blanks list indexes
+            "pathlib",  # the defaults vectors live beside the code (Q217 AB6)
+            "jen.services.secret_keys.is_secret_key",  # the ONE definition of a secret key name: the compare prints a path, never a value under one (LEAK-001)
             "jen.services.config_revisions",
             "jen.services.kea",
             "jen.services.kea_host",
@@ -669,6 +674,59 @@ class TestTheFirstDifferenceIsNamed:
             assert (api.first_difference(running, candidate) == "") is api._carries(running, candidate)
 
 
+class TestADamagedPendingRecord:
+    """Q217 AB10-AB12: ONE parser for a pending row's body, and a damaged row is a fourth state - never `AttributeError`, never "that change is live" from an empty section, never "there is no pending
+    change" while one blocks. The 3 x 3 matrix Opus ran: bodies x (read, pending_block, settle_pending)."""
+
+    BODIES = ["7", '"a config"', "[1, 2]", '{"Dhcp4": {}}', "{}", "null", "{not json"]
+
+    def _damaged(self, fake, server, store, body, sha="before-digest"):
+        row_id = store.record(
+            SID, "dhcp4", {"Dhcp4": {"valid-lifetime": 1}}, sha, "x", hash_kind="kea", source="pending"
+        )
+        next(r for r in store.rows if r["id"] == row_id)["config"] = body
+        return row_id
+
+    @pytest.mark.parametrize("body", BODIES)
+    def test_a_read_says_damaged_and_sends_one_command(self, fake, server, store, body):
+        self._damaged(fake, server, store, body)
+        notes = []
+        fake.commands.clear()
+        api.read(server, "dhcp4", capture=False, notes=notes)
+        assert fake.commands == ["config-get"] and notes and "is damaged" in notes[0]
+
+    @pytest.mark.parametrize("body", BODIES)
+    def test_the_gate_refuses_with_the_same_sentence_and_sends_nothing(self, fake, server, store, body):
+        self._damaged(fake, server, store, body)
+        fake.commands.clear()
+        blocked = api.pending_block(server, "dhcp4")
+        cfg, digest = _plan(server)
+        fake.commands.clear()
+        applied = api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
+        assert "is damaged" in blocked and applied["code"] == "unverified" and "is damaged" in applied["detail"]
+        assert not any(c in fake.commands for c in ("config-set", "config-write"))
+
+    @pytest.mark.parametrize("body", BODIES)
+    def test_settle_marks_it_damaged_and_never_calls_it_live(self, fake, server, store, body):
+        row_id = self._damaged(fake, server, store, body)
+        fake.commands.clear()
+        lines, settled = api.settle_pending(server, "dhcp4")
+        assert settled and "damaged and the daemon runs" in lines[0]
+        assert "config-write" not in fake.commands and "config-set" not in fake.commands
+        assert next(r for r in store.rows if r["id"] == row_id)["source"] == "damaged"
+        assert store.pending(SID, "dhcp4") is None  # it no longer blocks; Config history carries it
+
+    def test_a_damaged_row_whose_before_digest_is_the_daemons_never_reached_it(self, fake, server, store):
+        _cfg_now, digest = _plan(server)
+        self._damaged(fake, server, store, "{not json", sha=digest)
+        lines, settled = api.settle_pending(server, "dhcp4")
+        assert settled and "never reached the daemon" in lines[0] and store.rows == []
+
+    def test_the_one_parser_is_the_only_one(self):
+        source = (ROOT / "jen" / "services" / "kea_api_config.py").read_text(encoding="utf-8")
+        assert source.count('json.loads(row["config"])') == 1, "a second parser of a pending row's body"
+
+
 class TestQ216TheRegister:
     """Q216 - BF3 (no compare, no set), BF8 b (a hook's parameters), g (an unreadable record), o (the digest on record) and l (one restore window per Kea)."""
 
@@ -732,7 +790,9 @@ class TestQ216TheRegister:
         blocked = api.pending_block(server, "dhcp4")
         assert "cannot be read" in blocked
         result = api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
-        assert result["code"] == "unverified" and "cannot be read" in result["detail"]
+        assert (
+            result["code"] == "unreadable" and "cannot be read" in result["detail"] and not result.get("needs_hands")
+        )  # (Q217 AB9) nobody's hands
         assert not any(c in fake.commands for c in ("config-set", "config-write", "config-hash-get"))
         assert "cannot be read" in api.record_unreadable(server, "dhcp4")
 
@@ -918,7 +978,7 @@ class TestKeaWritesItsDefaultsOut:
         notes = []
         api.read(server, "dhcp4", capture=False, notes=notes)
         assert notes and "is live" in notes[0], notes
-        lines = api.settle_pending(server, "dhcp4")
+        lines, _settled = api.settle_pending(server, "dhcp4")
         assert lines and "finished" in lines[0], lines
         assert any(s.get("id") == 9 for s in fake.file["subnet4"]) and store.pending(SID, "dhcp4") is None
 
@@ -977,13 +1037,31 @@ class TestKeaWritesItsDefaultsOut:
         )  # only under interfaces-config
 
     def test_only_a_pool_is_compared_without_its_spaces(self):
-        """Q216 BF5. Fixup 2 stripped the spaces of EVERY string on both sides; Kea re-renders a pool "a - b" as "a-b" and nothing else row 09 saw."""
-        assert api._carries(
-            {"pools": [{"pool": "10.0.0.10-10.0.0.20"}]}, {"pools": [{"pool": "10.0.0.10 - 10.0.0.20"}]}
+        """Q216 BF5, as a PATH (Q217 AB15): Kea re-renders a pool "a - b" as "a-b" and nothing else row 09 saw; a `user-context.pool` and a top-level `pool` compare exactly."""
+        pool_a = {"subnet4": [{"pools": [{"pool": "10.0.0.10-10.0.0.20"}]}]}
+        pool_b = {"subnet4": [{"pools": [{"pool": "10.0.0.10 - 10.0.0.20"}]}]}
+        assert api._carries(pool_a, pool_b)
+        shared_a = {"shared-networks": [{"subnet4": pool_a["subnet4"]}]}
+        shared_b = {"shared-networks": [{"subnet4": pool_b["subnet4"]}]}
+        assert api._carries(shared_a, shared_b)  # a shared network's subnets are the same shape one level down
+        assert not api._carries(
+            {"user-context": {"pool": "a-b"}}, {"user-context": {"pool": "a - b"}}
+        )  # (AB15) the key name alone is not the rule
+        assert not api._carries({"pool": "ab"}, {"pool": "a b"})
+        assert not api._carries(
+            {"subnet4": [{"user-context": {"note": "a-b"}}]}, {"subnet4": [{"user-context": {"note": "a - b"}}]}
         )
-        assert not api._carries({"user-context": {"note": "a-b"}}, {"user-context": {"note": "a - b"}})
-        assert not api._carries({"comment": "ab"}, {"comment": "a b"})
-        assert set(api.SPACE_INSENSITIVE_KEYS) == {"pool"}
+        assert set(api.SPACE_INSENSITIVE_PATHS) == {
+            "subnet4[].pools[].pool",
+            "subnet6[].pools[].pool",
+            "subnet6[].pd-pools[].prefix",
+        }
+
+    def test_a_bool_is_not_an_int(self):
+        """Q217 AB3: Python says True == 1; Kea does not."""
+        assert not api._carries({"a": True}, {"a": 1}) and not api._carries({"a": 1}, {"a": True})
+        assert not api._carries({"a": False}, {"a": 0})
+        assert api._carries({"a": True}, {"a": True}) and api._carries({"a": 1}, {"a": 1})
 
     def test_carries_is_a_subset_test(self):
         assert api._carries({"a": 1, "b": 2}, {"a": 1})
@@ -992,3 +1070,114 @@ class TestKeaWritesItsDefaultsOut:
         assert api._carries([{"x": 1, "y": 2}], [{"x": 1}])
         assert not api._carries([{"x": 1}, {"x": 2}], [{"x": 1}])  # lists are positional and the same length
         assert api._carries(5, 5) and not api._carries(5, 6) and not api._carries([], {"a": 1})
+
+
+class TestADeletionIsADifference:
+    """Q217 AB6 - `file_in_daemon` asks both directions. Everything the file says is carried by the daemon (the old question) AND every key the daemon runs that is not one of Kea's own written-out
+    defaults is in the file: a key DELETED from the file reads as a difference, not as agreement, so the next `config-write` cannot destroy it unasked. The defaults are the daemon's own answer,
+    recorded per minor version (compat row 12); here a small set stands in."""
+
+    DEFAULTS = frozenset({"valid-lifetime", "echo-client-id", "subnet4[].t1-percent", "subnet4[].reservations"})
+
+    def _live(self):
+        return {
+            "Dhcp4": {
+                "valid-lifetime": 3600,
+                "echo-client-id": True,
+                "hooks-libraries": [{"library": "/usr/lib/kea/libdhcp_lease_cmds.so"}],
+                "hosts-databases": [{"type": "mysql", "password": "hunter2"}],
+                "subnet4": [
+                    {
+                        "id": 1,
+                        "subnet": "10.0.0.0/24",
+                        "t1-percent": 0.5,
+                        "reservations": [],
+                        "option-data": [{"name": "routers", "data": "10.0.0.1"}],
+                    }
+                ],
+            }
+        }
+
+    def _file(self):
+        """What Jen authored: the daemon's configuration with Kea's written-out defaults left out."""
+        live = copy.deepcopy(self._live())
+        for k in ("valid-lifetime", "echo-client-id"):
+            del live["Dhcp4"][k]
+        for k in ("t1-percent", "reservations"):
+            del live["Dhcp4"]["subnet4"][0][k]
+        live["Dhcp4"]["hosts-database"] = {"type": "mysql", "password": "hunter2"}
+        del live["Dhcp4"]["hosts-databases"]
+        return live
+
+    def test_a_file_that_omits_only_defaults_is_the_daemons(self):
+        assert api.file_in_daemon(self._file(), self._live(), "dhcp4", defaults=self.DEFAULTS)
+        assert api.difference_text(self._file(), self._live(), "dhcp4", defaults=self.DEFAULTS) == ""
+
+    def test_a_deleted_hooks_library_is_a_difference(self):
+        file_cfg = self._file()
+        del file_cfg["Dhcp4"]["hooks-libraries"]
+        assert api.file_in_daemon(file_cfg, self._live(), "dhcp4", defaults=self.DEFAULTS) is False
+        text = api.difference_text(file_cfg, self._live(), "dhcp4", defaults=self.DEFAULTS)
+        assert text == "at Dhcp4.hooks-libraries: the file says nothing, the daemon a list of 1", text
+
+    def test_a_deleted_option_of_a_subnet_is_named_by_its_path(self):
+        file_cfg = self._file()
+        del file_cfg["Dhcp4"]["subnet4"][0]["option-data"]
+        text = api.difference_text(file_cfg, self._live(), "dhcp4", defaults=self.DEFAULTS)
+        assert text.startswith("at Dhcp4.subnet4[0].option-data:"), text
+
+    def test_a_subnet_removed_a_changed_value_and_an_added_key_are_differences_too(self):
+        removed = self._file()
+        removed["Dhcp4"]["subnet4"] = []
+        changed = self._file()
+        changed["Dhcp4"]["subnet4"][0]["subnet"] = "10.9.0.0/24"
+        added = self._file()
+        added["Dhcp4"]["decline-probation-period"] = 5
+        for file_cfg in (removed, changed, added):
+            assert api.file_in_daemon(file_cfg, self._live(), "dhcp4", defaults=self.DEFAULTS) is False
+
+    def test_a_default_key_the_file_omits_is_not_a_difference_without_a_vector_the_old_question_only(self):
+        file_cfg = self._file()
+        del file_cfg["Dhcp4"]["hooks-libraries"]
+        assert (
+            api.file_in_daemon(file_cfg, self._live(), "dhcp4") is True
+        )  # no vector: only the first direction can be asked
+
+    def test_a_deleted_secret_never_prints_its_value(self):
+        file_cfg = self._file()
+        del file_cfg["Dhcp4"]["hosts-database"]["password"]
+        text = api.difference_text(file_cfg, self._live(), "dhcp4", defaults=self.DEFAULTS)
+        assert "hunter2" not in text and "Dhcp4.hosts-database" in text and "not shown" in text, text
+
+    def test_the_renamed_key_is_matched_by_its_alias_not_reported_as_extra(self):
+        assert api.file_in_daemon(self._file(), self._live(), "dhcp4", defaults=self.DEFAULTS)
+
+    def test_the_loader_takes_the_exact_minor_then_the_nearest_lower_and_never_a_higher(self, tmp_path):
+        for minor in (0, 2):
+            (tmp_path / f"kea_defaults_3.{minor}.json").write_text(json.dumps({"paths": [f"k{minor}"]}))
+        assert api.load_vector("3.0.5", tmp_path) == (frozenset({"k0"}), "3.0")
+        assert api.load_vector("3.1.4", tmp_path) == (frozenset({"k0"}), "3.0")
+        assert api.load_vector("3.2.1", tmp_path) == (frozenset({"k2"}), "3.2")
+        assert api.load_vector("3.3.3", tmp_path) == (frozenset({"k2"}), "3.2")
+        assert api.load_vector("2.6.1", tmp_path) == (None, "")
+        assert api.load_vector("4.0.0", tmp_path) == (None, "")
+        assert api.load_vector("", tmp_path) == (None, "")
+
+    def test_a_vector_that_cannot_be_read_asks_nothing(self, tmp_path):
+        (tmp_path / "kea_defaults_3.0.json").write_text("{not json")
+        assert api.load_vector("3.0.1", tmp_path) == (None, "")
+
+    def test_compare_uses_the_daemons_vector_and_names_the_place(self, fake, server, monkeypatch):
+        monkeypatch.setattr(api, "defaults_for", lambda s, svc="dhcp4": (self.DEFAULTS, {"version": "3.0.1"}))
+        file_cfg = self._file()
+        del file_cfg["Dhcp4"]["hooks-libraries"]
+        agrees, where = api.compare(server, "dhcp4", file_cfg, self._live())
+        assert agrees is False and where.startswith("at Dhcp4.hooks-libraries:")
+        assert api.compare(server, "dhcp4", self._file(), self._live()) == (True, "")
+
+    def test_the_shipped_vectors_are_keys_only(self):
+        """The recorded files carry key paths and nothing else (no values), sorted, indexes blanked."""
+        for path in sorted(api.KEA_DEFAULTS_DIR.glob("kea_defaults_*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            assert set(data) <= {"kea", "paths"} and data["paths"] == sorted(set(data["paths"])), path.name
+            assert all(isinstance(p, str) and "[0]" not in p for p in data["paths"]), path.name

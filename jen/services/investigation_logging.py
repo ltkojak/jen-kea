@@ -566,7 +566,9 @@ def _record_daemon_after_reload(server: dict) -> None:
         if _api.declared_transport(server) == "api":
             _api.record_after_file_write(server, "dhcp4", "investigation logging", source="jen")
     except Exception as e:
-        logger.debug(f"investigation_logging: the daemon's configuration after the reload was not recorded: {e}")
+        logger.warning(
+            f"investigation_logging: the daemon's configuration after the reload was not recorded: {e}"
+        )  # (Q217 AB1) a swallowed failure is read at warning, not debug
 
 
 def _daemon_step(

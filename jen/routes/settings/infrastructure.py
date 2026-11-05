@@ -235,6 +235,15 @@ def _config_cards() -> list:
                 "holds": True,
                 "button": "Update helper",
             }
+        elif st.get(
+            "version"
+        ):  # a helper that reports a version and no build is older than v7: it is updated, not installed
+            row1 = {
+                "state": "bad",
+                "text": f"Kea host helper at build {helper_min} or later - this host's helper reports no build (it is older than v7); press Update helper",
+                "holds": True,
+                "button": "Update helper",
+            }
         else:
             row1 = {
                 "state": "bad",

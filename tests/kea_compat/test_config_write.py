@@ -575,7 +575,7 @@ def test_09_jens_own_transport_round_trip(facts, monkeypatch):
         server, "dhcp4", capture=False, notes=notes
     )  # a read only CLASSIFIES (Q216 AA19); the settlement is the Plan's and the card's
     assert notes and "is live" in notes[0] and 3 not in _subnet_ids(_file()), notes
-    notes = api.settle_pending(server, "dhcp4")
+    notes, _settled = api.settle_pending(server, "dhcp4")
     settled_cfg, settled_digest = api.read(server, "dhcp4", capture=False)
     facts["transport_pending_notes"] = notes
     facts["transport_pending_first_difference"] = _first_difference(_section_of(settled_cfg), _section_of(candidate))
@@ -785,6 +785,115 @@ def test_11_what_config_get_renames(facts):
     except Exception as exc:  # recorded, never asserted: the daemon may refuse the key outright on 3.x
         facts["singular_control_socket_error"] = f"{type(exc).__name__}: {exc}"[:400]
     assert _hash(), "the daemon does not answer after row 11"
+
+
+def _key_paths(obj, path=""):
+    """Every KEY path of `obj` (containers and leaves), list indexes blanked to `[]` and relative to the section - the shape of `kea_api_config.load_vector`'s paths. A key Kea renames is also
+    walked under the name it comes back as, so an alias is never mistaken for a default."""
+    from jen.services import kea_api_config as api
+
+    out = set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            here = f"{path}.{k}" if path else k
+            out.add(here)
+            out |= _key_paths(v, here)
+            alias = api.RENAMED_KEYS.get(k)
+            if alias:
+                alias_here = f"{path}.{alias}" if path else alias
+                out.add(alias_here)
+                out |= _key_paths([v], alias_here)
+    elif isinstance(obj, list):
+        for item in obj:
+            out |= _key_paths(item, path + "[]")
+    return out
+
+
+def _rich_candidate(authored):
+    """The job's own file plus one of each structure Jen authors, so the defaults Kea writes out for them are recorded too: a global option, a client class, a reservation, a relay, an option and a
+    user-context on a subnet, a shared network. Hooks are left out: their library paths belong to the image."""
+    import ipaddress
+
+    rich = copy.deepcopy(authored)
+    subnet = rich["subnet4"][0]
+    net = ipaddress.ip_network(subnet["subnet"])
+    subnet["option-data"] = [{"name": "routers", "data": str(net.network_address + 1)}]
+    subnet["reservations"] = [{"hw-address": "aa:bb:cc:dd:ee:01", "ip-address": str(net.network_address + 5)}]
+    subnet["relay"] = {"ip-addresses": [str(net.network_address + 1)]}
+    subnet["user-context"] = {"note": "compat"}
+    rich["option-data"] = [{"name": "domain-name-servers", "data": "10.98.0.53"}]
+    rich["client-classes"] = [{"name": "compat-class", "test": "substring(option[60].hex,0,4) == 'VoIP'"}]
+    rich["shared-networks"] = [
+        {
+            "name": "compat-guest",
+            "subnet4": [{"id": 98, "subnet": "10.98.0.0/24", "pools": [{"pool": "10.98.0.10 - 10.98.0.20"}]}],
+        }
+    ]
+    return rich
+
+
+def test_12_the_defaults_kea_writes_out(facts):
+    """Q217 AB6: the SOURCE of `jen/data/kea_defaults_<major.minor>.json`. A rich configuration is sent (`config-set`), `config-get` is read, and every key path that appeared and was not sent is a
+    default Kea writes out. The row FAILS when a recorded vector for this minor exists and differs from the daemon's answer (a Kea release that adds a default is caught by the weekly run), and
+    records the answer in the facts either way - the file is written from the artifact, never by hand. Then the three controls the entry names: the job's own file is the daemon's, the rich file with
+    a client class DELETED is not, and the job's own file (every default left out) is the daemon's configuration from before."""
+    from jen.services import kea_api_config as api
+
+    assert ORIGINAL is not None, "test_01 did not record the original configuration"
+    authored = json.loads(_STATE["bytes"])["Dhcp4"]
+    rich = _rich_candidate(authored)
+    version_reply = __kea.kea_command("version-get")
+    m = api._VERSION.search(
+        str((version_reply.get("arguments") or {}).get("extended") or version_reply.get("text") or "")
+    )
+    assert m, f"version-get gave no version: {_brief(version_reply)}"
+    version = m.group(0)
+    facts["defaults_kea_version"] = version
+    tested = __kea.kea_command("config-test", arguments={"Dhcp4": rich})
+    facts["defaults_config_test"] = _brief(tested)
+    assert tested.get("result") == 0, f"the daemon refused the rich candidate: {_brief(tested)}"
+    __real._ok(__kea.kea_command("config-set", arguments={"Dhcp4": rich}))
+    try:
+        running = _get()
+        sent = _key_paths(rich)
+        got = _key_paths(running["Dhcp4"])
+        defaults = sorted(got - sent)
+        facts["defaults_vector"] = {"kea": version, "paths": defaults}
+        facts["defaults_vector_path_count"] = len(defaults)
+        major, minor = int(m.group(1)), int(m.group(2))
+        recorded = api.vector_path(major, minor)
+        facts["defaults_recorded_file"] = recorded.name
+        if recorded.exists():
+            on_file = json.loads(recorded.read_text(encoding="utf-8"))["paths"]
+            facts["defaults_vector_equals_the_recorded_file"] = on_file == defaults
+            assert on_file == defaults, {
+                "added_by_the_daemon": sorted(set(defaults) - set(on_file)),
+                "gone_from_the_daemon": sorted(set(on_file) - set(defaults)),
+            }
+        else:
+            facts["defaults_vector_equals_the_recorded_file"] = (
+                None  # nothing recorded yet for this minor: the artifact is the record
+            )
+        paths = frozenset(defaults)
+        # control 1: the file the job runs is the daemon's, both directions
+        assert api.file_in_daemon({"Dhcp4": rich}, running, "dhcp4", defaults=paths), api.difference_text(
+            {"Dhcp4": rich}, running, "dhcp4", defaults=paths
+        )
+        # control 2: a deletion from the file is a difference, and the place is named
+        deleted = copy.deepcopy(rich)
+        del deleted["client-classes"]
+        assert not api.file_in_daemon({"Dhcp4": deleted}, running, "dhcp4", defaults=paths)
+        facts["defaults_a_deleted_class_reads_as"] = api.difference_text(
+            {"Dhcp4": deleted}, running, "dhcp4", defaults=paths
+        )
+        assert "client-classes" in facts["defaults_a_deleted_class_reads_as"]
+        # control 3: the keys the daemon wrote out as defaults, left out of the file the job started with, are not a difference (the daemon's configuration BEFORE the rich candidate)
+        assert api.file_in_daemon({"Dhcp4": authored}, ORIGINAL[0], "dhcp4", defaults=paths), api.difference_text(
+            {"Dhcp4": authored}, ORIGINAL[0], "dhcp4", defaults=paths
+        )
+    finally:
+        __real._ok(__kea.kea_command("config-set", arguments=_body(ORIGINAL[0])))
+    assert _hash(), "the daemon does not answer after row 12"
 
 
 def test_90_restore_puts_the_original_back(facts):

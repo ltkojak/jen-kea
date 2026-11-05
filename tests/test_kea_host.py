@@ -2285,7 +2285,7 @@ class TestMissingBinaryTellsTheRealReason:
         import re
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper").read_text(encoding="utf-8")
-        assert int(re.search(r"^HELPER_BUILD = (\d+)$", src, re.M).group(1)) == kea_host.JEN_HELPER_SHIPPED_BUILD == 20
+        assert int(re.search(r"^HELPER_BUILD = (\d+)$", src, re.M).group(1)) == kea_host.JEN_HELPER_SHIPPED_BUILD == 21
 
 
 class TestReadConfigForAValueNotForHistory:
@@ -2406,3 +2406,34 @@ class TestOnlyTheChannelsFailuresAreFailedReads:
         errors = []
         assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors, capture=False) == (None, None)
         assert errors and "AuthenticationException" in errors[0]
+
+
+class TestNoRouteValidatesByItself:
+    """Q217 AB7 - a route validates a candidate through `kea_host.test_via_transport` and nowhere else: the transport of the server decides how, and a route that picked its own (`test_config` over SSH,
+    `kea_api_config.test` over the API) left two of the four dhcp4 previews unable to run on a Live API server with no SSH. The one reviewed exception is the authoring preview: it writes a STARTER
+    file over SSH (`helper_only=True`) and refuses an api server on the line above it."""
+
+    ALLOWED = {"jen/routes/settings/authoring.py"}
+
+    def _direct_calls(self):
+        import ast
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        found = []
+        for path in sorted((root / "jen" / "routes").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                owner = getattr(node.func.value, "id", "")
+                if node.func.attr == "test_config" or (
+                    node.func.attr == "test" and owner in ("__api", "_api", "kea_api_config")
+                ):
+                    found.append((path.relative_to(root).as_posix(), node.lineno))
+        return found
+
+    def test_no_route_calls_test_config_or_the_api_test_directly(self):
+        calls = [(p, n) for p, n in self._direct_calls() if p not in self.ALLOWED]
+        assert calls == [], calls
+
+    def test_the_one_exception_is_still_the_authoring_preview(self):
+        assert {p for p, _n in self._direct_calls()} == self.ALLOWED

@@ -82,7 +82,7 @@ def _mode(path):
 
 class TestTheOpsExistAtBuild19:
     def test_the_build_and_the_ops(self, helper):
-        assert helper.HELPER_BUILD == 20
+        assert helper.HELPER_BUILD == 21
         for op in ("config-write-check", "allow-config-write", "deny-config-write"):
             assert op in helper._OPS
 
@@ -126,6 +126,13 @@ class TestTheWalls:
     def test_a_path_outside_the_config_directories_is_refused(self, helper, conf, monkeypatch, op):
         _account(monkeypatch, helper)
         _code, out = _run(helper, op, {"service": "dhcp4", "path": "/etc/passwd"})
+        assert out == {"ok": False, "error": "not-allowed"}
+
+    @pytest.mark.parametrize("op", ["config-write-check", "allow-config-write", "deny-config-write"])
+    def test_a_trailing_newline_is_refused(self, helper, conf, monkeypatch, op):
+        """Q217 AB14 - `$` matches before one trailing newline; the basename wall is a `fullmatch` (build 21)."""
+        _account(monkeypatch, helper)
+        _code, out = _run(helper, op, {"service": "dhcp4", "path": str(conf) + "\n"})
         assert out == {"ok": False, "error": "not-allowed"}
 
     @pytest.mark.parametrize("op", ["config-write-check", "allow-config-write", "deny-config-write"])

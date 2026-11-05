@@ -103,6 +103,11 @@ def host_of(url) -> str:
     return urlparse(url or "").hostname or ""
 
 
+_REAL_REPLACE = (
+    os.replace
+)  # captured once at import: every Walk of a 500-seed run installs a wrapper, and wrappers must not nest (Q217 AB4)
+
+
 class Walk:
     """One seeded walk. `run()` raises InvariantViolated (with the seed and the step log) at the first step that breaks an invariant."""
 
@@ -130,6 +135,9 @@ class Walk:
         os.environ.get("JEN_MODEL_WINDOW_SHARE", "0.06")
     )  # 0 takes the window operation out of every walk
 
+    #: Q217 (AB-n): how often the step is followed by `op_extend` - a live session's deadline extended, with the fault `first_marker_left_behind`. Its own random source.
+    EXTEND_SHARE = float(os.environ.get("JEN_MODEL_EXTEND_SHARE", "0.05"))  # 0 takes the extension out of every walk
+
     #: Q165: the HostTimer actor. False is the mutation check of I10 - the walk must go red without the host's timer.
     HOST_TIMER = True
 
@@ -144,6 +152,9 @@ class Walk:
         self.window_rng = random.Random(
             f"window-{seed}"
         )  # Q216: the same for the turn-on inside the finished session's window
+        self.extend_rng = random.Random(f"extend-{seed}")  # Q217: and for the extension of a live session
+        self.stale_next: dict = {}  # host -> the earlier marker the NEXT file write must leave behind (the fault `first_marker_left_behind`)
+        self.stale_marker: dict = {}  # host -> that marker's `until`, once a write has left it: I12 tolerates exactly it, and nothing else, below the extended deadline
         self.world, self.tmp_path = world, tmp_path
         self.log: list[str] = []
         self.step_no = 0
@@ -240,6 +251,20 @@ class Walk:
         monkeypatch.setattr(extensions, "CONFIG_FILE", str(self.path))
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca", raising=False)
         monkeypatch.setattr(app_config, "reload", self.sync)
+        # Q217 AB4: on Windows the walk's own reader (`self.sync`) can hold jen.config open at the instant the product's atomic `os.replace` lands, and the replace answers WinError 5. The walk retries
+        # that - five times at 50 ms, and only a PermissionError - so a 500-seed run measures the product's sequences and not the box's file locking. The product's write is unchanged.
+        from jen.services import private_files as _private_files
+
+        def replace_with_retry(src, dst, *a, **k):
+            for attempt in range(5):
+                try:
+                    return _REAL_REPLACE(src, dst, *a, **k)
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05)
+
+        monkeypatch.setattr(_private_files.os, "replace", replace_with_retry)
         self.sync()
         # the wire: every Kea call is answered by the PHYSICAL fake at the address the server names
         monkeypatch.setattr(inv._kea, "kea_command", self._kea_command)
@@ -360,7 +385,12 @@ class Walk:
             self._armed_by_this_turn_on = (fake.host, until)
             theirs = ((_logger_of(fake.file) or {}).get("user-context") or {}).get("jen-investigation")
             mine = ed._parse_until(until)
-            if not isinstance(theirs, dict) or ed._parse_until(theirs.get("until")) != mine:
+            planted = self.stale_marker.get(
+                fake.host
+            )  # (Q217) the fault left the FIRST deadline's marker on purpose: I12 judges that session by the host's state (`_i12`)
+            if not isinstance(theirs, dict) or (
+                ed._parse_until(theirs.get("until")) != mine and ed._parse_until(theirs.get("until")) != planted
+            ):
                 self.i12_breach = (
                     f"the host at {fake.host} was armed for {until} and the file it holds no longer carries that session's marker ({theirs}): the host's own timer undid the session between "
                     f"Jen's write and Jen's arm"
@@ -415,6 +445,12 @@ class Walk:
             return {"ok": False, "error": "write", "detail": "the rollback could not be written"}
         before_marker = has_marker(fake.file)
         fake.file = copy.deepcopy(payload["config"])
+        earlier = self.stale_next.pop(fake.host, None)
+        if earlier is not None and has_marker(fake.file):
+            # the fault `first_marker_left_behind` (Q217): the extension's write landed, and the FILE still carries the marker of the first deadline
+            ((_logger_of(fake.file) or {}).get("user-context") or {})["jen-investigation"] = copy.deepcopy(earlier)
+            self.stale_marker[fake.host] = ed._parse_until(earlier.get("until"))
+            self.say(f"FAULT the file on {fake.host} kept the marker of the first deadline {earlier.get('until')}")
         fake.writes += 1
         self.applies.append((self.op, fake.host))
         if before_marker and not has_marker(fake.file):
@@ -530,6 +566,10 @@ class Walk:
                     self.op_api_write()
                 if self.op != "idle" and self.window_rng.random() < self.WINDOW_SHARE:
                     self.op_turn_on_again_inside_the_window()
+                elif (
+                    self.op != "idle" and self.extend_rng.random() < self.EXTEND_SHARE
+                ):  # (an elif: the window operation's turn-off and turn-on already restart the daemon twice, and I3 allows two per step)
+                    self.op_extend()
             except InvariantViolated:
                 raise
             except Exception as e:  # an operation must never raise: it is the page's route and the scheduler's job
@@ -903,6 +943,38 @@ class Walk:
         finally:
             sfake.tick_before_arm = False
         self.say(f"window: turn_on again {server['id']} -> ok={out['ok']}")
+
+    def op_extend(self):
+        """Q217 (AB-n), the cell nobody had built: a LIVE session's deadline is extended (`turn_on` with a later deadline is how Jen extends one) and the extension's file write leaves the marker of the FIRST
+        deadline in the FILE. The properties are I12 (the host is armed for the longer session and does not restore it at the first deadline) and I10 (it is restored at the longer one); I12 tolerates
+        exactly the planted marker and nothing else. Its own random source; drawn only while a session Jen armed is live."""
+        rng = self.extend_rng
+        live = [
+            (host, until)
+            for host, until in self.armed.items()
+            if (ed._parse_until(until) or self.now) > self.now and self.physical[host].helper_state is not None
+        ]
+        if not live or self.raw_state()[0] != "ok" or self.start_kind != "ok":
+            return
+        host, until = rng.choice(live)
+        server = next((s for s in self.world.servers if s.get("ssh_host") == host), None)
+        sfake = self.physical[host]
+        if server is None or sfake.host_down or sfake.helper_state["restored_at"]:
+            return
+        longer = [
+            m for m in inv.DURATIONS if self.now + timedelta(minutes=m) > ed._parse_until(until) + timedelta(minutes=1)
+        ]
+        if not longer:
+            return
+        marker = ((_logger_of(sfake.file) or {}).get("user-context") or {}).get("jen-investigation")
+        if not isinstance(marker, dict):
+            return
+        self.stale_next[host] = copy.deepcopy(marker)
+        try:
+            out = self._turn_on(server, rng.choice(longer))
+        finally:
+            self.stale_next.pop(host, None)
+        self.say(f"extend: turn_on {server['id']} past {until} -> ok={out['ok']}")
 
     def op_turn_off(self):
         server = self._pick_server()
@@ -1587,14 +1659,25 @@ class Walk:
                 continue
             marker = ((_logger_of(fake.file) or {}).get("user-context") or {}).get("jen-investigation")
             state = fake.helper_state
+            marker_until = ed._parse_until(marker.get("until")) if isinstance(marker, dict) else None
+            stale = self.stale_marker.get(host)
+            if stale is not None and marker_until != stale:
+                self.stale_marker.pop(
+                    host, None
+                )  # something rewrote the marker: the planted one is gone, and the plain rule applies again
+                stale = None
+            if stale is not None and state is not None and ed._parse_until(state["until"]) is not None:
+                # (Q217) the extension's write left the FIRST deadline's marker in the file: the session is still the one the host is armed for (its state is the longer deadline), and it is still
+                # at DEBUG 55 and not restored - which is what this invariant is for
+                marker_until = ed._parse_until(state["until"])
             if (
                 not at_debug(fake.file)
                 or not isinstance(marker, dict)
-                or ed._parse_until(marker.get("until")) is None
-                or ed._parse_until(marker.get("until"))
+                or marker_until is None
+                or marker_until
                 < due  # (an EXTENSION that did not finish - its arm took and its record did not - leaves a LATER deadline in both: the same session, longer)
                 or state is None
-                or ed._parse_until(state["until"]) != ed._parse_until(marker.get("until"))
+                or ed._parse_until(state["until"]) != marker_until
                 or state["restored_at"]
             ):
                 self.fail(
@@ -1856,6 +1939,9 @@ class TestTheApiWriteCannotLandOverTheHostsRestore:
             FakeKea, "REVERIFY", False
         )  # the host that does not keep verifying (build 18): the fake's own switch, not a replaced method (Q216 BF1)
         monkeypatch.setattr(Walk, "API_WRITE_SHARE", 0.5)
+        monkeypatch.setattr(
+            Walk, "EXTEND_SHARE", 0.0
+        )  # (Q217) this check measures ONE fault; an extended session lives past the deadline the fault needs, so the extension is taken out of THESE walks (its own check follows the class below)
         try:
             walk_world(seed, STEPS).run()
         except InvariantViolated as red:
@@ -1869,6 +1955,33 @@ class TestTheApiWriteCannotLandOverTheHostsRestore:
         assert TestTheApiWriteCannotLandOverTheHostsRestore.RED, (
             "the walk never found the API write landing over the restore - its fault does not bite"
         )
+
+
+class TestAnExtendedSessionKeepsTheFirstMarkerHarmlessly:
+    """Q217 (AB-n), the cell nobody had built: a live session's deadline is extended and the extension's file write leaves the marker of the FIRST deadline in the file (`op_extend`, the fault
+    `first_marker_left_behind`). I12 judges the session by the host's state (armed for the longer deadline, not restored, the logger at DEBUG 55 until THAT deadline) and I10 asks that it is
+    restored at the longer one. The walk found nothing at 500 seeds; this check says the operation RUNS, so a walk that stops drawing it is not read as green."""
+
+    RAN = []
+
+    @pytest.mark.parametrize("seed", range(40))
+    def test_the_walk_with_extensions_is_green(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(Walk, "EXTEND_SHARE", 0.3)
+        walk = walk_world(seed, STEPS)
+        walk.run()
+        TestAnExtendedSessionKeepsTheFirstMarkerHarmlessly.RAN.append(
+            (
+                sum("extend: turn_on" in line and "ok=True" in line for line in walk.log),
+                sum("kept the marker of the first deadline" in line for line in walk.log),
+            )
+        )
+
+    def test_the_extension_and_its_fault_were_real(self):
+        ran = TestAnExtendedSessionKeepsTheFirstMarkerHarmlessly.RAN
+        print(
+            f"MODEL EXTENSIONS over {len(ran)} seeds: extended={sum(r[0] for r in ran)} stale markers left={sum(r[1] for r in ran)}"
+        )
+        assert sum(r[0] for r in ran) >= 10 and sum(r[1] for r in ran) >= 10, ran
 
 
 def _build19_reverify(self, st):

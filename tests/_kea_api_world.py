@@ -60,6 +60,13 @@ class Store:
                 return True
         return False
 
+    def mark_damaged(self, rev_id):
+        for r in self.rows:
+            if r["id"] == rev_id and r["source"] == "pending":
+                r["source"] = "damaged"
+                return True
+        return False
+
     def discard_pending(self, server_id, service):
         before = len(self.rows)
         self.rows = [
@@ -81,7 +88,16 @@ class Store:
 def install_store(monkeypatch):
     """Patch `config_revisions` with a fresh `Store`; a test module wraps this in its own `store` fixture."""
     s = Store()
-    for name in ("record", "latest", "latest_of_kind", "pending", "finish", "discard", "discard_pending"):
+    for name in (
+        "record",
+        "latest",
+        "latest_of_kind",
+        "pending",
+        "finish",
+        "discard",
+        "discard_pending",
+        "mark_damaged",
+    ):
         monkeypatch.setattr(f"jen.services.config_revisions.{name}", getattr(s, name))
     return s
 

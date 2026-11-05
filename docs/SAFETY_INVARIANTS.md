@@ -318,6 +318,15 @@ updater's allowlist.
 - `tests/test_write_mode_card.py` (`TestTheCardIsOneChoice`, `TestAnAdminAndAViewerSeeTheHeader`)
 - `tests/test_transport_switch.py`
 
+### CFG-004 - A file is the daemon's configuration only when each says everything the other says (but Kea's own written-out defaults)
+**Rule.** Whether the file on a Kea host is the configuration its daemon runs is asked in BOTH directions: everything the file says is carried by the daemon, AND every key the daemon runs that is not one of Kea's own written-out defaults (the daemon's own answer, recorded per minor version) is in the file. A key deleted from the file is a difference, never an agreement, so a `config-write` cannot destroy the deletion without the named consent; a file or a daemon that cannot be read is not a difference in either direction (the write's own guards decide).
+**Established.** Q217 (AB6, AB8).
+**Enforced at.** `jen/services/kea_api_config.py` (`_walk`, `_lacks`, `file_in_daemon`, `compare`, `load_vector`).
+**Tests.**
+- `tests/test_kea_api_config.py::TestADeletionIsADifference`
+- `tests/test_kea_api_config.py::TestKeaWritesItsDefaultsOut`
+- `tests/kea_compat/test_config_write.py::test_12_the_defaults_kea_writes_out` (the daemon's own answer, per Kea minor)
+
 ### FILE-001 - A secret is private from its first byte; a privileged write never resolves a service-owned parent by pathname
 **Rule.** No secret is written by a plain `open`, redirect or `cp`; a `.prev` is made only by the certificate set's commit; root never copies anything into the app tree from the config or content directories.
 **Established.** Q150, Q151, Q155.

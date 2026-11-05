@@ -129,6 +129,43 @@ class TestQ216AFileWriteOnAnApiServerRecordsTheDaemon:
         api.read(server, "dhcp4")  # the next read: nothing differs from the last `kea` row
         assert not [r for r in store.rows if r["source"] == "external"]
 
+    def test_a_reload_records_the_daemons_digest(self, world, monkeypatch):
+        """Q217 AB1 - `record_after_file_write` pinned from the reload caller: the row carries the digest the daemon itself answers with now."""
+        from jen.services import kea_api_config as api
+        from tests import _kea_api_world as api_world
+
+        store = api_world.install_store(monkeypatch)
+        api_world.install_probes(monkeypatch)
+        world.daemons[1].include_hash = True
+        monkeypatch.setattr(
+            inv._kea,
+            "kea_command",
+            lambda command, *a, server=None, **kw: world.daemons[server["id"]].kea_command(
+                command, arguments=a[1] if len(a) > 1 else None
+            ),
+        )
+        world.servers[0].update(config_transport="api", api_url="http://10.0.0.1:8000/")
+        server = world.servers[0]
+        assert inv.turn_on(server, 5)["ok"]
+        _cfg_now, digest, _why = api._get(server, "dhcp4")
+        row = [r for r in store.rows if r["hash_kind"] == "kea"][-1]
+        assert digest and row["sha256"] == digest and row["source"] == "jen"
+
+    def test_a_recording_that_fails_is_read_at_warning(self, world, monkeypatch, caplog):
+        """Q217 AB1 - the swallowed failure of the reload's recording is logged at `warning` (the operator's log level), never `debug`."""
+        import logging
+
+        from jen.services import kea_api_config as api
+
+        def boom(*a, **k):
+            raise RuntimeError("no store")
+
+        monkeypatch.setattr(api, "record_after_file_write", boom)
+        server = {**world.servers[0], "config_transport": "api"}
+        with caplog.at_level(logging.WARNING):
+            inv._record_daemon_after_reload(server)
+        assert any(r.levelno == logging.WARNING and "no store" in r.getMessage() for r in caplog.records)
+
     def test_a_file_server_records_nothing_of_the_kind(self, world, monkeypatch):
         from tests import _kea_api_world as api_world
 
@@ -549,8 +586,8 @@ class TestTheWrappersAroundTheHelperOps:
             kea_host.INVESTIGATION_MIN_HELPER_BUILD == 18
         )  # the investigation ops arrived at 18 and still need only 18
         assert (
-            kea_host.JEN_HELPER_SHIPPED_BUILD == 20 and kea_host.CONFIG_WRITE_MIN_HELPER_BUILD == 19
-        )  # build 20 changed the tick, not the ops: the ops still need only 19
+            kea_host.JEN_HELPER_SHIPPED_BUILD == 21 and kea_host.CONFIG_WRITE_MIN_HELPER_BUILD == 19
+        )  # builds 20 and 21 changed the tick and a wall, not the ops: the ops still need only 19
 
 
 class TestTheElevenRowsOfTheCandidateMarker:

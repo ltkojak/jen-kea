@@ -207,6 +207,18 @@ def finish(rev_id: int, *, source: str, sha256: str, summary: str | None = None,
         return False
 
 
+def mark_damaged(rev_id: int) -> bool:
+    """A pending row whose body cannot be read as a configuration is marked `damaged` (Q217 AB10-AB12): it stays in Config history as the record of what happened, and it no longer blocks. True when
+    a row was updated."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute("UPDATE kea_config_revisions SET source='damaged' WHERE id=%s AND source='pending'", (rev_id,))
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.warning(f"config_revisions.mark_damaged failed: {e}")
+        return False
+
+
 def discard_pending(server_id: int, service: str) -> int:
     """Delete every `pending` revision of one (server, service) (Q212): a restore - the operator's way out of an unresolved change - and a successful apply supersede them. Returns how many."""
     try:

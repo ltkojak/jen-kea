@@ -51,6 +51,8 @@
                     <span class="badge u-851d78" title="the baseline recorded when this server's transport was switched">switch</span>
                     {% elif r.source == 'pending' %}
                     <span class="badge badge-dynamic" title="written before the daemon was asked; settled by its own answer on the next read">pending</span>
+                    {% elif r.source == 'damaged' %}
+                    <span class="badge badge-dynamic" title="a pending change whose record could not be read as a configuration; kept here, no longer blocking">damaged</span>
                     {% else %}
                     <span class="badge badge-reserved">jen</span>
                     {% endif %}

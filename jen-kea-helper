@@ -327,7 +327,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 20
+HELPER_BUILD = 21
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -363,7 +363,7 @@ _PEM_KEY_RE = re.compile(
 # independent of whatever path Jen sent — Jen validates its own copy,
 # but this helper does not trust that.
 _ALLOWED_CONF_DIRS = ("/etc/kea", "/usr/local/etc/kea")
-_CONF_BASENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.conf$")
+_CONF_BASENAME_RE = re.compile(r"[A-Za-z0-9._-]+\.conf")  # used with fullmatch: `$` also matches before one trailing newline (build 21, Q217 AB14)
 
 _ALLOWED_SERVICES = ("dhcp4", "dhcp6", "d2")
 
@@ -412,7 +412,7 @@ def _allowed_conf_path(p):
         return False
     if posixpath.dirname(p) not in _ALLOWED_CONF_DIRS:
         return False
-    return bool(_CONF_BASENAME_RE.match(posixpath.basename(p)))
+    return bool(_CONF_BASENAME_RE.fullmatch(posixpath.basename(p)))
 
 
 _STANDARD_CONF_SERVICE = {"kea-dhcp4.conf": "dhcp4", "kea-dhcp6.conf": "dhcp6", "kea-dhcp-ddns.conf": "d2"}
@@ -1679,7 +1679,7 @@ def op_update(payload):
 _STATE_DIR = "/var/lib/jen-kea-helper"  # root 0700; holds one `investigation-<service>.json` (root 0600) per armed service
 _SYSTEMD_DIR = "/etc/systemd/system"
 _TIMER_NAME = "jen-kea-investigation"
-_STATE_FILE_RE = re.compile(r"^investigation-(dhcp4)\.json$")
+_STATE_FILE_RE = re.compile(r"investigation-(dhcp4)\.json")  # used with fullmatch: `$` also matches before one trailing newline (build 21, Q217 AB14)
 _ARM_MAX_AHEAD = timedelta(hours=24, minutes=1)
 _HUP_WAIT_S = 8.0  # how long Kea gets to show the reload before the one restart
 _RESTART_WAIT_S = 8.0  # how long a restarted daemon gets to show the file
@@ -2707,7 +2707,7 @@ def _self_restore(force=False):
     failed = []
     checked = 0
     for name in names:
-        m = _STATE_FILE_RE.match(name)
+        m = _STATE_FILE_RE.fullmatch(name)
         if not m:
             continue
         checked += 1

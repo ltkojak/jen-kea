@@ -134,7 +134,15 @@ class TestOneScript:
         for name in GUARDED:
             text = (TEMPLATES / name).read_text(encoding="utf-8")
             callers += [name for _ in re.finditer(r"\.submit\(\)", text)]
-        assert set(callers) <= {"add_subnet.html", "edit_subnet.html", "author_kea_config.html"}
+        assert (
+            set(callers)
+            <= {
+                "add_subnet.html",
+                "edit_subnet.html",
+                "author_kea_config.html",
+                "settings_kea.html",  # Q217: the Write mode card's switch form, submitted after the card's own confirmation (`jenConfirm`) - the wrapper above sets the flag
+            }
+        )
 
 
 class TestASwapInsideAnUntouchedFormResnaps:

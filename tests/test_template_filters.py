@@ -247,8 +247,8 @@ class TestNoBareCountInATemplate:
         ("servers.html", "transport_refused"): "a sentence (a remembered refusal, in Kea's own words)",
         ("settings_kea.html", "badge-reserved"): "a CSS class name (the transport badge's tone), not a count",
         ("settings_kea.html", "c.refused"): "a sentence (a remembered refusal, in Kea's own words)",
-        ("settings_kea.html", "test_detail or 'refused'"): "a sentence: Kea's own words",
-        ("settings_kea.html", "probe.write.account"): "an account name",
+        ("settings_kea.html", "get('test_detail') or 'refused'"): "a sentence: Kea's own words",
+        ("settings_kea.html", "get('write').account"): "an account name (`account` contains `count`)",
         (
             "_leases6_results.html",
             "badge-reserved",

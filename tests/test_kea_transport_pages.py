@@ -276,7 +276,7 @@ class TestARestoreOverTheApi:
 
 
 class TestTheHistoryLabelsTheNewSources:
-    @pytest.mark.parametrize("source", ["rollback", "switch", "pending"])
+    @pytest.mark.parametrize("source", ["rollback", "switch", "pending", "damaged"])
     def test_each_source_has_its_own_badge(self, logged_in_client, three, source):
         rev.record(1, "dhcp4", {"Dhcp4": {}}, "d" * 64, f"a {source} row", hash_kind="kea", source=source)
         html = logged_in_client.get("/servers/1/config-history?service=dhcp4").data.decode()

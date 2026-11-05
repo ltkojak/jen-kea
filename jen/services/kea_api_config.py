@@ -12,6 +12,9 @@ change set, the restore and the import dispatch on the transport and read nothin
 
 `needs_hands` (a bool, beside the code) is set when the daemon may be in a state Jen cannot name: the line a person reads says both digests.
 
+**A file or a daemon that cannot be read is not a difference; a write's own guards decide** (Q217, AB8). `apply` step (8) and `api_daemon_differs` both cite this: a write the daemon's own digest proved
+is `ok` with a note when the file cannot be read back; only a file that WAS read and does not carry what the daemon runs is `unverified`.
+
 What this module knows of Kea, from the rows of `tests/kea_compat/test_config_write.py` (docs/ARCHITECTURE.md 3.17):
   - `config-get` is not redacted (database passwords in plain text): a reply is NEVER logged, nor is a `config-set` payload; this module logs command names and digests only.
   - the digest is under `arguments.hash` on `config-get`, `config-set` and `config-hash-get`; Jen cannot compute it, so it is only ever compared with another digest the daemon gave.
@@ -25,6 +28,8 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import pathlib
+import re
 
 from jen.services import config_revisions as _rev
 from jen.services import kea as _kea
@@ -104,9 +109,17 @@ def _section(cfg: dict | None, service: str) -> dict:
 # compat row (`tests/kea_compat/test_config_write.py::test_11_what_config_get_renames`, Q216 BF4): a row and this table that disagree are settled by the row, and the table is edited.
 RENAMED_KEYS = {"hosts-database": "hosts-databases", "control-socket": "control-sockets"}
 
-# The ONE kind of string Kea re-renders: a pool "a - b" is reported as "a-b" (compat run 41712142556). The spacing rule is for a string UNDER one of these keys and nowhere else; a path the compat row
-# reports that is not a `pool` is a new entry here, named, never a wider rule (Q216 BF5).
-SPACE_INSENSITIVE_KEYS = frozenset({"pool"})
+# The ONE kind of string Kea re-renders: a pool "a - b" is reported as "a-b" (compat run 41712142556). The spacing rule is for a string AT one of these paths (indexes blanked; a shared network's
+# subnets are the same shape one level down) and nowhere else: a `user-context.pool` and a top-level `pool` compare exactly. A path the compat row reports that is not one of these is a new entry
+# here, named, never a wider rule (Q216 BF5, Q217 AB15).
+SPACE_INSENSITIVE_PATHS = frozenset({"subnet4[].pools[].pool", "subnet6[].pools[].pool", "subnet6[].pd-pools[].prefix"})
+_INDEX = re.compile(r"\[\d+\]")
+
+
+def _space_insensitive(path: str) -> bool:
+    blank = _INDEX.sub("[]", path)
+    return any(blank == known or blank.endswith("." + known) for known in SPACE_INSENSITIVE_PATHS)
+
 
 # Keys of `interfaces-config` that `config-get` OMITS when they hold their default (compat row 11, Kea 3.0.5, 3.2.1 and 3.3.3: a file carrying `service-sockets-require-all: false` and
 # `service-sockets-max-retries: 0` comes back without them). A file that carries one at its default is carried by a daemon that does not report it; any other value is a difference.
@@ -161,11 +174,13 @@ def _walk(running: object, candidate: object, under: str | None = None, path: st
                 return found
         return None
     if isinstance(running, str) and isinstance(candidate, str):
-        if under in SPACE_INSENSITIVE_KEYS:
+        if _space_insensitive(path):
             same = running.replace(" ", "") == candidate.replace(" ", "")
         else:
             same = running == candidate
         return None if same else (path, candidate, running)
+    if isinstance(running, bool) or isinstance(candidate, bool):  # (AB3) Python says True == 1: Kea does not
+        return None if type(running) is type(candidate) and running == candidate else (path, candidate, running)
     return None if running == candidate else (path, candidate, running)
 
 
@@ -180,22 +195,61 @@ def first_difference(running: object, candidate: object, under: str | None = Non
     return "" if found is None else (found[0] or "/")
 
 
-def file_in_daemon(file_cfg: dict | None, live_cfg: dict | None, service: str) -> bool:
-    """Is everything the FILE says carried by what the daemon runs? A file Jen authored (or an older Kea-written one) is a subset of the daemon's configuration with its defaults written out, and
-    nothing in it would be lost by a `config-write`; a file with a subnet or a value the daemon does not run is a hand edit and is not. (fix row 7: equality never held for an authored file.)"""
-    return _carries(_section(live_cfg, service), _section(file_cfg, service))
+def _lacks(running: object, candidate: object, defaults: frozenset, path: str = ""):
+    """THE reverse walk (Q217 AB6): `None` when everything the daemon RUNS is either in the file or one of Kea's own written-out defaults (`defaults`: key paths with indexes blanked, relative to the
+    section), else `(path, _MISSING, running_leaf)` for the FIRST key the daemon runs that the file does not say - a key DELETED from the file (a `hooks-libraries` entry, a subnet's option) reads as
+    "the file says nothing" and the next `config-write` would destroy the deletion. Run only after `_walk` passed (lists are the same length then). A key Kea renames is matched by its alias."""
+    if isinstance(running, dict) and isinstance(candidate, dict):
+        accounted = set()
+        for k, v in candidate.items():
+            here = f"{path}.{k}" if path else k
+            if k in running:
+                accounted.add(k)
+                found = _lacks(running[k], v, defaults, here)
+                if found is not None:
+                    return found
+                continue
+            alias = RENAMED_KEYS.get(k, "")
+            renamed = running.get(alias)
+            if isinstance(renamed, list) and len(renamed) == 1:
+                accounted.add(alias)
+                found = _lacks(renamed[0], v, defaults, here)
+                if found is not None:
+                    return found
+        for k, v in running.items():
+            if k in accounted:
+                continue
+            here = f"{path}.{k}" if path else k
+            if _INDEX.sub("[]", here) in defaults:
+                continue
+            return (here, _MISSING, v)
+        return None
+    if isinstance(running, list) and isinstance(candidate, list) and len(running) == len(candidate):
+        for i, (r, c) in enumerate(zip(running, candidate, strict=True)):
+            found = _lacks(r, c, defaults, f"{path}[{i}]")
+            if found is not None:
+                return found
+    return None
 
 
-_SECRET_WORDS = ("password", "secret", "token")
+def file_in_daemon(
+    file_cfg: dict | None, live_cfg: dict | None, service: str, defaults: frozenset | None = None
+) -> bool:
+    """Is the FILE the daemon's configuration, in both directions? Everything the file says is carried by what the daemon runs (a file Jen authored, or an older Kea-written one, is a subset of the
+    daemon's configuration with its defaults written out - fix row 7: equality never held for an authored file) AND, when `defaults` is known (Kea's own written-out key paths for the daemon's
+    minor version, `defaults_for`), every key the daemon runs that is not one of those defaults is in the file: a key deleted from the file is a difference, not an agreement (Q217 AB6). Without
+    `defaults` only the first direction can be asked."""
+    running, said = _section(live_cfg, service), _section(file_cfg, service)
+    if not _carries(running, said):
+        return False
+    return defaults is None or _lacks(running, said, defaults) is None
 
 
 def _secret_path(path: str) -> bool:
-    """Is any segment of `path` a name a value must not be printed under? (`hosts-databases[0].password` is on a path Jen prints.)"""
-    for segment in path.replace("[", ".").replace("]", "").split("."):
-        low = segment.lower()
-        if any(w in low for w in _SECRET_WORDS) or low == "key" or low.endswith(("-key", "_key")):
-            return True
-    return False
+    """Is any segment of `path` a key whose VALUE is a secret? (`hosts-databases[0].password` is on a path Jen prints.) The one definition is `secret_keys.is_secret_key` (LEAK-001)."""
+    from jen.services.secret_keys import is_secret_key
+
+    return any(is_secret_key(segment) for segment in re.split(r"[.\[\]]+", path) if segment)
 
 
 def _leaf(value: object) -> str:
@@ -209,16 +263,100 @@ def _leaf(value: object) -> str:
     return text if len(text) <= 60 else text[:59] + "…"
 
 
-def difference_text(file_cfg: dict | None, live_cfg: dict | None, service: str) -> str:
+def difference_text(
+    file_cfg: dict | None, live_cfg: dict | None, service: str, defaults: frozenset | None = None
+) -> str:
     """Where the file and the daemon differ, in a sentence an operator can act on: `at <path>: the file says <a>, the daemon <b>` (each leaf cut to 60 characters, and the values replaced by an
-    ellipsis when any segment of the path names a secret) - or `""` when the file is carried. The path is prefixed with the section (`Dhcp4.`)."""
-    found = _walk(_section(live_cfg, service), _section(file_cfg, service), None, SERVICE_KEY.get(service, service))
+    ellipsis when any segment of the path names a secret) - or `""` when the file is the daemon's (`file_in_daemon`, both directions). The path is prefixed with the section (`Dhcp4.`)."""
+    section = SERVICE_KEY.get(service, service)
+    running, said = _section(live_cfg, service), _section(file_cfg, service)
+    found = _walk(running, said, None, section)
+    if found is None and defaults is not None:
+        found = _lacks(running, said, defaults)
+        if found is not None:
+            found = (f"{section}.{found[0]}", found[1], found[2])
     if found is None:
         return ""
     path, mine, theirs = found
     if _secret_path(path):
         return f"at {path}: the file and the daemon differ (the values are not shown)"
     return f"at {path}: the file says {_leaf(mine)}, the daemon {_leaf(theirs)}"
+
+
+# ── Kea's written-out defaults, per minor version (Q217 AB6) ─────────────────────────────────────────────────────────────
+# `config-get` writes Kea's defaults out, so "the daemon runs a key the file does not say" is a deletion only when that key is NOT one of them. The set is the daemon's own answer, never a guess:
+# `tests/kea_compat/test_config_write.py` row 12 sends a rich minimal configuration, reads `config-get`, and records every key path that appeared and was not sent; the recorded file is committed
+# under `jen/data/` (keys only, one per Kea minor, dhcp4) and the row FAILS when the daemon's answer differs from it, so a Kea release that adds a default is caught by the weekly run.
+KEA_DEFAULTS_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
+_VERSION = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+_VECTOR_NAME = re.compile(r"kea_defaults_(\d+)\.(\d+)\.json")
+
+
+def vector_path(major: int, minor: int) -> pathlib.Path:
+    return KEA_DEFAULTS_DIR / f"kea_defaults_{major}.{minor}.json"
+
+
+def load_vector(version: str, directory: pathlib.Path | None = None) -> tuple[frozenset | None, str]:
+    """`(paths, vector_name)` for a Kea version text: the vector of its own major.minor, else the nearest LOWER minor of the same major (a newer Kea that has not been recorded yet), else
+    `(None, "")` - nothing is known about its defaults and the reverse compare is not asked (Q217 AB6)."""
+    m = _VERSION.search(version or "")
+    if not m:
+        return None, ""
+    major, minor = int(m.group(1)), int(m.group(2))
+    directory = directory or KEA_DEFAULTS_DIR
+    best = None
+    try:
+        for entry in directory.iterdir():
+            f = _VECTOR_NAME.fullmatch(entry.name)
+            if f and int(f.group(1)) == major and int(f.group(2)) <= minor:
+                key = int(f.group(2))
+                if best is None or key > best[0]:
+                    best = (key, entry)
+    except OSError:
+        return None, ""
+    if best is None:
+        return None, ""
+    try:
+        data = json.loads(best[1].read_text(encoding="utf-8"))
+        paths = frozenset(str(p) for p in data["paths"])
+    except (OSError, ValueError, KeyError, TypeError):
+        logger.warning("kea_api_config: the defaults vector %s cannot be read", best[1].name)
+        return None, ""  # a vector that cannot be read asks nothing: the first direction still decides
+    return paths, f"{major}.{best[0]}"
+
+
+def daemon_version(server: dict, service: str = "dhcp4") -> str:
+    """The daemon's own version text from `version-get` (`3.0.1`), or `""` when it did not answer."""
+    reply = _cmd(server, service, "version-get")
+    if not _ok(reply):
+        return ""
+    args = reply.get("arguments") if isinstance(reply.get("arguments"), dict) else {}
+    m = _VERSION.search(str(args.get("extended") or reply.get("text") or ""))
+    return m.group(0) if m else ""
+
+
+def defaults_for(server: dict, service: str = "dhcp4") -> tuple[frozenset | None, dict]:
+    """`(paths, facts)` for the daemon on `server`: its defaults vector (dhcp4 only; recorded per minor) and `{"version", "vector", "exact"}`. `paths` is None when the version is unknown or no vector
+    covers it, and the facts say which (the card reads them)."""
+    facts = {"version": "", "vector": "", "exact": False}
+    if service != "dhcp4":
+        return None, facts
+    version = daemon_version(server, service)
+    facts["version"] = version
+    paths, name = load_vector(version)
+    facts["vector"] = name
+    m = _VERSION.search(version)
+    facts["exact"] = bool(paths is not None and m and name == f"{m.group(1)}.{m.group(2)}")
+    return paths, facts
+
+
+def compare(server: dict, service: str, file_cfg: dict | None, live_cfg: dict | None) -> tuple[bool, str]:
+    """`(agree, where)` - the ONE question every caller asks of a file and a daemon (Q217 AB6): `file_in_daemon` in both directions with the daemon's own defaults vector, and `difference_text` for
+    the first place they differ. `agree` is True and `where` is "" when the file is the daemon's."""
+    defaults, _facts = defaults_for(server, service)
+    if file_in_daemon(file_cfg, live_cfg, service, defaults=defaults):
+        return True, ""
+    return False, difference_text(file_cfg, live_cfg, service, defaults=defaults)
 
 
 def same_modulo_defaults(a_cfg: dict | None, b_cfg: dict | None, service: str) -> bool:
@@ -422,6 +560,21 @@ def record_unreadable(server: dict, service: str = "dhcp4") -> str:
     return ""
 
 
+DAMAGED_SENTENCE = "the record of an earlier change on {name} is damaged; Settle it now compares digests and removes it"
+
+
+def _pending_candidate(row: dict, service: str = "dhcp4") -> dict | None:
+    """THE one place a pending row's body is parsed (Q217 AB10-AB12): the candidate configuration it holds, or `None` when the row is DAMAGED - a body that is not JSON, not an object, or whose
+    service section is empty or missing. A damaged row is never "live" and never "nothing pending": it blocks, and `settle_pending` compares digests and removes it."""
+    try:
+        parsed = json.loads(row["config"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not isinstance(parsed, dict) or not _section(parsed, service):
+        return None
+    return parsed
+
+
 def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes: list | None) -> None:
     """What a pending row would be settled as, said in a line - and nothing else: no command is sent, no row changes (a read is not a write path, Q216 AA19). Raises `RevisionStoreUnreadable`."""
     sid = server.get("id")
@@ -430,9 +583,9 @@ def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes:
     row = _rev.pending(sid, service)
     if row is None:
         return
-    try:
-        candidate = json.loads(row["config"])
-    except (TypeError, ValueError):
+    candidate = _pending_candidate(row, service)
+    if candidate is None:
+        notes.append(DAMAGED_SENTENCE.format(name=_name(server)))
         return
     at = str(row.get("created_at") or "an earlier time")
     if _row_age_seconds(row) < PENDING_SETTLE_SECONDS:
@@ -451,47 +604,61 @@ def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes:
         )
 
 
-def settle_pending(server: dict, service: str = "dhcp4") -> list[str]:
+def settle_pending(server: dict, service: str = "dhcp4") -> tuple[list[str], bool]:
     """Settle a pending row by content NOW - the two places that may (Q216 AA19), both under `kea_changeset.change_lock`: this, called by the card's "settle" route, and `pending_block`, asked by the
-    Plan of a change set and by `apply`. The lines say what happened."""
+    Plan of a change set and by `apply`. `(lines, settled)`: the lines say what happened, `settled` is True only when a row was finished or removed (Q217 AB13)."""
     notes: list[str] = []
     cfg, digest, why = _get(server, service)
     if cfg is None:
-        return [f"{_name(server)} did not answer ({why}); nothing was settled"]
+        return [f"{_name(server)} did not answer ({why}); nothing was settled"], False
     try:
-        _reconcile_pending(server, service, cfg, digest, notes)
+        _cfg, _digest, settled = _reconcile_pending(server, service, cfg, digest, notes)
     except _rev.RevisionStoreUnreadable:
-        notes.append(unreadable_sentence(server))
-    return notes or ["there is no pending change to settle"]
+        return [unreadable_sentence(server)], False
+    return notes or ["there is no pending change to settle"], settled
 
 
-def _reconcile_pending(server: dict, service: str, cfg: dict, digest: str, notes: list | None) -> tuple[dict, str]:
+def _reconcile_pending(
+    server: dict, service: str, cfg: dict, digest: str, notes: list | None
+) -> tuple[dict, str, bool]:
     """If Jen died between `config-set` and the verify, the next change finds a `pending` row and settles it by CONTENT (Jen cannot compute Kea's digest, so a digest alone cannot say
     whose configuration runs): equal to the candidate -> that change is live, `config-write` is sent (idempotent) and verified, the row becomes `jen`; its digest equal to the row's BEFORE
-    digest -> nothing landed, the row is deleted; neither -> the row stays and the line names both digests; no answer -> the row stays. Returns the (cfg, digest) the daemon runs NOW. A WRITER:
-    never from a read - the caller holds the change lock. Raises `RevisionStoreUnreadable`."""
+    digest -> nothing landed, the row is deleted; neither -> the row stays and the line names both digests; no answer -> the row stays. A DAMAGED row (`_pending_candidate`) is removed when the
+    daemon's digest is the row's BEFORE digest and otherwise marked `damaged` with the daemon's digest named - never "live". Returns `(cfg, digest, settled)`: the configuration the daemon runs NOW
+    and whether a row was finished or removed. A WRITER: never from a read - the caller holds the change lock. Raises `RevisionStoreUnreadable`."""
     sid = server.get("id")
     if sid is None or service not in SERVICE_KEY:
-        return cfg, digest
+        return cfg, digest, False
     row = _rev.pending(sid, service)
     if row is None:
-        return cfg, digest
-    try:
-        candidate = json.loads(row["config"])
-    except (TypeError, ValueError):
-        return cfg, digest
+        return cfg, digest, False
     at = str(row.get("created_at") or "an earlier time")
+    candidate = _pending_candidate(row, service)
+    if candidate is None:
+        if row.get("sha256") and digest == row["sha256"]:
+            _rev.discard(row["id"])
+            if notes is not None:
+                notes.append(
+                    f"a change of {at} never reached the daemon (its record was damaged); the record was removed"
+                )
+        else:
+            _rev.mark_damaged(row["id"])
+            if notes is not None:
+                notes.append(
+                    f"the record of a change of {at} is damaged and the daemon runs {digest}; restore from Config history if that is not what you expect"
+                )
+        return cfg, digest, True
     if _row_age_seconds(row) < PENDING_SETTLE_SECONDS:
         if notes is not None:
             notes.append(
                 f"a change of {at} is in progress; it is not settled until it has had {PENDING_SETTLE_SECONDS} s"
             )
-        return cfg, digest
+        return cfg, digest, False
     if row.get("sha256") and digest == row["sha256"]:
         _rev.discard(row["id"])
         if notes is not None:
             notes.append(f"a change of {at} never reached the daemon; its record was removed")
-        return cfg, digest
+        return cfg, digest, True
     if _carries(_section(cfg, service), _section(candidate, service)):
         # (second pass, row 5) the settlement's `config-write` is a write of this server's file: it asks what every other writer asks first - the investigation marker and the host's restore window
         from jen.services import investigation_logging as _inv
@@ -502,35 +669,38 @@ def _reconcile_pending(server: dict, service: str, cfg: dict, digest: str, notes
         if waits:
             if notes is not None:
                 notes.append(f"a change of {at} is live and its file write waits: {waits}")
-            return cfg, digest
+            return cfg, digest, False
         wrote = write_file(server, service)
         again, digest2, _ = _get(server, service)
         if wrote.get("ok") and again is not None and digest2:
             _rev.finish(row["id"], source="jen", sha256=digest2, cfg=again)
             if notes is not None:
                 notes.append(f"a change of {at} was finished now")
-            return again, digest2
+            return again, digest2, True
         if notes is not None:
             notes.append(
                 f"a change of {at} is live but its file write is not proved ({wrote.get('detail') or 'no answer'}); the daemon runs {digest}"
             )
-        return cfg, digest
+        return cfg, digest, False
     if notes is not None:
         notes.append(
             f"a change of {at} is unresolved: the daemon runs {digest}, which is neither the state before it ({row.get('sha256') or 'unknown'}) nor the change; resolve it from Config history"
         )
-    return cfg, digest
+    return cfg, digest, False
 
 
 def pending_block(server: dict, service: str) -> str:
     """A sentence when a pending change is on record and the daemon is in neither of its states (read, reconcile, and nothing settled it); else "". `apply` refuses on it (a restore, which is
-    the operator's way out, passes `source="restore"` and is not stopped)."""
+    the operator's way out, passes `source="restore"` and is not stopped). A DAMAGED row blocks with the same sentence the read gives; only `settle_pending` removes it."""
     sid = server.get("id")
     if sid is None:
         return ""
     try:
-        if _rev.pending(sid, service) is None:
+        row = _rev.pending(sid, service)
+        if row is None:
             return ""
+        if _pending_candidate(row, service) is None:
+            return DAMAGED_SENTENCE.format(name=_name(server))
         notes: list = []
         cfg, digest, why = _get(server, service)
         if cfg is None:
@@ -682,6 +852,11 @@ def apply(
         return _result(False, "guard", guarded)
 
     if source != "restore":
+        unreadable = record_unreadable(server, service)
+        if unreadable:
+            return _result(
+                False, "unreadable", unreadable
+            )  # (Q217 AB9) nothing was sent and nobody's hands are needed: the record has to be readable again
         blocked = pending_block(server, service)
         if blocked:
             return _unproved("unverified", blocked)
@@ -761,9 +936,14 @@ def apply(
         )
 
     raw_sha = None
+    note = ""
     if _has_ssh(server):  # (8)
         file_cfg, raw_sha = _host.read_config_versioned(server, service, capture=False)
-        if file_cfg is None or not same_modulo_defaults(file_cfg, got, service):
+        if file_cfg is None and not unwritten:
+            # (Q217 AB8) the daemon proved the write (its digest is the set's); a file that cannot be READ BACK is not a difference - a write's own guards decide
+            note = f"the file on {_name(server)} could not be read back; Config history carries what the daemon runs"
+            raw_sha = None
+        elif file_cfg is None or not same_modulo_defaults(file_cfg, got, service):
             return _unproved(
                 "unverified",
                 f"the file on {_name(server)} does not carry what the daemon runs"
@@ -781,7 +961,7 @@ def apply(
         )  # (fix row 2) an unresolved row an earlier crash left is superseded by a change that stood
     if raw_sha and sid is not None and not str(raw_sha).startswith(_host._CANONICAL_SENTINEL_PREFIX):
         _rev.record(sid, service, got, raw_sha, summary or f"{source} {service}", hash_kind="raw", source=source)
-    return _result(True, "ok", sha256=h1)
+    return _result(True, "ok", sha256=h1, **({"note": note} if note else {}))
 
 
 def revert(
@@ -829,9 +1009,11 @@ def api_daemon_differs(server: dict, service: str) -> str:
             "restore or resolve it from Config history first"
         )
     file_cfg, raw = _host.read_config_versioned(server, service, capture=False)
-    if file_cfg is None or file_in_daemon(file_cfg, live, service):
+    if file_cfg is None:
         return ""
-    where = difference_text(file_cfg, live, service)
+    agrees, where = compare(server, service, file_cfg, live)
+    if agrees:
+        return ""
     return (
         f"the daemon on {_name(server)} runs a configuration its file does not carry ({where + '; ' if where else ''}the daemon {digest[:12]}, the file {str(raw or 'unknown')[:12]}); "
         "restore or resolve it from Config history first"
@@ -894,6 +1076,9 @@ def _bound(server: dict) -> str:
 
 
 CONSENTS = ("consent_rendering", "consent_unauthenticated", "discard_file_edit", "confirm_no_include")
+# A stored result with no `consents` list (beta.1's shape) has accepted the file rewrite - and, for a server with no SSH, the structural confirmation that no later fact can change - and nothing
+# else (Q217 AB2): an endpoint that has lost its authentication, or a file that no longer matches, blocks until the card's step 3 is ticked again.
+LEGACY_CONSENTS = ("consent_rendering", "confirm_no_include")
 
 
 def consent_gap(name: str, facts: dict | None, consents, *, has_ssh: bool, strict: bool = True) -> tuple[str, str]:
@@ -996,7 +1181,7 @@ def probe_gate(server: dict, source: str = "jen") -> str:
     if not stored.get("consented_at"):
         return f"changes over the API to {_name(server)} have not been allowed yet - read the facts and allow them from the server's card"
     # the consent on record covers the facts it was given for; a stored result from before the consents were recorded (7.0.0-beta.1) counts as having been given all of them
-    given = stored.get("consents", CONSENTS)
+    given = stored.get("consents", LEGACY_CONSENTS)
     uncovered = consent_allowed(_name(server), stored, given, has_ssh=_has_ssh(server), strict=False)
     if uncovered:
         prefix = f"{_name(server)}: "
@@ -1143,9 +1328,15 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False, consen
                 :300
             ]
         file_cfg, _raw = _host.read_config_versioned(server, service, capture=False)
-        out["agree"] = None if file_cfg is None or cfg is None else file_in_daemon(file_cfg, cfg, service)
-        if out["agree"] is False:
-            out["agree_at"] = difference_text(file_cfg, cfg, service)
+        if file_cfg is None or cfg is None:
+            out["agree"] = None
+        else:
+            out["agree"], where = compare(server, service, file_cfg, cfg)
+            if out["agree"] is False:
+                out["agree_at"] = where
+            out["defaults"] = defaults_for(server, service)[
+                1
+            ]  # the version and the vector the compare used (the card says when none covered it)
         if check.get("ok") and check.get("may_write"):
             refused = None  # evidence: the host says the daemon's account may write its file
     else:

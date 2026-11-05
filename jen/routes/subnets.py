@@ -801,7 +801,7 @@ def edit_subnet_preview(subnet_id):
             if not changed:
                 server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
                 continue
-            res = __host.test_config(server, "dhcp4", cfg)
+            res = __host.test_via_transport(server, "dhcp4", cfg)
             if res["ok"]:
                 server_results.append({"name": name, "ok": True, "message": "Config test passed"})
             elif res["code"] == "missingbinary":
@@ -1519,7 +1519,14 @@ def dhcp_class_preview():
                     )
                     candidate = __classes.merge_class_fields(existing, name, expr)
                     preview_cfg, _code = __edit.upsert_class4(full_cfg, candidate)
-                    test_result = __host.test_config(ssh_server, "dhcp4", preview_cfg)
+                    test_result = __host.test_via_transport(ssh_server, "dhcp4", preview_cfg)
+                    if (
+                        test_result.get("code") == "skipped"
+                    ):  # a Read-only server writes nothing: there is nothing to validate it against (Q217 AB7)
+                        test_result = {
+                            "ok": None,
+                            "detail": "That server is Read-only, so this was not validated against it; switch its Write mode to validate.",
+                        }
             except Exception:
                 # v5.19.1 (14G) — an SSH failure on a legacy-path host used
                 # to raise straight out of this route, showing a 500 in the
@@ -1880,7 +1887,7 @@ def edit_subnet6_preview(subnet_id):
             if not changed:
                 server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
                 continue
-            res = __host.test_config(server, "dhcp6", cfg)
+            res = __host.test_via_transport(server, "dhcp6", cfg)
             if res["ok"]:
                 server_results.append({"name": name, "ok": True, "message": "Config test passed"})
             elif res["code"] == "missingbinary":
@@ -2334,9 +2341,7 @@ def import_windows_preview(source):
     if src["key"] == "isc":
         # to_kea's summary lines say "scope" (the Windows word); a dhcpd.conf has subnets
         report = [("subnet " + line[len("scope ") :]) if line.startswith("scope ") else line for line in report]
-    test_result = (
-        __api.test(primary, "dhcp4", new_cfg) if kind == "api" else __host.test_config(primary, "dhcp4", new_cfg)
-    )
+    test_result = __host.test_via_transport(primary, "dhcp4", new_cfg)
 
     # v5.28.0 (Q24, C4) — preview==apply: Apply pushes exactly this
     # candidate config (never a fresh to_kea() call) and refuses unless

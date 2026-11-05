@@ -336,6 +336,13 @@ class TestAFilePathWriteToAnApiServerComparesFirst:
         assert "apply-config" in helper.ops() and "service" in helper.ops()
         assert any(r["hash_kind"] == "kea" and r["source"] == "jen" for r in store.rows)
 
+    def test_a_restart_records_the_daemons_digest(self, daemon, helper, store):
+        """Q217 AB1 - `record_after_file_write` pinned from the change set's caller: the `kea` row carries the digest the daemon answers with after the restart."""
+        server = self._wire(daemon, helper, {"Dhcp4": copy.deepcopy(daemon.running)})
+        assert cs.apply_change("dhcp4", lifetime(5), "logging on", servers=[server], transport="file").status == "ok"
+        row = [r for r in store.rows if r["hash_kind"] == "kea" and r["source"] == "jen"][-1]
+        assert row["sha256"] == daemon.digest()
+
     def test_a_daemon_that_does_not_answer_does_not_block_the_write(self, daemon, helper, store):
         """The host's own restore must still be possible when the daemon is down."""
         server = self._wire(daemon, helper, {"Dhcp4": {"valid-lifetime": 1}})
@@ -373,6 +380,49 @@ class TestAnApiServerWithSshIsCheckedForAnUnloadedEdit:
         daemon._answer = write_through
         result = cs.apply_change("dhcp4", lifetime(5), "x", servers=[server])
         assert result.status == "ok", result.lines
+
+
+class TestAPreviewValidatesOnItsOwnTransport:
+    """Q217 AB7 - `kea_host.test_via_transport`: the validation a preview runs is the one the write would take. An api server with no SSH validates over `config-test`; a file server through the
+    helper; an off server is skipped (nothing will be written, so Apply is not held by it)."""
+
+    def test_an_api_server_with_no_ssh_is_validated_by_the_daemon(self, daemon, helper, store):
+        res = kea_host.test_via_transport(api_server(daemon), "dhcp4", {"Dhcp4": copy.deepcopy(daemon.running)})
+        assert res["ok"] is True and "config-test" in daemon.commands and "test-config" not in helper.ops()
+
+    def test_a_daemon_that_refuses_the_candidate_says_so(self, daemon, helper, store):
+        daemon.test_fails = "bad pool"
+        res = kea_host.test_via_transport(api_server(daemon), "dhcp4", {"Dhcp4": copy.deepcopy(daemon.running)})
+        assert res["ok"] is False and res["code"] == "testerror"
+
+    def test_a_file_server_is_validated_through_the_helper(self, daemon, helper, store):
+        res = kea_host.test_via_transport(FILE_SERVER, "dhcp4", {"Dhcp4": {}})
+        assert res["ok"] is True and "test-config" in helper.ops() and "config-test" not in daemon.commands
+
+    def test_the_helper_only_and_tls_arguments_reach_the_file_path(self, daemon, helper, store, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(kea_host, "test_config", lambda server, service, cfg, **kw: seen.update(kw) or {"ok": True})
+        kea_host.test_via_transport(FILE_SERVER, "dhcp4", {}, tls_paths={"a": "b"}, helper_only=True)
+        assert seen == {"tls_paths": {"a": "b"}, "helper_only": True}
+
+    def test_an_off_server_is_skipped_and_nothing_is_sent(self, daemon, helper, store):
+        server = {"id": 9, "name": "kea-z", "api_url": daemon.url, "ssh_host": "10.0.0.9", "config_transport": "off"}
+        res = kea_host.test_via_transport(server, "dhcp4", {"Dhcp4": {}})
+        assert res == {"ok": True, "code": "skipped", "detail": "read-only"}
+        assert "config-test" not in daemon.commands and "test-config" not in helper.ops()
+
+
+class TestAnUnreadableRecordStore:
+    """Q217 AB9 - a store that cannot be asked is its own outcome at PLAN: nothing is sent, and nobody's hands are needed (the store has to come back)."""
+
+    def test_an_unreadable_store_aborts_without_hands(self, daemon, helper, store):
+        server = api_server(daemon)
+        store.unreadable = True
+        result = cs.apply_change("dhcp4", lifetime(5), "x", servers=[server])
+        assert result.status == "aborted" and result.last_code == "unreadable"
+        assert result.needs_hands == [] and result.needs_hands_ids == []
+        assert any("cannot be read" in t for _k, t in result.lines)
+        assert not any(c in daemon.commands for c in ("config-set", "config-write"))
 
 
 class TestTheCallersDoNotChange:

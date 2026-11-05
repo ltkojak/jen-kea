@@ -48,7 +48,7 @@ def worked(monkeypatch):
     monkeypatch.setattr("jen.services.kea_api_config.clear_refusal", lambda sid: calls.append("fixed") or True)
     monkeypatch.setattr(
         "jen.services.kea_api_config.settle_pending",
-        lambda *a, **k: calls.append("settle") or ["a change was finished now"],
+        lambda *a, **k: calls.append("settle") or (["a change was finished now"], True),
     )
     monkeypatch.setattr("jen.services.capabilities.invalidate", lambda *a, **k: None)
     return calls
@@ -178,3 +178,11 @@ class TestTheSettleRouteWorksUnderTheLockAndIsAudited:
     def test_it_settles_and_says_what_was_done(self, logged_in_client, worked):
         r = logged_in_client.post("/settings/infrastructure/settle-pending-change/3", follow_redirects=True)
         assert r.status_code == 200 and worked == ["settle"] and b"finished now" in r.data
+
+    def test_a_young_change_flashes_warning(self, logged_in_client, worked, monkeypatch):
+        monkeypatch.setattr(
+            "jen.services.kea_api_config.settle_pending",
+            lambda *a, **k: (["a change of T is in progress; it is not settled until it has had 120 s"], False),
+        )
+        r = logged_in_client.post("/settings/infrastructure/settle-pending-change/3", follow_redirects=True)
+        assert r.status_code == 200 and b"in progress" in r.data and b"alert-warning" in r.data

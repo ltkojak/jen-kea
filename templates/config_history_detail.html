@@ -21,7 +21,9 @@
 {% elif rev.source == 'baseline' %}
 <div class="alert alert-info">{{ icon("info") }} This is the first config Jen saw on this host for <code>{{ rev.service }}</code> — recorded so history has a starting point, not a change Jen made.</div>
 {% elif rev.source == 'pending' %}
-<div class="alert alert-warning">{{ icon("triangle-alert") }} This change was written before the daemon was asked and the daemon's own answer has not settled it: it may or may not be what the daemon runs. The next read of the server settles it by content; if it stays here, restore the revision you want.</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} This change was written before the daemon was asked and the daemon's own answer has not settled it: it may or may not be what the daemon runs. The next change, or Settle it now on the server's Write mode card, settles it by content; if it stays here, restore the revision you want.</div>
+{% elif rev.source == 'damaged' %}
+<div class="alert alert-warning">{{ icon("triangle-alert") }} This was a pending change whose record could not be read as a configuration, so Jen could not tell whether it ever reached the daemon. It is kept here and no longer blocks; restore from an earlier revision if the daemon is not running what you expect.</div>
 {% endif %}
 {% if rev.hash_kind == 'kea' %}
 <p class="u-41e804">Recorded from the daemon's own answer over its API (the digest is Kea's, not a hash of a file).</p>

@@ -131,7 +131,7 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
             f"{name}: the file on the host could not be read (is the helper installed? Settings → Kea → SSH); nothing was changed"
         )
     live, digest, why = _api._get(server, SERVICE)
-    if live is not None and not _api.file_in_daemon(file_cfg, live, SERVICE):
+    if live is not None and not _api.compare(server, SERVICE, file_cfg, live)[0]:
         # (fix row 5) compare FIRST: the file carries something the daemon does not run (a hand edit, or a change the daemon never wrote). Overwriting it is a named consent; a daemon that was never
         # granted the write (so `config-write` is refused) still leaves `api` once they agree, and the compare decides again after the best-effort write
         if "discard_file_edit" not in consents:
@@ -146,7 +146,7 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
             return _refuse(blocked)
         _api.write_file(server, SERVICE)
         file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
-        if file_cfg is None or not _api.file_in_daemon(file_cfg, live, SERVICE):
+        if file_cfg is None or not _api.compare(server, SERVICE, file_cfg, live)[0]:
             return _refuse(
                 f"{name}: the file still differs from the daemon after the write was tried (the daemon {_short(digest)}, the file {_short(raw)}); nothing was changed",
                 before_hash=digest,

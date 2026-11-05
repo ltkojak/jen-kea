@@ -101,17 +101,15 @@ def settle_pending_change(server_id):
     name = server.get("name") or str(server_id)
     try:
         with __cs.change_lock():
-            lines = __api.settle_pending(server, "dhcp4")
+            lines, settled = __api.settle_pending(server, "dhcp4")
     except __cs.ChangeBusy:
         flash(__cs.BUSY_SENTENCE, "error")
         return _back()
     __user.audit("KEA_PENDING_CHANGE_SETTLED", name, "; ".join(lines)[:500])
     __caps.invalidate(server_id)
-    text = " ".join(lines)
-    unsettled = any(
-        w in text for w in ("nothing was settled", "cannot be read", "unresolved", "not proved", "waits:", "no pending")
-    )
-    flash(f"{name}: {text}", "warning" if unsettled else "success")  # (second pass, row 7)
+    flash(
+        f"{name}: {' '.join(lines)}", "success" if settled else "warning"
+    )  # (Q217 AB13) by what happened, not by the words in the lines
     return _back()
 
 

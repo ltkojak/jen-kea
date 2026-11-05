@@ -165,7 +165,7 @@ class TestTheTenStateTable:
             "read_config_versioned",
             lambda *a, **k: ({"Dhcp4": {}}, "r" * 64) if facts["agree"] is not None else (None, None),
         )
-        monkeypatch.setattr(api, "file_in_daemon", lambda file_cfg, live_cfg, svc: bool(facts["agree"]))
+        monkeypatch.setattr(api, "file_in_daemon", lambda file_cfg, live_cfg, svc, **kw: bool(facts["agree"]))
         out = api.probe(server, "dhcp4", consent=True, consents=consents)
         assert ("consented_at" in out) is allowed, out
         if allowed:
@@ -210,17 +210,18 @@ class TestAConsentWithoutTheFactsOnThePageIsNotGiven:
         }
         assert api.probe_gate(_server(daemon, True)) == ""
 
-    def test_a_probe_that_finds_an_unconsented_fact_after_a_legacy_consent_keeps_the_legacy_all(self, daemon, probes):
-        probes[4] = {
-            "at": _iso(),
-            "config_api": True,
-            "consented_at": _iso(),
-            **{k: v for k, v in GOOD.items() if k != "config_api"},
-            "auth": "none",
-        }
-        assert (
-            api.probe_gate(_server(daemon, True)) == ""
-        )  # beta.1 recorded no list; the unauthenticated confirmation was a switch rule and the card's one checkbox
+    def test_a_beta1_consent_covers_the_rendering_only(self, daemon, probes):
+        """Q217 AB2 (Opus's beta.2 row): a stored result with no `consents` list counts as the file rewrite accepted - nothing else. An endpoint that lost its authentication, or a file that no longer
+        matches, blocks until the card's step 3 is ticked again."""
+        base = {"at": _iso(), "consented_at": _iso(), **GOOD}
+        probes[4] = dict(base)
+        assert api.probe_gate(_server(daemon, True)) == ""  # the facts it was given for
+        probes[4] = dict(base, auth="none")
+        assert "no authentication" in api.probe_gate(_server(daemon, True))
+        probes[4] = dict(base, agree=False)
+        assert "carries a configuration the daemon is not running" in api.probe_gate(_server(daemon, True))
+        probes[4] = dict(base, auth="none", consents=["consent_rendering", "consent_unauthenticated"])
+        assert api.probe_gate(_server(daemon, True)) == ""  # ticked again on the card: recorded with a list
 
 
 class TestTheFactsAreKeptFreshWithoutAskingAgain:
@@ -368,14 +369,14 @@ class TestSecondPassRows:
             lambda server, now=None: "the host is restoring logging at T; try again after it",
         )
         daemon.commands.clear()
-        lines = api.settle_pending(server, "dhcp4")
+        lines, _settled = api.settle_pending(server, "dhcp4")
         assert (
             "waits" in " ".join(lines)
             and "config-write" not in daemon.commands
             and store.pending(4, "dhcp4") is not None
         )
         monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
-        assert "finished" in api.settle_pending(server, "dhcp4")[0]
+        assert "finished" in api.settle_pending(server, "dhcp4")[0][0]
 
     def test_row10_a_refresh_never_discards_a_consent_given_while_it_ran(self, daemon, store, probes, monkeypatch):
         server = {**_server(daemon, True), "api_user": "jen", "api_pass": "pw"}

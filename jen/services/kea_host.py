@@ -271,7 +271,7 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 20  # build 20 (Q212, beta.2): the tick's re-verify reopens only the session whose marker it finds (a NEW session's marker is not a stray). Build 19 (Q212): `config-write-check`, `allow-config-write` and `deny-config-write` (who may write the daemon's own file), a backup that is never group-writable, and a timer tick that keeps verifying after a restore; build 18: v5.69.0-beta.1 (Q170): the walls (credentials, sockets, symlinks, descriptors, the bounded restore lock, the completion validator) around what the helper does as root; build 17: v5.68.0-beta.31 (Q168): a restore is recorded only on the daemon's own answer (config-get on its control socket), Kea's completion id read across rotation, or a NEW active process - a reload-start line is never evidence, an unreadable state file is never "no session"; build 16: v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
+JEN_HELPER_SHIPPED_BUILD = 21  # build 21 (Q217, beta.3): the basename and state-file walls are `fullmatch`, so a trailing newline is refused. Build 20 (Q212, beta.2): the tick's re-verify reopens only the session whose marker it finds (a NEW session's marker is not a stray). Build 19 (Q212): `config-write-check`, `allow-config-write` and `deny-config-write` (who may write the daemon's own file), a backup that is never group-writable, and a timer tick that keeps verifying after a restore; build 18: v5.69.0-beta.1 (Q170): the walls (credentials, sockets, symlinks, descriptors, the bounded restore lock, the completion validator) around what the helper does as root; build 17: v5.68.0-beta.31 (Q168): a restore is recorded only on the daemon's own answer (config-get on its control socket), Kea's completion id read across rotation, or a NEW active process - a reload-start line is never evidence, an unreadable state file is never "no session"; build 16: v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
@@ -724,6 +724,22 @@ def read_via_transport(
     if errors is not None:
         errors.append("this server has no way to read its configuration (no SSH host and not served over the API)")
     return None, None
+
+
+def test_via_transport(server: dict, service: str, cfg: dict, **kw) -> dict:
+    """Validate a candidate configuration on the server's OWN write mode (Q217 AB7), beside `read_via_transport`: `api` -> `kea_api_config.test` (the daemon's `config-test`, no SSH needed), `file` ->
+    `test_config` (the helper's `kea-dhcpX -t`; `**kw` are its `tls_paths` / `helper_only`), `off` -> `{"ok": True, "code": "skipped", "detail": "read-only"}` (nothing will be written, so there is
+    nothing to validate). A route never calls `test_config` or `kea_api_config.test` itself - `tests/test_kea_host.py::TestNoRouteValidatesByItself` walks the tree."""
+    from jen.services import kea_changeset as _cs
+
+    kind = _cs._transport(server, service)
+    if kind == "api":
+        from jen.services import kea_api_config as _api
+
+        return _api.test(server, service, cfg)
+    if kind == "file":
+        return test_config(server, service, cfg, **kw)
+    return {"ok": True, "code": "skipped", "detail": "read-only"}
 
 
 def read_config(server: dict, service: str, *, errors: list | None = None, **kw) -> dict | None:

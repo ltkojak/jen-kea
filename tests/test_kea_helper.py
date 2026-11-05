@@ -203,7 +203,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 20
+        assert out["helper_build"] == helper.HELPER_BUILD == 21
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -272,6 +272,7 @@ class TestPathWalls:
             "/var/log/../etc/shadow",
             "relative.conf",
             "/etc/kea/kea-dhcp4.txt",
+            "/etc/kea/kea-dhcp4.conf\n",  # Q217 AB14: `$` also matches before one trailing newline
         ],
     )
     def test_conf_path_rejected(self, helper, p):
@@ -305,6 +306,49 @@ class TestPathWalls:
     def test_read_config_rejects_a_bad_service(self, helper):
         code, out, _ = _run(helper, "read-config", {"service": "dhcp9", "path": "/etc/kea/kea-dhcp4.conf"})
         assert out == {"ok": False, "error": "not-allowed"}
+
+
+class TestNoWallIsDollarAnchored:
+    """Q217 AB14 - a compiled pattern used as a wall (its name ends `_RE` or starts `_ALLOWED`) carries no `$` anchor and is used with `fullmatch`: `$` also matches before one trailing newline. The
+    patterns that read a whole file with `re.M` on bytes (`_HELPER_VERSION_RE`, `_HELPER_BUILD_RE`) are parsers of lines, not walls, and say so by their flag."""
+
+    def _walls(self):
+        import ast
+
+        tree = ast.parse(_SCRIPT_PATH.read_text(encoding="utf-8"))
+        found = []
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "attr", "") == "compile"
+            ):
+                name = node.targets[0].id
+                if name.endswith("_RE") or name.startswith("_ALLOWED"):
+                    found.append((name, node.value))
+        return found
+
+    def test_no_wall_carries_a_dollar_anchor(self):
+        import ast
+
+        walls = self._walls()
+        assert len(walls) >= 4, [n for n, _ in walls]
+        for name, call in walls:
+            flags = any(isinstance(kw.value, ast.Attribute) and kw.value.attr == "M" for kw in call.keywords) or any(
+                isinstance(a, ast.Attribute) and a.attr == "M" for a in call.args[1:]
+            )
+            pattern = call.args[0].value if isinstance(call.args[0], ast.Constant) else ""
+            pattern = pattern.decode() if isinstance(pattern, bytes) else pattern
+            if flags:
+                continue  # a multi-line parser of a candidate's lines, not a wall
+            assert not pattern.rstrip().endswith("$") or pattern.endswith("\\$"), (name, pattern)
+
+    def test_the_two_basename_walls_are_used_with_fullmatch(self):
+        src = _SCRIPT_PATH.read_text(encoding="utf-8")
+        for name in ("_CONF_BASENAME_RE", "_STATE_FILE_RE"):
+            assert f"{name}.fullmatch(" in src and f"{name}.match(" not in src, name
 
 
 class TestReadConfig:

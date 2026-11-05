@@ -294,8 +294,10 @@ def _unloaded_edit(server: dict, service: str, cfg: dict, name: str) -> str:
         return (
             f"the file on {host} could not be read, so a change cannot be proved against it (check the SSH connection)"
         )
-    if not _api.file_in_daemon(file_cfg, cfg, service):
-        where = _api.difference_text(file_cfg, cfg, service)  # (Q217 BG3 b) the first place they differ
+    agrees, where = _api.compare(
+        server, service, file_cfg, cfg
+    )  # (Q217 BG3 b, AB6) both directions, and the first place they differ
+    if not agrees:
         return (
             f"the file on {host} carries an edit the daemon has not loaded ({where}) - restart Kea there first, or discard it from the server's Write mode card"
             if where
@@ -454,6 +456,10 @@ def _run_change_unlocked(
                         ("error", f"❌ {name}: {read_errors[0] if read_errors else 'the daemon did not answer'}")
                     )
                     return ChangeSetResult("aborted", "error", lines)
+                unreadable = _api.record_unreadable(server, service)
+                if unreadable:  # (Q217 AB9) a record that cannot be read needs no hands: it needs the store back, so it is its own code
+                    lines.append(("error", f"❌ {name}: {unreadable}"))
+                    return ChangeSetResult("aborted", "unreadable", lines)
                 unresolved = _api.pending_block(server, service)
                 if unresolved:  # (fix row 2) an earlier change that nothing settled: stop before a file target is written for a change no api target will take
                     lines.append(("error", f"❌ {name}: {unresolved}"))

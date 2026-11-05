@@ -801,14 +801,17 @@ S10_ALLOWED = {
     ("jen/services/config_revisions.py", "prune", "Exception", "return 0"): (
         "pruning old rows is housekeeping; a failure keeps every row (Q216)"
     ),
-    ("jen/services/kea_api_config.py", "_classify_pending", "(TypeError, ValueError)", "return"): (
-        "a pending row whose body is not JSON is classified as nothing HERE - a read only says; `pending_block` finds the same row still pending and refuses every change until it is resolved from Config history (Q216 AA19)"
-    ),
     ("jen/services/kea_api_config.py", "stored_probe", "(TypeError, ValueError)", "return None"): (
         "no readable stored probe means `probe_gate` answers 'run readiness check first' and the card shows the same: an unreadable result is never consent - fail closed (Q212, Q216)"
     ),
     ("jen/services/kea_api_config.py", "_age_days", "(TypeError, ValueError)", "return None"): (
         "a timestamp that cannot be read is an age nobody knows: `probe_gate` treats it as stale and refuses, `refresh_if_stale` leaves it to the gate - fail closed (Q216)"
+    ),
+    ("jen/services/config_revisions.py", "mark_damaged", "Exception", "return False"): (
+        "a pending row that could not be marked damaged STAYS pending and keeps blocking the next change; `settle_pending` says nothing was settled - fail closed (Q217 AB10-AB12)"
+    ),
+    ("jen/services/kea_api_config.py", "_pending_candidate", "(TypeError, ValueError, KeyError)", "return None"): (
+        "a body that cannot be read as a configuration is a DAMAGED record: `pending_block` refuses with it, a read says it, `settle_pending` compares digests and marks it - it never reads as live or as nothing pending (Q217 AB10-AB12)"
     ),
 }
 

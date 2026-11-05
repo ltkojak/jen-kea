@@ -1036,7 +1036,7 @@ def _restore_over_api(server, server_id, rev_id, service, cfg, back):
                     "error",
                 )
                 return back
-            tested = __api.test(server, service, cfg)
+            tested = __host.test_via_transport(server, service, cfg)
             if not tested["ok"]:
                 flash(
                     f"Restore aborted — {name} rejected revision #{rev_id}: {tested.get('detail') or 'unknown error'}",
@@ -1107,7 +1107,7 @@ def config_history_restore(server_id, rev_id):
     # Q203 AS2: the material-before-reference preflight every other writer of a control socket runs - a revision that names Jen's certificate files is refused while they are absent,
     # and not restarted into a config the daemon cannot load.
     tls_paths = __authoring.referenced_tls_paths(cfg, __tls.remote_tls_paths(service))
-    test = __host.test_config(server, service, cfg, tls_paths=tls_paths)
+    test = __host.test_via_transport(server, service, cfg, tls_paths=tls_paths)
     if not test["ok"]:
         flash(
             f"Restore aborted — {server['name']} rejected revision #{rev_id}: {test.get('detail') or 'unknown error'}",
