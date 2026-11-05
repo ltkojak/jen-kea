@@ -2007,11 +2007,21 @@ def _credential_file_ok(st):
     return account is not None and "uid" in account and st.st_uid == account["uid"]
 
 
-def _owned_by_the_daemon(st):
-    """Is the file owned by the account the daemon runs as (a daemon that runs as root owns root's files)? `config-loaded` reads a config it has NOT validated with `-t`, so a credential file it names is taken
-    only from the daemon's own account: a root-owned 0600 file the daemon could not read is never read for it (build 22, Q219)."""
+def _readable_by_the_daemon(st):
+    """Could the account the daemon runs as read this file itself (by its owner, group or other bits; a daemon that runs as root reads what the generic walls let through)? `config-loaded` reads a config it
+    has NOT validated with `-t`, so a credential file it names is taken only when the daemon could take it too: what Kea's own `-t` would have refused - a root-only 0600 file - is never read for it, so
+    whoever writes the config gains nothing the daemon's account does not already have (build 22, Q219)."""
     account = _unit_account("dhcp4")
-    return account is not None and "uid" in account and st.st_uid == account["uid"]
+    if account is None:
+        return True  # no User=, or root: the daemon is root's
+    if "uid" not in account:
+        return False  # the unit's identity is not known: never a guess
+    mode = st.st_mode
+    if st.st_uid == account["uid"]:
+        return bool(mode & 0o400)
+    if st.st_gid == account["gid"] or st.st_gid in (account.get("extra_groups") or []):
+        return bool(mode & 0o040)
+    return bool(mode & 0o004)
 
 
 def _read_credential(directory, name, strict=False):
@@ -2033,7 +2043,7 @@ def _read_credential(directory, name, strict=False):
             return None
         try:
             st = os.fstat(fd)
-            if not _credential_file_ok(st) or (strict and not _owned_by_the_daemon(st)):
+            if not _credential_file_ok(st) or (strict and not _readable_by_the_daemon(st)):
                 return None
             data = os.read(fd, _CRED_MAX + 1)
         except OSError:

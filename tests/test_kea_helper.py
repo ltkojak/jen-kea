@@ -523,17 +523,25 @@ class TestConfigLoadedOp:
         assert out["now"] == 1000
         assert out["mtime"] == 101  # an st_mtime of 100.1 reads 101
 
-    def test_a_credential_file_is_taken_only_from_the_daemons_own_account(self, helper, monkeypatch):
-        """Build 22 reads a config nobody validated with `-t`: a root-owned file the daemon could not read is never read for it (a daemon that runs as root owns root's files)."""
+    def test_a_credential_file_is_taken_only_when_the_daemon_could_read_it_too(self, helper, monkeypatch):
+        """Build 22 reads a config nobody validated with `-t`: a root-only 0600 file the daemon could not read is never read for it; a root:kea 0640 file (the packaged shape) is; a root daemon reads all."""
         import types
 
-        monkeypatch.setattr(helper, "_unit_account", lambda service: {"uid": 100, "gid": 101})
-        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=100)) is True
-        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=0)) is False
-        monkeypatch.setattr(helper, "_unit_account", lambda service: {"uid": 0, "gid": 0})
-        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=0)) is True
+        def st(uid, gid, mode):
+            return types.SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=mode)
+
+        monkeypatch.setattr(helper, "_unit_account", lambda service: {"uid": 100, "gid": 101, "extra_groups": [102]})
+        assert helper._readable_by_the_daemon(st(0, 0, 0o600)) is False, "root-only: the daemon cannot read it"
+        assert helper._readable_by_the_daemon(st(0, 101, 0o640)) is True, "root:kea 0640"
+        assert helper._readable_by_the_daemon(st(0, 102, 0o640)) is True, "a supplementary group"
+        assert helper._readable_by_the_daemon(st(0, 0, 0o640)) is False
+        assert helper._readable_by_the_daemon(st(0, 0, 0o644)) is True, "world-readable"
+        assert helper._readable_by_the_daemon(st(100, 0, 0o600)) is True, "the daemon's own"
+        assert helper._readable_by_the_daemon(st(100, 0, 0o200)) is False
         monkeypatch.setattr(helper, "_unit_account", lambda service: None)
-        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=0)) is False
+        assert helper._readable_by_the_daemon(st(0, 0, 0o600)) is True, "a root daemon"
+        monkeypatch.setattr(helper, "_unit_account", lambda service: {"refused": "systemctl failed"})
+        assert helper._readable_by_the_daemon(st(0, 0, 0o644)) is False, "an unknown identity is never a guess"
 
     def test_the_op_reads_credentials_strictly(self):
         source = _SCRIPT_PATH.read_text(encoding="utf-8")
