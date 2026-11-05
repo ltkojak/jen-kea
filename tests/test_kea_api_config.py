@@ -996,16 +996,20 @@ class TestQ216TheRegister:
         fake.expand = _expands
         _plan(server)
         shipped, _name = api.load_vector("3.0.5")
-        # the file omits Kea's written-out defaults, as a file Jen authored does (Q217: the reverse compare is real now, so "the defaults" are the shipped vector's)
-        file_cfg = {"Dhcp4": {k: v for k, v in fake.running.items() if k not in shipped}}
+        # the file omits Kea's written-out defaults AT their default values, as a file Jen authored does (Q217: the reverse compare is real now, so "the defaults" are the shipped vector's; Q218 D1:
+        # a scalar is a default only at the value the daemon wrote out)
+        file_cfg = {
+            "Dhcp4": {k: v for k, v in fake.running.items() if not api._is_default(k, v, shipped, (fake.running,))}
+        }
         monkeypatch.setattr(host, "read_config_versioned", lambda *a, **k: (copy.deepcopy(file_cfg), "r" * 64))
         server = {**server, "ssh_host": "10.0.0.7", "config_transport": "api"}
         stranger = copy.deepcopy(fake.running)
         stranger["decline-probation-period"] = 123
         fake.set_running(stranger)
-        assert (
-            api.api_daemon_differs(server, "dhcp4") == ""
-        )  # no `kea` row on record: containment says the file is in the daemon, and it is - the limit of the fallback
+        # no `kea` row on record: containment is the fallback. Since Q218 D1 it sees a hand `config-set` of a scalar default too: 123 is not the value the daemon writes out (86400), so the file that omits
+        # the key does not carry what the daemon runs (before D1 this was the named limit of the path rule and the sentence was "")
+        sentence = api.api_daemon_differs(server, "dhcp4")
+        assert "at Dhcp4.decline-probation-period: the file says nothing, the daemon 123" in sentence, sentence
 
     def test_bl_one_kea_is_one_window_whichever_server_id_names_it(self, monkeypatch):
         from datetime import datetime, timedelta, timezone
@@ -1352,10 +1356,12 @@ class TestADeletionIsADifference:
         assert api.compare(server, "dhcp4", self._file(), self._live()) == (True, "")
 
     def test_the_shipped_vectors_are_keys_only(self):
-        """The recorded files carry key paths and nothing else (no values), sorted, indexes blanked."""
+        """The recorded files carry key paths, the names of the lists Kea defaults to non-empty, and the VALUE the daemon wrote out for a scalar path (Q218 D1: the defaults' values, never a setting), sorted, indexes blanked."""
         for path in sorted(api.KEA_DEFAULTS_DIR.glob("kea_defaults_*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
-            assert set(data) <= {"kea", "paths", "populated"} and data["paths"] == sorted(set(data["paths"])), path.name
+            assert set(data) <= {"kea", "paths", "populated", "scalars"} and data["paths"] == sorted(
+                set(data["paths"])
+            ), path.name
             assert set(data.get("populated", {})) <= set(data["paths"]), path.name
             assert all(
                 isinstance(v, list) and all(isinstance(i, str) for i in v) for v in data.get("populated", {}).values()
