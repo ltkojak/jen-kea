@@ -109,7 +109,9 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     stored["consents"] = sorted(set(consents) & set(_api.CONSENTS))
     stored.pop("consent_refused", None)
     _api.store_probe(sid, stored)
-    verb = "consent recorded for Live API" if current == "api" else "switched to Live API"  # (Q217, second pass row 2) a server already in Live API records a consent in place
+    verb = (
+        "consent recorded for Live API" if current == "api" else "switched to Live API"
+    )  # (Q217, second pass row 2) a server already in Live API records a consent in place
     return _done(
         f"{name}: {verb}; Kea rendered its file; revision #{revision} is the baseline"
         if revision
