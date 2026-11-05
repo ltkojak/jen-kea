@@ -578,7 +578,15 @@ def author_kea_config_preview(service):
             logger.exception("authoring: the check failed on %s", name)
             server_results.append({"name": name, "ok": False, "message": "The check failed - see the Jen log."})
 
-    all_passed = all(r["ok"] for r in server_results) if server_results else True
+    if not server_results:  # (Q218 D10, the AC26 class) "all of none passed" is not a pass: a fleet with no server that has an SSH host says why
+        server_results = [
+            {
+                "name": "no server",
+                "ok": False,
+                "message": "no server can be written to: none has an SSH host (Settings → Kea → SSH)",
+            }
+        ]
+    all_passed = all(r["ok"] for r in server_results)
     return jsonify({"ok": True, "config": first_config, "servers": server_results, "all_passed": all_passed})
 
 

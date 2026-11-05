@@ -282,6 +282,9 @@ class TestSettingsCardsCollapsibleOnPhone:
     # v7.0.0-beta.3 (Q217): the card became one choice with its steps under the selected radio (three numbered rows, one set of boxes, the switch). CI measured 2542 px against a ceiling of 2465:
     # 77 px over, so the baseline gains 111 px (ceiling +78, 2543) - a real measurement (run 41949665514), not a guess. The phone budget is unchanged (the card is one of the folded ones).
     WRITE_MODE_CARD_Q217 = 111
+    # v7.0.0-beta.4 (Q218, BH6 c): CI's desktop-screenshots artifact of run 42000846507 (ce42884) measured settings-kea.png at 1440x2542. The ceiling was 2542.4 - a slack of 0.4 px, which fails on the next
+    # sentence anyone adds - so the baseline gains 29 px (3632 -> 3661, ceiling 2562.7): the ceiling clears the measured height by 20.7 px, per the rule above. Remeasure from the artifact of the release commit.
+    WRITE_MODE_CARD_Q218 = 29
 
     def test_settings_kea_is_at_least_30_percent_shorter_than_5_56_3(self, desktop, base_url):
         _visit(desktop, base_url, "/settings/kea")
@@ -292,6 +295,7 @@ class TestSettingsCardsCollapsibleOnPhone:
             + self.NO_PASSWORD_BOXES_Q180
             + self.CONFIG_TRANSPORT_CARD_Q212
             + self.WRITE_MODE_CARD_Q217
+            + self.WRITE_MODE_CARD_Q218
         )
         ceiling = baseline * 0.7
         assert height <= ceiling, f"settings-kea is {height}px tall now, needed <= {ceiling:.0f}px (was {baseline}px)"

@@ -633,3 +633,57 @@ class TestTheFirstWriteTarget:
         source = (ROOT / "jen" / "routes" / "subnets.py").read_text(encoding="utf-8")
         assert "extensions.KEA_SERVERS[0]" not in source.replace("`KEA_SERVERS[0]`", "")
         assert source.count("first_write_target(") == 3  # the import preview, its apply and the reservations step
+
+
+class TestAnAdminIsNotToldAHostFactByAChangeSetLine:
+    """Q218 D2 (the second pass): the line a change set flashes to its actor named the daemon's account, a file's mode and an include's path when the gate was closed - to an ADMIN. A superadmin (and a
+    context with no signed-in user) reads the gate's own sentence; a signed-in admin or viewer reads the mode's sentence and that a change will stop until a superadmin has read the card."""
+
+    LEAKS = ("_kea", "0640", "0660", "/etc/kea/extra.conf", "no authentication", "bad subnet")
+    STATES = [
+        {"include": ["/etc/kea/extra.conf"]},
+        {"write": {"may_write": False, "mode": "0640", "account": "_kea"}},
+        {"auth": "none", "consents": ["consent_rendering"]},
+        {"test_ok": False, "test_detail": "bad subnet 10.0.0.0/24"},
+    ]
+
+    def _plan(self, monkeypatch, daemon, probes, state, role):
+        from types import SimpleNamespace
+
+        facts = {
+            "at": "2099-01-01T00:00:00+00:00",
+            "config_api": True,
+            "consented_at": "2099-01-01T00:00:00+00:00",
+            "consents": list(api.CONSENTS),
+            "include": [],
+            "agree": True,
+            "write": {"may_write": True, "mode": "0660", "account": "_kea"},
+            "auth": "password",
+            "bound": "t",
+            **state,
+        }
+        probes[1] = facts
+        monkeypatch.setattr(api, "_age_days", lambda iso: 0.1)
+        server = api_server(daemon, ssh_host="10.0.0.1")
+        if role is not None:
+            monkeypatch.setattr("flask.has_request_context", lambda: True)
+            monkeypatch.setattr(
+                "flask_login.current_user", SimpleNamespace(is_authenticated=True, is_superadmin=role == "superadmin")
+            )
+        result = cs.apply_change("dhcp4", lifetime(5), "x", servers=[server])
+        return " ".join(text for _kind, text in result.lines)
+
+    @pytest.mark.parametrize("role", ["admin", "viewer"])
+    def test_no_host_fact_reaches_an_admin_or_a_viewer(self, monkeypatch, daemon, store, probes, role):
+        for state in self.STATES:
+            text = self._plan(monkeypatch, daemon, probes, state, role)
+            assert "will stop until a superadmin has read its Write mode card" in text, (state, text)
+            for needle in self.LEAKS:
+                assert needle not in text, (state, needle, text)
+
+    @pytest.mark.parametrize("role", ["superadmin", None], ids=["a superadmin", "no signed-in user"])
+    def test_a_superadmin_and_a_context_with_no_user_read_the_gates_own_sentence(
+        self, monkeypatch, daemon, store, probes, role
+    ):
+        text = self._plan(monkeypatch, daemon, probes, self.STATES[0], role)
+        assert "/etc/kea/extra.conf" in text and "superadmin has read" not in text

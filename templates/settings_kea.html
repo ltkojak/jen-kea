@@ -1138,8 +1138,8 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
 })();
 
 (function () {
-    // Q217: the Write mode card. The radios are the switch form's own inputs; the panel under the selected one is shown and the others are hidden here (with JavaScript off every panel shows and
-    // the form still submits). The switch button's holding sentence is a convenience for the person - the ROUTE decides for real (`consent_gap`). Delegated listeners, no inline handler.
+    // Q217: the Write mode card. The radios are the switch form's own inputs; the panel under the selected one is shown and the others are hidden here (the card needs JavaScript to
+    // switch, as its confirm already did: with it off a box in a panel that is not the current mode's is disabled and cannot be ticked). The switch button's holding sentence is a convenience for the person - the ROUTE decides for real (`consent_gap`). Delegated listeners, no inline handler.
     function selected(card) {
         var r = card.querySelector('[data-wm-radio]:checked');
         return r ? r.value : null;

@@ -202,27 +202,48 @@ def first_difference(running: object, candidate: object, under: str | None = Non
 
 
 class DefaultsSet(frozenset):
-    """Kea's written-out default key paths for one minor version (`load_vector`), with `populated`: the paths whose default is a NON-EMPTY list (`host-reservation-identifiers`), and that list."""
+    """Kea's written-out default key paths for one minor version (`load_vector`), with `populated`: the paths whose default is a NON-EMPTY list (`host-reservation-identifiers`), that list, and
+    `scalars`: the value the daemon wrote out for a scalar path (Q218 D1), `None` for a vector recorded before values were (the path rule then stands, as before)."""
 
     populated: dict = {}
+    scalars: dict | None = None
 
 
-def _is_default(path: str, value: object, defaults: frozenset) -> bool:
-    """Is a key the daemon runs and the file does not say one of Kea's own written-out defaults? (Q217 row 1 of the second pass.) Its path must be in the vector AND its VALUE must be what a default
-    is: an empty list, an object whose every child is itself a default, the recorded list for a list that Kea defaults to non-empty - so a populated `option-data`, `reservations`, `relay` or
-    `shared-networks` deleted from the file is a difference, never "a default". A scalar is judged by its path alone: a hand `config-set` of a scalar default is the digest check's to find
-    (`api_daemon_differs`), and `docs/ARCHITECTURE.md` 3.17 names the limit."""
+def _same_scalar(a: object, b: object) -> bool:
+    """Equal as JSON scalars: a boolean is never a number (Python says True == 1, Kea does not)."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    return type(a) is type(b) and a == b
+
+
+def _is_default(path: str, value: object, defaults: frozenset, chain: tuple = ()) -> bool:
+    """Is a key the daemon runs and the file does not say one of Kea's own written-out defaults? (Q217 row 1 of the second pass; Q218 D1.) Its path must be in the vector AND its VALUE must be what a
+    default is: an empty list, an object whose every child is itself a default, the recorded list for a list that Kea defaults to non-empty - so a populated `option-data`, `reservations`, `relay` or
+    `shared-networks` deleted from the file is a difference, never "a default" - and a SCALAR only when it is the value the daemon wrote out for that path (`defaults.scalars`) or the value of the
+    same-named key in an enclosing scope of the running configuration (Kea inherits an omitted scalar from the scope above it: a subnet's `valid-lifetime` is the global one). A scalar the operator
+    DELETED from the file while the daemon runs another value is a difference: a `config-write` would put it back. `chain` is the running objects from the section down to the one that holds this
+    key. A vector with no recorded scalar values (`scalars is None`) judges a scalar by its path alone - the limit `docs/ARCHITECTURE.md` 3.17 names for a vector not yet re-recorded."""
     blank = _INDEX.sub("[]", path)
     if blank not in defaults:
         return False
     if isinstance(value, dict):
-        return all(_is_default(f"{path}.{k}", v, defaults) for k, v in value.items())
+        return all(_is_default(f"{path}.{k}", v, defaults, chain + (value,)) for k, v in value.items())
     if isinstance(value, list):
         return not value or getattr(defaults, "populated", {}).get(blank) == value
-    return True
+    scalars = getattr(defaults, "scalars", None)
+    if scalars is None:
+        return True
+    if blank in scalars and _same_scalar(scalars[blank], value):
+        return True
+    key = re.split(r"[.\[\]]+", path)[-1]
+    return any(
+        isinstance(scope, dict) and key in scope and _same_scalar(scope[key], value) for scope in reversed(chain[:-1])
+    )
 
 
-def _lacks(running: object, candidate: object, defaults: frozenset, path: str = ""):
+def _lacks(running: object, candidate: object, defaults: frozenset, path: str = "", scope: tuple = ()):
     """THE reverse walk (Q217 AB6): `None` when everything the daemon RUNS is either in the file or one of Kea's own written-out defaults (`defaults`: key paths with indexes blanked, relative to the
     section), else `(path, _MISSING, running_leaf)` for the FIRST key the daemon runs that the file does not say - a key DELETED from the file (a `hooks-libraries` entry, a subnet's option) reads as
     "the file says nothing" and the next `config-write` would destroy the deletion. Run only after `_walk` passed (lists are the same length then). A key Kea renames is matched by its alias."""
@@ -232,7 +253,7 @@ def _lacks(running: object, candidate: object, defaults: frozenset, path: str = 
             here = f"{path}.{k}" if path else k
             if k in running:
                 accounted.add(k)
-                found = _lacks(running[k], v, defaults, here)
+                found = _lacks(running[k], v, defaults, here, scope + (running,))
                 if found is not None:
                     return found
                 continue
@@ -240,20 +261,20 @@ def _lacks(running: object, candidate: object, defaults: frozenset, path: str = 
             renamed = running.get(alias)
             if isinstance(renamed, list) and len(renamed) == 1:
                 accounted.add(alias)
-                found = _lacks(renamed[0], v, defaults, here)
+                found = _lacks(renamed[0], v, defaults, here, scope + (running,))
                 if found is not None:
                     return found
         for k, v in running.items():
             if k in accounted:
                 continue
             here = f"{path}.{k}" if path else k
-            if _is_default(here, v, defaults):
+            if _is_default(here, v, defaults, scope + (running,)):
                 continue
             return (here, _MISSING, v)
         return None
     if isinstance(running, list) and isinstance(candidate, list) and len(running) == len(candidate):
         for i, (r, c) in enumerate(zip(running, candidate, strict=True)):
-            found = _lacks(r, c, defaults, f"{path}[{i}]")
+            found = _lacks(r, c, defaults, f"{path}[{i}]", scope)
             if found is not None:
                 return found
     return None
@@ -370,18 +391,26 @@ def load_vector(version: str, directory: pathlib.Path | None = None) -> tuple[fr
         return None, ""
     try:
         data = json.loads(best[1].read_text(encoding="utf-8"))
-        raw_paths, raw_populated = data["paths"], data.get("populated", {})
+        raw_paths, raw_populated, raw_scalars = data["paths"], data.get("populated", {}), data.get("scalars")
         if (
             not isinstance(raw_paths, list)
             or not all(isinstance(p, str) for p in raw_paths)
             or not isinstance(raw_populated, dict)
             or not all(isinstance(v, list) for v in raw_populated.values())
+            or (
+                raw_scalars is not None
+                and not (
+                    isinstance(raw_scalars, dict)
+                    and all(isinstance(v, (str, int, float, bool)) or v is None for v in raw_scalars.values())
+                )
+            )
         ):
             raise ValueError(
-                "the vector's shape is not `paths: [str]` and `populated: {str: list}`"
-            )  # (Q218 BH5 d, AC23)
+                "the vector's shape is not `paths: [str]`, `populated: {str: list}`, `scalars: {str: scalar}`"
+            )  # (Q218 BH5 d, AC23; D1)
         paths = DefaultsSet(raw_paths)
         paths.populated = {str(k): v for k, v in raw_populated.items()}
+        paths.scalars = None if raw_scalars is None else {str(k): v for k, v in raw_scalars.items()}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         logger.warning("kea_api_config: the defaults vector %s cannot be read", best[1].name)
         return None, ""  # a vector that cannot be read asks nothing: the first direction still decides
@@ -595,6 +624,18 @@ def _ask_the_file(
     if discard:
         return None
     return _result(False, "unloaded-edit", unproved or unloaded_edit_sentence(server, where))
+
+
+def record_file_after_write(server: dict, service: str, summary: str, source: str = "jen") -> bool:
+    """The file Jen's own `config-write` just rendered is a `raw` row in Config history (Q218 D8, the second pass), as `apply` step 9 records it: without it the NEXT capturing read finds a file the store
+    has not seen and records Jen's own write as `external` ("changed outside Jen"). A server with no SSH host, a read that fails and a helper that answers no raw hash record nothing."""
+    sid = server.get("id")
+    if sid is None or not _has_ssh(server):
+        return False
+    file_cfg, raw = _host.read_config_versioned(server, service, capture=False)
+    if file_cfg is None or not raw or str(raw).startswith(_host._CANONICAL_SENTINEL_PREFIX):
+        return False
+    return _rev.record(sid, service, file_cfg, raw, summary, hash_kind="raw", source=source) is not None
 
 
 def _send_write(server: dict, service: str, attempts: int) -> tuple[dict | None, bool, bool]:
@@ -913,6 +954,7 @@ def _reconcile_pending(
         again, digest2, _ = _get(server, service)
         if wrote.get("ok") and again is not None and digest2:
             finished = _rev.finish(row["id"], source="jen", sha256=digest2, cfg=again)
+            record_file_after_write(server, service, f"settled a change of {at}")  # (Q218 D8)
             if not finished:  # (Q218 BH2 a) the third store write of this function: a False is no settlement
                 if notes is not None:
                     notes.append(

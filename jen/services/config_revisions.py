@@ -132,17 +132,18 @@ def _decrypted(row: dict | None) -> dict | None:
 
 
 def latest(server_id: int, service: str, exclude_kind: str | None = None) -> dict | None:
-    """The newest revision of (server, service); `exclude_kind` skips one `hash_kind` (the FILE reader skips the daemon's `kea` rows: its digests are not comparable with a file hash)."""
+    """The newest SETTLED revision of (server, service); `exclude_kind` skips one `hash_kind` (the FILE reader skips the daemon's `kea` rows: its digests are not comparable with a file hash). A `pending` or
+    `damaged` row is the record of a change the daemon may be running, never the last known configuration (Q218 D3, CFG-006): the recovery bundle, the support bundle, Explain and the capture read this."""
     try:
         with _jen_db() as db, db.cursor() as cur:
             if exclude_kind is None:
                 cur.execute(
-                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s ORDER BY id DESC LIMIT 1",
+                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
                     (server_id, service),
                 )
             else:
                 cur.execute(
-                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind<>%s ORDER BY id DESC LIMIT 1",
+                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind<>%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
                     (server_id, service, exclude_kind),
                 )
             row = cur.fetchone()
@@ -383,9 +384,11 @@ def prune(server_id: int, service: str, keep: int | None = None) -> int:
             row = cur.fetchone()
             if row is None:
                 return 0  # fewer than `keep` rows
+            # (Q218 D6) and never the settled row whose digest is an in-flight row's BEFORE digest: it is what a settlement proves the file against (`by_digest`)
             cur.execute(
-                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s AND source NOT IN ('pending', 'damaged')",
-                (server_id, service, row["id"]),
+                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s AND source NOT IN ('pending', 'damaged') "
+                "AND sha256 NOT IN (SELECT keep_sha FROM (SELECT sha256 AS keep_sha FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source IN ('pending', 'damaged')) AS in_flight)",
+                (server_id, service, row["id"], server_id, service),
             )
             return cur.rowcount
     except Exception as e:

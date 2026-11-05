@@ -149,6 +149,23 @@ def _transport(server: dict, service: str) -> str:
     return "api"
 
 
+def _gate_for_reader(gated: str) -> str:
+    """The gate's sentence names the daemon's unix account, a file's mode, an include's path and whether an endpoint has authentication: a superadmin's to read (Q218 D2, the second pass: the line a
+    change set flashes to its actor reached an ADMIN with them). A signed-in admin or viewer reads the mode's sentence and that a change will stop until a superadmin has read the card; a context with
+    no signed-in user (the scheduler, a test) keeps the full sentence for the log."""
+    from flask import has_request_context
+    from flask_login import current_user
+
+    from jen.services.write_mode import MODE_SENTENCES
+
+    if has_request_context() and current_user.is_authenticated and not getattr(current_user, "is_superadmin", False):
+        return (
+            MODE_SENTENCES["api"].rstrip(".")
+            + ", and a change to it over the API will stop until a superadmin has read its Write mode card."
+        )
+    return gated
+
+
 def first_write_target(service: str = "dhcp4") -> dict | None:
     """The first server, in configuration order, whose write mode for `service` is not Read-only (Q218 BH6 h, AC27): the one an import is read from, validated against and applied to. `None` when
     the whole fleet is Read-only (or there is no server). Never `KEA_SERVERS[0]` - a fleet whose first server is Read-only and whose second is on Live API has a write target, and the import
@@ -434,7 +451,7 @@ def _run_change_unlocked(
                     server
                 )  # no write without the probe's facts and the operator's consent; a remembered refusal (BB9 a) is needs-hands BEFORE the first read
                 if gated:
-                    lines.append(("error", f"❌ {name}: {gated}"))
+                    lines.append(("error", f"❌ {name}: {_gate_for_reader(gated)}"))
                     refused = bool(_api.refusal_sentence(server))
                     return ChangeSetResult(
                         "aborted",

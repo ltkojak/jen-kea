@@ -121,6 +121,9 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
             if sid is not None
             else None
         )
+        _api.record_file_after_write(
+            server, SERVICE, f"transport switched {current} -> api by {actor}", source="switch"
+        )  # (Q218 D8) Jen's own rendering is not "changed outside Jen"
     else:
         revision = None
     # the operator's consent is on record from this moment: the gate in `apply` reads it

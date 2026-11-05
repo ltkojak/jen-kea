@@ -42,7 +42,12 @@ class Store:
         return [r for r in self.rows if r["server_id"] == server_id and r["service"] == service]
 
     def latest(self, server_id, service, exclude_kind=None):
-        rows = [r for r in self._of(server_id, service) if r["hash_kind"] != exclude_kind]
+        # (Q218 D3) the real one never returns a pending or a damaged row
+        rows = [
+            r
+            for r in self._of(server_id, service)
+            if r["hash_kind"] != exclude_kind and r["source"] not in ("pending", "damaged")
+        ]
         return copy.deepcopy(rows[-1]) if rows else None
 
     def latest_of_kind(self, server_id, service, hash_kind):

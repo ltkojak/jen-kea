@@ -183,6 +183,27 @@ class TestPruneKeepsTheRecordOfAChange:
         rev.record(_SID, "dhcp4", _cfg(3), "d", "x", hash_kind="kea", source="damaged")
         assert rev.latest_of_kind(_SID, "dhcp4", "kea")["sha256"] == "settled"
 
+    def test_latest_skips_pending_and_damaged(self):
+        """Q218 D3 (the second pass): `latest()` was unfiltered, so the recovery bundle, the support bundle, Explain and the capture read an in-flight candidate as the server's configuration."""
+        rev.record(_SID, "dhcp4", _cfg(1), "settled", "x", hash_kind="kea", source="jen")
+        rev.record(_SID, "dhcp4", _cfg(2), "p", "x", hash_kind="kea", source="pending")
+        rev.record(_SID, "dhcp4", _cfg(3), "d", "x", hash_kind="kea", source="damaged")
+        assert rev.latest(_SID, "dhcp4")["sha256"] == "settled"
+        assert rev.latest(_SID, "dhcp4", exclude_kind="raw")["sha256"] == "settled"
+        assert {r["source"] for r in rev.list_revisions(_SID, "dhcp4")} == {"jen", "pending", "damaged"}
+
+    def test_the_row_that_proves_a_pending_changes_before_state_is_kept(self):
+        """Q218 D6: fifty-five raw rows beside an open pending row pushed the settled `kea` row holding its BEFORE state out, and the settlement then could not prove the file."""
+        before = rev.record(
+            _SID, "dhcp4", _cfg(0), "before-digest", "the state before", hash_kind="kea", source="baseline"
+        )
+        pending = rev.record(_SID, "dhcp4", _cfg(1), "before-digest", "the change", hash_kind="kea", source="pending")
+        for i in range(55):
+            rev.record(_SID, "dhcp4", _cfg(i + 2), f"raw{i}", "an external edit", hash_kind="raw", source="external")
+        kept = {r["id"] for r in rev.list_revisions(_SID, "dhcp4")}
+        assert before in kept and pending in kept
+        assert rev.by_digest(_SID, "dhcp4", "before-digest")["id"] == before
+
     def test_by_digest_finds_the_settled_revision_and_never_a_row_in_flight(self):
         settled = rev.record(_SID, "dhcp4", _cfg(1), "same", "x", hash_kind="kea", source="baseline")
         rev.record(_SID, "dhcp4", _cfg(2), "same", "x", hash_kind="kea", source="pending")

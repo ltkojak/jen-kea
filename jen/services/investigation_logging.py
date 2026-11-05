@@ -587,6 +587,9 @@ def _daemon_step(
             return {"ok": True, "mode": "reload", "lines": ["Kea re-read its config without a restart."]}
         refused = reply.get("text") or "refused"
         if verify is not None and verify():
+            _record_daemon_after_reload(
+                server
+            )  # (Q218 D7) the daemon took the file though its reply did not say so: what it runs is recorded as in the other three branches
             return {
                 "ok": True,
                 "mode": "reload",

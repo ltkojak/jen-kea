@@ -1736,3 +1736,129 @@ class TestApplyAsksTheFileAtStepSix:
         out = api.revert(ssh, "dhcp4", cfg, after_digest, "rollback: x", before_cfg=sparse)
         assert out["ok"], out
         assert fake.running["valid-lifetime"] == cfg["Dhcp4"]["valid-lifetime"] and fake.file == fake.running
+
+
+class TestAScalarIsJudgedByItsValueToo:
+    """Q218 D1 (the second pass, P1): a scalar the operator DELETES from the file while the daemon runs another value read as "Kea wrote a default" because the vector lists the path, so a `config-write`
+    put the deleted line back. A scalar is a default only when it is the value the daemon wrote out for that path (`DefaultsSet.scalars`) or the value of the same-named key in an enclosing scope."""
+
+    def _set(self, scalars=...):
+        paths = api.DefaultsSet(
+            {
+                "t1-percent",
+                "valid-lifetime",
+                "subnet4[]",
+                "subnet4[].valid-lifetime",
+                "subnet4[].t1-percent",
+                "echo-client-id",
+            }
+        )
+        if scalars is not ...:
+            paths.scalars = scalars
+        return paths
+
+    LIVE = {
+        "Dhcp4": {
+            "valid-lifetime": 3600,
+            "t1-percent": 0.3,
+            "echo-client-id": True,
+            "subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "valid-lifetime": 3600, "t1-percent": 0.2}],
+        }
+    }
+
+    def _file(self, **drop):
+        cfg = copy.deepcopy(self.LIVE)
+        for key in drop.get("top", ()):
+            del cfg["Dhcp4"][key]
+        for key in drop.get("subnet", ()):
+            del cfg["Dhcp4"]["subnet4"][0][key]
+        return cfg
+
+    def test_a_deleted_scalar_that_is_not_the_default_is_a_difference(self):
+        defaults = self._set(
+            {"t1-percent": 0.5, "valid-lifetime": 7200, "echo-client-id": True, "subnet4[].t1-percent": 0.5}
+        )
+        for file_cfg, where in (
+            (self._file(top=["t1-percent"]), "Dhcp4.t1-percent"),
+            (self._file(subnet=["t1-percent"]), "Dhcp4.subnet4[0].t1-percent"),
+            (self._file(top=["valid-lifetime"]), "Dhcp4.valid-lifetime"),
+        ):
+            assert api.file_in_daemon(file_cfg, self.LIVE, "dhcp4", defaults=defaults) is False, where
+            assert api.difference_text(file_cfg, self.LIVE, "dhcp4", defaults=defaults).startswith(f"at {where}:")
+
+    def test_the_value_kea_writes_out_is_a_default(self):
+        live = copy.deepcopy(self.LIVE)
+        live["Dhcp4"]["t1-percent"] = 0.5
+        live["Dhcp4"]["subnet4"][0]["t1-percent"] = 0.5
+        defaults = self._set({"t1-percent": 0.5, "echo-client-id": True, "subnet4[].t1-percent": 0.5})
+        file_cfg = copy.deepcopy(live)
+        del (
+            file_cfg["Dhcp4"]["t1-percent"],
+            file_cfg["Dhcp4"]["subnet4"][0]["t1-percent"],
+            file_cfg["Dhcp4"]["echo-client-id"],
+        )
+        assert api.file_in_daemon(file_cfg, live, "dhcp4", defaults=defaults) is True
+
+    def test_a_value_inherited_from_the_scope_above_is_a_default_and_a_different_one_is_not(self):
+        defaults = self._set(
+            {"echo-client-id": True}
+        )  # no recorded value for the subnet's valid-lifetime: it is contextual
+        file_cfg = self._file(subnet=["valid-lifetime"])
+        assert api.file_in_daemon(file_cfg, self.LIVE, "dhcp4", defaults=defaults) is True  # 3600 is the global 3600
+        live = copy.deepcopy(self.LIVE)
+        live["Dhcp4"]["subnet4"][0]["valid-lifetime"] = 7200
+        file_cfg = copy.deepcopy(live)
+        del file_cfg["Dhcp4"]["subnet4"][0]["valid-lifetime"]
+        assert (
+            api.file_in_daemon(file_cfg, live, "dhcp4", defaults=defaults) is False
+        )  # the daemon runs 7200, the global is 3600
+
+    def test_a_boolean_is_not_a_number(self):
+        defaults = self._set({"echo-client-id": True, "t1-percent": 1})
+        live = {"Dhcp4": {"echo-client-id": 1, "t1-percent": True}}
+        assert api.file_in_daemon({"Dhcp4": {}}, live, "dhcp4", defaults=defaults) is False
+
+    def test_a_vector_with_no_recorded_values_keeps_the_path_rule(self):
+        defaults = self._set()  # `scalars` is None: recorded before values were
+        assert defaults.scalars is None
+        assert api.file_in_daemon(self._file(top=["t1-percent"]), self.LIVE, "dhcp4", defaults=defaults) is True
+
+    def test_load_vector_reads_and_validates_scalars(self, tmp_path):
+        (tmp_path / "kea_defaults_3.0.json").write_text(
+            '{"paths": ["a"], "scalars": {"a": 0.5, "b": "x", "c": true, "d": null}}'
+        )
+        paths, _name = api.load_vector("3.0.1", tmp_path)
+        assert paths.scalars == {"a": 0.5, "b": "x", "c": True, "d": None}
+        for bad in (
+            '{"paths": ["a"], "scalars": ["a"]}',
+            '{"paths": ["a"], "scalars": {"a": [1]}}',
+            '{"paths": ["a"], "scalars": {"a": {"b": 1}}}',
+        ):
+            (tmp_path / "kea_defaults_3.0.json").write_text(bad)
+            assert api.load_vector("3.0.1", tmp_path) == (None, "")
+        (tmp_path / "kea_defaults_3.0.json").write_text('{"paths": ["a"]}')
+        assert api.load_vector("3.0.1", tmp_path)[0].scalars is None
+
+    def test_the_shipped_vectors_may_carry_scalars_and_only_scalars_of_their_paths(self):
+        for path in sorted(api.KEA_DEFAULTS_DIR.glob("kea_defaults_*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            assert set(data.get("scalars", {})) <= set(data["paths"]), path.name
+
+
+class TestAnOwnWriteIsNotChangedOutsideJen:
+    """Q218 D8 (the second pass): the settlement's `config-write` wrote the file and recorded a `kea` row and no `raw` row, so the next capturing read recorded Jen's own write as `external`."""
+
+    def test_a_settlement_records_the_file_it_wrote(self, fake, server, store, monkeypatch):
+        server["ssh_host"] = "10.0.0.9"
+        world.host_reads_the_fakes_file(monkeypatch, fake, store)
+        host.read_config_versioned(server, "dhcp4")  # the baseline of the clean file
+        cfg, digest = _plan(server)
+        store.record(SID, "dhcp4", cfg, digest, "the state before", hash_kind="kea", source="baseline")
+        cand = _candidate(cfg)
+        store.record(SID, "dhcp4", cand, digest, "interrupted", hash_kind="kea", source="pending")
+        fake.set_running(cand["Dhcp4"])
+        lines, settled = api.settle_pending(server, "dhcp4")
+        assert settled, lines
+        assert any(r["hash_kind"] == "raw" and r["source"] == "jen" for r in store.rows)
+        host.read_config_versioned(server, "dhcp4")  # the next capturing read
+        assert not [r for r in store.rows if r["source"] == "external"]

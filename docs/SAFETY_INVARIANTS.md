@@ -320,6 +320,7 @@ updater's allowlist.
 - `tests/test_transport_switch.py::TestToApi::test_a_consent_the_facts_never_called_for_is_not_recorded`
 - `tests/test_kea_transport_routes.py::TestAConsentIsAnActNotAClick::test_probe_at_is_checked_for_every_act_that_carries_a_consent`
 - `tests/test_kea_consent.py::TestAStoredResultThatNamesNoEndpointIsCheckedAgain`
+- `tests/test_kea_changeset_transports.py::TestAnAdminIsNotToldAHostFactByAChangeSetLine`
 - `tests/e2e/test_write_mode_journeys.py::test_a_box_in_the_hidden_panel_is_not_a_consent`
 
 ### CFG-004 - A file is the daemon's configuration only when each says everything the other says (but Kea's own written-out defaults)
@@ -330,6 +331,8 @@ updater's allowlist.
 - `tests/test_kea_api_config.py::TestADeletionIsADifference`
 - `tests/test_kea_api_config.py::TestADefaultIsJudgedByItsValueToo`
 - `tests/test_kea_api_config.py::TestKeaWritesItsDefaultsOut`
+- `tests/test_kea_api_config.py::TestAScalarIsJudgedByItsValueToo`
+- `tests/test_kea_defaults_recording.py::TestWhatIsRecorded`
 - `tests/kea_compat/test_config_write.py::test_12_the_defaults_kea_writes_out` (the daemon's own answer, per Kea minor)
 
 ### CFG-005 - A `config-write` is sent only after the file it replaces has been read into Config history and compared with the configuration the change was built from
@@ -342,6 +345,7 @@ updater's allowlist.
 - `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_every_write_file_caller_passes_before`
 - `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_config_write_has_one_sender_and_it_is_asked_first`
 - `tests/test_kea_changeset_transports.py::TestTheSettlementAsksTheFileFirst`
+- `tests/test_kea_api_config.py::TestAnOwnWriteIsNotChangedOutsideJen`
 - `tests/test_transport_switch.py::TestToApi::test_a_discarded_edit_is_in_config_history_before_the_write`
 - `tests/test_transport_switch.py::TestToApi::test_api_to_api_records_and_does_not_render`
 
@@ -354,6 +358,7 @@ updater's allowlist.
 - `tests/test_kea_api_config.py::TestAPendingOrDamagedRowIsNeverTheLastKnownState`
 - `tests/test_kea_api_config.py::TestADamagedPendingRecord`
 - `tests/test_config_revisions.py::TestPruneKeepsTheRecordOfAChange`
+- `tests/test_config_revisions.py::TestPruneKeepsTheRecordOfAChange::test_latest_skips_pending_and_damaged`
 
 ### FILE-001 - A secret is private from its first byte; a privileged write never resolves a service-owned parent by pathname
 **Rule.** No secret is written by a plain `open`, redirect or `cp`; a `.prev` is made only by the certificate set's commit; root never copies anything into the app tree from the config or content directories.

@@ -787,22 +787,46 @@ def test_11_what_config_get_renames(facts):
     assert _hash(), "the daemon does not answer after row 11"
 
 
-def _all_paths(value, path, populated=None):
+def _all_paths(value, path, populated=None, scalars=None):
     """Every key path at and below `value` (list indexes blanked), `path` itself included. A NON-EMPTY list the daemon wrote out as a default is recorded in `populated` (path -> the list): the
-    product accepts a missing key as a default only when its value is empty or is that list (second pass, row 1)."""
+    product accepts a missing key as a default only when its value is empty or is that list (second pass, row 1). A path two recordings populate DIFFERENTLY is set to None, never last-writer-wins
+    (Q218 D4). A scalar under a key is appended to `scalars[path]` (Q218 D1: the value the daemon wrote out, so a scalar the operator deleted while the daemon runs another is a difference)."""
     out = {path}
     if isinstance(value, dict):
         for k, v in value.items():
-            out |= _all_paths(v, f"{path}.{k}", populated)
+            out |= _all_paths(v, f"{path}.{k}", populated, scalars)
     elif isinstance(value, list):
         if value and populated is not None:
-            populated.setdefault(path, value)
+            if path in populated and populated[path] != value:
+                populated[path] = None
+            else:
+                populated.setdefault(path, value)
         for item in value:
-            out |= _all_paths(item, path + "[]", populated)
+            out |= _all_paths(item, path + "[]", populated, None)
+    elif scalars is not None:
+        scalars.setdefault(path, []).append(value)
     return out
 
 
-def _added_by_the_daemon(sent, running, path="", populated=None):
+def _agreed_populated(populated):
+    """The `populated` map without the paths two recordings disagreed on (Q218 D4)."""
+    return {k: populated[k] for k in sorted(populated) if populated[k] is not None}
+
+
+def _agreed_scalars(observed):
+    """`scalars` for the vector (Q218 D1): the value the daemon wrote out for a path, kept only when every recording that saw the path saw the SAME value - a value that depends on the configuration
+    (a subnet's `valid-lifetime` is the global one) is contextual, and the product judges it by inheritance instead. Returns `(scalars, contextual_paths)`."""
+    scalars, contextual = {}, []
+    for path in sorted(observed):
+        values = observed[path]
+        if all(json.dumps(v, sort_keys=True) == json.dumps(values[0], sort_keys=True) for v in values):
+            scalars[path] = values[0]
+        else:
+            contextual.append(path)
+    return scalars, contextual
+
+
+def _added_by_the_daemon(sent, running, path="", populated=None, scalars=None):
     """The key paths (list indexes blanked, relative to the section - the shape of `kea_api_config.load_vector`'s paths) the DAEMON added to an object that did not say them: for each object, the keys of
     the running side that the sent side lacks, and everything below them. Judged object by object, not by path alone: `subnet4[].reservations` is sent on one subnet and written out as a default on the
     next, and the second is what makes it a default. A key Kea renames is matched to its alias, so an alias is never mistaken for an addition."""
@@ -815,19 +839,19 @@ def _added_by_the_daemon(sent, running, path="", populated=None):
             here = f"{path}.{k}" if path else k
             if k in running:
                 matched.add(k)
-                out |= _added_by_the_daemon(v, running[k], here, populated)
+                out |= _added_by_the_daemon(v, running[k], here, populated, scalars)
                 continue
             alias = api.RENAMED_KEYS.get(k)
             renamed = running.get(alias) if alias else None
             if isinstance(renamed, list) and len(renamed) == 1:
                 matched.add(alias)
-                out |= _added_by_the_daemon(v, renamed[0], here, populated)
+                out |= _added_by_the_daemon(v, renamed[0], here, populated, scalars)
         for k, v in running.items():
             if k not in matched:
-                out |= _all_paths(v, f"{path}.{k}" if path else k, populated)
+                out |= _all_paths(v, f"{path}.{k}" if path else k, populated, scalars)
     elif isinstance(sent, list) and isinstance(running, list) and len(sent) == len(running):
         for s_item, r_item in zip(sent, running, strict=True):
-            out |= _added_by_the_daemon(s_item, r_item, path + "[]", populated)
+            out |= _added_by_the_daemon(s_item, r_item, path + "[]", populated, scalars)
     return out
 
 
@@ -931,11 +955,15 @@ def test_12_the_defaults_kea_writes_out(facts):
         assert tested_min.get("result") == 0, f"the daemon refused the minimal candidate: {_brief(tested_min)}"
         __real._ok(__kea.kea_command("config-set", arguments={"Dhcp4": minimal}))
         running_min = _get()
-        populated = {}
+        populated, observed = {}, {}
         defaults = sorted(
-            _added_by_the_daemon(authored, ORIGINAL[0]["Dhcp4"], "", populated)
-            | _added_by_the_daemon(rich, running["Dhcp4"], "", populated)
-            | _added_by_the_daemon(minimal, running_min["Dhcp4"], "", populated)
+            _added_by_the_daemon(authored, ORIGINAL[0]["Dhcp4"], "", populated, observed)
+            | _added_by_the_daemon(rich, running["Dhcp4"], "", populated, observed)
+            | _added_by_the_daemon(minimal, running_min["Dhcp4"], "", populated, observed)
+        )
+        scalars, contextual = _agreed_scalars(observed)
+        facts["defaults_contextual_scalars"] = (
+            contextual  # the daemon wrote different values for these in different recordings: judged by inheritance, not by a recorded value
         )
         # the eight keys' verdicts: sent by the minimal configuration (so unknowable from it), or written out by the daemon when omitted
         renamed = {"hosts-database": "hosts-databases"}
@@ -947,29 +975,46 @@ def test_12_the_defaults_kea_writes_out(facts):
             )
             for key in EIGHT_TOP_LEVEL_KEYS
         }
-        populated = {k: populated[k] for k in sorted(populated)}
-        facts["defaults_vector"] = {"kea": version, "paths": defaults, "populated": populated}
+        populated = _agreed_populated(populated)
+        facts["defaults_vector"] = {"kea": version, "paths": defaults, "populated": populated, "scalars": scalars}
         facts["defaults_vector_path_count"] = len(defaults)
         major, minor = int(m.group(1)), int(m.group(2))
         recorded = api.vector_path(major, minor)
         facts["defaults_recorded_file"] = recorded.name
+        mismatch = []
         if recorded.exists():
             on_disk = json.loads(recorded.read_text(encoding="utf-8"))
             on_file = on_disk["paths"]
             facts["defaults_vector_equals_the_recorded_file"] = (
-                on_file == defaults and on_disk.get("populated") == populated
+                on_file == defaults and on_disk.get("populated") == populated and on_disk.get("scalars") == scalars
             )
-            assert on_file == defaults, {
-                "added_by_the_daemon": sorted(set(defaults) - set(on_file)),
-                "gone_from_the_daemon": sorted(set(on_file) - set(defaults)),
-            }
-            assert on_disk.get("populated") == populated, {"recorded": on_disk.get("populated"), "daemon": populated}
+            # the equality is asserted AFTER the controls (Q218): a vector that is not yet re-recorded must not hide whether the controls pass with the daemon's own answer
+            if on_file != defaults:
+                mismatch.append(
+                    {
+                        "added_by_the_daemon": sorted(set(defaults) - set(on_file)),
+                        "gone_from_the_daemon": sorted(set(on_file) - set(defaults)),
+                    }
+                )
+            if on_disk.get("populated") != populated:
+                mismatch.append({"recorded_populated": on_disk.get("populated"), "daemon_populated": populated})
+            if on_disk.get("scalars") != scalars:
+                recorded_scalars = on_disk.get("scalars") or {}
+                mismatch.append(
+                    {
+                        "scalars_added_or_changed": {
+                            p: v for p, v in scalars.items() if recorded_scalars.get(p, object()) != v
+                        },
+                        "scalars_gone": sorted(set(recorded_scalars) - set(scalars)),
+                    }
+                )
         else:
             facts["defaults_vector_equals_the_recorded_file"] = (
                 None  # nothing recorded yet for this minor: the artifact is the record
             )
         paths = api.DefaultsSet(defaults)
         paths.populated = populated
+        paths.scalars = scalars
         # control 1: the file the job runs is the daemon's, both directions
         assert api.file_in_daemon({"Dhcp4": rich}, running, "dhcp4", defaults=paths), api.difference_text(
             {"Dhcp4": rich}, running, "dhcp4", defaults=paths
@@ -997,6 +1042,19 @@ def test_12_the_defaults_kea_writes_out(facts):
         assert api.file_in_daemon({"Dhcp4": authored}, ORIGINAL[0], "dhcp4", defaults=paths), api.difference_text(
             {"Dhcp4": authored}, ORIGINAL[0], "dhcp4", defaults=paths
         )
+        # control 4 (Q218 D1): a scalar the file says and the daemon runs at a value that is NOT Kea's default, DELETED from the file, is a difference (a `config-write` would put it back)
+        for key in ("valid-lifetime", "renew-timer", "rebind-timer"):
+            value = rich.get(key)
+            if value is not None and value != paths.scalars.get(key):
+                gone = copy.deepcopy(rich)
+                del gone[key]
+                facts[f"defaults_a_deleted_{key}_reads_as"] = api.difference_text(
+                    {"Dhcp4": gone}, running, "dhcp4", defaults=paths
+                )
+                assert not api.file_in_daemon({"Dhcp4": gone}, running, "dhcp4", defaults=paths), key
+        assert not mismatch, (
+            mismatch
+        )  # the recorded vector is the daemon's answer, or the artifact is re-recorded into jen/data/ in a fixup
     finally:
         __real._ok(__kea.kea_command("config-set", arguments=_body(ORIGINAL[0])))
     assert _hash(), "the daemon does not answer after row 12"
