@@ -253,6 +253,12 @@ class TestToOff:
         r = sw.switch(srv(daemon, "api"), "api")
         assert r["ok"] and r["unchanged"] and written == [] and daemon.commands == []
 
+    def test_a_server_already_in_live_api_records_a_consent_in_place(self, daemon, store, probes, written):
+        """Q217, second pass row 2: a server whose gate is closed on a fact (an endpoint with no authentication) records the consent where it stands - it used to say `unchanged` and record nothing."""
+        r = sw.switch(srv(daemon, "api"), "api", consents=ALL, actor="root")
+        assert r["ok"] and not r.get("unchanged") and "consent recorded for Live API" in r["line"], r
+        assert probes[5]["consented_at"] and api.probe_gate(srv(daemon, "api")) == ""
+
     def test_a_word_that_is_not_a_transport_is_refused(self, daemon, store, probes, written):
         assert not sw.switch(srv(daemon, "api"), "ssh")["ok"]
 

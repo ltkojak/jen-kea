@@ -722,6 +722,19 @@ class TestADamagedPendingRecord:
         lines, settled = api.settle_pending(server, "dhcp4")
         assert settled and "never reached the daemon" in lines[0] and store.rows == []
 
+    def test_a_store_that_cannot_change_the_row_is_not_settled(self, fake, server, store, monkeypatch):
+        """Q217, second pass row 4: `settled` is what the store did, not what the code meant to do."""
+        row_id = self._damaged(fake, server, store, "{not json")
+        monkeypatch.setattr(api._rev, "mark_damaged", lambda rev_id: False)
+        lines, settled = api.settle_pending(server, "dhcp4")
+        assert settled is False and "could not be marked" in lines[0]
+        assert next(r for r in store.rows if r["id"] == row_id)["source"] == "pending"
+        _cfg_now, digest = _plan(server)
+        row_id = self._damaged(fake, server, store, "{not json", sha=digest)
+        monkeypatch.setattr(api._rev, "discard", lambda rev_id: False)
+        lines, settled = api.settle_pending(server, "dhcp4")
+        assert settled is False and "could not be removed" in lines[0]
+
     def test_the_one_parser_is_the_only_one(self):
         source = (ROOT / "jen" / "services" / "kea_api_config.py").read_text(encoding="utf-8")
         assert source.count('json.loads(row["config"])') == 1, "a second parser of a pending row's body"
@@ -842,7 +855,9 @@ class TestQ216TheRegister:
     ):
         fake.expand = _expands
         _plan(server)
-        file_cfg = {"Dhcp4": {"valid-lifetime": fake.running["valid-lifetime"]}}  # the file omits the defaults
+        shipped, _name = api.load_vector("3.0.5")
+        # the file omits Kea's written-out defaults, as a file Jen authored does (Q217: the reverse compare is real now, so "the defaults" are the shipped vector's)
+        file_cfg = {"Dhcp4": {k: v for k, v in fake.running.items() if k not in shipped}}
         monkeypatch.setattr(host, "read_config_versioned", lambda *a, **k: (copy.deepcopy(file_cfg), "r" * 64))
         server = {**server, "ssh_host": "10.0.0.7", "config_transport": "api"}
         stranger = copy.deepcopy(fake.running)
@@ -1181,3 +1196,102 @@ class TestADeletionIsADifference:
             data = json.loads(path.read_text(encoding="utf-8"))
             assert set(data) <= {"kea", "paths"} and data["paths"] == sorted(set(data["paths"])), path.name
             assert all(isinstance(p, str) and "[0]" not in p for p in data["paths"]), path.name
+
+
+class TestADefaultIsJudgedByItsValueToo:
+    """Q217, second pass row 1: a path in the vector is a default only when the VALUE the daemon runs is one - an empty list, an object of defaults, or the list Kea defaults to - so a populated
+    `option-data`, `reservations`, `relay` or `shared-networks` deleted from the file is a difference even though the vector holds the path."""
+
+    def _defaults(self):
+        paths = api.DefaultsSet(
+            {
+                "subnet4[].option-data",
+                "subnet4[].reservations",
+                "subnet4[].relay",
+                "subnet4[].relay.ip-addresses",
+                "shared-networks",
+                "host-reservation-identifiers",
+                "valid-lifetime",
+            }
+        )
+        paths.populated = {"host-reservation-identifiers": ["hw-address", "duid"]}
+        return paths
+
+    def _live(self):
+        return {
+            "Dhcp4": {
+                "valid-lifetime": 3600,
+                "host-reservation-identifiers": ["hw-address", "duid"],
+                "shared-networks": [{"name": "guest"}],
+                "subnet4": [
+                    {
+                        "id": 1,
+                        "subnet": "10.0.0.0/24",
+                        "option-data": [{"name": "routers", "data": "10.0.0.1"}],
+                        "reservations": [{"hw-address": "aa:bb:cc:dd:ee:01", "ip-address": "10.0.0.5"}],
+                        "relay": {"ip-addresses": ["10.0.0.1"]},
+                    }
+                ],
+            }
+        }
+
+    def test_a_populated_key_deleted_wholesale_is_a_difference_though_the_vector_holds_its_path(self):
+        live = self._live()
+        for key in ("option-data", "reservations", "relay"):
+            file_cfg = copy.deepcopy(live)
+            file_cfg["Dhcp4"]["subnet4"][0].pop(key)
+            file_cfg["Dhcp4"].pop("valid-lifetime")
+            file_cfg["Dhcp4"].pop("host-reservation-identifiers")
+            assert api.file_in_daemon(file_cfg, live, "dhcp4", defaults=self._defaults()) is False, key
+        gone = copy.deepcopy(live)
+        gone["Dhcp4"].pop("shared-networks")
+        assert api.file_in_daemon(gone, live, "dhcp4", defaults=self._defaults()) is False
+
+    def test_the_same_keys_empty_are_defaults(self):
+        live = self._live()
+        live["Dhcp4"]["subnet4"][0].update({"option-data": [], "reservations": [], "relay": {}})
+        live["Dhcp4"]["shared-networks"] = []
+        bare = {"Dhcp4": {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24"}]}}
+        assert api.file_in_daemon(bare, live, "dhcp4", defaults=self._defaults()) is True
+
+    def test_a_list_kea_defaults_to_is_a_default_only_while_it_is_that_list(self):
+        live = {"Dhcp4": {"host-reservation-identifiers": ["hw-address", "duid"], "subnet4": []}}
+        assert api.file_in_daemon({"Dhcp4": {"subnet4": []}}, live, "dhcp4", defaults=self._defaults()) is True
+        live["Dhcp4"]["host-reservation-identifiers"] = ["flex-id"]
+        assert api.file_in_daemon({"Dhcp4": {"subnet4": []}}, live, "dhcp4", defaults=self._defaults()) is False
+
+    def test_a_scalar_default_is_judged_by_its_path_alone_the_named_limit(self):
+        live = {"Dhcp4": {"valid-lifetime": 123, "subnet4": []}}
+        assert api.file_in_daemon({"Dhcp4": {"subnet4": []}}, live, "dhcp4", defaults=self._defaults()) is True
+
+    def test_the_shipped_vector_catches_the_five_deletions(self):
+        shipped, name = api.load_vector("3.0.5")
+        assert shipped is not None and name == "3.0"
+        subnet = {
+            "id": 1,
+            "subnet": "10.0.0.0/24",
+            "option-data": [{"name": "routers", "data": "10.0.0.1"}],
+            "reservations": [{"hw-address": "aa:bb:cc:dd:ee:01", "ip-address": "10.0.0.5"}],
+            "relay": {"ip-addresses": ["10.0.0.1"]},
+        }
+        live = {
+            "Dhcp4": {
+                "option-data": [{"name": "domain-name-servers", "data": "10.0.0.53"}],
+                "shared-networks": [{"name": "guest", "subnet4": []}],
+                "subnet4": [subnet],
+            }
+        }
+        paths = (
+            ("option-data",),
+            ("shared-networks",),
+            ("subnet4", 0, "option-data"),
+            ("subnet4", 0, "reservations"),
+            ("subnet4", 0, "relay"),
+        )
+        for path in paths:
+            file_cfg = copy.deepcopy(live)
+            node = file_cfg["Dhcp4"]
+            for step in path[:-1]:
+                node = node[step]
+            node.pop(path[-1])
+            assert api.file_in_daemon(file_cfg, live, "dhcp4", defaults=shipped) is False, path

@@ -324,6 +324,7 @@ updater's allowlist.
 **Enforced at.** `jen/services/kea_api_config.py` (`_walk`, `_lacks`, `file_in_daemon`, `compare`, `load_vector`).
 **Tests.**
 - `tests/test_kea_api_config.py::TestADeletionIsADifference`
+- `tests/test_kea_api_config.py::TestADefaultIsJudgedByItsValueToo`
 - `tests/test_kea_api_config.py::TestKeaWritesItsDefaultsOut`
 - `tests/kea_compat/test_config_write.py::test_12_the_defaults_kea_writes_out` (the daemon's own answer, per Kea minor)
 

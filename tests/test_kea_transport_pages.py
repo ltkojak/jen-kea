@@ -287,3 +287,14 @@ class TestTheHistoryLabelsTheNewSources:
         html = logged_in_client.get(f"/servers/1/config-history/{rid}").data.decode()
         assert "daemon's own answer has not settled it" in html and "Recorded from the daemon's own answer" in html
         assert json.loads(rev.get(rid)["config"]) == {"Dhcp4": {}}
+
+
+class TestTheBadgeLinkIsForTheRolesThatCanOpenTheCard:
+    def test_a_viewer_is_not_linked_to_a_page_that_bounces_them(self):
+        """Q217, second pass row 11: the Servers badge carries its href only for an admin or above."""
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "servers.html").read_text(
+            encoding="utf-8"
+        )
+        assert '{% if current_user.is_admin_or_above %}href="/settings/kea#config-card-' in src

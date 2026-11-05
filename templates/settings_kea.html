@@ -361,8 +361,8 @@
                         </li>
                     </ol>
                     <div class="wm-switch">
-                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-primary" data-wm-switch="{{ c.id }}" data-wm-target="api" data-holds="{{ '1' if c.holding else '' }}" {% if m.value == c.transport %}data-current="1"{% endif %} {% if m.value == c.transport or c.holding %}disabled{% endif %}>Switch to live API</button>
-                        <span class="form-hint" data-wm-holding="{{ c.id }}">{% if m.value == c.transport %}This is the current mode.{% else %}{{ c.holding }}{% endif %}</span>
+                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-primary" data-wm-switch="{{ c.id }}" data-wm-target="api" data-holds="{{ '1' if c.holding else '' }}" {% if m.value == c.transport and not c.blocked %}data-current="1"{% endif %} {% if (m.value == c.transport and not c.blocked) or c.holding %}disabled{% endif %}>{% if m.value == c.transport %}Record consent{% else %}Switch to live API{% endif %}</button>
+                        <span class="form-hint" data-wm-holding="{{ c.id }}">{% if m.value == c.transport and not c.blocked %}This is the current mode.{% else %}{{ c.holding }}{% endif %}</span>
                     </div>
                     <div class="form-hint">Audited. Reversible from this card.</div>
                     {% elif m.value == 'file' %}
@@ -373,7 +373,7 @@
                         </li>
                     </ol>
                     <p class="form-hint">Jen compares the file with what the daemon runs before it writes anything; a file edit the daemon never loaded is kept.</p>
-                    {% if c.transport == 'api' and c.probe and c.probe.get('agree') is false %}
+                    {% if c.ssh and c.transport != 'file' %}
                     <div class="wm-consents"><label><input type="checkbox" name="discard_file_edit" value="1" form="wm-form-{{ c.id }}"> {{ c.consent_texts.discard_file_edit }}</label></div>
                     {% endif %}
                     <div class="wm-switch">

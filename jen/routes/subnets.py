@@ -1490,13 +1490,14 @@ def dhcp_class_preview():
     if not error:
         # (Q216 AA18) `read_kind` is never falsy for dhcp4 - an `off` server with no SSH still reads over its API - so "a server to validate against" is one a change could reach: a write target, or a
         # host with SSH. The branch that says there is none is reachable again.
-        ssh_server = next(
-            (
-                s
-                for s in extensions.KEA_SERVERS
-                if __host.read_kind(s, "dhcp4") and (s.get("ssh_host") or __changeset._transport(s, "dhcp4") != "off")
-            ),
-            None,
+        candidates = [
+            s
+            for s in extensions.KEA_SERVERS
+            if __host.read_kind(s, "dhcp4") and (s.get("ssh_host") or __changeset._transport(s, "dhcp4") != "off")
+        ]
+        # (Q217, second pass row 9) a write target is validated against before a Read-only host that merely has SSH
+        ssh_server = next((s for s in candidates if __changeset._transport(s, "dhcp4") != "off"), None) or next(
+            iter(candidates), None
         )
         if ssh_server is None:
             test_result = {
@@ -2507,7 +2508,11 @@ def import_windows_apply(source):
                     server_name=primary.get("name", ""),
                 )
             flash(
-                f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}"
+                (
+                    f"The import was not applied: {apply_result.get('detail', apply_result['code'])}"
+                    if apply_result.get("code") == "unreadable"
+                    else f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}"
+                )
                 + ("" if noted else " Jen could not record that the daemon is unproved; check it on the daemon."),
                 "error",
             )

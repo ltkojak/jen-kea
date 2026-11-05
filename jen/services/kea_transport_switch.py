@@ -109,10 +109,11 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     stored["consents"] = sorted(set(consents) & set(_api.CONSENTS))
     stored.pop("consent_refused", None)
     _api.store_probe(sid, stored)
+    verb = "consent recorded for Live API" if current == "api" else "switched to Live API"  # (Q217, second pass row 2) a server already in Live API records a consent in place
     return _done(
-        f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
+        f"{name}: {verb}; Kea rendered its file; revision #{revision} is the baseline"
         if revision
-        else f"{name}: switched to Live API; Kea rendered its file",
+        else f"{name}: {verb}; Kea rendered its file",
         revision=revision,
     )
 
@@ -185,7 +186,7 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
         return _refuse("the transport must be api, file or off")
     current = _api.declared_transport(server)
     name = server.get("name") or "the server"
-    if target == current:
+    if target == current and not (target == "api" and consents):
         return _done(f"{name} is already in write mode {_words.mode_word(target)}", unchanged=True)
     try:
         with _cs.change_lock():

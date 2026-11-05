@@ -195,6 +195,27 @@ def first_difference(running: object, candidate: object, under: str | None = Non
     return "" if found is None else (found[0] or "/")
 
 
+class DefaultsSet(frozenset):
+    """Kea's written-out default key paths for one minor version (`load_vector`), with `populated`: the paths whose default is a NON-EMPTY list (`host-reservation-identifiers`), and that list."""
+
+    populated: dict = {}
+
+
+def _is_default(path: str, value: object, defaults: frozenset) -> bool:
+    """Is a key the daemon runs and the file does not say one of Kea's own written-out defaults? (Q217 row 1 of the second pass.) Its path must be in the vector AND its VALUE must be what a default
+    is: an empty list, an object whose every child is itself a default, the recorded list for a list that Kea defaults to non-empty - so a populated `option-data`, `reservations`, `relay` or
+    `shared-networks` deleted from the file is a difference, never "a default". A scalar is judged by its path alone: a hand `config-set` of a scalar default is the digest check's to find
+    (`api_daemon_differs`), and `docs/ARCHITECTURE.md` 3.17 names the limit."""
+    blank = _INDEX.sub("[]", path)
+    if blank not in defaults:
+        return False
+    if isinstance(value, dict):
+        return all(_is_default(f"{path}.{k}", v, defaults) for k, v in value.items())
+    if isinstance(value, list):
+        return not value or getattr(defaults, "populated", {}).get(blank) == value
+    return True
+
+
 def _lacks(running: object, candidate: object, defaults: frozenset, path: str = ""):
     """THE reverse walk (Q217 AB6): `None` when everything the daemon RUNS is either in the file or one of Kea's own written-out defaults (`defaults`: key paths with indexes blanked, relative to the
     section), else `(path, _MISSING, running_leaf)` for the FIRST key the daemon runs that the file does not say - a key DELETED from the file (a `hooks-libraries` entry, a subnet's option) reads as
@@ -220,7 +241,7 @@ def _lacks(running: object, candidate: object, defaults: frozenset, path: str = 
             if k in accounted:
                 continue
             here = f"{path}.{k}" if path else k
-            if _INDEX.sub("[]", here) in defaults:
+            if _is_default(here, v, defaults):
                 continue
             return (here, _MISSING, v)
         return None
@@ -318,8 +339,9 @@ def load_vector(version: str, directory: pathlib.Path | None = None) -> tuple[fr
         return None, ""
     try:
         data = json.loads(best[1].read_text(encoding="utf-8"))
-        paths = frozenset(str(p) for p in data["paths"])
-    except (OSError, ValueError, KeyError, TypeError):
+        paths = DefaultsSet(str(p) for p in data["paths"])
+        paths.populated = {str(k): v for k, v in (data.get("populated") or {}).items() if isinstance(v, list)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         logger.warning("kea_api_config: the defaults vector %s cannot be read", best[1].name)
         return None, ""  # a vector that cannot be read asks nothing: the first direction still decides
     return paths, f"{major}.{best[0]}"
@@ -636,18 +658,22 @@ def _reconcile_pending(
     candidate = _pending_candidate(row, service)
     if candidate is None:
         if row.get("sha256") and digest == row["sha256"]:
-            _rev.discard(row["id"])
+            done = _rev.discard(row["id"])
             if notes is not None:
                 notes.append(
                     f"a change of {at} never reached the daemon (its record was damaged); the record was removed"
+                    if done
+                    else f"a change of {at} never reached the daemon (its record was damaged), and the record could not be removed - try again"
                 )
         else:
-            _rev.mark_damaged(row["id"])
+            done = _rev.mark_damaged(row["id"])
             if notes is not None:
                 notes.append(
                     f"the record of a change of {at} is damaged and the daemon runs {digest}; restore from Config history if that is not what you expect"
+                    if done
+                    else f"the record of a change of {at} is damaged and could not be marked - try again (the daemon runs {digest})"
                 )
-        return cfg, digest, True
+        return cfg, digest, bool(done)
     if _row_age_seconds(row) < PENDING_SETTLE_SECONDS:
         if notes is not None:
             notes.append(
@@ -655,10 +681,14 @@ def _reconcile_pending(
             )
         return cfg, digest, False
     if row.get("sha256") and digest == row["sha256"]:
-        _rev.discard(row["id"])
+        done = _rev.discard(row["id"])
         if notes is not None:
-            notes.append(f"a change of {at} never reached the daemon; its record was removed")
-        return cfg, digest, True
+            notes.append(
+                f"a change of {at} never reached the daemon; its record was removed"
+                if done
+                else f"a change of {at} never reached the daemon, and its record could not be removed - try again"
+            )
+        return cfg, digest, bool(done)
     if _carries(_section(cfg, service), _section(candidate, service)):
         # (second pass, row 5) the settlement's `config-write` is a write of this server's file: it asks what every other writer asks first - the investigation marker and the host's restore window
         from jen.services import investigation_logging as _inv

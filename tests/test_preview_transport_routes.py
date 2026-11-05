@@ -75,3 +75,23 @@ class TestAClassPreviewOnAnApiServerWithNoSsh:
         r = logged_in_client.post("/subnets/classes/preview", data=self.FORM)
         assert r.status_code == 200 and b"Read-only" in r.data
         assert "test-config" not in fake.ops() and "config-test" not in daemon.commands
+
+    def test_a_write_target_is_validated_before_a_read_only_host_that_merely_has_ssh(
+        self, logged_in_client, monkeypatch, daemon
+    ):
+        """Q217, second pass row 9: the Read-only host is listed FIRST and the Live API server is still the one the preview asks."""
+        read_only = {
+            "id": 2,
+            "name": "kea-ro",
+            "api_url": "http://127.0.0.1:9",
+            "ssh_host": "10.0.0.5",
+            "config_transport": "off",
+        }
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [read_only, _server(daemon)])
+        monkeypatch.setattr(
+            kea_host,
+            "read_via_transport",
+            lambda server, service, **kw: (copy.deepcopy({"Dhcp4": daemon.running}), "d"),
+        )
+        r = logged_in_client.post("/subnets/classes/preview", data=self.FORM)
+        assert r.status_code == 200 and b"Kea accepted this config" in r.data and "config-test" in daemon.commands

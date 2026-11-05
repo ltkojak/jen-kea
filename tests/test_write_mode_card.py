@@ -158,6 +158,23 @@ class TestTheCardIsOneChoice:
         cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts()})
         assert re.search(r'data-wm-target="api"[^>]*disabled', html) and "This is the current mode." in html
 
+    def test_a_server_already_in_live_api_whose_gate_is_closed_can_record_a_consent(self, monkeypatch):
+        """Q217, second pass row 2: the current mode's button is "Record consent" and enabled while the gate is blocked on a fact the operator can accept."""
+        cards, html = wm.render(
+            monkeypatch, [wm.S_API], {2: _facts(auth="none")}, gate="this endpoint has no authentication"
+        )
+        button = re.search(r'<button[^>]*data-wm-target="api"[^>]*>[^<]*</button>', html).group(0)
+        assert "disabled" not in button and "data-current" not in button and "Record consent" in button
+        _cards, quiet = wm.render(monkeypatch, [wm.S_API], {2: _facts()})
+        assert "Record consent" in quiet and re.search(r'data-wm-target="api"[^>]*disabled', quiet)
+
+    def test_the_file_panel_offers_the_discard_box_to_a_server_that_is_not_in_file_mode(self, monkeypatch):
+        """Q217, second pass row 3: `_to_file` demands `discard_file_edit` when the file differs; the box is on the panel for any server with SSH that is not already File over SSH."""
+        _cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts()})
+        assert 'name="discard_file_edit"' in html
+        _cards, html = wm.render(monkeypatch, [wm.S_FILE], {1: _facts()})
+        assert 'name="discard_file_edit"' not in html
+
     def test_one_switch_form_per_server_and_the_row_buttons_do_not_nest_in_it(self, monkeypatch):
         cards, html = wm.render(monkeypatch, [wm.S_FILE, wm.S_API], {1: _facts(), 2: _facts()})
         assert html.count('id="wm-form-') == 2
