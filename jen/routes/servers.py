@@ -180,7 +180,11 @@ def servers():
         s["transport_unauthenticated"] = (
             current_user.is_admin_or_above and caps.config_transport == "api" and probe.get("auth") == "none"
         )
-        s["transport_refused"] = __api.refusal_sentence(s["server"]) if current_user.is_admin_or_above else ""
+        s["transport_refused"] = (
+            __api.refusal_sentence(s["server"])
+            if current_user.is_admin_or_above and caps.config_transport == "api"
+            else ""
+        )  # (Q219 BI3 b, AD3) a remembered refusal of `config-write` belongs to Live API: a server in another mode never tells its operator to fix it
     single_server = len(extensions.KEA_SERVERS) == 1
     ha_mode = extensions.cfg.get("kea", "ha_mode", fallback="")
 

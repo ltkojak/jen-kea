@@ -556,6 +556,38 @@ def _kea_config_drift(ctx) -> Check:
     return c
 
 
+def _kea_write_gate(ctx) -> Check:
+    """Q219 BI5 b (AD-Q1): is any Live API server's write gate closed? A change to it will stop, and nothing on this page said so: the card, the Servers badge and the bundle read the gate, and Health did not.
+    `warn` names each server and the gate's sentence BY THE READER'S ROLE (`transport_why_for`: a superadmin reads the gate's own words, an admin or a viewer reads the mode's sentence and that a superadmin
+    has to read the card); `ok` only when every Live API server's gate is open (or none is on Live API)."""
+    from flask import has_request_context
+    from flask_login import current_user
+
+    from jen.services import capabilities as _caps
+    from jen.services import kea_changeset as _cs
+
+    c = Check("kea_write_gate", "Live API changes are open", "kea", fix_url="/settings/kea")
+    if not ctx.get("unrestricted", True):
+        c.status, c.detail = "skip", "fleet-wide summary is for unrestricted accounts"
+        return c
+    superadmin = bool(has_request_context() and getattr(current_user, "is_superadmin", False))
+    on_api, held = 0, []
+    for s in extensions.KEA_SERVERS or []:
+        if _cs._transport(s, "dhcp4") != "api":
+            continue
+        on_api += 1
+        caps = _caps.write_gate_for(s)
+        if caps.transport_blocked:
+            held.append(f"{_server_name(s)}: {caps.transport_why_for(superadmin)}")
+    if not on_api:
+        c.status, c.detail = "skip", "no server is on Live API"
+    elif held:
+        c.status, c.detail = "warn", "; ".join(held)
+    else:
+        c.status, c.detail = "ok", f"{on_api} Live API server(s), every gate open"
+    return c
+
+
 def _kea_subnets_declared(ctx) -> Check:
     # v5.15.0 — via kea_config_view so a subnet nested in a shared-network
     # is seen too (before, it was flagged as orphaned).
@@ -1955,6 +1987,7 @@ _CHECKS = [
     _debug_logging_left_on,
     _problems_sweep,
     _kea_config_drift,
+    _kea_write_gate,
     _kea_subnets_declared,
     _config_doctor,
     _endpoint_credentials,
@@ -1994,6 +2027,7 @@ _CHECK_META = {
     "debug_logging_left_on": ("DEBUG logging left on", "kea"),
     "problems_sweep": ("Problems inbox sweep", "kea"),
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
+    "kea_write_gate": ("Live API changes are open", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "config_doctor": ("Configuration Doctor", "kea"),
     "endpoint_credentials": ("Every endpoint has a credential", "kea"),

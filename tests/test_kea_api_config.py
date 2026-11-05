@@ -661,6 +661,7 @@ class TestTheModuleIsTheOneSender:
             "hashlib",  # the probe is bound to its endpoint by a hash
             "datetime.datetime",  # the stored probe's clock (lazy)
             "datetime.timezone",
+            "urllib.parse.urlsplit",  # `endpoint_key`: the host and port of an api_url (Q219, lazy)
             "jen.models.user",  # the stored probe is a settings row (lazy)
         }
         assert imported <= allowed, imported - allowed
@@ -670,6 +671,24 @@ class TestTheModuleIsTheOneSender:
             if isinstance(n, ast.Call) and "post" in ast.unparse(n.func).lower()
         }
         assert calls == set(), calls  # no direct HTTP: every command goes through `kea_command`
+
+
+class TestLeafGrammar:
+    """Q219 BI6 c (AD13): a container is named by its shape and the noun agrees with the count - "1 key", "1 entry" - and a value is never printed."""
+
+    @pytest.mark.parametrize(
+        ("value", "text"),
+        [
+            ({}, "an object with 0 keys"),
+            ({"a": 1}, "an object with 1 key"),
+            ({"a": 1, "b": 2}, "an object with 2 keys"),
+            ([], "a list of 0 entries"),
+            (["x"], "a list of 1 entry"),
+            (["x", "y", "z"], "a list of 3 entries"),
+        ],
+    )
+    def test_the_noun_agrees_with_the_count(self, value, text):
+        assert api._leaf(value) == text
 
 
 class TestTheOldNamesAreGone:
@@ -816,7 +835,7 @@ class TestTheFirstDifferenceIsNamed:
         file_cfg = copy.deepcopy(self.FILE)
         file_cfg["Dhcp4"]["subnet4"].append({"id": 2, "subnet": "10.1.0.0/24"})
         text = api.difference_text(file_cfg, self._live(), "dhcp4")
-        assert text == "at Dhcp4.subnet4: the file says a list of 2, the daemon a list of 1"
+        assert text == "at Dhcp4.subnet4: the file says a list of 2 entries, the daemon a list of 1 entry"
 
     def test_the_path_is_built_as_the_walk_descends(self):
         live = self._live()
@@ -1371,7 +1390,7 @@ class TestADeletionIsADifference:
         del file_cfg["Dhcp4"]["hooks-libraries"]
         assert api.file_in_daemon(file_cfg, self._live(), "dhcp4", defaults=self.DEFAULTS) is False
         text = api.difference_text(file_cfg, self._live(), "dhcp4", defaults=self.DEFAULTS)
-        assert text == "at Dhcp4.hooks-libraries: the file says nothing, the daemon a list of 1", text
+        assert text == "at Dhcp4.hooks-libraries: the file says nothing, the daemon a list of 1 entry", text
 
     def test_a_deleted_option_of_a_subnet_is_named_by_its_path(self):
         file_cfg = self._file()
@@ -1780,6 +1799,11 @@ class TestTheRecordIsAPreconditionOfTheSendAndOfOk:
         assert not out["ok"] and out["code"] == "unverified"
         assert store.pending(SID, "dhcp4") is not None
 
+
+class TestAStoreThatRaisesAtStepThreeIsUnreadable:
+    """Q219 BI2 c (AD9): the pending record's write RAISING is the same refusal as one that answers None - `unreadable`, nothing sent - never an exception out of `apply`, and the two routes that call `apply` directly (the restore
+    and the import) answer the sentence, not a 500."""
+
     def test_a_store_that_raises_at_step_three_is_the_same_refusal(self, fake, server, store, monkeypatch):
         """Q219 BI2 c (AD9): `record` RAISING is `unreadable` with nothing sent, never an exception out of `apply`."""
 
@@ -1792,6 +1816,11 @@ class TestTheRecordIsAPreconditionOfTheSendAndOfOk:
         out = api.apply(server, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
         assert not out["ok"] and out["code"] == "unreadable" and "nothing was sent" in out["detail"]
         assert not any(c in fake.commands for c in ("config-set", "config-write"))
+
+    def test_the_two_routes_that_call_apply_directly_catch_the_unreadable_store(self):
+        for rel in ("jen/routes/servers.py", "jen/routes/subnets.py"):
+            source = (ROOT / rel).read_text(encoding="utf-8")
+            assert "RevisionStoreUnreadable" in source and "unreadable_sentence(" in source, rel
 
 
 class TestARestoreOverALivePendingChangeIsRefused:
@@ -2400,3 +2429,123 @@ class TestFileProofOrder:
         why = api.file_proof(w.server, "dhcp4")["why"]
         stamp = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC"
         assert re.search(rf"written at {stamp} and the daemon last loaded its configuration at {stamp}", why), why
+
+
+class TestSecondPassRowsOfBeta5:
+    """The second pass's rows E1, E3, E4, E9, E10 and H1 (pass/reports/v7.0.0-beta.5-fix-rows.md): each executed here against the real sequence."""
+
+    @pytest.fixture
+    def w(self, fake, server, store, monkeypatch):
+        world_ = world.ProofWorld(fake, server, store, monkeypatch)
+        world_.start(world_.ad1_running(fake.running))
+        return world_
+
+    # E1 - the gate never refuses on a stale `agree False`
+    def test_e1_a_stored_false_is_asked_again_and_a_restart_since_opens_it(self, w, fake, server):
+        probes = api.stored_probe(server["id"])
+        w.hand_edit(world.without(fake.file, "subnet4", 0, "valid-lifetime"))
+        api.store_probe(
+            server["id"],
+            {
+                **probes,
+                "agree": False,
+                "agree_at": "at Dhcp4.subnet4[0].valid-lifetime",
+                "consents": ["consent_rendering"],
+            },
+        )
+        assert "restart Kea first" in api.probe_gate(
+            server
+        ) or "carries a configuration the daemon is not running" in api.probe_gate(server)
+        w.reload()  # the operator did what the sentence said
+        assert api.probe_gate(server) == ""
+        stored = api.stored_probe(server["id"])
+        assert stored["agree"] is True and stored["proof"] == "loaded" and "agree_at" not in stored
+
+    def test_e1_a_file_that_is_still_unloaded_keeps_the_gate_closed(self, w, fake, server):
+        probes = api.stored_probe(server["id"])
+        w.hand_edit(world.without(fake.file, "subnet4", 0, "valid-lifetime"))
+        api.store_probe(server["id"], {**probes, "agree": False, "consents": ["consent_rendering"]})
+        assert "daemon is not running" in api.probe_gate(server)
+        assert api.stored_probe(server["id"])["agree"] is False
+
+    # E3 - a refused restore loses nothing
+    def test_e3_a_refused_restore_keeps_the_stale_record(self, w, fake, server, store):
+        cfg, digest = api.read(server, "dhcp4", capture=False)
+        store.record(SID, "dhcp4", _candidate_of(cfg, 99), digest, "never landed", hash_kind="kea", source="pending")
+        w.hand_edit({**fake.file, EDIT_KEY: copy.deepcopy(EDIT)})
+        fake.commands.clear()
+        out = api.apply(server, "dhcp4", _candidate_of(cfg, 4), digest, "restore", source="restore", before_cfg=cfg)
+        assert out["code"] == "guard" and "config-set" not in fake.commands
+        assert store.pending(SID, "dhcp4") is None, "it no longer blocks ..."
+        assert [r["source"] for r in store.rows if r["summary"] == "never landed"] == ["damaged"], (
+            "... and it is still in Config history"
+        )
+
+    # E4 - a rendering that could not be recorded is said
+    def test_e4_a_change_whose_rendering_cannot_be_recorded_says_so(self, w, fake, server, store, monkeypatch):
+        real = store.record
+
+        def refuse_rendering(*a, **k):
+            return None if k.get("source") == "rendering" else real(*a, **k)
+
+        monkeypatch.setattr(api._rev, "record", refuse_rendering)
+        cfg, digest = api.read(server, "dhcp4", capture=False)
+        proof = api.file_proof(server, "dhcp4")
+        out = api.apply(server, "dhcp4", _candidate_of(cfg), digest, "x", before_cfg=cfg, planned_sha=proof["sha256"])
+        assert (
+            out["ok"]
+            and "could not be recorded in Config history" in out["note"]
+            and "restart Kea there" in out["note"]
+        )
+
+    # E9 - times are bounded
+    def test_e9_an_absurd_time_is_no_time_and_never_raises(self, w, monkeypatch):
+        real = host.read_config_proof
+
+        def absurd(server, service, *, capture=True):
+            cfg, sha, times = real(server, service, capture=capture)
+            return cfg, sha, {**times, "mtime": 10**15, "daemon": {"pid": 1, "uptime": 5, "reload": -5}}
+
+        monkeypatch.setattr(host, "read_config_proof", absurd)
+        out = api.file_proof(w.server, "dhcp4")
+        assert out["mtime"] is None and out["loaded_at"] is None and not out["ok"]
+        assert api._utc(10**15) == "an unreadable time"
+
+    # E10 - a rollback's row carries the file, and a live row with no planned file says the restart
+    def test_e10_a_rollback_row_carries_the_file_as_it_stands(self, w, fake, server, store):
+        cfg, digest = api.read(server, "dhcp4", capture=False)
+        first = api.apply(
+            server,
+            "dhcp4",
+            _candidate_of(cfg),
+            digest,
+            "x",
+            before_cfg=cfg,
+            planned_sha=api.file_proof(server, "dhcp4")["sha256"],
+        )
+        assert first["ok"]
+        _after, after_digest = api.read(server, "dhcp4", capture=False)
+        seen = {}
+        fake.hooks["config-set"] = lambda f: seen.setdefault("row", store.pending(SID, "dhcp4"))
+        api.revert(server, "dhcp4", cfg, after_digest, "rollback: x", before_cfg=_candidate_of(cfg))
+        assert (
+            seen["row"]
+            and seen["row"]["file_sha256"] == w.seen["sha"]({"Dhcp4": fake.file})
+            or len(seen["row"]["file_sha256"]) == 64
+        )
+
+    def test_e10_a_restore_over_a_live_row_with_no_planned_file_says_the_restart(self, w, fake, server, store):
+        cfg, digest = api.read(server, "dhcp4", capture=False)
+        cand = _candidate_of(cfg)
+        store.record(SID, "dhcp4", cand, digest, "an older release", hash_kind="kea", source="pending")
+        fake.set_running(cand["Dhcp4"])
+        out = api.apply(server, "dhcp4", _candidate_of(cfg, 4), digest, "restore", source="restore", before_cfg=cfg)
+        assert not out["ok"] and "restart Kea there to load the file as it stands" in out["detail"]
+
+    # H1 - a write that never ran
+    def test_h1_a_write_that_may_not_have_run_over_the_planned_file_is_unverified(self, w, fake, server, store):
+        fake.hang = {"config-write": "before"}  # the command never runs and no answer comes
+        cfg, digest = api.read(server, "dhcp4", capture=False)
+        proof = api.file_proof(server, "dhcp4")
+        out = api.apply(server, "dhcp4", _candidate_of(cfg), digest, "x", before_cfg=cfg, planned_sha=proof["sha256"])
+        assert not out["ok"] and out["code"] == "unverified"

@@ -131,9 +131,6 @@ class TestZeroWriteTargets:
             "/subnets/classes/preview",
             data={"is_new": "1", "orig_name": "", "name": "voice", "mode": "advanced", "test": "1 == 1"},
         )
-        assert (
-            r.status_code == 200
-            and b"Kea accepted this config" not in r.data
-            and b"No Kea server to validate" in r.data
-        )
+        assert r.status_code == 200 and b"Kea accepted this config" not in r.data
+        assert b"no server takes this change: every server is Read-only" in r.data and b"data-no-write-target" in r.data
         assert "config-test" not in daemon.commands

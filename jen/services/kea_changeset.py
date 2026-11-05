@@ -257,6 +257,15 @@ def _default_conflict_phrase(name: str) -> str:
     return f"the config on {name} changed since you started"
 
 
+ENDPOINT_NOTE = " (two servers name one Kea endpoint)"  # Q219 BI5 b (AD8): what a conflict line adds when the Doctor's `kea_duplicate_endpoint` finding is true of the target
+
+
+def _conflict_line(t, phrase: str) -> str:
+    """The conflict line of one target, with the endpoint note when another configured server names the same Kea endpoint."""
+    note = ENDPOINT_NOTE if _api.shares_endpoint(t.server, extensions.KEA_SERVERS) else ""
+    return f"❌ {t.name}: {phrase}{note}"
+
+
 def _failure_line(name: str, res: dict, daemon_label: str) -> str:
     """The existing per-code phrase every converted loop already used,
     for a `test_config`/`apply_config` result that came back not-ok.
@@ -568,7 +577,7 @@ def _run_change_unlocked(
         if not res.get("ok"):
             preflight_failed = True
             if res.get("code") == "conflict":
-                lines.append(("error", f"❌ {t.name}: {conflict_phrase(t.name)}"))
+                lines.append(("error", _conflict_line(t, conflict_phrase(t.name))))
             else:
                 lines.append(("error", _failure_line(t.name, res, daemon_label)))
     if preflight_failed:
@@ -609,7 +618,7 @@ def _run_change_unlocked(
 
         # First failure — revert every already-committed target.
         if res.get("code") == "conflict":
-            lines.append(("error", f"❌ {t.name}: {conflict_phrase(t.name)}"))
+            lines.append(("error", _conflict_line(t, conflict_phrase(t.name))))
         else:
             lines.append(("error", _failure_line(t.name, res, daemon_label)))
 

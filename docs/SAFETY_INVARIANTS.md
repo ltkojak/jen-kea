@@ -322,6 +322,10 @@ updater's allowlist.
 - `tests/test_kea_consent.py::TestAStoredResultThatNamesNoEndpointIsCheckedAgain`
 - `tests/test_kea_changeset_transports.py::TestAnAdminIsNotToldAHostFactByAChangeSetLine`
 - `tests/e2e/test_write_mode_journeys.py::test_a_box_in_the_hidden_panel_is_not_a_consent`
+- `tests/test_transport_switch.py::TestToApi::test_the_stored_facts_after_the_switch_are_the_facts_after_its_write` (Q219: a consent is never recorded over facts the act itself changed, and a used-up one is never left on record)
+- `tests/test_kea_transport_routes.py::TestATickWithoutAStoredResultNamesTheCheck`
+- `tests/test_write_mode_card.py::TestNoConsentBoxWithoutAStoredResult`
+- `tests/test_write_mode_card.py::TestTheConsentValueIsOneConstant`
 
 ### CFG-004 - A file is the daemon's configuration when the daemon loaded it after it was written, or it is Jen's own rendering or the file the Plan proved; a model of Kea's defaults never decides
 **Rule.** Whether the file on a Kea host may be replaced by the daemon's `config-write` is answered by facts the host and the daemon give themselves, never by a model of Kea inside Jen (`file_proof`, the one definition): the file's sha256 is the newest `rendering` row's - the file Kea itself wrote after a change over the API (R); or it is byte for byte the file the Plan proved before any `config-set` (P); or the daemon last committed a configuration at or after the file was written - the host's one clock: `mtime <= now - reload`, from helper build 22's `config-loaded` - AND the file is in the daemon one way (a reload that did not take is not a load) AND no change of Jen's is pending (then the daemon's last commit is Jen's own `config-set` and the time proves nothing) (L). In that order; none of them is a refusal that prints both times. A file that cannot be read, or a host that cannot say, is never overwritten without the named consent. The comparison with Kea's written-out defaults survives for one job: naming a path in the sentence, best effort - it decides nothing, and the verdicts are identical with the vector absent and with every key a default.
@@ -336,6 +340,9 @@ updater's allowlist.
 - `tests/test_kea_helper.py::TestConfigLoadedOp`
 - `tests/test_kea_host.py::TestReadConfigProof`
 - `tests/test_config_revisions.py::TestLatestRendering`
+- `tests/kea_compat/test_config_write.py::test_13_the_daemons_own_load_time` (the clock's own facts, per Kea minor)
+- `tests/system/test_boundaries.py::test_24_a_hand_edit_without_a_reload_is_refused_and_the_edit_survives`
+- `tests/system/test_boundaries.py::test_25_a_hand_edit_the_daemon_reloaded_is_accepted_and_rendered`
 
 ### CFG-005 - A `config-write` is sent only after the file it replaces has been read into Config history and proved: the daemon loaded it, it is Jen's own rendering, or it is the file the Plan proved
 **Rule.** The daemon's `config-write` renders ITS configuration over the file on its host, so whatever the file carries that the daemon never loaded is destroyed. It is therefore sent only by `kea_api_config` (`_send_write`, the one sender), and only after `_ask_the_file`, which is `file_proof` and nothing else: on a server with an SSH host the file is READ (capturing: an edit is an `external` row in Config history before it can be lost) and proved (CFG-004). A `none` is refused with the times and the path (`unloaded-edit`, nothing sent) unless `discard_file_edit` was given on THIS act and the facts called for it; a file that cannot be read is refused with or without it. The Plan proves BEFORE any `config-set` and carries the proved file's sha256 as `planned_sha`; `apply` records it in the pending row and step (6) checks the file is still that one (or Jen's own rendering); a settlement of a pending change (the Plan's, and *Settle it now*) writes only over the file the row's `file_sha256` names, and a row that carries none - an earlier release wrote it - is refused with the restart sentence. A caller with no Plan (a restore, an import) proves the file itself before anything is sent.
@@ -359,6 +366,7 @@ updater's allowlist.
 **Tests.**
 - `tests/test_kea_api_config.py::TestTheRecordIsAPreconditionOfTheSendAndOfOk`
 - `tests/test_kea_api_config.py::TestAPendingOrDamagedRowIsNeverTheLastKnownState`
+- `tests/test_kea_api_config.py::TestAStoreThatRaisesAtStepThreeIsUnreadable`
 - `tests/test_kea_api_config.py::TestARestoreOverALivePendingChangeIsRefused`
 - `tests/test_kea_api_config.py::TestLiveNotYetInItsFileIsTheLine`
 - `tests/test_kea_api_config.py::TestADamagedPendingRecord`

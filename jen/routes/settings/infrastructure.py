@@ -160,6 +160,30 @@ def _kea_servers_with_helper_status():
     return rows
 
 
+def _proof_text(probe) -> str:
+    """The sentence for what the readiness check proved about the file (Q219 BI1 f): the times are the host's own, in UTC; `""` for a stored result that carries no proof."""
+    from datetime import datetime, timezone
+
+    import jen.services.write_mode as __words
+
+    if not probe or not probe.get("proof"):
+        return ""
+
+    def when(ts):
+        try:
+            return (
+                datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                if isinstance(ts, int) and not isinstance(ts, bool)
+                else ""
+            )
+        except (OverflowError, OSError, ValueError):
+            return ""
+
+    written, loaded = probe.get("file_written_at"), probe.get("daemon_loaded_at")
+    after = not (isinstance(written, int) and isinstance(loaded, int) and written <= loaded)
+    return __words.proof_sentence(probe.get("proof"), when(written), when(loaded), after)
+
+
 def _config_cards() -> list:
     """Q217 (BG2): one Write mode card per server - the effective mode (the one word the radio, the chip, the Servers page badge and `transport_why` all print), the ordered rows of the Live API panel
     (the helper, the readiness check, what the operator accepts), the first thing holding the switch, and the alerts. A superadmin's card carries the facts; an admin's and a viewer's carries the
@@ -231,7 +255,12 @@ def _config_cards() -> list:
         elif helper_ok:
             row1 = {
                 "state": "ok",
-                "text": f"Kea host helper at build {build} (needs {helper_min} or later)",
+                "text": f"Kea host helper at build {build} (needs {helper_min} or later)"
+                + (
+                    f"; build {__host.CONFIG_LOADED_MIN_HELPER_BUILD} adds the daemon's own load time - press Update helper"
+                    if build < __host.CONFIG_LOADED_MIN_HELPER_BUILD
+                    else ""
+                ),
                 "holds": False,
             }
         elif isinstance(build, int):
@@ -295,6 +324,8 @@ def _config_cards() -> list:
                 "helper_build": build,
                 "helper_min": helper_min,
                 "consent_texts": __words.CONSENT_TEXTS,
+                "consent_value": __words.CONSENT_VALUE,
+                "proof_text": _proof_text(probe),
                 "row1": row1,
                 "row2": row2,
                 "consents": [{"name": n, "text": __words.CONSENT_TEXTS[n]} for n in needs],

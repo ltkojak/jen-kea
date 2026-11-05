@@ -135,6 +135,10 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     used = sorted(set(consents) & called_before)
     ignored = sorted(set(consents) - called_before)
     recorded = sorted(set(used) & set(_api.consents_called_for(facts, has_ssh=has_ssh)))
+    if wrote_a_file:
+        recorded = [
+            c for c in recorded if c != "discard_file_edit"
+        ]  # (Q219 E4) a discard the act made is USED, whatever the facts afterward say - it is never left on record to open the gate on a later edit
     stored = _api.stored_probe(sid) or facts
     stored["consented_at"] = _api._now_iso()
     stored["consents"] = recorded
@@ -270,7 +274,8 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
                 )
             if current == "api" and target != "api":
                 # (Q219 BI3 b, AD3) a remembered refusal of `config-write` belongs to Live API: it is cleared when the server leaves it, after the setting is written
-                result["refusal_cleared"] = bool(_api.clear_refusal(server.get("id")))
+                had = bool((_api.stored_probe(server.get("id")) or {}).get("refused"))
+                result["refusal_cleared"] = bool(_api.clear_refusal(server.get("id"))) and had
     except _cs.ChangeBusy:
         return _refuse(_cs.BUSY_SENTENCE)
     result.setdefault("from", current)

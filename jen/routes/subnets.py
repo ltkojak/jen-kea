@@ -1509,7 +1509,11 @@ def dhcp_class_preview():
         error = f'"{name}" is a built-in class name and cannot be used.'
 
     test_result = None
-    if not error:
+    no_target = not any(__changeset._transport(s, "dhcp4") != "off" for s in extensions.KEA_SERVERS or [])
+    if not error and no_target:
+        # (Q219 BI4, AD14) a fleet with no write target answers as the two subnet previews do (`_preview_answer`): the same row, and it is not a pass
+        test_result = {"ok": False, "no_target": True, "detail": NO_WRITE_TARGET_ROW["message"]}
+    if not error and not no_target:
         # (Q216 AA18) `read_kind` is never falsy for dhcp4 - an `off` server with no SSH still reads over its API - so "a server to validate against" is one a change could reach: a write target, or a
         # host with SSH. The branch that says there is none is reachable again.
         candidates = [
@@ -2156,13 +2160,32 @@ def _store_import_plan(plan, source, extra=None):
     return token
 
 
+def _import_target_name(target) -> str:
+    """The server an import goes to, by its own name (Q219 BI4, AD4): the first server that takes changes, never "the primary"."""
+    return (target or {}).get("name") or "the first server that takes changes"
+
+
+def _import_apply_confirm(target, kind: str, reservations: int) -> str:
+    """The one confirm sentence of the import's Apply button (Q219 BI4, Decided 10), built from the target's mode and passed to the template - never two spellings of it."""
+    name = _import_target_name(target)
+    count = f"{reservations} reservation{'' if reservations == 1 else 's'}"
+    if kind == "api":
+        return f"Apply this import to {name} live over its API (no restart), and add {count}? This is a live change."
+    return f"Apply this import to {name}, restart it, and add {count}? This is a live change."
+
+
 @bp.route("/subnets/import-windows", methods=["GET", "POST"])
 @login_required
 @_superadmin_required
 def import_windows():
     _prune_win_import_plans()
     if request.method == "GET":
-        return render_template("import_windows.html")
+        target = __changeset.first_write_target("dhcp4")
+        return render_template(
+            "import_windows.html",
+            import_target_name=_import_target_name(target),
+            import_target_transport=__changeset._transport(target, "dhcp4") if target else "off",
+        )
 
     file = request.files.get("xml_file")
     if not file or not file.filename:
@@ -2395,6 +2418,8 @@ def import_windows_preview(source):
         reservation_count=len(reservations),
         subnet_count=len(subnets_to_declare),
         src=src,
+        import_target_name=_import_target_name(primary),
+        import_apply_confirm=_import_apply_confirm(primary, kind, len(reservations)),
     )
 
 
@@ -2484,18 +2509,19 @@ def import_windows_apply(source):
     kind = __changeset._transport(primary, "dhcp4")
     if entry.get("preview_kind", "file") != kind:
         flash(
-            "The primary server's configuration transport changed since you previewed this import — preview it again.",
+            f"{_import_target_name(primary)}'s write mode changed since you previewed this import — preview it again.",
             "error",
         )
         return redirect(review_url)
 
     live_cfg, live_sha = __host.read_via_transport(primary, "dhcp4")
     if live_cfg is None:
-        flash("Could not read the primary server's Kea configuration.", "error")
+        flash(f"Could not read the Kea configuration of {_import_target_name(primary)}.", "error")
         return redirect(review_url)
     if live_sha != entry["preview_sha"]:
         flash(
-            "The Kea config on the primary server changed since you previewed this import — preview it again.", "error"
+            f"The Kea config on {_import_target_name(primary)} changed since you previewed this import — preview it again.",
+            "error",
         )
         return redirect(review_url)
 
@@ -2518,7 +2544,7 @@ def import_windows_apply(source):
             flash(f"The import was not applied: {__api.unreadable_sentence(primary)}", "error")
             return redirect(review_url)
         if apply_result["code"] == "conflict":
-            flash(_conflict_flash(primary.get("name", "the primary server")), "error")
+            flash(_conflict_flash(_import_target_name(primary)), "error")
             return redirect(review_url)
         if apply_result["code"] != "ok":
             noted = True
@@ -2540,7 +2566,7 @@ def import_windows_apply(source):
                 "error",
             )
             return redirect(review_url)
-        entry["report"].append("Applied over the daemon's own API; no restart was needed.")
+        entry["report"].append(f"{_import_target_name(primary)} took the change live; no restart.")
         __changeset.resolve_attention(
             primary.get("id"), "dhcp4", categories=("config-api-unverified", "config-restart-failed")
         )
@@ -2555,7 +2581,7 @@ def import_windows_apply(source):
         summary=f"{src['label']} import",
     )
     if apply_result["code"] == "conflict":
-        flash(_conflict_flash(primary.get("name", "the primary server")), "error")
+        flash(_conflict_flash(_import_target_name(primary)), "error")
         return redirect(review_url)
     if apply_result["code"] != "ok":
         flash(f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}", "error")
@@ -2602,7 +2628,7 @@ def import_windows_apply(source):
             "error",
         )
         return render_template("import_windows_result.html", report=report, restart_failed=True, src=src)
-    report.append("Kea restarted on the primary server.")
+    report.append(f"Kea restarted on {_import_target_name(primary)}.")
     __changeset.resolve_attention(primary.get("id"), "dhcp4", categories=("config-restart-failed",))
 
     report = _finish_windows_import(token, entry)
@@ -2646,11 +2672,11 @@ def import_windows_apply_reservations(source):
         )  # (the retry exists for a failed RESTART: an import applied over the API has none, so this step is file-only)
     live_cfg, live_sha = __host.read_config_versioned(primary, "dhcp4")
     if live_cfg is None:
-        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
+        flash(f"Could not read the kea-dhcp4.conf of {_import_target_name(primary)}.", "error")
         return redirect(review_url)
     if live_sha != entry.get("applied_sha"):
         flash(
-            "The Kea config on the primary server changed since the import was applied — check "
+            f"The Kea config on {_import_target_name(primary)} changed since the import was applied — check "
             "Servers → Config history before adding reservations.",
             "error",
         )

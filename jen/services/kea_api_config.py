@@ -62,6 +62,31 @@ def declared_transport(server: dict) -> str:
     return value if value in TRANSPORTS else "off"
 
 
+def endpoint_key(url) -> str:
+    """The identity of a Kea endpoint as two sections can disagree about it (Q219 BI5 b, AD8): the lower-cased host and port of an `api_url`, never its path, never user-info. `""` for no address."""
+    from urllib.parse import urlsplit
+
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text if "://" in text else f"http://{text}")
+        host = (parts.hostname or "").lower()
+        return f"{host}:{parts.port}" if parts.port else host
+    except ValueError:
+        return text.lower()
+
+
+def shares_endpoint(server: dict, servers) -> bool:
+    """Does another server of `servers` name the same Kea endpoint as `server`? (Two sections on one daemon make every change set abort with "changed since you started": the second server's write sees the
+    first's.)"""
+    mine = endpoint_key(server.get("api_url"))
+    return bool(mine) and any(
+        s is not server and s.get("id") != server.get("id") and endpoint_key(s.get("api_url")) == mine
+        for s in servers or []
+    )
+
+
 def _name(server: dict) -> str:
     return server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
 
@@ -324,9 +349,9 @@ def _leaf(value: object) -> str:
     if value is _MISSING:
         return "nothing"
     if isinstance(value, dict):
-        return f"an object with {len(value)} keys"  # (a container is never printed: it may hold a secret the path does not name)
+        return f"an object with {len(value)} key{'' if len(value) == 1 else 's'}"  # (a container is never printed: it may hold a secret the path does not name; Q219 BI6 c: plural by count)
     if isinstance(value, list):
-        return f"a list of {len(value)}"
+        return f"a list of {len(value)} {'entry' if len(value) == 1 else 'entries'}"
     text = json.dumps(value, sort_keys=True, default=str)
     return text if len(text) <= 60 else text[:59] + "…"
 
@@ -553,6 +578,7 @@ def read(
     return cfg, digest
 
 
+RENDERING_NOT_RECORDED = "the file Kea wrote on {host} could not be recorded in Config history, so the next change to it will ask you to restart Kea there (or reload its configuration) first"
 PROOF_HOWS = ("rendering", "planned", "loaded", "no-file", "unreadable", "none")
 NO_PLANNED_SENTENCE = "the file on {host} cannot be proved against the file this change was planned over; restart Kea there to load the file as it stands, then Settle it now"
 
@@ -561,7 +587,10 @@ def _utc(ts: int) -> str:
     """A time as the proof prints it (Q219, Decided 1): UTC, to the second."""
     from datetime import datetime, timezone
 
-    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    try:
+        return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (OverflowError, OSError, ValueError):
+        return "an unreadable time"
 
 
 def _proof(
@@ -588,7 +617,8 @@ def _proof(
 
 
 def _int_or_none(value) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    """A time or an age the helper reported, or None: an integer in a plausible range (0 to the year 2100) - anything else is no time at all (a bound the printing and the comparison both rely on)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 4_102_444_800 else None
 
 
 def file_proof(server: dict, service: str = "dhcp4", *, planned_sha: str | None = None, capture: bool = True) -> dict:
@@ -987,7 +1017,7 @@ def _reconcile_pending(
         again, digest2, _ = _get(server, service)
         if wrote.get("ok") and again is not None and digest2:
             finished = _rev.finish(row["id"], source="jen", sha256=digest2, cfg=again)
-            record_rendering_after_write(server, service, f"settled a change of {at}")  # (Q218 D8)
+            recorded = record_rendering_after_write(server, service, f"settled a change of {at}")  # (Q218 D8)
             if not finished:  # (Q218 BH2 a) the third store write of this function: a False is no settlement
                 if notes is not None:
                     notes.append(
@@ -995,7 +1025,14 @@ def _reconcile_pending(
                     )
                 return again, digest2, False
             if notes is not None:
-                notes.append(f"a change of {at} was finished now")
+                notes.append(
+                    f"a change of {at} was finished now"
+                    + (
+                        ""
+                        if recorded or not _has_ssh(server)
+                        else f" ({RENDERING_NOT_RECORDED.format(host=_name(server))})"
+                    )
+                )
             return again, digest2, True
         if notes is not None:
             notes.append(
@@ -1004,14 +1041,16 @@ def _reconcile_pending(
         return cfg, digest, False
     if notes is not None:
         notes.append(
-            f"a change of {at} is unresolved: the daemon runs {digest}, which is neither the state before it ({row.get('sha256') or 'unknown'}) nor the change; resolve it from Config history"
+            f"a change of {at} is unresolved: the daemon runs {digest}, which is neither the state before it ({row.get('sha256') or 'unknown'}) nor the change; resolve it from Config history (restore the revision you want - if the file on the host is not what the daemon runs either, restart Kea there first)"
         )
     return cfg, digest, False
 
 
 def _stale_pending(server: dict, service: str) -> str:
     """For a restore (Q219): `""` when no pending record is on file, `"stale"` when one is and the daemon does NOT carry its change (it never reached the daemon, the body is damaged, or the daemon runs neither
-    state) - the record is removed, so the restore's own can be written - `"live"` when the daemon carries it (or it is younger than a change takes), and `"unknown"` when the daemon could not be asked."""
+    state) - the record is MARKED `damaged` (kept in Config history, no longer pending), so the restore's own can be written and a restore that is then refused has still lost nothing - `"live"`
+    when the daemon carries it (or it is younger than a change takes), `"unprovable"` when it is live and carries no planned file (an earlier release, or a rollback that could not read the file), and
+    `"unknown"` when the daemon could not be asked."""
     sid = server.get("id")
     if sid is None:
         return ""
@@ -1028,8 +1067,8 @@ def _stale_pending(server: dict, service: str) -> str:
         if not (row.get("sha256") and digest == row["sha256"]) and _carries(
             _section(cfg, service), _section(candidate, service)
         ):
-            return "live"
-    _rev.discard_pending(sid, service)
+            return "unprovable" if _has_ssh(server) and not row.get("file_sha256") else "live"
+    _rev.mark_damaged(row["id"])
     return "stale"
 
 
@@ -1206,6 +1245,12 @@ def apply(
                 "unverified",
                 f"settle the unresolved change on {_name(server)} first - Settle it now on its Write mode card",
             )
+        if stale == "unprovable":
+            return _unproved(
+                "unverified",
+                f"an earlier change on {_name(server)} is live and its file cannot be proved: "
+                + NO_PLANNED_SENTENCE.format(host=server.get("name") or server.get("ssh_host") or "the host"),
+            )
         if stale == "unknown":
             return _unproved(
                 "unverified",
@@ -1222,6 +1267,12 @@ def apply(
             return _result(False, "guard", refusal["detail"])
         planned_sha = proof["sha256"]
 
+    row_sha = planned_sha if _has_ssh(server) else None
+    if row_sha is None and source == "rollback" and _has_ssh(server):
+        # (Q219 E10) a rollback brings no Plan: its row carries the file as it stands now, so an interrupted rollback can be settled over the file it started from
+        _file_now, row_sha = _host.read_config_versioned(server, service, capture=False)
+    if not (isinstance(row_sha, str) and len(row_sha) == 64):
+        row_sha = None  # (a canonical sentinel, from a host with no raw hash, is no sha256 and the column is CHAR(64))
     pending_id = None
     if sid is not None:  # (3)
         try:
@@ -1233,7 +1284,7 @@ def apply(
                 summary,
                 hash_kind="kea",
                 source=PENDING,
-                file_sha256=planned_sha if _has_ssh(server) else None,
+                file_sha256=row_sha,
             )
         except Exception as e:  # (Q219 BI2 c, AD9) a store that RAISES is the same refusal as one that answers None
             logger.warning("kea_api_config: the pending record could not be written: %s", type(e).__name__)
@@ -1336,9 +1387,11 @@ def apply(
             # (Q217 AB8) the daemon proved the write (its digest is the set's); a file that cannot be READ BACK is not a difference - a write's own guards decide
             note = f"the file on {_name(server)} could not be read back; Config history carries what the daemon runs"
             raw_sha = None
-        elif file_cfg is None or not file_in_daemon(
-            file_cfg, got, service
-        ):  # Kea's own rendering carries everything the daemon runs (Q219, Decided 16)
+        elif (
+            file_cfg is None
+            or not file_in_daemon(file_cfg, got, service)
+            or bool(unwritten and planned_sha and raw_sha == planned_sha)
+        ):  # Kea's own rendering carries everything the daemon runs (Q219, Decided 16); a write that may not have run and a file that is still the one the Plan proved did not take it
             return _unproved(
                 "unverified",
                 f"the file on {_name(server)} does not carry what the daemon runs"
@@ -1356,8 +1409,12 @@ def apply(
             _rev.discard_pending(
                 sid, service
             )  # (fix row 2) an unresolved row an earlier crash left is superseded by a change that stood
-    if raw_sha and sid is not None:
-        record_rendering_after_write(server, service, summary or f"{source} {service}", cfg=got, raw=raw_sha)
+    if (
+        raw_sha
+        and sid is not None
+        and not record_rendering_after_write(server, service, summary or f"{source} {service}", cfg=got, raw=raw_sha)
+    ):
+        note = (note + "; " if note else "") + RENDERING_NOT_RECORDED.format(host=_name(server))
     if not finished:
         # (Q218 BH2 c) the pending row is the ONE record of what the daemon runs: it is not discarded, and the change is not "ok" - the next change, or Settle it now, finishes it by content
         return _unproved(
@@ -1590,6 +1647,10 @@ def probe_gate(server: dict, source: str = "jen") -> str:
         return f"changes over the API to {_name(server)} have not been allowed yet - read the facts and allow them from the server's card"
     # the consent on record covers the facts it was given for; a stored result from before the consents were recorded (7.0.0-beta.1) counts as having been given all of them
     given = stored.get("consents", LEGACY_CONSENTS)
+    if _has_ssh(server) and stored.get("agree") is False and "discard_file_edit" not in given:
+        stored = _reprove(
+            server, stored
+        )  # (Q219 E1) a restart or a reload since the check may have made the file the daemon's: the gate never refuses on a stale fact
     uncovered = consent_allowed(_name(server), stored, given, has_ssh=_has_ssh(server), strict=False)
     if uncovered:
         prefix = f"{_name(server)}: "
@@ -1599,6 +1660,41 @@ def probe_gate(server: dict, source: str = "jen") -> str:
     return (
         "" if source in ("rollback", "restore") else refusal_sentence(server)
     )  # a rollback puts back a change that DID stand on this server, and a restore is the way out of a REFUSED write (Q216 AA14, Q219 BI2 d): a remembered refusal must not stop either. A restart of Kea (or a reload of its configuration) is the way out of an UNLOADED edit - the attention note names which
+
+
+def _reprove(server: dict, stored: dict) -> dict:
+    """The stored readiness facts of a server whose `agree` is False, with the LIVE proof asked again (Q219 E1): a hand edit the operator then restarted Kea over is a file the daemon has loaded, and the
+    gate must not keep refusing for up to a day on a fact the operator has already answered - an admin cannot press *Check readiness*. A proof that holds opens `agree` (and the stored facts are
+    refreshed, best effort); one that does not, or cannot be asked, leaves the stored fact as it was. A read: no history is captured."""
+    sid = server.get("id")
+    planned = None
+    if sid is not None:
+        try:
+            planned = (_rev.pending(sid, "dhcp4") or {}).get("file_sha256")
+        except _rev.RevisionStoreUnreadable:
+            planned = None
+    try:
+        refusal, proof = _ask_the_file(server, "dhcp4", planned_sha=planned, capture=False)
+    except (
+        Exception
+    ) as e:  # a proof that could not be asked leaves the fact as stored: the gate stays closed (fail closed)
+        logger.warning(
+            "kea_api_config: the live proof for the gate of %s could not be asked: %s", sid, type(e).__name__
+        )
+        return stored
+    if refusal is not None or proof["how"] not in ("rendering", "planned", "loaded"):
+        return stored
+    fresh = {k: v for k, v in stored.items() if k != "agree_at"}
+    fresh.update(
+        {
+            "agree": True,
+            "proof": proof["how"],
+            "file_written_at": proof["mtime"],
+            "daemon_loaded_at": proof["loaded_at"],
+        }
+    )
+    store_probe(sid, fresh)
+    return fresh
 
 
 def refusal_sentence(server: dict) -> str:

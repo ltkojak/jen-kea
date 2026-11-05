@@ -818,6 +818,38 @@ def _check_config_transport(jen_cfg) -> list[Finding]:
     return out
 
 
+def _check_duplicate_endpoint(jen_cfg) -> list[Finding]:
+    """Q219 BI5 b (AD8): two server sections that name ONE Kea endpoint (`api_url`) are one daemon configured twice. Every change set to them stops - the second server's write finds the daemon already
+    changed by the first - with a line that says only "changed since you started". The finding names the sections and the endpoint's host and port (never a path, never user-info). `jen_cfg` is the loaded
+    parser; None or an empty file gives nothing."""
+    if jen_cfg is None:
+        return []
+    import re
+
+    from jen.services import kea_api_config as _api
+
+    by_endpoint: dict[str, list[str]] = {}
+    for section in jen_cfg.sections():
+        if section != "kea" and not re.fullmatch(r"kea_server_\d+", section):
+            continue
+        key = _api.endpoint_key(jen_cfg.get(section, "api_url", fallback="", raw=True))
+        if key:
+            by_endpoint.setdefault(key, []).append(section)
+    return [
+        _finding(
+            "kea_duplicate_endpoint",
+            "warn",
+            "Two servers name one Kea endpoint",
+            f'{" and ".join(f"[{s}]" for s in sections)} both name the Kea endpoint {key}: one daemon configured twice. A change to both stops with "changed since you started", because the second server\'s write finds the daemon already changed by the first.',
+            " and ".join(f"[{s}] api_url" for s in sections),
+            fix_url="/settings/kea",
+            why="Each server section is one Kea daemon. Point each at its own daemon, or remove the duplicate section.",
+        )
+        for key, sections in by_endpoint.items()
+        if len(sections) > 1
+    ]
+
+
 def _check_credential_endpoints(jen_cfg) -> list[Finding]:
     """CRED-004 (v5.69.0-beta.11, Q180): the Doctor reads the same `credentials.resolve` every consumer uses, so what it says is what Jen does. `endpoint-has-no-credential` (warn)
     is an endpoint on a different host from the one whose password it would have inherited: it is sent NOTHING with that password, and the sentence says where to set its own.
@@ -950,6 +982,7 @@ def diagnose(
     out += _check_ha_peer_semantic_diff(ha_configs)
     out += _check_credential_endpoints(jen_config)
     out += _check_config_transport(jen_config)
+    out += _check_duplicate_endpoint(jen_config)
     if not dhcp4_cfg:
         out.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 3))
         return out

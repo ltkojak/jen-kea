@@ -204,6 +204,27 @@ class TestAConsentIsAnActNotAClick:
         assert "consents: consent_rendering, discard_file_edit" not in details[0]
 
 
+class TestATickWithoutAStoredResultNamesTheCheck:
+    """Q219 BI3 c (AD7): a tick that arrives for a server with NO stored readiness result has no facts to be given for, and the sentence names the way out - the check - instead of sending the operator
+    to "refresh" something that never existed. 3 targets x tick/no tick x stored/none = 12 cells: the switch runs unless a consent (or a switch to Live API) arrives with nothing stored."""
+
+    @pytest.mark.parametrize("stored", [True, False], ids=["stored", "none stored"])
+    @pytest.mark.parametrize("tick", [True, False], ids=["ticked", "not ticked"])
+    @pytest.mark.parametrize("target", ["api", "file", "off"])
+    def test_the_twelve_cells(self, logged_in_client, worked, monkeypatch, target, tick, stored):
+        monkeypatch.setattr("jen.services.kea_api_config.stored_probe", lambda sid: {"at": "T"} if stored else None)
+        data = {"transport": target, "probe_at": "T"}
+        if tick:
+            data["discard_file_edit"] = "1"
+        r = logged_in_client.post("/settings/infrastructure/kea-transport/3", data=data, follow_redirects=True)
+        must_check = (target == "api" or tick) and not stored
+        if must_check:
+            assert worked == [], (target, tick, stored)
+            assert b"run the readiness check first (Check readiness on the card)" in r.data, r.data[:300]
+        else:
+            assert worked == ["switch"], (target, tick, stored)
+
+
 class TestIHaveFixedItIsForAServerNothingCanProve:
     def test_a_server_whose_host_can_prove_it_is_sent_to_the_check(self, logged_in_client, worked, monkeypatch):
         monkeypatch.setattr(

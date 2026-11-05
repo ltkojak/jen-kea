@@ -776,3 +776,50 @@ class TestTheConfigTransport:
     def test_diagnose_carries_it(self):
         found = doctor.diagnose(None, jen_config=self._cfg("[kea]\nconfig_transport = nope\n"))
         assert [f["id"] for f in found] == ["config-transport-unrecognized"]
+
+
+class TestTwoServersOneEndpoint:
+    """Q219 BI5 b (AD8): two server sections that name ONE Kea endpoint are one daemon configured twice - every change to them stops with "changed since you started". The Doctor says so, naming the sections and
+    the host and port (never a path, never user-info), and the change set's conflict line adds the same fact."""
+
+    @staticmethod
+    def _cfg(text):
+        import configparser
+
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read_string(text)
+        return parser
+
+    def test_two_sections_one_endpoint_is_a_warning_naming_both(self):
+        found = doctor._check_duplicate_endpoint(
+            self._cfg("[kea]\napi_url = http://10.0.0.7:8000/\n[kea_server_2]\napi_url = HTTP://10.0.0.7:8000/path\n")
+        )
+        assert [f["id"] for f in found] == ["kea_duplicate_endpoint"] and found[0]["severity"] == "warn"
+        assert (
+            "[kea]" in found[0]["detail"]
+            and "[kea_server_2]" in found[0]["detail"]
+            and "10.0.0.7:8000" in found[0]["detail"]
+        )
+        assert "/path" not in found[0]["detail"]
+
+    def test_user_info_is_never_printed(self):
+        found = doctor._check_duplicate_endpoint(
+            self._cfg(
+                "[kea]\napi_url = http://jen:SECRETPW@10.0.0.7:8000/\n[kea_server_2]\napi_url = http://10.0.0.7:8000/\n"
+            )
+        )
+        assert found and "SECRETPW" not in str(found) and "jen:" not in str(found)
+
+    def test_distinct_endpoints_blank_ones_and_other_sections_are_quiet(self):
+        text = "[kea]\napi_url = http://10.0.0.7:8000/\n[kea_server_2]\napi_url = http://10.0.0.8:8000/\n[kea_server_3]\napi_url =\n[kea_server_4]\napi_url =\n[kea6]\napi_url = http://10.0.0.7:8000/\n"
+        assert doctor._check_duplicate_endpoint(self._cfg(text)) == []
+        assert doctor._check_duplicate_endpoint(None) == []
+
+    def test_a_different_port_is_a_different_endpoint(self):
+        text = "[kea]\napi_url = http://10.0.0.7:8000/\n[kea_server_2]\napi_url = http://10.0.0.7:8001/\n"
+        assert doctor._check_duplicate_endpoint(self._cfg(text)) == []
+
+    def test_the_diagnosis_runs_it(self):
+        import inspect
+
+        assert "_check_duplicate_endpoint(jen_config)" in inspect.getsource(doctor)

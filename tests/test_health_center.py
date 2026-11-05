@@ -199,6 +199,64 @@ class TestKeaConfigDrift:
         assert c.status == "warn" and "subnet 3 disagrees" in c.detail
 
 
+# ── kea_write_gate ─────────────────────────────────────────────────────────
+
+
+class TestTheWriteGateRow:
+    """Q219 BI5 b (AD-Q1): Health reads the gate the card, the Servers badge and the bundle already read. `warn` names every Live API server whose gate is closed with the sentence BY THE READER'S ROLE;
+    `ok` only when every Live API server's gate is open; `skip` when none is on Live API."""
+
+    def _gate(self, monkeypatch, servers, closed, *, superadmin):
+        from types import SimpleNamespace
+
+        from jen.services import capabilities as caps
+        from jen.services import kea_api_config as api
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        monkeypatch.setattr("flask.has_request_context", lambda: True)
+        monkeypatch.setattr(
+            "flask_login.current_user", SimpleNamespace(is_authenticated=True, is_superadmin=superadmin)
+        )
+        monkeypatch.setattr(api, "stored_probe", lambda sid: {"at": "x", "config_api": True})
+        monkeypatch.setattr(
+            api,
+            "probe_gate",
+            lambda server, source="jen": (
+                "the daemon's account (_kea) may not write its file" if server["id"] in closed else ""
+            ),
+        )
+        monkeypatch.setattr(caps, "_age_days", lambda *a, **k: 0, raising=False)
+        return health._kea_write_gate(_ctx())
+
+    SERVERS = [
+        {"id": 1, "name": "kea-a", "api_url": "http://a", "config_transport": "api"},
+        {"id": 2, "name": "kea-b", "api_url": "http://b", "config_transport": "api"},
+        {"id": 3, "name": "kea-c", "api_url": "http://c", "config_transport": "off"},
+    ]
+
+    def test_every_gate_open_is_ok(self, monkeypatch):
+        c = self._gate(monkeypatch, self.SERVERS, closed=(), superadmin=True)
+        assert c.id == "kea_write_gate" and c.status == "ok" and "2 Live API" in c.detail
+
+    def test_a_closed_gate_warns_and_names_the_server_with_a_superadmins_words(self, monkeypatch):
+        c = self._gate(monkeypatch, self.SERVERS, closed=(2,), superadmin=True)
+        assert c.status == "warn" and "kea-b" in c.detail and "kea-a" not in c.detail
+        assert "_kea" in c.detail, c.detail
+
+    @pytest.mark.parametrize("superadmin", [False])
+    def test_an_admin_or_a_viewer_reads_the_mode_sentence_and_no_host_fact(self, monkeypatch, superadmin):
+        c = self._gate(monkeypatch, self.SERVERS, closed=(1, 2), superadmin=superadmin)
+        assert c.status == "warn" and "kea-a" in c.detail and "kea-b" in c.detail
+        assert "_kea" not in c.detail and "a superadmin has read its Write mode card" in c.detail
+
+    def test_no_server_on_live_api_is_a_skip(self, monkeypatch):
+        c = self._gate(monkeypatch, [self.SERVERS[2]], closed=(), superadmin=True)
+        assert c.status == "skip"
+
+    def test_the_check_is_registered_in_the_kea_group(self):
+        assert health._CHECK_META["kea_write_gate"][1] == "kea" and "kea_write_gate" in health.CHECK_IDS
+
+
 # ── kea_subnets_declared ───────────────────────────────────────────────────
 
 

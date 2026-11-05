@@ -28,7 +28,7 @@
 </div>
 
 <div class="alert alert-info">
-    {{ icon("info") }} This only ever touches the <strong>primary</strong> Kea server's config. If you run an HA pair,
+    {{ icon("info") }} This only ever touches the config of <strong>{{ import_target_name }}</strong>, the first server that takes changes{% if import_target_transport == 'api' %} (live over its API, no restart){% elif import_target_transport == 'file' %} (its file is rewritten and Kea is restarted){% endif %}. If you run an HA pair,
     sync the change to the partner the same way you already do for any other config edit.
 </div>
 

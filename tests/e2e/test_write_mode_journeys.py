@@ -64,6 +64,22 @@ def file_mode_primary(monkeypatch, live_server):
     monkeypatch.setattr(
         kea_host, "read_config_versioned", lambda *a, **k: ({"Dhcp4": copy.deepcopy(daemon.running)}, "r" * 64)
     )
+    # Q219: the proof reads the file through ONE call (`read_config_proof`, helper build 22): the host's file was written before the daemon's last load
+    monkeypatch.setattr(
+        kea_host,
+        "read_config_proof",
+        lambda server, service, *, capture=True: (
+            {"Dhcp4": copy.deepcopy(daemon.running)},
+            "r" * 64,
+            {
+                "mtime": 1_799_999_900,
+                "now": 1_800_000_000,
+                "size": 1,
+                "daemon": {"pid": 1, "uptime": 3600, "reload": 50},
+                "socket_note": "",
+            },
+        ),
+    )
     kea_host.record_helper_status(1, 7, build=20)
     yield daemon
     app_config.write_values([(s, k, v) for (s, k), v in before.items()], typed={"kea", "kea_ssh"})

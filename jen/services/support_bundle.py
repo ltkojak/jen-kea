@@ -283,15 +283,21 @@ WRITE_MODE_FACT_KEYS = (
     "consented_at",
     "refused",
     "defaults",
+    "test_ok",
+    "test_detail",
+    "read_error",
+    "file_written_at",
+    "daemon_loaded_at",
+    "proof",
 )
 
 
 def _write_mode_of(server: dict) -> dict:
     """The write mode of a server, for `servers.json` (the exported layer of "the file is the daemon's configuration", Q154's six): the configured value, the word the operator reads, and the stored
     readiness facts. A stored result that cannot be read is named, never an empty object that reads as "never checked"."""
+    from jen.services import capabilities, write_mode
     from jen.services import kea_api_config as api
     from jen.services import kea_changeset as changeset
-    from jen.services import write_mode
 
     out = {
         "config_transport": server.get("config_transport"),
@@ -301,6 +307,11 @@ def _write_mode_of(server: dict) -> dict:
         probe = api.stored_probe(server.get("id")) or {}
         out["write_mode_facts"] = {k: probe[k] for k in WRITE_MODE_FACT_KEYS if k in probe}
         out["write_mode_checked"] = bool(probe)
+        # (Q219 BI5 a, AD6) the gate's own state: whether it is closed and the sentence that says why. The bundle is a superadmin's download (`routes/settings/updates.py`: `@_superadmin_required`), so
+        # it carries the full sentence the card prints to a superadmin - never a configuration body, never a secret
+        caps = capabilities.write_gate_for(server)
+        out["transport_blocked"] = bool(caps.transport_blocked)
+        out["transport_why"] = caps.transport_why_for(True)
     except Exception as e:  # a settings row that cannot be read is said so, in words
         logger.warning(f"support bundle: the readiness facts of server {server.get('id')} were not read: {e}")
         out["write_mode_facts_error"] = type(e).__name__

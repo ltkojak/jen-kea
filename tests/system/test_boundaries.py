@@ -3869,3 +3869,126 @@ def test_23_a_change_set_over_the_api_and_the_file_undoes_the_api_server_when_th
         second_half["second"]
     )
     assert second_half["second"]["needs_hands"] == ["kea-a"], second_half["second"]
+
+
+# ── 24 and 25. the proof is the daemon's own clock: a hand edit nobody loaded is kept, one the daemon reloaded is rendered ──────────────────────────────────────────────
+
+PROOF_CHANGE = (
+    CHANGESET_PRELUDE
+    + """
+from datetime import datetime, timezone
+from jen.services import kea_api_config as api
+
+def lifetime(cfg):
+    c = copy.deepcopy(cfg)
+    c["Dhcp4"]["valid-lifetime"] = 5400
+    return c, "ok"
+
+a = {**[s for s in extensions.KEA_SERVERS if s["name"] == "kea-a"][0], "config_transport": "api"}
+now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now, "bound": api._bound(a)})  # the operator has read the card's facts once
+try:
+    before = api.hash(a, "dhcp4")
+    res = cs.apply_change("dhcp4", lifetime, "system-test the proof is the daemon's clock", servers=[a])
+    emit({"status": res.status, "last_code": res.last_code, "lines": [l[1] for l in res.lines], "a_before": before, "a_after": api.hash(a, "dhcp4")})
+except Exception as e:
+    emit({"raised": type(e).__name__ + ": " + str(e)[:300]})
+"""
+)
+
+
+def _s24_put_conf(conf):
+    """The file on kea-a, replaced in place by `cat >` (the operator's editor: its mtime is now)."""
+    st.dexec(st.KEA_A, "sh", "-c", f"cat > {st.KEA_CONF}", input=json.dumps(conf, indent=2), user="root")
+
+
+def _s24_world():
+    """kea-a runs a configuration whose subnet has a `valid-lifetime` of its own (3600) under a global of 7200, and the file on its host is that configuration - loaded: the daemon is told to
+    reload it, and the reload moves the daemon's last load past the file's mtime."""
+    conf = json.loads(st.BASELINE[st.KEA_A])
+    conf["Dhcp4"]["valid-lifetime"] = 7200
+    conf["Dhcp4"]["subnet4"][0]["valid-lifetime"] = 3600
+    _s24_put_conf(conf)
+    time.sleep(2)
+    reloaded = st.kea_command("kea-a", "config-reload")
+    assert reloaded and reloaded.get("result") == 0, f"kea-a would not reload the world's file: {reloaded}"
+    return conf
+
+
+def _s24_hand_edit(conf):
+    """The operator deletes the subnet's `valid-lifetime: 3600` from the file on the host - AFTER the daemon's last load."""
+    time.sleep(2)
+    edited = json.loads(json.dumps(conf))
+    del edited["Dhcp4"]["subnet4"][0]["valid-lifetime"]
+    _s24_put_conf(edited)
+    return edited
+
+
+def _s24_conf_has_the_line():
+    return "valid-lifetime" in json.loads(st.kea_conf_bytes(st.KEA_A))["Dhcp4"]["subnet4"][0]
+
+
+def _s24_command_count(command):
+    """How many times kea-a's own log says it received `command` (INFO: `COMMAND_RECEIVED`)."""
+    p = st.sh(st.KEA_A, f"grep -c \"command '{command}'\" {st.KEA_LOG} || true", check=False)
+    try:
+        return int((p.stdout or "0").strip() or 0)
+    except ValueError:
+        return 0
+
+
+def test_24_a_hand_edit_without_a_reload_is_refused_and_the_edit_survives(stack):
+    """Q219 BI1 j (CFG-004, CFG-005): the file on kea-a was edited by hand AFTER the daemon's last load - a subnet's `valid-lifetime` deleted - and the daemon never reloaded it. A change over the API refuses: the
+    line carries BOTH times (the file's, the daemon's last load), `config-write` is never sent (the daemon's own log counts none and the file is byte for byte what the operator left), and the deletion is
+    still on the host. A model of Kea's defaults read this as agreement and put the line back (beta.3 and beta.4); the host's own clock does not."""
+    conf = _s24_world()
+    edited = _s24_hand_edit(conf)
+    on_host = st.kea_conf_bytes(st.KEA_A)
+    writes_before = _s24_command_count("config-write")
+    objs, proc = st.jen_py(PROOF_CHANGE, check=False)
+    result = emitted(objs)
+    assert result is not None and "raised" not in result, (
+        f"no usable result from the change set:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    )
+    text = " ".join(result["lines"])
+    assert result["status"] == "aborted", (
+        f"INVARIANT: an unloaded edit stops the change before anything is sent: {result}"
+    )
+    assert "written at " in text and "last loaded its configuration at " in text, (
+        f"INVARIANT: the refusal prints both times so the operator can see the order of events: {text}"
+    )
+    assert result["a_after"] == result["a_before"], "INVARIANT: nothing was set on the daemon"
+    assert _s24_command_count("config-write") == writes_before, "INVARIANT: no config-write reached kea-a"
+    assert st.kea_conf_bytes(st.KEA_A) == on_host and not _s24_conf_has_the_line(), (
+        "INVARIANT: the operator's deletion is still on the host, byte for byte"
+    )
+    assert json.loads(on_host) == edited
+
+
+def test_25_a_hand_edit_the_daemon_reloaded_is_accepted_and_rendered(stack):
+    """Q219 BI1 j: the same edit, and the operator reloaded the daemon (`config-reload`): the daemon has loaded the file, so the change is accepted, ONE `config-write` renders the daemon's own configuration over
+    it, and the file on the host is what the daemon runs."""
+    conf = _s24_world()
+    edited = _s24_hand_edit(conf)
+    time.sleep(2)
+    reloaded = st.kea_command("kea-a", "config-reload")
+    assert reloaded and reloaded.get("result") == 0, f"kea-a would not reload the edited file: {reloaded}"
+    on_host = st.kea_conf_bytes(st.KEA_A)
+    objs, proc = st.jen_py(PROOF_CHANGE, check=False)
+    result = emitted(objs)
+    assert result is not None and "raised" not in result, (
+        f"no usable result from the change set:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    )
+    assert result["status"] == "ok", f"INVARIANT: a file the daemon has loaded is accepted: {result}"
+    assert result["a_after"] != result["a_before"], "the daemon took the change"
+    assert st.kea_conf_bytes(st.KEA_A) != on_host, "INVARIANT: the file is now the daemon's own rendering"
+    running = st.kea_command("kea-a", "config-get")["arguments"]["Dhcp4"]
+    on_file = json.loads(st.kea_conf_bytes(st.KEA_A))["Dhcp4"]
+    assert on_file["valid-lifetime"] == 5400 and running["valid-lifetime"] == 5400, (
+        on_file.get("valid-lifetime"),
+        running.get("valid-lifetime"),
+    )
+    assert json.loads(json.dumps(on_file, sort_keys=True)) == json.loads(json.dumps(running, sort_keys=True)), (
+        "INVARIANT: the file on the host is what the daemon runs"
+    )
+    assert json.loads(on_host) == edited

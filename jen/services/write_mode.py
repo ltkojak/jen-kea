@@ -24,6 +24,34 @@ CONSENT_TEXTS = {
 }
 
 
+# The ONE value a consent checkbox carries (Q219 BI3 d, AD15): the card writes `value="{{ c.consent_value }}"` and the route reads it back with this constant, so the two cannot drift apart unseen.
+CONSENT_VALUE = "1"
+
+# What the readiness check says about the file on a Live API server's host (Q219 BI1 f): ONE table for the card, the support bundle and Health, keyed by what `file_proof` found (`how`). `none` has three
+# readings - both times known, only the file's, and no clock at all (a helper below build 22) - and `{written}` / `{loaded}` are times the caller has already formatted.
+PROOF_SENTENCES = {
+    "loaded": "one the daemon has loaded (written {written}, loaded {loaded})",
+    "rendering": "Jen's own rendering of what the daemon runs (see Config history)",
+    "planned": "the file the unfinished change was planned over",
+    "none": "written at {written}, after the daemon's last load at {loaded} - the daemon has not loaded that edit",
+    "none-before": "written at {written}, before the daemon's last load at {loaded}, but the daemon does not run it",
+    "no-daemon": "written at {written}; the daemon's own load time could not be read",
+    "no-clock": "cannot be proved: helper build 22 needed for the daemon's own load time (press Update helper)",
+    "unreadable": "the file on the host could not be read",
+    "no-file": "no SSH host: there is no file to prove",
+}
+
+
+def proof_sentence(how, written="", loaded="", after=True):
+    """The sentence for a stored proof (`how`, the two preformatted times, and whether the file is the NEWER of the two); "" for a result that records none (one stored before the proof existed)."""
+    if not how:
+        return ""
+    key = how
+    if how == "none":
+        key = ("none" if after else "none-before") if written and loaded else ("no-daemon" if written else "no-clock")
+    return PROOF_SENTENCES.get(key, "").format(written=written, loaded=loaded)
+
+
 def mode_word(transport: str) -> str:
     """The word for a config value; anything that is not one of the three reads as Read-only (as `declared_transport` reads it)."""
     return MODE_WORDS.get(transport, MODE_WORDS["off"])

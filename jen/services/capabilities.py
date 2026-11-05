@@ -603,3 +603,19 @@ def for_primary(*, with_config: bool = True) -> ServerCapabilities:
 
 def field_names() -> list[str]:
     return [f.name for f in fields(ServerCapabilities)]
+
+
+def write_gate_for(server: dict) -> ServerCapabilities:
+    """The capabilities of one server as far as its WRITE GATE goes (Q219 BI5): the stored readiness result, the transport and - for a Live API server - the gate's own first refusal, derived exactly as the
+    Write mode card derives them. The support bundle and Health read the gate through this, so the exported and the derived layer say what the card says. A settings read and a few pure rules; no Kea call."""
+    from jen.services import kea_api_config as _api
+    from jen.services import kea_changeset as _cs
+
+    transport = _cs._transport(server, "dhcp4")
+    return derive(
+        ssh=bool(server.get("ssh_host")),
+        config_transport=transport,
+        config_declared=_api.declared_transport(server),
+        config_probe=_api.stored_probe(server.get("id")),
+        config_gate=_api.probe_gate(server) if transport == "api" else "",
+    )

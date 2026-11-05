@@ -10,7 +10,11 @@
     <div class="mono" style="word-break:break-all;">{{ expression }}</div>
 </div>
 {% if test_result %}
-{% if test_result.ok %}
+{% if test_result.get('no_target') %}
+<div class="card" style="border-color:var(--danger);padding:8px;margin-top:8px;" data-no-write-target>
+    {{ icon("circle-x") }} {{ test_result.detail }}
+</div>
+{% elif test_result.ok %}
 <div class="card" style="border-color:var(--success);padding:8px;margin-top:8px;">
     {{ icon("circle-check") }} Kea accepted this config with the class inserted.
 </div>

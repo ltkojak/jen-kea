@@ -393,6 +393,48 @@ class TestServersJsonNamesTheWriteMode:
             assert sentinel not in text, sentinel
         assert "password" not in set(facts) and "config" not in set(facts)
 
+    def test_servers_json_says_the_gate_state_and_no_secret(self, monkeypatch):
+        """Q219 BI5 a (AD6): the bundle carries the facts the gate reads (`test_ok`, `test_detail`, `read_error`, the proof's times) AND the gate's own state - `transport_blocked` and the full sentence - and the
+        bundle is a SUPERADMIN's download: the decorator is asserted before the field is."""
+        import pathlib
+
+        route = (
+            pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "settings" / "updates.py"
+        ).read_text(encoding="utf-8")
+        decorators = route.split("def support_bundle(")[0].rsplit("@bp.route", 1)[1]
+        assert "@_superadmin_required" in decorators, "the full gate sentence is only safe in a superadmin's download"
+        from jen.services import kea_api_config as api
+
+        monkeypatch.setattr(api, "_bound", lambda server: "abc123")  # the stored result names this endpoint
+        probe = {
+            "at": api._now_iso(),
+            "bound": "abc123",
+            "config_api": True,
+            "test_ok": False,
+            "test_detail": "bad subnet",
+            "read_error": "",
+            "auth": "password",
+            "agree": False,
+            "agree_at": "at Dhcp4.valid-lifetime: the file says nothing, the daemon 3600",
+            "proof": "none",
+            "file_written_at": 1_800_000_200,
+            "daemon_loaded_at": 1_800_000_100,
+            "include": ["/etc/kea/extra.conf"],
+            "write": {"may_write": True, "account": "_kea", "mode": "0660"},
+            "consents": ["consent_rendering"],
+            "consented_at": "2026-11-05T10:01:00+00:00",
+            "password": "SENTINEL_PROBE_PASSWORD_q219",
+        }
+        rows = self._servers(monkeypatch, probe)
+        a, b = rows
+        facts = a["write_mode_facts"]
+        assert facts["test_ok"] is False and facts["test_detail"] == "bad subnet" and facts["proof"] == "none"
+        assert facts["file_written_at"] == 1_800_000_200 and facts["daemon_loaded_at"] == 1_800_000_100
+        assert a["transport_blocked"] is True and "config-test (bad subnet)" in a["transport_why"]
+        assert "transport_blocked" in b and b["transport_blocked"] is False
+        text = json.dumps(rows)
+        assert "SENTINEL_API_PASS_q218" not in text and "SENTINEL_PROBE_PASSWORD_q219" not in text
+
     def test_a_stored_result_that_cannot_be_read_is_named_not_empty(self, monkeypatch):
         from jen.services import kea_api_config as api
 

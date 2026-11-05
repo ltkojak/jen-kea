@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>{{ icon(src.icon, "ico-lg") }} Preview Import</h1>
-    <p>This is exactly what would be applied to the primary Kea server. Nothing has been written yet.</p>
+    <p>This is exactly what would be applied to {{ import_target_name }}. Nothing has been written yet.</p>
 </div>
 
 <div class="card u-87c136">
@@ -39,7 +39,7 @@
 </div>
 
 <form method="POST" action="{{ url_for('subnets.import_windows_apply', source=src.key) }}"
-      data-confirm="Apply this import to the primary Kea server, restart it, and add {{ reservation_count|plural('reservation') }}? This is a live change.">
+      data-confirm="{{ import_apply_confirm }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="u-3efc98">
         {% if test_result.ok %}

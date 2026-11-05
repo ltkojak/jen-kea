@@ -66,13 +66,20 @@ def switch_kea_transport(server_id):
     if server is None:
         return _gone()
     target = request.form.get("transport", "").strip()
-    consents = {name for name in SWITCH_CONSENTS if request.form.get(name) == "1"}
+    consents = {name for name in SWITCH_CONSENTS if request.form.get(name) == __write_mode.CONSENT_VALUE}
     if target == "api" or consents:
         # (Q218 BH3 c, AC18) a consent is given for the facts whose time the form carries, whatever the target: the one the card showed is the one that was read, or nothing is changed
         stored = __api.stored_probe(server_id) or {}
-        if not stored or request.form.get("probe_at", "") != str(stored.get("at") or ""):
+        if not stored:
+            # (Q219 BI3 c, AD7) a tick with nothing stored has no facts to be given for: the sentence names the way out
             flash(
-                f"{server.get('name') or 'The server'}: the readiness check was refreshed (or never run) since you read it - read the card again and accept what it shows; nothing was changed.",
+                f"{server.get('name') or 'The server'}: run the readiness check first (Check readiness on the card), then tick what you accept; nothing was changed.",
+                "error",
+            )
+            return _back()
+        if request.form.get("probe_at", "") != str(stored.get("at") or ""):
+            flash(
+                f"{server.get('name') or 'The server'}: the readiness check was refreshed since you read it - read the card again and accept what it shows; nothing was changed.",
                 "error",
             )
             return _back()

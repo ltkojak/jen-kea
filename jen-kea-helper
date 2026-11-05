@@ -1046,8 +1046,9 @@ def op_read_config(payload):
 def op_config_loaded(payload):
     """Build 22 (Q219): `read-config`'s answer PLUS what proves the file is one the daemon has loaded - the file's `size` and `mtime` and the host's `now` from ONE clock, and the daemon's own `pid`,
     `uptime` and `reload` (seconds since its last configuration commit, Kea's `getLastCommitTime`) from `status-get` on its control socket. The proof is `mtime <= now - reload`: the file was written
-    before the daemon last loaded a configuration. `now` is taken BEFORE the daemon is asked, so `now - reload` is never later than the true commit time, and `mtime` rounds UP (`math.ceil`), so a
-    write in the same second as the commit is refused: both errors are in the fail-closed direction. No control socket, no answer, or an answer without `reload` is `daemon: null` with `socket_note`
+    before the daemon last loaded a configuration. `now` is taken BEFORE the daemon is asked and `mtime` rounds UP (`math.ceil`): both
+    errors are in the fail-closed direction, but `reload` is whole seconds, so the named limit is an edit within about a second AFTER the commit (the next `config-write` replaces it; the capturing read has
+    already put it in Config history). No control socket, no answer, or an answer without `reload` is `daemon: null` with `socket_note`
     saying which - never a guess. The errors are `read-config`'s."""
     service = payload.get("service")
     path = payload.get("path")
@@ -1067,22 +1068,24 @@ def op_config_loaded(payload):
         return {"ok": False, "error": "invalid-json", "detail": str(e)}, path
     now = int(time.time())
     daemon, socket_note = None, ""
-    sock, note = _control_socket(config)
+    sock, note = _control_socket(config, strict=True)  # a config nobody validated: credential files only from the daemon's own account
     if sock is None:
         socket_note = note or _NOTE_NO_SOCKET
     else:
         reply = _ask_daemon(sock, "status-get")
         if reply is None:
             socket_note = "the socket did not answer"
-        elif reply.get("result") != 0:
+        elif isinstance(reply.get("result"), bool) or reply.get("result") != 0:
             socket_note = f"status-get answered {reply.get('result')}"
         else:
             arguments = reply.get("arguments") if isinstance(reply.get("arguments"), dict) else {}
             reload = arguments.get("reload")
-            if isinstance(reload, bool) or not isinstance(reload, int):
+            uptime = arguments.get("uptime")
+            if isinstance(reload, bool) or not isinstance(reload, int) or not 0 <= reload < 4_000_000_000:
                 socket_note = "status-get carries no reload"
             else:
-                daemon = {"pid": arguments.get("pid"), "uptime": arguments.get("uptime"), "reload": reload}
+                sane = isinstance(uptime, int) and not isinstance(uptime, bool) and 0 <= uptime < 4_000_000_000
+                daemon = {"pid": arguments.get("pid"), "uptime": uptime if sane else None, "reload": reload}
     return {
         "ok": True,
         "config": config,
@@ -2004,7 +2007,14 @@ def _credential_file_ok(st):
     return account is not None and "uid" in account and st.st_uid == account["uid"]
 
 
-def _read_credential(directory, name):
+def _owned_by_the_daemon(st):
+    """Is the file owned by the account the daemon runs as (a daemon that runs as root owns root's files)? `config-loaded` reads a config it has NOT validated with `-t`, so a credential file it names is taken
+    only from the daemon's own account: a root-owned 0600 file the daemon could not read is never read for it (build 22, Q219)."""
+    account = _unit_account("dhcp4")
+    return account is not None and "uid" in account and st.st_uid == account["uid"]
+
+
+def _read_credential(directory, name, strict=False):
     """The first line, stripped, of the credential file `name` in `directory` - or None. `directory` must be `_CRED_ROOT` itself (the one directory Jen authors; its parent is root's);
     it is opened `O_DIRECTORY | O_NOFOLLOW` and the bare file name is opened relative to THAT descriptor, `O_NOFOLLOW | O_NONBLOCK`, and judged on its own descriptor. No path is resolved
     twice, so nothing the daemon's account can rename between a look and a read is followed (build 18, Q170 and its fixup)."""
@@ -2022,7 +2032,8 @@ def _read_credential(directory, name):
         except OSError:
             return None
         try:
-            if not _credential_file_ok(os.fstat(fd)):
+            st = os.fstat(fd)
+            if not _credential_file_ok(st) or (strict and not _owned_by_the_daemon(st)):
                 return None
             data = os.read(fd, _CRED_MAX + 1)
         except OSError:
@@ -2037,7 +2048,7 @@ def _read_credential(directory, name):
     return lines[0].strip() if lines else ""
 
 
-def _http_credentials(entry):
+def _http_credentials(entry, strict=False):
     """(user, password) of the first basic-auth client of an http control socket entry, inline (`user`/`password`) or in files (`user-file`/`password-file` under `directory`, default
     /etc/kea - walled to `_CRED_ROOT`, see `_read_credential`)."""
     auth = entry.get("authentication")
@@ -2050,8 +2061,8 @@ def _http_credentials(entry):
         if isinstance(client.get("user"), str) and isinstance(client.get("password"), str):
             return client["user"], client["password"]
         if isinstance(client.get("user-file"), str) and isinstance(client.get("password-file"), str):
-            user = _read_credential(directory, client["user-file"])
-            password = _read_credential(directory, client["password-file"]) if user else None
+            user = _read_credential(directory, client["user-file"], strict)
+            password = _read_credential(directory, client["password-file"], strict) if user else None
             if user and password is not None:
                 return user, password
     return None
@@ -2070,7 +2081,7 @@ _NOTE_CREDENTIAL = (
 _NOTE_HTTP = "the http socket is https or not local"
 
 
-def _control_socket(config):
+def _control_socket(config, strict=False):
     """(spec, note). `spec` is the dhcp4 daemon's own control socket from its config: ("unix", path) for a unix socket (preferred), ("http", (address, port, user, password)) for a PLAIN
     http socket bound to a local address with basic auth whose credentials are inline or in files - the two shapes Jen authors - else None, and then `note` says why the helper will not
     use a socket (build 18 fixup: a restore that falls back to the log or the process says what it could not ask, instead of looking like a daemon that never answered). Called ONLY with
@@ -2103,7 +2114,7 @@ def _control_socket(config):
         if not (address and isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536):
             notes.append(_NOTE_HTTP)
             continue
-        credentials = _http_credentials(entry)
+        credentials = _http_credentials(entry, strict)
         if credentials:
             return ("http", (address, port, credentials[0], credentials[1])), ""
         notes.append(_NOTE_CREDENTIAL)

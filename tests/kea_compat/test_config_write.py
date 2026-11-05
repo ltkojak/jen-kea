@@ -813,13 +813,32 @@ def _agreed_populated(populated):
     return {k: populated[k] for k in sorted(populated) if populated[k] is not None}
 
 
-def _agreed_scalars(observed):
-    """`scalars` for the vector (Q218 D1): the value the daemon wrote out for a path, kept only when every recording that saw the path saw the SAME value - a value that depends on the configuration
-    (a subnet's `valid-lifetime` is the global one) is contextual, and the product judges it by inheritance instead. Returns `(scalars, contextual_paths)`."""
+def _inherited_scalar_paths(value, path="", chain=(), out=None):
+    """The paths (list indexes blanked) of every scalar whose key ALSO exists in an enclosing object of the SAME recording (Q219 BI1 g): a subnet's `valid-lifetime` beside the section's - Kea inherits an
+    omitted scalar from the scope above, so the value the daemon wrote out there is the recording's own enclosing value showing through, never a default of its own."""
+    out = set() if out is None else out
+    if isinstance(value, dict):
+        for key, child in value.items():
+            here = f"{path}.{key}" if path else key
+            if not isinstance(child, (dict, list)) and any(isinstance(scope, dict) and key in scope for scope in chain):
+                out.add(here)
+            _inherited_scalar_paths(child, here, chain + (value,), out)
+    elif isinstance(value, list):
+        for item in value:
+            _inherited_scalar_paths(item, path + "[]", chain, out)
+    return out
+
+
+def _agreed_scalars(observed, inherited=frozenset()):
+    """`scalars` for the vector (Q218 D1, Q219 BI1 g): the value the daemon wrote out for a path, kept only when every recording that saw the path saw the SAME value AND the path is not an inherited one
+    in ANY recording (`_inherited_scalar_paths`) - a value that depends on the configuration (a subnet's `valid-lifetime` is the global one) is contextual, and the product judges it by the scope above
+    it instead (`kea_api_config._is_default`). Returns `(scalars, contextual_paths)`: the vector itself carries no inherited value."""
     scalars, contextual = {}, []
     for path in sorted(observed):
         values = observed[path]
-        if all(json.dumps(v, sort_keys=True) == json.dumps(values[0], sort_keys=True) for v in values):
+        if path not in inherited and all(
+            json.dumps(v, sort_keys=True) == json.dumps(values[0], sort_keys=True) for v in values
+        ):
             scalars[path] = values[0]
         else:
             contextual.append(path)
@@ -961,7 +980,12 @@ def test_12_the_defaults_kea_writes_out(facts):
             | _added_by_the_daemon(rich, running["Dhcp4"], "", populated, observed)
             | _added_by_the_daemon(minimal, running_min["Dhcp4"], "", populated, observed)
         )
-        scalars, contextual = _agreed_scalars(observed)
+        inherited = (
+            _inherited_scalar_paths(ORIGINAL[0]["Dhcp4"])
+            | _inherited_scalar_paths(running["Dhcp4"])
+            | _inherited_scalar_paths(running_min["Dhcp4"])
+        )
+        scalars, contextual = _agreed_scalars(observed, inherited)
         facts["defaults_contextual_scalars"] = (
             contextual  # the daemon wrote different values for these in different recordings: judged by inheritance, not by a recorded value
         )
@@ -1058,6 +1082,155 @@ def test_12_the_defaults_kea_writes_out(facts):
     finally:
         __real._ok(__kea.kea_command("config-set", arguments=_body(ORIGINAL[0])))
     assert _hash(), "the daemon does not answer after row 12"
+
+
+def _status_now():
+    """`status-get` as the helper's `config-loaded` reads it: the host's `now` is taken BEFORE the daemon is asked (so `now - reload` is never later than the true commit), then the daemon's own
+    `pid`, `uptime` and `reload` (the seconds since it last committed a configuration, Kea's `getLastCommitTime`)."""
+    now = int(time.time())
+    reply = __kea.kea_command("status-get")
+    args = reply.get("arguments") or {}
+    return {
+        "result": reply.get("result"),
+        "now": now,
+        "pid": args.get("pid"),
+        "uptime": args.get("uptime"),
+        "reload": args.get("reload"),
+    }
+
+
+def _mtime_up():
+    """The file's modification time as the helper reads it: the host's own stat, rounded UP to a whole second (a write in the same second as a commit must read as AFTER it)."""
+    import math
+
+    return math.ceil(os.stat(CONF_PATH).st_mtime)
+
+
+def _write_conf_as_root(data):
+    """A hand edit of the file on the host of the daemon, by `docker exec` (the operator's editor): the bytes replace the file in place, its mtime is now."""
+    import subprocess  # nosec B404 - the compat suite drives docker with fixed argv lists
+
+    subprocess.run(  # nosec B603 B607
+        ["docker", "exec", "-i", "-u", "root", "kea", "sh", "-c", f"cat > {DAEMON_CONF}"],
+        input=data,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_13_the_daemons_own_load_time(facts):
+    """Q219 BI1 i: the facts the proof rests on, proved on the real daemon - never assumed. The file on the host was written BEFORE the daemon last loaded a configuration exactly when
+    `mtime <= now - reload` (`jen/services/kea_api_config.py::file_proof`, (L)), and that is only sound if Kea's own `status-get` behaves so. Eight facts, each with its raw numbers in
+    `load_time_steps` so a reader can re-derive every verdict by hand:
+      1. `status-get` carries `pid`, `uptime` and `reload`;  2. after a fresh start `reload == uptime` (+-1 s);  3. `config-set` resets `reload`;  4. `config-reload` resets `reload`;
+      5. Kea's own `config-write` leaves the file's mtime LATER than `now - reload` (so Jen's own cycle is its own rendering, never a load);  6. a hand edit with no reload: `mtime > now - reload`;
+      7. a hand edit then `config-reload`: `mtime <= now - reload` and the file is in `config-get` one way;  8. a `config-reload` of a file with a syntax error does NOT reset `reload` and the old
+         configuration keeps serving (a failed reload never looks like a load).
+    A fact that does not hold on a leg is a deviation that stops the release; the row's assertion stays."""
+    from jen.services import kea_api_config as api
+
+    steps = {}
+    good = None
+
+    def keep(name, status, **more):
+        steps[name] = {**status, "mtime": _mtime_up(), **more}
+        facts["load_time_steps"] = steps
+
+    try:
+        with open(CONF_PATH, "rb") as fh:
+            good = fh.read()
+
+        # 1 and 2 - a fresh start
+        _restart_daemon()
+        fresh = _status_now()
+        keep("1_fresh_start", fresh)
+        facts["status_get_carries_pid_uptime_reload"] = all(
+            isinstance(fresh[k], int) for k in ("pid", "uptime", "reload")
+        )
+        assert facts["status_get_carries_pid_uptime_reload"], fresh
+        facts["reload_equals_uptime_after_a_fresh_start"] = abs(fresh["uptime"] - fresh["reload"]) <= 1
+        assert facts["reload_equals_uptime_after_a_fresh_start"], fresh
+
+        # 3 - config-set resets reload
+        time.sleep(3)
+        before = _status_now()
+        __real._ok(__kea.kea_command("config-set", arguments=_body(_get())))
+        after = _status_now()
+        keep("3_config_set", after, before=before)
+        facts["config_set_resets_reload"] = after["reload"] < before["reload"] and after["uptime"] >= before["uptime"]
+        assert facts["config_set_resets_reload"], (before, after)
+
+        # 4 - config-reload resets reload
+        time.sleep(3)
+        before = _status_now()
+        reloaded = __kea.kea_command("config-reload")
+        assert reloaded.get("result") == 0, _brief(reloaded)
+        after = _status_now()
+        keep("4_config_reload", after, before=before)
+        facts["config_reload_resets_reload"] = (
+            after["reload"] < before["reload"] and after["uptime"] >= before["uptime"]
+        )
+        assert facts["config_reload_resets_reload"], (before, after)
+
+        # 5 - Kea's own config-write leaves the file NEWER than the daemon's last commit
+        time.sleep(3)
+        __real._ok(__kea.kea_command("config-write"))
+        status = _status_now()
+        keep("5_config_write", status)
+        facts["config_write_leaves_the_file_newer_than_the_load"] = (
+            steps["5_config_write"]["mtime"] > status["now"] - status["reload"]
+        )
+        assert facts["config_write_leaves_the_file_newer_than_the_load"], steps["5_config_write"]
+
+        # 6 and 7 - a hand edit with no reload, then the same edit reloaded
+        edited = json.loads(good)
+        edited["Dhcp4"]["user-context"] = {"jen-note": "a hand edit of the file (compat row 13)"}
+        time.sleep(2)
+        _write_conf_as_root(json.dumps(edited, indent=2).encode("utf-8"))
+        status = _status_now()
+        keep("6_hand_edit_no_reload", status)
+        facts["a_hand_edit_without_a_reload_is_newer_than_the_load"] = (
+            steps["6_hand_edit_no_reload"]["mtime"] > status["now"] - status["reload"]
+        )
+        assert facts["a_hand_edit_without_a_reload_is_newer_than_the_load"], steps["6_hand_edit_no_reload"]
+        time.sleep(2)
+        reloaded = __kea.kea_command("config-reload")
+        assert reloaded.get("result") == 0, _brief(reloaded)
+        status = _status_now()
+        keep("7_hand_edit_reloaded", status)
+        with open(CONF_PATH, "rb") as fh:
+            on_disk = json.loads(fh.read())
+        in_daemon = api.file_in_daemon(on_disk, _get(), "dhcp4")
+        facts["a_reloaded_hand_edit_is_older_than_the_load_and_in_config_get"] = bool(
+            steps["7_hand_edit_reloaded"]["mtime"] <= status["now"] - status["reload"] and in_daemon
+        )
+        assert facts["a_reloaded_hand_edit_is_older_than_the_load_and_in_config_get"], (
+            steps["7_hand_edit_reloaded"],
+            in_daemon,
+        )
+
+        # 8 - a reload of a file with a syntax error is not a load, and the old configuration serves
+        _write_conf_as_root(b"{ this is not json")
+        time.sleep(3)
+        served = _hash()
+        before = _status_now()
+        refused = __kea.kea_command("config-reload")
+        after = _status_now()
+        keep("8_failed_reload", after, before=before, reply=_brief(refused))
+        facts["a_failed_reload_does_not_reset_reload_and_the_old_configuration_serves"] = bool(
+            refused.get("result") not in (0, None)
+            and after["reload"] >= before["reload"]
+            and _hash() == served
+            and after["uptime"] >= before["uptime"]
+        )
+        assert facts["a_failed_reload_does_not_reset_reload_and_the_old_configuration_serves"], (
+            before,
+            after,
+            _brief(refused),
+        )
+    finally:
+        if good is not None:
+            _write_conf_as_root(good)  # the file the job had: the rows after this one start from it
 
 
 def test_90_restore_puts_the_original_back(facts):

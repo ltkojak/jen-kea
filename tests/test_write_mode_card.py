@@ -432,3 +432,137 @@ class TestWhatTheFactsSayAboutTheirCause:
         probe = _facts({"agree": False}, agree_at="at Dhcp4.valid-lifetime: the file says 1, the daemon 2")
         _c, html = wm.render(monkeypatch, [wm.S_API], {2: probe})
         assert "no — at Dhcp4.valid-lifetime: the file says 1, the daemon 2" in html
+
+
+def _macro_html(*, transport, refused, superadmin=False, admin=True):
+    """The Write mode row of the Servers page, rendered through the one macro (`templates/_write_mode_badge.html`) with the role's `current_user`."""
+    import types
+
+    from jinja2 import DictLoader, Environment
+
+    source = (ROOT / "templates" / "_write_mode_badge.html").read_text(encoding="utf-8")
+    env = Environment(loader=DictLoader({"m": source + "{{ write_mode_badge(s) }}"}), autoescape=True)
+    s = {
+        "server": {"id": 7},
+        "transport": transport,
+        "transport_word": words.mode_word(transport),
+        "transport_why": "why",
+        "transport_blocked": False,
+        "transport_unauthenticated": False,
+        "transport_refused": refused,
+    }
+    user = types.SimpleNamespace(is_admin_or_above=admin, is_superadmin=superadmin)
+    return env.get_template("m").render(s=types.SimpleNamespace(**s), current_user=user)
+
+
+class TestTheRefusedNoteIsLiveApisOnly:
+    """Q219 BI3 b (AD3): a remembered refusal of `config-write` belongs to Live API. The macro prints it only for a server that is on Live API (like its two siblings, the blocked note and the
+    ", unauthenticated" suffix), over 3 transports x 3 roles x refused/not = 18 cells; and the route derives it for `api` only."""
+
+    @pytest.mark.parametrize("refused", ["Permission denied", ""], ids=["refused", "not refused"])
+    @pytest.mark.parametrize("role", ["superadmin", "admin", "viewer"])
+    @pytest.mark.parametrize("transport", ["api", "file", "off"])
+    def test_the_refused_note_prints_for_live_api_and_for_nothing_else(self, transport, role, refused):
+        html = _macro_html(
+            transport=transport, refused=refused, superadmin=role == "superadmin", admin=role in ("superadmin", "admin")
+        )
+        assert ("data-transport-refused" in html) == (transport == "api" and bool(refused)), (transport, role, html)
+        if transport == "api" and refused:
+            assert "Permission denied" in html
+
+    def test_the_route_derives_the_note_for_live_api_only(self):
+        source = (ROOT / "jen" / "routes" / "servers.py").read_text(encoding="utf-8")
+        assert (
+            'if current_user.is_admin_or_above and caps.config_transport == "api" else ""'
+            in source.replace("\n            ", " ")
+            or 'caps.config_transport == "api"' in source.split('s["transport_refused"]')[1][:400]
+        )
+
+
+class TestNoConsentBoxWithoutAStoredResult:
+    """Q219 BI3 c (AD7): a box with no stored result has nothing to bind to - the File panel offers the discard box only when a readiness result is on record - and the route's sentence names the check."""
+
+    def _file_panel(self, monkeypatch, probes):
+        server = {"id": 2, "name": "kea-b", "api_url": "http://y", "ssh_host": "10.0.0.2", "config_transport": "off"}
+        _cards, html = wm.render(monkeypatch, [server], probes)
+        return _panel(html, "file"), _panel(html, "off")
+
+    def test_no_stored_result_no_box_in_the_file_or_the_read_only_panel(self, monkeypatch):
+        file_panel, off_panel = self._file_panel(monkeypatch, {})
+        assert "checkbox" not in file_panel and "checkbox" not in off_panel
+
+    def test_a_stored_result_offers_the_discard_box_in_the_file_panel_only(self, monkeypatch):
+        file_panel, off_panel = self._file_panel(monkeypatch, {2: _facts({"agree": False})})
+        assert 'name="discard_file_edit"' in file_panel and "checkbox" not in off_panel
+
+
+class TestTheConsentValueIsOneConstant:
+    """Q219 BI3 d (AD15): the template and the route read the same constant, `write_mode.CONSENT_VALUE` - a test renders the card in every shape and checks every consent input carries it."""
+
+    SERVERS = [
+        {"id": 2, "name": "kea-b", "api_url": "http://y", "ssh_host": "10.0.0.2", "config_transport": "off"},
+        {"id": 3, "name": "kea-c", "api_url": "http://z", "config_transport": "api"},
+        {"id": 1, "name": "kea-a", "api_url": "http://x", "ssh_host": "10.0.0.1", "config_transport": "file"},
+    ]
+
+    def test_every_consent_input_carries_the_constant(self, monkeypatch):
+        probes = {s["id"]: _facts({"agree": False}, auth="none") for s in self.SERVERS}
+        _cards, html = wm.render(monkeypatch, self.SERVERS, probes)
+        tags = re.findall(r'<input type="checkbox"[^>]*>', html)
+        assert len(tags) >= 6, len(tags)
+        for tag in tags:
+            assert f'value="{words.CONSENT_VALUE}"' in tag, tag
+
+    def test_the_route_reads_the_constant_not_a_literal(self):
+        source = (ROOT / "jen" / "routes" / "settings" / "kea_transport.py").read_text(encoding="utf-8")
+        assert "request.form.get(name) == __write_mode.CONSENT_VALUE" in source and '== "1"' not in source
+        template = (ROOT / "templates" / "settings_kea.html").read_text(encoding="utf-8")
+        assert 'type="checkbox" name="{{ n.name }}" value="{{ c.consent_value }}"' in template
+        assert 'value="1" form=' not in template.split("<!-- Write mode (Q217)")[1].split("<!-- SSH")[0]
+
+
+class TestTheProofSentencesAreOneTable:
+    """Q219 BI1 f: the words the card, the bundle and Health use for what the readiness check proved are `write_mode.PROOF_SENTENCES`."""
+
+    def test_the_four_readings_and_the_two_non_verdicts(self):
+        assert set(words.PROOF_SENTENCES) >= {
+            "loaded",
+            "rendering",
+            "none",
+            "no-clock",
+            "unreadable",
+            "no-file",
+            "planned",
+        }
+        assert words.proof_sentence("loaded", "2026-11-05 14:02:00 UTC", "2026-11-05 14:05:00 UTC") == (
+            "one the daemon has loaded (written 2026-11-05 14:02:00 UTC, loaded 2026-11-05 14:05:00 UTC)"
+        )
+        assert words.proof_sentence("none", "14:07", "14:05") == (
+            "written at 14:07, after the daemon's last load at 14:05 - the daemon has not loaded that edit"
+        )
+        assert "helper build 22" in words.proof_sentence("none", "", "")
+        assert words.proof_sentence("none", "14:00", "14:05", after=False) == (
+            "written at 14:00, before the daemon's last load at 14:05, but the daemon does not run it"
+        )
+        assert "could not be read" in words.proof_sentence("none", "14:07", "")
+        assert words.proof_sentence(None) == "" and words.proof_sentence("") == ""
+
+    @pytest.mark.parametrize(
+        ("probe", "needle"),
+        [
+            (
+                {"agree": True, "proof": "loaded", "file_written_at": 1_800_000_000, "daemon_loaded_at": 1_800_000_100},
+                "one the daemon has loaded (written 2027-01-15",
+            ),
+            ({"agree": True, "proof": "rendering"}, "own rendering of what the daemon runs"),
+            (
+                {"agree": False, "proof": "none", "file_written_at": 1_800_000_200, "daemon_loaded_at": 1_800_000_100},
+                "the daemon has not loaded that edit",
+            ),
+            ({"agree": False, "proof": "none", "file_written_at": None, "daemon_loaded_at": None}, "helper build 22"),
+        ],
+    )
+    def test_the_card_row_prints_the_proofs_words(self, monkeypatch, probe, needle):
+        _cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts(probe)})
+        row = html.split("Config file matches running config")[1].split("</tr>")[0]
+        assert needle in row, row

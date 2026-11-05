@@ -198,6 +198,8 @@ class TestToApi:
         assert api.probe_gate(dict(server, config_transport="api")) == ""
         stored["agree"] = False  # the facts a later refresh would read: a hand edit
         probes[5] = stored
+        host(monkeypatch, daemon, raw="e" * 64)  # (Q219 E1) the hand edit: other bytes than Jen's rendering ...
+        world.proof_follows_the_read(monkeypatch, loaded=False)  # ... written after the daemon's last load
         assert "carries a configuration the daemon is not running" in api.probe_gate(
             dict(server, config_transport="api")
         )
@@ -339,6 +341,10 @@ class TestToApi:
         }
         assert sw.switch(srv(daemon, "off", ssh=True), "file")["ok"]
         assert probes[5].get("refused") == "Permission denied", "a server that was not in Live API keeps what it had"
+        probes[5] = {"at": "2099-01-01T00:00:00+00:00", "config_api": True, "bound": "t"}
+        assert sw.switch(srv(daemon, "api", ssh=True), "off").get("refusal_cleared") is False, (
+            "nothing was on record, nothing is claimed"
+        )
 
 
 class TestToFile:

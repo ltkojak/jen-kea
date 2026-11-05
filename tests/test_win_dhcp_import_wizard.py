@@ -560,3 +560,77 @@ class TestWinDhcpImportWizardRealFixture:
 
         row53 = next(r for r in self._reservation_calls if r["ip-address"] == "10.10.10.53")
         assert "option-data" in row53
+
+
+class TestTheImportNamesItsWriteTarget:
+    """Q219 BI4 (AD4): the import's preview, its confirm dialog and its flashes name the server the import goes to (`first_write_target`: the first server that takes changes) and say "restart it" only
+    when that server's write mode is File over SSH - never "the primary Kea server", never a restart promised over a Live API server that is never restarted."""
+
+    def _two(self, monkeypatch, second):
+        from jen import extensions
+
+        wizard = TestWinDhcpImportWizard()
+        fake = wizard._wire(monkeypatch)
+        fake.configs[(2, "dhcp4")] = fake.configs[(1, "dhcp4")]
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [
+                {"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea", "config_transport": "off"},
+                {"id": 2, "name": "Kea B", "ssh_host": "10.0.0.6", "ssh_user": "kea", **second},
+            ],
+        )
+        return wizard, fake
+
+    def test_a_file_second_server_is_named_and_restarted_in_the_preview_and_the_dialog(
+        self, logged_in_client, monkeypatch, mock_kea
+    ):
+        wizard, fake = self._two(monkeypatch, {"config_transport": "file"})
+        wizard._upload(logged_in_client)
+        r = logged_in_client.post("/subnets/import-windows/preview", data=wizard._review_form())
+        body = r.data.decode()
+        assert r.status_code == 200 and "applied to Kea B" in body, body[:600]
+        assert "Apply this import to Kea B, restart it, and add" in body
+        assert "primary" not in body.lower().split("<h1")[1].split("</div>")[0]
+        assert "Kea A" not in body.split("Preview Import")[1].split("Summary")[0]
+
+    def test_the_apply_names_the_second_server_in_every_line(self, logged_in_client, monkeypatch, mock_kea):
+        wizard, fake = self._two(monkeypatch, {"config_transport": "file"})
+        wizard._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=wizard._review_form())
+        fake.configs[(2, "dhcp4")] = {"Dhcp4": {**wizard._EMPTY_DHCP4["Dhcp4"], "valid-lifetime": 9999}}
+        r = logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        assert b"The Kea config on Kea B changed since you previewed this import" in r.data
+        assert b"primary" not in r.data.split(b"changed since you previewed")[0][-200:]
+
+    def test_the_confirm_sentences_follow_the_targets_mode(self):
+        from jen.routes import subnets
+
+        target = {"id": 2, "name": "Kea B"}
+        assert (
+            subnets._import_apply_confirm(target, "file", 3)
+            == "Apply this import to Kea B, restart it, and add 3 reservations? This is a live change."
+        )
+        api_text = subnets._import_apply_confirm(target, "api", 1)
+        assert (
+            api_text
+            == "Apply this import to Kea B live over its API (no restart), and add 1 reservation? This is a live change."
+        )
+        assert subnets._import_target_name(None) == "the first server that takes changes"
+
+    def test_no_import_line_says_the_primary_server(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        source = (root / "jen" / "routes" / "subnets.py").read_text(encoding="utf-8")
+        start = source.index("def import_windows_apply") if "def import_windows_apply" in source else 0
+        for text in (
+            source[start:],
+            *(
+                (root / "templates" / name).read_text(encoding="utf-8")
+                for name in ("import_windows_preview.html", "import_windows.html")
+            ),
+        ):
+            assert "primary Kea server" not in text and "the primary server" not in text.replace(
+                'never "the primary"', ""
+            )

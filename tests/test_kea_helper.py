@@ -481,6 +481,9 @@ class TestConfigLoadedOp:
             ({"result": 0, "arguments": {"pid": 1, "uptime": 5}}, "status-get carries no reload"),
             ({"result": 0, "arguments": {"pid": 1, "uptime": 5, "reload": "soon"}}, "status-get carries no reload"),
             ({"result": 0, "arguments": {"pid": 1, "uptime": 5, "reload": True}}, "status-get carries no reload"),
+            ({"result": 0, "arguments": {"pid": 1, "uptime": 5, "reload": -5}}, "status-get carries no reload"),
+            ({"result": 0, "arguments": {"pid": 1, "uptime": 5, "reload": 10**12}}, "status-get carries no reload"),
+            ({"result": False, "arguments": {"pid": 1, "uptime": 5, "reload": 3}}, "status-get answered False"),
         ],
     )
     def test_a_daemon_that_does_not_answer_a_reload_is_null_never_a_guess(
@@ -519,6 +522,22 @@ class TestConfigLoadedOp:
         assert order == ["time", "ask"], order
         assert out["now"] == 1000
         assert out["mtime"] == 101  # an st_mtime of 100.1 reads 101
+
+    def test_a_credential_file_is_taken_only_from_the_daemons_own_account(self, helper, monkeypatch):
+        """Build 22 reads a config nobody validated with `-t`: a root-owned file the daemon could not read is never read for it (a daemon that runs as root owns root's files)."""
+        import types
+
+        monkeypatch.setattr(helper, "_unit_account", lambda service: {"uid": 100, "gid": 101})
+        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=100)) is True
+        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=0)) is False
+        monkeypatch.setattr(helper, "_unit_account", lambda service: {"uid": 0, "gid": 0})
+        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=0)) is True
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        assert helper._owned_by_the_daemon(types.SimpleNamespace(st_uid=0)) is False
+
+    def test_the_op_reads_credentials_strictly(self):
+        source = _SCRIPT_PATH.read_text(encoding="utf-8")
+        assert "_control_socket(config, strict=True)" in source
 
     def test_the_op_is_in_the_table_and_the_build_is_22(self, helper):
         assert helper._OPS["config-loaded"] is helper.op_config_loaded

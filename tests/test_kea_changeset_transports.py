@@ -681,7 +681,9 @@ class TestTheFirstWriteTarget:
     def test_no_import_route_reads_the_first_server_in_the_list(self):
         source = (ROOT / "jen" / "routes" / "subnets.py").read_text(encoding="utf-8")
         assert "extensions.KEA_SERVERS[0]" not in source.replace("`KEA_SERVERS[0]`", "")
-        assert source.count("first_write_target(") == 3  # the import preview, its apply and the reservations step
+        assert (
+            source.count("first_write_target(") == 4
+        )  # the upload page (Q219: it names the server), the import preview, its apply and the reservations step
 
 
 class TestAnAdminIsNotToldAHostFactByAChangeSetLine:
@@ -736,3 +738,24 @@ class TestAnAdminIsNotToldAHostFactByAChangeSetLine:
     ):
         text = self._plan(monkeypatch, daemon, probes, self.STATES[0], role)
         assert "/etc/kea/extra.conf" in text and "superadmin has read" not in text
+
+
+class TestAConflictLineSaysWhenTwoServersNameOneEndpoint:
+    """Q219 BI5 b (AD8): the conflict line of a change set appends " (two servers name one Kea endpoint)" when another configured server names the same endpoint (the Doctor's `kea_duplicate_endpoint`)."""
+
+    def test_the_suffix_is_added_only_for_a_shared_endpoint(self, monkeypatch):
+        a = {"id": 1, "name": "kea-a", "api_url": "http://10.0.0.7:8000/"}
+        b = {"id": 2, "name": "kea-b", "api_url": "HTTP://10.0.0.7:8000"}
+        c = {"id": 3, "name": "kea-c", "api_url": "http://10.0.0.9:8000/"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [a, b, c])
+        t = cs.Target(a, "kea-a", {}, "x")
+        assert cs._conflict_line(t, "the config on kea-a changed since you started") == (
+            "❌ kea-a: the config on kea-a changed since you started (two servers name one Kea endpoint)"
+        )
+        assert cs.ENDPOINT_NOTE == " (two servers name one Kea endpoint)"
+        t3 = cs.Target(c, "kea-c", {}, "x")
+        assert cs._conflict_line(t3, "p") == "❌ kea-c: p"
+
+    def test_a_server_alone_never_shares(self):
+        assert api.shares_endpoint({"id": 1, "api_url": "http://a/"}, [{"id": 1, "api_url": "http://a/"}]) is False
+        assert api.shares_endpoint({"id": 1, "api_url": ""}, [{"id": 2, "api_url": ""}]) is False
