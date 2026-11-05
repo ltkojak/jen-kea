@@ -152,10 +152,9 @@ def latest(server_id: int, service: str, exclude_kind: str | None = None) -> dic
     return _decrypted(row)
 
 
-#: The two sources that are the record of a change the daemon MAY be running (Q218 BH2, CFG-006): never pruned, never "the last known state". `pending` is a candidate written before `config-set`;
-#: `damaged` is a pending row whose body could not be read as a configuration.
-IN_FLIGHT_SOURCES = ("pending", "damaged")
-_NOT_IN_FLIGHT = "source NOT IN ('pending', 'damaged')"
+# A `pending` or `damaged` row is the record of a change the daemon MAY be running (Q218 BH2, CFG-006): the SQL below says `source NOT IN ('pending', 'damaged')` in each statement as a literal
+# (bandit B608: a statement is never built by concatenation) - never pruned, never "the last known state". `pending` is a candidate written before `config-set`; `damaged` is one whose body
+# could not be read as a configuration.
 
 
 def latest_of_kind(server_id: int, service: str, hash_kind: str) -> dict | None:
@@ -165,9 +164,7 @@ def latest_of_kind(server_id: int, service: str, hash_kind: str) -> dict | None:
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s AND "
-                + _NOT_IN_FLIGHT
-                + " ORDER BY id DESC LIMIT 1",
+                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
                 (server_id, service, hash_kind),
             )
             row = cur.fetchone()
@@ -186,9 +183,7 @@ def by_digest(server_id: int, service: str, sha256: str, hash_kind: str = "kea")
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s AND sha256=%s AND "
-                + _NOT_IN_FLIGHT
-                + " ORDER BY id DESC LIMIT 1",
+                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind=%s AND sha256=%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
                 (server_id, service, hash_kind, sha256),
             )
             row = cur.fetchone()
@@ -382,16 +377,14 @@ def prune(server_id: int, service: str, keep: int | None = None) -> int:
         with _jen_db() as db, db.cursor() as cur:
             # id of the oldest SETTLED row we keep; every settled row below it goes.
             cur.execute(
-                "SELECT id FROM kea_config_revisions WHERE server_id=%s AND service=%s AND "
-                + _NOT_IN_FLIGHT
-                + " ORDER BY id DESC LIMIT 1 OFFSET %s",
+                "SELECT id FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1 OFFSET %s",
                 (server_id, service, keep - 1),
             )
             row = cur.fetchone()
             if row is None:
                 return 0  # fewer than `keep` rows
             cur.execute(
-                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s AND " + _NOT_IN_FLIGHT,
+                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s AND source NOT IN ('pending', 'damaged')",
                 (server_id, service, row["id"]),
             )
             return cur.rowcount

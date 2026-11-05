@@ -1628,7 +1628,9 @@ class TestApplyAsksTheFileAtStepSix:
         assert "config-set" in fake.commands and "config-write" not in fake.commands
         assert fake.running["valid-lifetime"] == 7200, "nothing is undone: the daemon runs the change"
         assert EDIT_KEY in fake.file, "and the operator's edit is still on the host"
-        assert store.pending(SID, "dhcp4") is not None, "the pending row is the state `_reconcile_pending` settles by content"
+        assert store.pending(SID, "dhcp4") is not None, (
+            "the pending row is the state `_reconcile_pending` settles by content"
+        )
         assert any(r["source"] == "external" for r in store.rows)
 
     def test_a_rollback_is_proved_against_the_state_the_daemon_runs_not_its_sparse_candidate(self, fake, ssh, store):
@@ -1636,7 +1638,9 @@ class TestApplyAsksTheFileAtStepSix:
         first = api.apply(ssh, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
         assert first["ok"]
         after, after_digest = _plan(ssh)
-        sparse = _candidate(cfg)  # what `Target.after_cfg` holds: the candidate Jen built, not what the daemon reported back
+        sparse = _candidate(
+            cfg
+        )  # what `Target.after_cfg` holds: the candidate Jen built, not what the daemon reported back
         out = api.revert(ssh, "dhcp4", cfg, after_digest, "rollback: x", before_cfg=sparse)
         assert out["ok"], out
         assert fake.running["valid-lifetime"] == cfg["Dhcp4"]["valid-lifetime"] and fake.file == fake.running
