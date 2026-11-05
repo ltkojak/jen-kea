@@ -32,10 +32,10 @@ class TestSubnetEditPreviewApply:
         # Playwright can't evaluate a JS-string predicate in the page.
         # Playwright's own :has-text()/attribute selectors don't need
         # page-context eval at all.
-        page.wait_for_selector("#validation-summary:has-text('No Kea servers with SSH')", timeout=10000)
-        page.wait_for_selector("#apply-btn:not([disabled])", timeout=10000)
-        page.click("#apply-btn")
-        page.wait_for_url(f"{base_url}/subnets", timeout=10000)
+        # (Q218 BH6 g, AC26) a fleet with no write target - this server has no SSH host and is not on Live API - has nothing to validate against and nothing to apply to: the preview says why
+        # and Apply stays disabled (it used to read "all of none passed" and offered a change that no server would take)
+        page.wait_for_selector("#validation-summary:has-text('no server takes this change')", timeout=10000)
+        assert page.locator("#apply-btn").is_disabled()
 
 
 class TestClassBuilderLivePreview:
