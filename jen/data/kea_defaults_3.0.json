@@ -8,7 +8,11 @@
   "calculate-tee-times",
   "client-classes[].boot-file-name",
   "client-classes[].next-server",
-  "client-classes[].option-data",
+  "client-classes[].option-data[].always-send",
+  "client-classes[].option-data[].code",
+  "client-classes[].option-data[].csv-format",
+  "client-classes[].option-data[].never-send",
+  "client-classes[].option-data[].space",
   "client-classes[].option-def",
   "client-classes[].server-hostname",
   "ddns-conflict-resolution-mode",
@@ -81,7 +85,11 @@
   "shared-networks[].calculate-tee-times",
   "shared-networks[].max-valid-lifetime",
   "shared-networks[].min-valid-lifetime",
-  "shared-networks[].option-data",
+  "shared-networks[].option-data[].always-send",
+  "shared-networks[].option-data[].code",
+  "shared-networks[].option-data[].csv-format",
+  "shared-networks[].option-data[].never-send",
+  "shared-networks[].option-data[].space",
   "shared-networks[].relay",
   "shared-networks[].relay.ip-addresses",
   "shared-networks[].store-extended-info",
@@ -93,7 +101,11 @@
   "shared-networks[].subnet4[].calculate-tee-times",
   "shared-networks[].subnet4[].max-valid-lifetime",
   "shared-networks[].subnet4[].min-valid-lifetime",
-  "shared-networks[].subnet4[].option-data",
+  "shared-networks[].subnet4[].option-data[].always-send",
+  "shared-networks[].subnet4[].option-data[].code",
+  "shared-networks[].subnet4[].option-data[].csv-format",
+  "shared-networks[].subnet4[].option-data[].never-send",
+  "shared-networks[].subnet4[].option-data[].space",
   "shared-networks[].subnet4[].pools[].option-data",
   "shared-networks[].subnet4[].relay",
   "shared-networks[].subnet4[].relay.ip-addresses",
@@ -124,6 +136,11 @@
   "subnet4[].option-data[].never-send",
   "subnet4[].option-data[].space",
   "subnet4[].pools[].option-data",
+  "subnet4[].pools[].option-data[].always-send",
+  "subnet4[].pools[].option-data[].code",
+  "subnet4[].pools[].option-data[].csv-format",
+  "subnet4[].pools[].option-data[].never-send",
+  "subnet4[].pools[].option-data[].space",
   "subnet4[].relay",
   "subnet4[].relay.ip-addresses",
   "subnet4[].reservations",
@@ -139,5 +156,13 @@
   "subnet4[].valid-lifetime",
   "t1-percent",
   "t2-percent"
- ]
+ ],
+ "populated": {
+  "host-reservation-identifiers": [
+   "hw-address",
+   "duid",
+   "circuit-id",
+   "client-id"
+  ]
+ }
 }
