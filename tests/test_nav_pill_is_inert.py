@@ -8,7 +8,7 @@ import pytest
 
 from jen.services import onboarding
 
-PAGE = "/users"
+PAGE = "/settings/users"
 
 
 def _recorder(monkeypatch):
