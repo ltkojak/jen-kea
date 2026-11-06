@@ -209,7 +209,7 @@ the procedure that replaces it. It runs on every tagged beta BEFORE the archive 
    branch is run with `.prev`-bearing untouched targets (one of them stale-marked) and the records compared byte for byte afterward; likewise the AKI rows had every single-value form and not a list of two
    issuer names with the wrong one first - the second time a value-level shape escaped a class-level enumeration (rule 7 above), found again by the reader who started from the tree.
 
-**Before a Q goes to the builder.** The audit starts one step earlier than the diff: a defect the entry forces is found by no pass on the tag. The
+**Before a Q goes to the builder.** The audit starts one step earlier than the diff: a defect the entry forces is found by no pass on the tag. The A test this box cannot run for want of a database is run against a named stand-in before the entry is filed (an in-memory database behind `jen_db()` proves the test's own logic and its use of pytest, never the SQL), and "verified by reading" names the KIND of the thing read, not that it exists: Q221's three new tests called an autouse fixture as a function, and "`_clean()` exists" was true. The entry ends with its "If it goes red" table (rule 12): a failure the author can foresee has its answer in the entry, so the builder acts and reports instead of stopping.
 author runs the pre-filing check on the entry itself (`LESSONS.md` section 1, first entry; CLAUDE.md rule 12) - the decision inventory read as the
 builder, every literal resolved by a command, every code block extracted and run, what was not run listed, a stop rule with its evidence - and the
 message that hands the Q over carries the ledger: the decision count, and what was verified by execution, by reading, and not at all. The pass on

@@ -529,3 +529,10 @@ carry that exact suffix (the box would re-install itself forever).
    for a red run is written down only after the failing assertion's own value (the RAW job log: `gh api --allow-escape-sequences
    repos/<owner>/<repo>/actions/jobs/<job id>/logs`) and the function the failing line calls have been read. At grading, each reported
    deviation is traced to the sentence of the entry that left it open.
+   **Fewest, not zero (the maintainer, 2026-11-06, after Q221 stopped on six redundant lines of a test).** A failure is not a stop. Every entry
+   carries an "If it goes red" table - each failure its author can foresee, with the prescribed answer or the bounds of a guided one - and the
+   builder acts on it, keeps going and reports what it did. With no matching row the builder still fixes, as a `Qnnn (fixup N)` commit, a defect
+   in a test, a doc or a comment the Q added or changed, when the failing assertion's own value explains it and the fix leaves what the test
+   asserts about the product as it was; a run that went red with no assertion failed (a service container, a network fetch) is re-run once,
+   never on a tag. The stops are few and named in the entry: product behavior the entry does not prescribe; the helper, a sudoers line, a
+   migration, a version spot, a tag; a security judgment; the same test red after two fixups. A stop comes back with the builder's proposed fix.
