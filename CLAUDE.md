@@ -97,6 +97,7 @@ and as a gate on every tagged release (`release.yml`).
   `urlopen` *raising* `HTTPError(302)` — a real redirect is followed, never raised. Stand
   up `http.server` / `jen.httpredirect.make_server` / an `ssl`-wrapped server on an
   ephemeral port (see `tests/test_jen_update_root.py::TestServiceHealthy`).
+- **One test's stubs never answer for the next (Q220).** A module-level cache under `jen/` or `plugins/` is on `tests/test_cache_resets.py`'s reviewed list with what the unit suite does about it; the nav pill is inert in every unit test (`_nav_pill_is_inert`; `real_nav_pill` opts in). A red run's assertion is read from the RAW job log (`gh api --allow-escape-sequences repos/<owner>/<repo>/actions/jobs/<job id>/logs`) - the viewer drops a line that carries a whole page.
 
 ### Local verification (Windows dev box)
 

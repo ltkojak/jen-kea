@@ -2197,9 +2197,11 @@ class TestAnApiServerIsNamedNotAuthored:
         assert data["all_passed"] is False and fake_ssh.calls == []
 
     def test_the_post_refuses_before_a_helper_is_asked_or_anything_is_sent(self, logged_in_client, monkeypatch):
+        import jen.services.kea6 as kea6_module
         from jen.services import kea_changeset, kea_host
 
         self._api_server(monkeypatch)
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("", "")] * 6))
         sent = []
         monkeypatch.setattr(
             kea_host, "helper_build", lambda server: sent.append("helper") or {"code": "ok", "build": 99}

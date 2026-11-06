@@ -495,6 +495,25 @@ def _reset_log_tail(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _nav_pill_is_inert(request, monkeypatch):
+    """v7.0.0-beta.6 (Q220) - jen.services.onboarding keeps the Getting-started nav pill for 300 s per (role, scope), and a miss runs the WHOLE Health check set
+    (`build_ctx` -> `health.run_checks`), which is Kea traffic. Every page an admin renders asks for the pill (`inject_plugin_nav`), so once every five minutes of
+    suite time that refresh landed in whichever test rendered a page first, with whatever that test had stubbed: v7.0.0-beta.5's release run failed on three
+    `kea_command` calls a test asserted absent. Every unit test gets NO pill and an empty cache; a test of the pill itself carries `real_nav_pill`. The browser,
+    system and real-Kea suites are left exactly as they were."""
+    if any(request.node.get_closest_marker(m) for m in ("e2e", "system", "kea_compat", "kea_log", "kea_write")):
+        yield
+        return
+    from jen.services import onboarding
+
+    onboarding._pill_cache.clear()
+    if request.node.get_closest_marker("real_nav_pill") is None:
+        monkeypatch.setattr(onboarding, "cached_pill", lambda user, is_superadmin: None)
+    yield
+    onboarding._pill_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def clean_tables(db):
     yield
     with db.cursor() as cur:
