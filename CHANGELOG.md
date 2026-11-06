@@ -2,6 +2,10 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.0.0-beta.6] - 2026-11-06
+
+Beta. The same product as 7.0.0-beta.5, released. 7.0.0-beta.5 was tagged and never released: its release run failed one test, and the cause was in the test suite, not in Jen. The Getting-started pill in the navigation is kept for five minutes and refreshes by running the Health checks, which ask Kea; the unit suite never reset it, so once every five minutes that refresh ran inside whichever test rendered a page first, and this time it ran inside a test that asserts no command is sent to Kea. Every unit test now gets no pill unless it asks for one, the test that caught it no longer waits ten seconds on an SSH connection to an address that does not exist, and every module-level cache in the tree is on a reviewed list that a new one fails. No file of the product changed: what 7.0.0-beta.5's entry below describes is what this release is.
+
 ## [7.0.0-beta.5] - 2026-11-05
 
 Beta. The file is proved by the daemon's own clock. The fifth beta of the 7.0 line replaces, rather than patches again, the question every `config-write` asks before it renders the daemon's configuration over the file on a Kea host - "does the file carry anything the daemon has not loaded?" - which three betas in a row answered through a table of what Kea writes out by itself and which three reviews in a row found one more thing that table did not know. The upgrade is the usual one, `sudo ./install.sh` or the in-app updater, with one additive migration (38, one nullable column on the config history), no new setting and no sudoers line; **press Update helper (build 22) on every Kea host that has an SSH host and a server on Live API**, because the proof reads the host's own clock and the daemon's own last load time through one new read-only helper op, `config-loaded`. A host below build 22 keeps working: a Live API server there accepts a write only over a file Jen itself rendered or the one the change was planned over, and the card says "press Update helper".
