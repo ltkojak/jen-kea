@@ -520,3 +520,12 @@ carry that exact suffix (the box would re-install itself forever).
    loop is not the only vehicle for a fix. And when a review names the N-th property of
    an artifact a standard verifier judges (a certificate, a chain, a signature, a schema),
    the fix is the VERIFIER as the product's check, not the N-th property.
+12. **A Q decides; the builder types (the maintainer, 2026-11-06).** The author of a Q leaves the builder the fewest decisions a spec can: every
+   name, shape, signature, order, sentence, count, URL, fixture and marker is decided in the entry (its "Decided, not left to the builder" list
+   is binding), code under about a hundred lines is written out in full, and before the entry is filed every literal in it is resolved against
+   the tree by a command and every code block is extracted back out of the entry and linted, formatted and run as far as the box allows - what
+   was not run is listed with what stands in for it. The check is `LESSONS.md` section 1, first entry; a hand-back mid-Q gets the same check.
+   The builder's half: a choice the entry did not make is a deviation to REPORT in the SHIPPED paragraph, never to make silently, and a cause
+   for a red run is written down only after the failing assertion's own value (the RAW job log: `gh api --allow-escape-sequences
+   repos/<owner>/<repo>/actions/jobs/<job id>/logs`) and the function the failing line calls have been read. At grading, each reported
+   deviation is traced to the sentence of the entry that left it open.

@@ -209,6 +209,12 @@ the procedure that replaces it. It runs on every tagged beta BEFORE the archive 
    branch is run with `.prev`-bearing untouched targets (one of them stale-marked) and the records compared byte for byte afterward; likewise the AKI rows had every single-value form and not a list of two
    issuer names with the wrong one first - the second time a value-level shape escaped a class-level enumeration (rule 7 above), found again by the reader who started from the tree.
 
+**Before a Q goes to the builder.** The audit starts one step earlier than the diff: a defect the entry forces is found by no pass on the tag. The
+author runs the pre-filing check on the entry itself (`LESSONS.md` section 1, first entry; CLAUDE.md rule 12) - the decision inventory read as the
+builder, every literal resolved by a command, every code block extracted and run, what was not run listed, a stop rule with its evidence - and the
+message that hands the Q over carries the ledger: the decision count, and what was verified by execution, by reading, and not at all. The pass on
+the tag reads the SHIPPED paragraph's deviations against the entry: one the entry left open is the author's row.
+
 **The exit rule.** Promotion is judged against Jen's threat model (`docs/ARCHITECTURE.md`): a P1 in a supported configuration blocks and gets a Q; a finding that requires the operator to
 have hand-corrupted Jen's own identity or state files is a P2 in this model - registered, shipped as a stable PATCH if it proves to matter, never another beta. A finding after promotion
 ships as `X.Y.Z+1` on the stable channel. The maintainer says "promote"; nothing about a promotion is written before that word.
