@@ -375,6 +375,19 @@ updater's allowlist.
 - `tests/test_config_revisions.py::TestOnePendingRowPerServer`
 - `tests/test_migrations.py::TestMigration38RevisionsFileSha256`
 
+### CFG-007 - The write gate is a read: no page asks Kea or a host to print it, the write path re-reads a stored fact before it asks, and the way out a refusal names is one a control offers
+**Rule.** `kea_api_config.probe_gate` is a settings read and pure rules. It never asks Kea, never asks a host and never writes the stored result, because every page derives the Live API badge from it. The write path refreshes before it asks (`refresh_if_stale`: facts older than a day, and a stored `agree` of False), the stored result is one snapshot with one time, and the file is judged in one place, live, by `file_proof`. A refusal names a way out a control offers: with a change unsettled that is a restart of Kea or the box beside *Settle it now* (`settle_pending(discard=True)`), never the card's discard, which the switch refuses while a change is unsettled; a file that cannot be read is never overwritten.
+**Established.** Q221 (AE8, AE9, AE10: Q219 E1's live proof sat inside the gate, so a page a viewer can load made an SSH read and a `config-get` and wrote the stored result; AE11: every control refused in a circle).
+**Enforced at.** `jen/services/kea_api_config.py` (`probe_gate`, `refresh_if_stale`, `apply` step (1b), `settle_pending`, `_reconcile_pending`, `file_proof`'s sentence); `jen/services/kea_changeset.py` (`_run_change_unlocked`, the Plan); `jen/routes/settings/kea_transport.py` (`settle_pending_change`); `jen/services/health.py` (`_kea_write_gate`).
+**Tests.**
+- `tests/test_the_gate_is_a_read.py::TestTheGateReachesNothingRemote`
+- `tests/test_the_gate_is_a_read.py::TestTheGateAnswersFromTheStoredResult`
+- `tests/test_the_gate_is_a_read.py::TestTheWritePathRefreshesBeforeItAsks`
+- `tests/test_the_gate_is_a_read.py::TestHealthSaysWhatItKnowsAndWhen`
+- `tests/test_the_way_out_is_offered.py::TestSettleItNowOffersBothWaysOut`
+- `tests/test_the_way_out_is_offered.py::TestTheCardCarriesTheBox`
+- `tests/test_kea_transport_routes.py::TestTheSettleRouteWorksUnderTheLockAndIsAudited`
+
 ### FILE-001 - A secret is private from its first byte; a privileged write never resolves a service-owned parent by pathname
 **Rule.** No secret is written by a plain `open`, redirect or `cp`; a `.prev` is made only by the certificate set's commit; root never copies anything into the app tree from the config or content directories.
 **Established.** Q150, Q151, Q155.
@@ -617,15 +630,18 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 **Rule.** (Q190.) The credential rule's fields (`api_user`, `api_pass` and their per-daemon twins, resolved by `credentials.resolve`) are the ONLY place a Kea password lives. `auth.valid_api_url` refuses an address
 with user-info (`https://user:password@host:8004`, `https://user@host`), the forms say so (`auth.userinfo_sentence`), and the same function is the one definition at every form and in the wizard. An address
 that already carries user-info in jen.config is legacy input: `AppConfig.apply` logs ONE warning per section and key (never the value), Health's "Every endpoint has a credential" row names it and says to move
-it to the user and password fields, and Jen keeps dialing it as written (the credential rule is not touched). Every sentence that shows an address goes through `auth.shown_url` (LEAK-001).
-**Established.** Q190 (beta.20's review: `valid_api_url` accepted user-info and Rotate's probe-failure flash, the connection form's audit row and the authoring flash printed the address as typed).
-**Enforced at.** `auth.valid_api_url` / `userinfo_sentence` / `shown_url` / `scrub_urls` / `urls_with_userinfo`; `config._warn_userinfo_urls`; `health._endpoint_credentials`.
+it to the user and password fields, and Jen keeps dialing it as written (the credential rule is not touched). Every sentence that shows an address goes through `auth.shown_url` (LEAK-001). What LEAVES the box carries no user-info at all (Q221): every member of the support bundle is made by `support_bundle._json` or `redact_ini_text`, and both remove the user-info of every address - a value by `secret_keys.without_userinfo` (split at the authority's last `@`, so a password with a quote, a space or an `@` in it goes too), text by `secret_keys.scrub_urls` - and the compare's sentence prints a leaf the same way.
+**Established.** Q190 (beta.20's review: `valid_api_url` accepted user-info and Rotate's probe-failure flash, the connection form's audit row and the authoring flash printed the address as typed). Q221 (AE7: the bundle exported a legacy `api_url` in the clear beside a masked `api_pass`, and its own test asserted the address passed through; AE12).
+**Enforced at.** `auth.valid_api_url` / `userinfo_sentence` / `shown_url` / `scrub_urls` / `urls_with_userinfo`; `config._warn_userinfo_urls`; `health._endpoint_credentials`. `secret_keys.scrub_urls` / `without_userinfo` (the one definition; `auth`'s names delegate); `support_bundle._json` / `_scrubbed` / `redact_ini_text` / `scrub_log_line`; `kea_api_config._leaf`.
 **Tests.**
 - `tests/test_url_never_carries_a_password.py::TestValidApiUrl`
 - `tests/test_url_never_carries_a_password.py::TestLegacyUrls`
 - `tests/test_kea_tls_rotation.py::TestALegacyUrlWithAPasswordNeverReachesText`
 - `tests/test_direct_socket_lock.py::TestALegacyUrlWithAPasswordNeverReachesTheRecoveryLines`
 - `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
+- `tests/test_an_exported_address_carries_no_password.py::TestTheOneDefinition`
+- `tests/test_an_exported_address_carries_no_password.py::TestNoMemberOfTheBundleCarriesAPassword`
+- `tests/test_an_exported_address_carries_no_password.py::TestTheComparesSentence`
 
 ### REMOTE-001 - A TLS or socket operation is one transaction: local state first, every step proved, the restored endpoint answers, every unproved state durable, every target from the configuration, every record the host's own
 **Rule.** (Final form, Q188; the target set and the record added by Q189.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:

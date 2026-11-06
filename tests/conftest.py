@@ -478,6 +478,26 @@ def _reset_capabilities_cache():
     capabilities.invalidate()
 
 
+def clear_kea_health_cache():
+    """`jen.services.kea._HEALTH_CACHE` emptied in place - the body of `_reset_kea_health_cache`, by name so tests/test_cache_resets.py can run it."""
+    from jen.services import kea
+
+    kea._HEALTH_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_kea_health_cache(request):
+    """v7.0.0-beta.7 (Q221, AE2) - `jen.services.kea._HEALTH_CACHE` remembers each server's last `version-get` answer for 120 s, and `/api/v1/health` answers from it; every unit test starts (and
+    ends) with none, so one test's stubbed Kea never answers in the next. The reader never probes on a miss (`cached_kea_health`), so an empty cache costs nothing. The suites that drive a real
+    process are left alone, as `_nav_pill_is_inert` leaves them."""
+    if any(request.node.get_closest_marker(m) for m in ("e2e", "system", "kea_compat", "kea_log", "kea_write")):
+        yield
+        return
+    clear_kea_health_cache()
+    yield
+    clear_kea_health_cache()
+
+
 @pytest.fixture(autouse=True)
 def _reset_log_tail(monkeypatch):
     """v5.68.0-beta.17 (Q152) - jen.services.log_tail keeps one read of a Kea server's log for 3 s per (server, path), shared by every

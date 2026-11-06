@@ -433,11 +433,19 @@ def prune(server_id: int, service: str, keep: int | None = None) -> int:
             row = cur.fetchone()
             if row is None:
                 return 0  # fewer than `keep` rows
+            # (Q221) and never the newest `rendering` row: it is what `kea_api_config.file_proof`'s (R) reads, and with a small `keep` a later capture would push it out - every second change
+            # over the API would then be refused until Kea was restarted
+            cur.execute(
+                "SELECT id FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind='raw' AND source='rendering' ORDER BY id DESC LIMIT 1",
+                (server_id, service),
+            )
+            rendering = cur.fetchone()
+            rendering_id = rendering["id"] if rendering else 0
             # (Q218 D6) and never the settled row whose digest is an in-flight row's BEFORE digest: it is what a settlement proves the file against (`by_digest`)
             cur.execute(
-                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s AND source NOT IN ('pending', 'damaged') "
+                "DELETE FROM kea_config_revisions WHERE server_id=%s AND service=%s AND id < %s AND id <> %s AND source NOT IN ('pending', 'damaged') "
                 "AND sha256 NOT IN (SELECT keep_sha FROM (SELECT sha256 AS keep_sha FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source IN ('pending', 'damaged')) AS in_flight)",
-                (server_id, service, row["id"], server_id, service),
+                (server_id, service, row["id"], rendering_id, server_id, service),
             )
             return cur.rowcount
     except Exception as e:

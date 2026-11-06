@@ -39,6 +39,8 @@ from jen import extensions
 from jen.services import runtime
 from jen.services.secret_keys import (
     is_secret_key,
+    scrub_urls,
+    without_userinfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,12 +90,34 @@ def redact_ini_text(text: str) -> str:
         for key, value in parser.items(section):
             if is_secret_key(key) and value and not _PATH_VALUE_RE.match(value):
                 value = MASK
+            else:
+                value = without_userinfo(
+                    value
+                )  # (Q221, AE7; CRED-005) a legacy address keeps its host and port and never its user name or password
             out.append(f"{key} = {value}")
         out.append("")
     return "\n".join(out)
 
 
+def _address_key(key) -> bool:
+    """Is `key` one whose value is an address (`api_url`, `api6_url`, `api_d2_url`, a Kea `url`)? Such a value is split structurally; any other string is text."""
+    return str(key if key is not None else "").lower().replace("-", "_").endswith("url")
+
+
+def _scrubbed(data, key=None):
+    """`data` with no user-info left in any address, at any depth (Q221, AE7): THE pass every JSON member of the bundle goes through (`_json`), so a section added later is covered by being a
+    member. A string under an address key is a value (`secret_keys.without_userinfo`); any other string is text (`secret_keys.scrub_urls`). Keys, numbers, booleans and None are untouched."""
+    if isinstance(data, dict):
+        return {k: _scrubbed(v, k) for k, v in data.items()}
+    if isinstance(data, (list, tuple)):
+        return [_scrubbed(v, key) for v in data]
+    if isinstance(data, str):
+        return without_userinfo(data) if _address_key(key) else scrub_urls(data)
+    return data
+
+
 def scrub_log_line(line: str) -> str:
+    line = scrub_urls(line)  # (Q221, AE7) before the patterns: an address in a log line never keeps its user-info
     for rx, repl in _LOG_SCRUBS:
         line = rx.sub(repl, line)
     return line
@@ -105,7 +129,7 @@ def scrub_log_text(text: str, max_lines: int = LOG_TAIL_LINES) -> str:
 
 
 def _json(data) -> str:
-    return json.dumps(data, indent=2, sort_keys=True, default=str) + "\n"
+    return json.dumps(_scrubbed(data), indent=2, sort_keys=True, default=str) + "\n"
 
 
 def readme_text(version: str, channel: str, hostname: str, when: str, notes: list[str]) -> str:
@@ -129,6 +153,7 @@ def readme_text(version: str, channel: str, hostname: str, when: str, notes: lis
         "  logs/                    scrubbed tail of the Jen log, or a note if it goes to journald",
         "",
         "What is NOT here: passwords, API keys, TOTP secrets, alert-channel tokens,",
+        "a user name or password inside an address (an address is host and port),",
         "the SSH / mTLS / CA private keys, users, or the config-revision history.",
         "Key FILE PATHS appear; key contents never do.",
     ]

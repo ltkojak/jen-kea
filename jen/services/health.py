@@ -584,7 +584,10 @@ def _kea_write_gate(ctx) -> Check:
     elif held:
         c.status, c.detail = "warn", "; ".join(held)
     else:
-        c.status, c.detail = "ok", f"{on_api} Live API server(s), every gate open"
+        c.status, c.detail = (
+            "ok",
+            f"{on_api} Live API server(s): every gate was open at each server's last check; the file on the host is proved again before every change",
+        )
     return c
 
 

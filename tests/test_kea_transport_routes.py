@@ -246,3 +246,30 @@ class TestTheSettleRouteWorksUnderTheLockAndIsAudited:
         )
         r = logged_in_client.post("/settings/infrastructure/settle-pending-change/3", follow_redirects=True)
         assert r.status_code == 200 and b"in progress" in r.data and b"alert-warning" in r.data
+
+    @pytest.mark.parametrize(
+        ("form", "expected"),
+        [
+            ({}, False),
+            ({"discard_file_edit": "1"}, True),
+            ({"discard_file_edit": "on"}, False),
+            ({"discard_file_edit": ""}, False),
+        ],
+    )
+    def test_the_box_is_the_operators_word_and_only_the_consent_value_is_one(
+        self, logged_in_client, worked, monkeypatch, form, expected
+    ):
+        """Q221 (AE11): the box beside *Settle it now* reaches `settle_pending` as `discard`, only for `write_mode.CONSENT_VALUE`, and the audit row says it was ticked."""
+        from jen.services import write_mode as words
+
+        assert words.CONSENT_VALUE == "1"
+        seen, audits = [], []
+        monkeypatch.setattr(
+            "jen.services.kea_api_config.settle_pending",
+            lambda server, service, **k: seen.append(k) or (["a change was finished now"], True),
+        )
+        monkeypatch.setattr("jen.models.user.audit", lambda *a, **k: audits.append(a))
+        r = logged_in_client.post("/settings/infrastructure/settle-pending-change/3", data=form, follow_redirects=True)
+        assert r.status_code == 200 and seen == [{"discard": expected}]
+        settled = [a for a in audits if a and a[0] == "KEA_PENDING_CHANGE_SETTLED"]
+        assert len(settled) == 1 and settled[0][2].startswith("discard_file_edit ticked; ") is expected

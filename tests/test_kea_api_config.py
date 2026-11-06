@@ -651,6 +651,7 @@ class TestTheModuleIsTheOneSender:
             "re",  # the pool-path rule blanks list indexes
             "pathlib",  # the defaults vectors live beside the code (Q217 AB6)
             "jen.services.secret_keys.is_secret_key",  # the ONE definition of a secret key name: the compare prints a path, never a value under one (LEAK-001)
+            "jen.services.secret_keys.without_userinfo",  # (Q221, AE12) the ONE definition of an address without its user-info: a leaf the compare prints never carries a password; a pure module
             "jen.services.config_revisions",
             "jen.services.kea",
             "jen.services.kea_host",
@@ -2439,33 +2440,59 @@ class TestSecondPassRowsOfBeta5:
         world_.start(world_.ad1_running(fake.running))
         return world_
 
-    # E1 - the gate never refuses on a stale `agree False`
-    def test_e1_a_stored_false_is_asked_again_and_a_restart_since_opens_it(self, w, fake, server):
+    # E1 - a change is never refused on a stale `agree False`: the WRITE PATH reads it again (Q221 moved the re-read out of the gate, which is a read every page makes)
+    @staticmethod
+    def _the_host_answers(monkeypatch):
+        """The helper's `config-write-check`, as a host answers it: the world stands in for the file reads, and the probe asks this too."""
+        monkeypatch.setattr(
+            api._host,
+            "config_write_check",
+            lambda server, service="dhcp4": {
+                "ok": True,
+                "may_write": True,
+                "mode": "0660",
+                "account": {"name": "_kea"},
+                "includes": [],
+            },
+        )
+
+    CONSENTS = [
+        "consent_rendering",
+        "consent_unauthenticated",
+    ]  # the fake daemon has no authentication, and a full re-read says so
+
+    def test_e1_a_stored_false_is_read_again_by_the_write_path_and_a_restart_since_opens_it(
+        self, w, fake, server, monkeypatch
+    ):
+        self._the_host_answers(monkeypatch)
         probes = api.stored_probe(server["id"])
         w.hand_edit(world.without(fake.file, "subnet4", 0, "valid-lifetime"))
         api.store_probe(
             server["id"],
-            {
-                **probes,
-                "agree": False,
-                "agree_at": "at Dhcp4.subnet4[0].valid-lifetime",
-                "consents": ["consent_rendering"],
-            },
+            {**probes, "agree": False, "agree_at": "at Dhcp4.subnet4[0].valid-lifetime", "consents": self.CONSENTS},
         )
-        assert "restart Kea first" in api.probe_gate(
-            server
-        ) or "carries a configuration the daemon is not running" in api.probe_gate(server)
+        assert "carries a configuration the daemon is not running" in api.probe_gate(server)
         w.reload()  # the operator did what the sentence said
+        assert "carries a configuration the daemon is not running" in api.probe_gate(server), (
+            "the gate is a read: it answers from the stored result"
+        )
+        assert api.stored_probe(server["id"])["agree"] is False
+        assert (
+            api.refresh_if_stale(server) is True
+        )  # what the Plan of the next change, and `apply`, ask before the gate
         assert api.probe_gate(server) == ""
         stored = api.stored_probe(server["id"])
         assert stored["agree"] is True and stored["proof"] == "loaded" and "agree_at" not in stored
 
-    def test_e1_a_file_that_is_still_unloaded_keeps_the_gate_closed(self, w, fake, server):
+    def test_e1_a_file_that_is_still_unloaded_keeps_the_gate_closed(self, w, fake, server, monkeypatch):
+        self._the_host_answers(monkeypatch)
         probes = api.stored_probe(server["id"])
         w.hand_edit(world.without(fake.file, "subnet4", 0, "valid-lifetime"))
-        api.store_probe(server["id"], {**probes, "agree": False, "consents": ["consent_rendering"]})
+        api.store_probe(server["id"], {**probes, "agree": False, "consents": self.CONSENTS})
+        assert api.refresh_if_stale(server) is True  # read again, and the answer is still no
         assert "daemon is not running" in api.probe_gate(server)
-        assert api.stored_probe(server["id"])["agree"] is False
+        stored = api.stored_probe(server["id"])
+        assert stored["agree"] is False and stored["proof"] == "none"
 
     # E3 - a refused restore loses nothing
     def test_e3_a_refused_restore_keeps_the_stale_record(self, w, fake, server, store):

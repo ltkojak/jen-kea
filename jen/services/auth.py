@@ -526,16 +526,24 @@ def shown_url(url) -> str:
 def scrub_urls(text) -> str:
     """Q190 (AF2): `text` with the user-info of every URL in it removed (`https://u:p@h:8004/x` -> `https://h:8004/x`). For text Jen did not write - a `requests` exception's message, a transport's
     answer - that may carry the address as it was typed. Idempotent; a text with no URL comes back unchanged."""
-    import re
+    from jen.services import secret_keys
 
-    # (second pass, finding 5: the user-info runs to the LAST '@' before the path - a password may contain one - so the pattern is greedy up to a delimiter)
-    return re.sub(r"(?i)\b(https?://)[^\s/?#'\"<>]*@", r"\1", str(text if text is not None else ""))
+    return secret_keys.scrub_urls(
+        text
+    )  # (Q221, AE7) the one definition is the pure module's: an address ends at whitespace, `/`, `?` or `#`, and a quote is not a delimiter
+
+
+def without_userinfo(value) -> str:
+    """Q221 (AE7; CRED-005): a value that IS one address, without its user-info, whatever characters the user-info carries - `secret_keys.without_userinfo`. The page's `no_userinfo` filter."""
+    from jen.services import secret_keys
+
+    return secret_keys.without_userinfo(value)
 
 
 def register_url_filters(jinja_env) -> None:
     """The two page filters of Q190 (AF2): `shown_url` - an address as scheme, host and port - and `no_userinfo` - a saved address for a form field, without a legacy password."""
     jinja_env.filters["shown_url"] = shown_url
-    jinja_env.filters["no_userinfo"] = lambda value: scrub_urls(value) if value else ""
+    jinja_env.filters["no_userinfo"] = lambda value: without_userinfo(value) if value else ""
 
 
 def userinfo_legacy_note(section: str, key: str) -> str:

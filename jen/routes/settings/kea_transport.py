@@ -109,13 +109,17 @@ def settle_pending_change(server_id):
     if server is None:
         return _gone()
     name = server.get("name") or str(server_id)
+    # (Q221, AE11) the box beside the button: the operator's word, on this act, that the file's edit is discarded (it is kept in Config history) and the change is kept
+    discard = request.form.get("discard_file_edit") == __write_mode.CONSENT_VALUE
     try:
         with __cs.change_lock():
-            lines, settled = __api.settle_pending(server, "dhcp4")
+            lines, settled = __api.settle_pending(server, "dhcp4", discard=discard)
     except __cs.ChangeBusy:
         flash(__cs.BUSY_SENTENCE, "error")
         return _back()
-    __user.audit("KEA_PENDING_CHANGE_SETTLED", name, "; ".join(lines)[:500])
+    __user.audit(
+        "KEA_PENDING_CHANGE_SETTLED", name, (("discard_file_edit ticked; " if discard else "") + "; ".join(lines))[:500]
+    )
     __caps.invalidate(server_id)
     flash(
         f"{name}: {' '.join(lines)}", "success" if settled else "warning"

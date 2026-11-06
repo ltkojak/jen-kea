@@ -209,12 +209,18 @@ class TestVersion:
 
 
 class TestBuildBumpReminder:
-    """v5.66.0-beta.2 (Q104), made strict by Q218 BH6 f (AC20), made a HISTORY by Q219 BI6 a (AD16) - tests/kea_helper_build.json is a list of {"build": N, "sha256": <hash of jen-kea-helper at that build>}.
-    The LAST entry's sha MUST equal the file's and its build MUST equal HELPER_BUILD, so EVERY change to `jen-kea-helper` fails here until the pin is moved; builds strictly increase and no two entries share
-    a build or a sha, so moving the pin means a NEW entry with a NEW build - never the last entry's sha moved in place under the same build, which the strict pin of beta.4 accepted. `RELEASED` carries the sha
-    of every build that shipped in a tag (21: `git show v7.0.0-beta.4:jen-kea-helper`), so a released entry cannot be rewritten either. A helper change in a later Q adds its entry in the SAME commit."""
+    """v5.66.0-beta.2 (Q104), made strict by Q218 BH6 f (AC20), a HISTORY since Q219 BI6 a (AD16), ONE RULE since Q221 (AE1) - tests/kea_helper_build.json is a list of
+    {"build": N, "sha256": <hash of jen-kea-helper at that build>, "since": <the Jen version that first carried it>}. `_violations` is the whole rule, as sentences: the LAST entry's sha is the file's
+    and its build is HELPER_BUILD, so EVERY change to `jen-kea-helper` fails here until the pin is moved; builds strictly increase and no two entries share a build or a sha; an entry named in
+    `RELEASED` keeps the sha it shipped with; and an entry whose `since` is an EARLIER version than this tree's must be named in `RELEASED` - so the release after a helper change cannot be cut until
+    the build that shipped is frozen, and a sha can never again be moved in place under a build a host may have installed (7.0.0-beta.6 shipped build 22 with `RELEASED` naming only 21). A helper
+    change in a later Q adds its entry, with `since` set to the version that Q ships as, in the SAME commit; the first release commit after it adds the build to `RELEASED`."""
 
-    RELEASED = {21: "0cb830fcf281e8b1f7ff916c940afa6de480c51cffdf80a4f660f71b37f85274"}
+    RELEASED = {
+        21: "0cb830fcf281e8b1f7ff916c940afa6de480c51cffdf80a4f660f71b37f85274",
+        22: "58f1f4d241851f9f1181259f513763b05815a65eebe97478932e93c9dd79b5d0",
+    }
+    A, B, C = "a" * 64, "b" * 64, "c" * 64
 
     @staticmethod
     def _history():
@@ -222,39 +228,169 @@ class TestBuildBumpReminder:
             (pathlib.Path(__file__).resolve().parent / "kea_helper_build.json").read_text(encoding="utf-8")
         )
 
-    def test_the_last_entry_is_the_file_and_the_build(self, helper):
+    @staticmethod
+    def _violations(history, file_sha, helper_build, released, jen_version):
+        """Every way the pin is wrong, as sentences; [] when it is right. Pure, so the rule is tested over made-up histories and never only over the one on disk."""
+        from jen.version import parse_version
+
+        if not (isinstance(history, list) and history and all(isinstance(h, dict) for h in history)):
+            return ["the pin is a history: a non-empty list of {build, sha256, since}"]
+        out = []
+        builds = [h.get("build") for h in history]
+        shas = [h.get("sha256") for h in history]
+        if builds != sorted(set(builds)):
+            out.append("builds must strictly increase, none twice")
+        if len(set(shas)) != len(shas):
+            out.append("no two builds share a sha: a build is a CHANGE of the file")
+        last = history[-1]
+        if last.get("sha256") != file_sha:
+            out.append(
+                f"jen-kea-helper changed (sha256 {file_sha} != pinned {last.get('sha256')}): bump HELPER_BUILD and ADD an entry to tests/kea_helper_build.json "
+                "(a new build, its sha256 and the version it ships in) in the same commit"
+            )
+        if last.get("build") != helper_build:
+            out.append(
+                f"the pin says build {last.get('build')} and HELPER_BUILD reads {helper_build} - the two must never disagree"
+            )
+        for h in history:
+            build = h.get("build")
+            if build in released:
+                if released[build] != h.get("sha256"):
+                    out.append(f"build {build} shipped with {released[build]}; its entry is never rewritten")
+            elif parse_version(h.get("since")) < parse_version(jen_version):
+                out.append(
+                    f"build {build} has been carried since {h.get('since') or 'a version the entry does not name'}, before {jen_version}: add it to RELEASED with the sha256 that shipped"
+                )
+        for build in released:
+            if build not in builds:
+                out.append(f"RELEASED names build {build} and the history has no entry for it")
+        return out
+
+    def test_the_shipped_pin_is_right(self, helper):
         import hashlib
 
-        history = self._history()
-        assert isinstance(history, list) and history, "the pin is a history: a list of {build, sha256}"
-        pin = history[-1]
-        actual_sha = hashlib.sha256(_SCRIPT_PATH.read_bytes()).hexdigest()
-        assert actual_sha == pin["sha256"], (
-            f"jen-kea-helper changed (sha256 {actual_sha} != pinned {pin['sha256']}): bump HELPER_BUILD and ADD an entry to tests/kea_helper_build.json "
-            "(a new build AND its sha256) in the same commit"
-        )
-        assert pin["build"] == helper.HELPER_BUILD, (
-            f"the pin says build {pin['build']} and HELPER_BUILD reads {helper.HELPER_BUILD} - the two must never disagree"
-        )
+        from jen import JEN_VERSION
 
-    def test_builds_strictly_increase_and_no_build_or_sha_repeats(self):
-        history = self._history()
-        builds = [h["build"] for h in history]
-        shas = [h["sha256"] for h in history]
-        assert builds == sorted(set(builds)), "builds must strictly increase, none twice"
-        assert len(set(shas)) == len(shas), "no two builds share a sha: a build is a CHANGE of the file"
+        file_sha = hashlib.sha256(_SCRIPT_PATH.read_bytes()).hexdigest()
+        assert self._violations(self._history(), file_sha, helper.HELPER_BUILD, self.RELEASED, JEN_VERSION) == []
 
-    def test_a_released_build_keeps_its_released_sha(self):
-        by_build = {h["build"]: h["sha256"] for h in self._history()}
-        for build, sha in self.RELEASED.items():
-            assert by_build.get(build) == sha, f"build {build} shipped with {sha}; its entry is never rewritten"
+    @pytest.mark.parametrize(
+        ("name", "history", "file_sha", "build", "released", "version", "says"),
+        [
+            (
+                "the file changed and the pin was not touched",
+                [{"build": 21, "sha256": A, "since": "7.0.0-beta.3"}],
+                B,
+                21,
+                {21: A},
+                "7.0.0-beta.7",
+                "jen-kea-helper changed",
+            ),
+            (
+                "AD16 / AE1: the last entry's sha moved in place under a build that has shipped",
+                [
+                    {"build": 21, "sha256": A, "since": "7.0.0-beta.3"},
+                    {"build": 22, "sha256": C, "since": "7.0.0-beta.5"},
+                ],
+                C,
+                22,
+                {21: A, 22: B},
+                "7.0.0-beta.7",
+                "build 22 shipped with",
+            ),
+            (
+                "the same move while RELEASED has not been given the build: the version says it shipped",
+                [
+                    {"build": 21, "sha256": A, "since": "7.0.0-beta.3"},
+                    {"build": 22, "sha256": C, "since": "7.0.0-beta.5"},
+                ],
+                C,
+                22,
+                {21: A},
+                "7.0.0-beta.7",
+                "add it to RELEASED",
+            ),
+            (
+                "an entry that names no version is one that shipped",
+                [{"build": 21, "sha256": A}],
+                A,
+                21,
+                {},
+                "7.0.0-beta.7",
+                "add it to RELEASED",
+            ),
+            (
+                "the build did not move with the file",
+                [
+                    {"build": 21, "sha256": A, "since": "7.0.0-beta.3"},
+                    {"build": 22, "sha256": B, "since": "7.0.0-beta.7"},
+                ],
+                B,
+                21,
+                {21: A},
+                "7.0.0-beta.7",
+                "the two must never disagree",
+            ),
+            (
+                "a build repeated",
+                [
+                    {"build": 21, "sha256": A, "since": "7.0.0-beta.3"},
+                    {"build": 21, "sha256": B, "since": "7.0.0-beta.7"},
+                ],
+                B,
+                21,
+                {21: A},
+                "7.0.0-beta.7",
+                "builds must strictly increase",
+            ),
+            (
+                "a sha repeated under a new build",
+                [
+                    {"build": 21, "sha256": A, "since": "7.0.0-beta.3"},
+                    {"build": 22, "sha256": A, "since": "7.0.0-beta.7"},
+                ],
+                A,
+                22,
+                {21: A},
+                "7.0.0-beta.7",
+                "no two builds share a sha",
+            ),
+            (
+                "a released entry rewritten",
+                [
+                    {"build": 21, "sha256": C, "since": "7.0.0-beta.3"},
+                    {"build": 22, "sha256": B, "since": "7.0.0-beta.7"},
+                ],
+                B,
+                22,
+                {21: A},
+                "7.0.0-beta.7",
+                "build 21 shipped with",
+            ),
+            (
+                "a released entry removed",
+                [{"build": 22, "sha256": B, "since": "7.0.0-beta.7"}],
+                B,
+                22,
+                {21: A},
+                "7.0.0-beta.7",
+                "the history has no entry for it",
+            ),
+            ("not a history", {"build": 21, "sha256": A}, A, 21, {}, "7.0.0-beta.7", "the pin is a history"),
+        ],
+    )
+    def test_a_pin_that_cheats_is_named(self, name, history, file_sha, build, released, version, says):
+        found = self._violations(history, file_sha, build, released, version)
+        assert any(says in line for line in found), (name, found)
 
-    def test_moving_the_last_entry_in_place_is_caught(self, helper):
-        """The beta.4 pin accepted a sha moved in place under the same build: here a history whose newest entry carries the OLD build with a NEW sha has two entries with one build."""
-        history = self._history()
-        moved = [*history[:-1], {"build": history[-2]["build"], "sha256": history[-1]["sha256"]}]
-        builds = [h["build"] for h in moved]
-        assert builds != sorted(set(builds))
+    @pytest.mark.parametrize("version", ["7.0.0-beta.6", "7.0.0-beta.7"])
+    def test_a_build_of_the_version_being_built_may_still_move(self, version):
+        """Nobody has installed it: an entry whose `since` is this tree's version, or the one this tree will ship as, need not be in RELEASED yet."""
+        history = [
+            {"build": 21, "sha256": self.A, "since": "7.0.0-beta.3"},
+            {"build": 22, "sha256": self.C, "since": "7.0.0-beta.7"},
+        ]
+        assert self._violations(history, self.C, 22, {21: self.A}, version) == []
 
 
 class TestHelperVersionEnvelope:

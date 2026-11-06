@@ -352,6 +352,14 @@ def _leaf(value: object) -> str:
         return f"an object with {len(value)} key{'' if len(value) == 1 else 's'}"  # (a container is never printed: it may hold a secret the path does not name; Q219 BI6 c: plural by count)
     if isinstance(value, list):
         return f"a list of {len(value)} {'entry' if len(value) == 1 else 'entries'}"
+    if isinstance(value, str):
+        from jen.services.secret_keys import (
+            without_userinfo,
+        )  # (lazy, pure) the one definition; this module never imports `auth`, which holds the SSH helpers
+
+        value = without_userinfo(
+            value
+        )  # (Q221, AE12) a key Kea does not call a secret may still hold an address with a password in it
     text = json.dumps(value, sort_keys=True, default=str)
     return text if len(text) <= 60 else text[:59] + "…"
 
@@ -687,6 +695,11 @@ def file_proof(server: dict, service: str = "dhcp4", *, planned_sha: str | None 
         logger.warning("kea_api_config: file_proof could not name a path for %s: %s", sid, type(e).__name__)
     at = f" ({where})" if where else ""
     way_out = "restart Kea there (or `config-reload`) to load it, or discard it from the server's Write mode card"
+    # (Q221, AE11) with a change unsettled the card's discard is refused (`pending_block`), so the sentence names the control that is offered: the box beside *Settle it now*
+    settle_way_out = (
+        "restart Kea there (or `config-reload`) to run the file instead of the change, "
+        "or tick the discard box beside Settle it now on the server's Write mode card to keep the change"
+    )
     written = (
         f"the file on {host} was written at {_utc(mtime)}"
         if mtime is not None
@@ -699,7 +712,7 @@ def file_proof(server: dict, service: str = "dhcp4", *, planned_sha: str | None 
     elif planned_sha:
         why = (
             f"the file on {host} is not the file this change was planned over (written at {_utc(mtime)}, the daemon last loaded its configuration at {_utc(loaded_at)}); "
-            f"the daemon has not loaded that edit - {way_out}"  # (no path: against a daemon that runs the change, the first difference is the change itself)
+            f"the daemon has not loaded that edit - {settle_way_out}"  # (no path: against a daemon that runs the change, the first difference is the change itself)
         )
     elif pending_row is not None or pending_unreadable:
         why = (
@@ -926,7 +939,7 @@ def _classify_pending(server: dict, service: str, cfg: dict, digest: str, notes:
         )
 
 
-def settle_pending(server: dict, service: str = "dhcp4") -> tuple[list[str], bool]:
+def settle_pending(server: dict, service: str = "dhcp4", *, discard: bool = False) -> tuple[list[str], bool]:
     """Settle a pending row by content NOW - the two places that may (Q216 AA19), both under `kea_changeset.change_lock`: this, called by the card's "settle" route, and `pending_block`, asked by the
     Plan of a change set and by `apply`. `(lines, settled)`: the lines say what happened, `settled` is True only when a row was finished or removed (Q217 AB13)."""
     notes: list[str] = []
@@ -934,14 +947,14 @@ def settle_pending(server: dict, service: str = "dhcp4") -> tuple[list[str], boo
     if cfg is None:
         return [f"{_name(server)} did not answer ({why}); nothing was settled"], False
     try:
-        _cfg, _digest, settled = _reconcile_pending(server, service, cfg, digest, notes)
+        _cfg, _digest, settled = _reconcile_pending(server, service, cfg, digest, notes, discard=discard)
     except _rev.RevisionStoreUnreadable:
         return [unreadable_sentence(server)], False
     return notes or ["there is no pending change to settle"], settled
 
 
 def _reconcile_pending(
-    server: dict, service: str, cfg: dict, digest: str, notes: list | None
+    server: dict, service: str, cfg: dict, digest: str, notes: list | None, *, discard: bool = False
 ) -> tuple[dict, str, bool]:
     """If Jen died between `config-set` and the verify, the next change finds a `pending` row and settles it by CONTENT (Jen cannot compute Kea's digest, so a digest alone cannot say
     whose configuration runs): equal to the candidate -> that change is live, `config-write` is sent (idempotent) and verified, the row becomes `jen`; its digest equal to the row's BEFORE
@@ -1009,7 +1022,9 @@ def _reconcile_pending(
                     + NO_PLANNED_SENTENCE.format(host=server.get("name") or server.get("ssh_host") or "the host")
                 )
             return cfg, digest, False
-        wrote = write_file(server, service, planned_sha=row.get("file_sha256"))
+        # (Q221, AE11) `discard` is the operator's word on THIS settlement (the box beside *Settle it now*): the capturing read has put the file's edit in Config history, then the daemon's
+        # configuration - the change - is written over it. Only `settle_pending` passes it; `pending_block` (the Plan, `apply`, the switch) never does
+        wrote = write_file(server, service, planned_sha=row.get("file_sha256"), discard=discard)
         if wrote.get("code") == "unloaded-edit":
             if notes is not None:
                 notes.append(f"a change of {at} is live and its file write waits: {wrote.get('detail')}")
@@ -1215,6 +1230,9 @@ def apply(
         if window:
             return _result(False, "investigation-on", window)
     # (1b) no write without the probe's facts, the operator's consent and a daemon that is not known to refuse its file
+    refresh_if_stale(
+        server, service
+    )  # (Q221, AE8) a caller with no Plan - a restore, an import - is never refused on a stored fact a restart has already answered
     gated = probe_gate(server, source)
     if gated:
         return _result(False, "guard", gated)
@@ -1629,7 +1647,9 @@ def consent_allowed(name: str, facts: dict | None, consents, *, has_ssh: bool, s
 def probe_gate(server: dict, source: str = "jen") -> str:
     """NO API write without it: a sentence for a server whose stored result is absent, older than 7 days, has `config_api` false, carries no `consented_at` (the operator's named consent, from
     the card), carries a fact the consent given does not cover (a refresh found an include, or the endpoint lost its authentication - Q216 AA12), or remembers a refused write (BB9 a); "" otherwise. A
-    server added through Settings with `api` written by the save route therefore cannot be written to until its operator has read the probe's facts once: the probe is a click, the facts are the gate."""
+    server added through Settings with `api` written by the save route therefore cannot be written to until its operator has read the probe's facts once: the probe is a click, the facts are the gate.
+    A READ (Q221, AE8): a settings read and pure rules - it never asks Kea or a host and never writes the stored result, because every page that prints the badge derives it from this. The write path
+    refreshes a stored fact before it asks (`refresh_if_stale`), and the file itself is judged live, there, by `file_proof`."""
     stored = stored_probe(server.get("id"))
     if not stored:
         return PROBE_SENTENCE
@@ -1647,10 +1667,6 @@ def probe_gate(server: dict, source: str = "jen") -> str:
         return f"changes over the API to {_name(server)} have not been allowed yet - read the facts and allow them from the server's card"
     # the consent on record covers the facts it was given for; a stored result from before the consents were recorded (7.0.0-beta.1) counts as having been given all of them
     given = stored.get("consents", LEGACY_CONSENTS)
-    if _has_ssh(server) and stored.get("agree") is False and "discard_file_edit" not in given:
-        stored = _reprove(
-            server, stored
-        )  # (Q219 E1) a restart or a reload since the check may have made the file the daemon's: the gate never refuses on a stale fact
     uncovered = consent_allowed(_name(server), stored, given, has_ssh=_has_ssh(server), strict=False)
     if uncovered:
         prefix = f"{_name(server)}: "
@@ -1660,41 +1676,6 @@ def probe_gate(server: dict, source: str = "jen") -> str:
     return (
         "" if source in ("rollback", "restore") else refusal_sentence(server)
     )  # a rollback puts back a change that DID stand on this server, and a restore is the way out of a REFUSED write (Q216 AA14, Q219 BI2 d): a remembered refusal must not stop either. A restart of Kea (or a reload of its configuration) is the way out of an UNLOADED edit - the attention note names which
-
-
-def _reprove(server: dict, stored: dict) -> dict:
-    """The stored readiness facts of a server whose `agree` is False, with the LIVE proof asked again (Q219 E1): a hand edit the operator then restarted Kea over is a file the daemon has loaded, and the
-    gate must not keep refusing for up to a day on a fact the operator has already answered - an admin cannot press *Check readiness*. A proof that holds opens `agree` (and the stored facts are
-    refreshed, best effort); one that does not, or cannot be asked, leaves the stored fact as it was. A read: no history is captured."""
-    sid = server.get("id")
-    planned = None
-    if sid is not None:
-        try:
-            planned = (_rev.pending(sid, "dhcp4") or {}).get("file_sha256")
-        except _rev.RevisionStoreUnreadable:
-            planned = None
-    try:
-        refusal, proof = _ask_the_file(server, "dhcp4", planned_sha=planned, capture=False)
-    except (
-        Exception
-    ) as e:  # a proof that could not be asked leaves the fact as stored: the gate stays closed (fail closed)
-        logger.warning(
-            "kea_api_config: the live proof for the gate of %s could not be asked: %s", sid, type(e).__name__
-        )
-        return stored
-    if refusal is not None or proof["how"] not in ("rendering", "planned", "loaded"):
-        return stored
-    fresh = {k: v for k, v in stored.items() if k != "agree_at"}
-    fresh.update(
-        {
-            "agree": True,
-            "proof": proof["how"],
-            "file_written_at": proof["mtime"],
-            "daemon_loaded_at": proof["loaded_at"],
-        }
-    )
-    store_probe(sid, fresh)
-    return fresh
 
 
 def refusal_sentence(server: dict) -> str:
@@ -1774,10 +1755,16 @@ def refresh_probe(server: dict, service: str = "dhcp4") -> bool:
 
 
 def refresh_if_stale(server: dict, service: str = "dhcp4") -> bool:
-    """The change set's Plan: facts older than a day are refreshed before the gate is asked."""
+    """The WRITE PATH's refresh, asked before the gate by the change set's Plan and by `apply`: facts older than a day are re-read, and so is a stored `agree` of False on a server with an SSH host
+    (Q219 E1, moved here from the gate by Q221, AE8): a restart or a reload since the check may have made the file the daemon's, and a change must not be refused on a fact the operator has already
+    answered. One `at` covers every fact a refresh stores (AE10). True when the stored facts were replaced."""
     stored = stored_probe(server.get("id"))
-    age = _age_days((stored or {}).get("at"))
-    if not stored or age is None or age * 24 < PROBE_REFRESH_AFTER_HOURS:
+    if not stored:
+        return False
+    age = _age_days(stored.get("at"))
+    stale = age is not None and age * 24 >= PROBE_REFRESH_AFTER_HOURS
+    unloaded = _has_ssh(server) and stored.get("agree") is False
+    if not (stale or unloaded):
         return False
     return refresh_probe(server, service)
 

@@ -22,6 +22,10 @@ One step (7.0.0-beta.1). There is no Jen 6: the number is 7 because this release
 
 **The Kea host helper has a new build (19, and 20 from 7.0.0-beta.2).** Build 19 adds the three ops behind the card's grant buttons, keeps verifying after a restore of investigation logging, and never makes a backup group-writable. Press **Update helper** on a host only if you want the grant; the legacy `python3` path has no engine for these ops. **Build 20 fixes a race in build 19's re-verify** (see 7.0.0-beta.2 below): press **Update helper** on any host that uses investigation logging.
 
+## 7.0.0-beta.7: an address leaves the box without its password, and the write gate is a read
+
+Nothing to do on the upgrade: no migration, no new setting, no sudoers line and no helper build (the helper is build 22 still), and no server changes its write mode. What changes: a support bundle never carries the user name or password of an address (if a saved `api_url` still has one inside it, Health's "Every endpoint has a credential" row names it - move it to the user and password fields; **a bundle downloaded from an earlier release on such a box carries that password, so treat it as a secret**); a page no longer reaches out to a Kea host to print the Live API badge; and the alert for a change left half-done carries a box beside *Settle it now* that keeps the change when the file was edited by hand afterward.
+
 **7.0.0-beta.6** is 7.0.0-beta.5's product: 7.0.0-beta.5 was tagged and never released (its release run failed on a leak between two tests of the suite). Everything under 7.0.0-beta.5 below applies to it unchanged.
 
 ## 7.0.0-beta.5: the file is proved by the daemon's own clock

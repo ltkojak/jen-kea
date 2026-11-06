@@ -1,10 +1,12 @@
 [
   {
     "build": 21,
-    "sha256": "0cb830fcf281e8b1f7ff916c940afa6de480c51cffdf80a4f660f71b37f85274"
+    "sha256": "0cb830fcf281e8b1f7ff916c940afa6de480c51cffdf80a4f660f71b37f85274",
+    "since": "7.0.0-beta.3"
   },
   {
     "build": 22,
-    "sha256": "58f1f4d241851f9f1181259f513763b05815a65eebe97478932e93c9dd79b5d0"
+    "sha256": "58f1f4d241851f9f1181259f513763b05815a65eebe97478932e93c9dd79b5d0",
+    "since": "7.0.0-beta.5"
   }
 ]

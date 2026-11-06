@@ -662,3 +662,44 @@ class TestTheRestoreRouteIsHeldToItsSiblingsGate:
         calls = self._stub(monkeypatch)
         logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
         assert calls["test"][0]["tls_paths"] == [] and calls["apply"][0]["tls_paths"] == []
+
+
+class TestPruneKeepsTheNewestRendering:
+    """Q221 - the newest `rendering` row is what `kea_api_config.file_proof`'s (R) reads: the file Kea wrote after a change over the API. With `config_revision_keep` at 1 (the settings form allows
+    1 to 1000) a later capture pushed it out, and every second change over the API was then refused until Kea was restarted. The prune never takes it; an OLDER rendering goes like any row."""
+
+    def test_the_newest_rendering_survives_a_keep_of_one(self):
+        _clean()
+        rendering = rev.record(
+            _SID, "dhcp4", _cfg(1), "file-sha-1", "kea wrote its file", hash_kind="raw", source="rendering"
+        )
+        for n in range(2, 6):
+            rev.record(_SID, "dhcp4", _cfg(n), f"digest-{n}", f"read {n}", hash_kind="kea", source="external")
+        rev.prune(_SID, "dhcp4", keep=1)
+        assert (rev.latest_rendering(_SID, "dhcp4") or {}).get("id") == rendering
+        kept = [r["id"] for r in rev.list_revisions(_SID, "dhcp4")]
+        assert rendering in kept and len(kept) == 2, kept  # the newest settled row, and the newest rendering
+        _clean()
+
+    def test_an_older_rendering_goes_like_any_row(self):
+        _clean()
+        older = rev.record(
+            _SID, "dhcp4", _cfg(1), "file-sha-1", "kea wrote its file", hash_kind="raw", source="rendering"
+        )
+        rev.record(_SID, "dhcp4", _cfg(2), "digest-2", "a change", hash_kind="kea", source="jen")
+        newer = rev.record(
+            _SID, "dhcp4", _cfg(3), "file-sha-3", "kea wrote its file", hash_kind="raw", source="rendering"
+        )
+        rev.record(_SID, "dhcp4", _cfg(4), "digest-4", "read", hash_kind="kea", source="external")
+        rev.prune(_SID, "dhcp4", keep=1)
+        kept = [r["id"] for r in rev.list_revisions(_SID, "dhcp4")]
+        assert newer in kept and older not in kept and len(kept) == 2, kept
+        _clean()
+
+    def test_no_rendering_at_all_prunes_as_before(self):
+        _clean()
+        for n in range(1, 5):
+            rev.record(_SID, "dhcp4", _cfg(n), f"digest-{n}", f"read {n}", hash_kind="kea", source="external")
+        assert rev.prune(_SID, "dhcp4", keep=2) == 2
+        assert len(rev.list_revisions(_SID, "dhcp4")) == 2
+        _clean()
