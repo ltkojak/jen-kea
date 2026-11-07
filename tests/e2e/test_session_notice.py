@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect
 
 from tests.e2e.conftest import ADMIN_PASSWORD, ADMIN_USERNAME, login
@@ -404,8 +405,10 @@ class TestTwoTabsOfOneSignIn:
         )  # the second tab's own first paint reaches this one through the storage event: read the state AFTER it settles
         st = page.evaluate("window.jenSessionWatch.state()")
         later = st["expires"] + 7200
+        # Q215 (Z2): a value written by a tab carries `<deadline>:<clock>:<state>` - the watch ignores one without its state
+        active = _active(page)
         second.evaluate(
-            f"localStorage.setItem('jen-session-expires:0123456789abcdef', '{later}:{st['lastServerNow'] + 5}')"
+            f"localStorage.setItem('jen-session-expires:0123456789abcdef', '{later}:{st['lastServerNow'] + 5}:{active}')"
         )
         page.wait_for_timeout(500)
         assert page.evaluate("window.jenSessionWatch.expires()") == st["expires"], (
@@ -413,7 +416,9 @@ class TestTwoTabsOfOneSignIn:
         )
         # the positive control: the same write under THIS sign-in's key is read, so the line above is not vacuous
         login_id = page.locator("body").get_attribute("data-session-login")
-        second.evaluate(f"localStorage.setItem('jen-session-expires:{login_id}', '{later}:{st['lastServerNow'] + 5}')")
+        second.evaluate(
+            f"localStorage.setItem('jen-session-expires:{login_id}', '{later}:{st['lastServerNow'] + 5}:{active}')"
+        )
         page.wait_for_function("(d) => window.jenSessionWatch.expires() > d", arg=st["expires"])
         second.close()
 
@@ -474,7 +479,12 @@ class TestAPageThatReloadsItselfLeavesTheDialogAlone:
         page.evaluate("window.__sentinel = 1")
 
     def _age(self, page, ms):
-        page.wait_for_function(f"performance.now() >= {ms}", polling=250, timeout=ms + 15000)
+        """Wait until the page is `ms` old. Polled with `evaluate`, not `wait_for_function` with a string: the page's CSP forbids the `eval` that one runs on."""
+        for _ in range((ms + 15_000) // 250):
+            if page.evaluate("performance.now()") >= ms:
+                return
+            page.wait_for_timeout(250)
+        raise AssertionError(f"the page never reached age {ms} ms")
 
     def test_the_servers_page_does_not_reload_under_the_dialog(self, page, base_url):
         self._servers(page, base_url)
@@ -497,4 +507,11 @@ class TestAPageThatReloadsItselfLeavesTheDialogAlone:
     def test_the_control_reloads_within_forty_seconds(self, page, base_url):
         """Without the dialog the same page reloads itself on schedule: the sentinel is gone by then, so the test above proves the dialog is the reason and not a page that never reloads."""
         self._servers(page, base_url)
-        page.wait_for_function("window.__sentinel === undefined", polling=500, timeout=40_000)
+        for _ in range(80):
+            try:
+                if page.evaluate("window.__sentinel === undefined"):
+                    return
+            except PlaywrightError:  # the reload is in flight: the old document is gone
+                pass
+            page.wait_for_timeout(500)
+        raise AssertionError("the Servers page never reloaded itself in 40 s")
