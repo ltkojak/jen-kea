@@ -281,7 +281,8 @@ class TestThePageLinksEncodeTheSort:
     def test_every_per_page_in_a_link_is_encoded(self, name):
         """Q215 (Z3): `per_page` was concatenated raw into twenty links (leases 12, reservations 10, devices 2 after the fix); it is `|urlencode`d at every one."""
         text = pathlib.Path("templates", name).read_text(encoding="utf-8")
-        assert "per_page={{ per_page }}" not in text and "per_page=' ~ per_page ~" not in text, name
+        assert not re.search(r"per_page=\{\{ per_page \}\}", text), name
+        assert not re.search(r"per_page=' ~ per_page\b", text), name
         assert "per_page|urlencode" in text, name
 
     @pytest.mark.parametrize("path", sorted(TestAnUnknownSortStillSaysWhichColumnIsSorted.DEFAULTS))

@@ -27,6 +27,8 @@
     <div class="code">{{ code }}</div>
     <div class="msg">{{ message }}</div>
     {# Q215 (Z6): a pending field error or flash is consumed by the next FULL page whatever it is (FIELD-001: a message never outlives one full page); this page has no field to put it under, so it prints plain, as login, force_password_change and mfa_challenge do #}
+    {# only a navigation consumes them: an htmx swap or a fetch (a status poll, a Stay signed in click) that gets this page is not a page anyone reads, and would eat a message meant for the next one #}
+    {% if not request.headers.get('HX-Request') and request.headers.get('Sec-Fetch-Mode', 'navigate') in ('navigate', 'nested-navigate') %}
     {% for field, text, form_path in (take_field_errors() if take_field_errors is defined else []) %}
     <div class="alert">{{ text }}</div>
     {% endfor %}
@@ -35,6 +37,7 @@
     <div class="alert {% if category == 'warning' %}alert-warning{% endif %}">{{ text }}</div>
     {% endfor %}
     {% endwith %}
+    {% endif %}
     <a href="/" class="btn">← Back to Dashboard</a>
     {% if code == 500 %}
     <div class="hint">Check Jen logs: <code>sudo journalctl -u jen -n 30</code></div>
