@@ -122,13 +122,17 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
             if sid is not None
             else None
         )
-        _api.record_rendering_after_write(
+        rendering_recorded = _api.record_rendering_after_write(
             server, SERVICE, f"transport switched {current} -> api by {actor}"
         )  # (Q218 D8, Q219) Jen's own rendering is not "changed outside Jen", and it is the file `file_proof`'s (R) accepts
         # (Q219 BI3 a, AD2) the act itself changed the facts: the file IS the daemon's rendering now. The consent is written over THESE facts, never over the ones read before the write
         facts = _api.probe(server, SERVICE)
     else:
         revision = None
+        rendering_recorded = True
+    # (Q223, AH6) a rendering row the store refused is the one fact that closes the gate this act opens (the re-probe finds a file written after the daemon's last load and no row to prove it by):
+    # the switch says so in its own line instead of an unqualified success
+    not_recorded = "" if rendering_recorded else f" ({_api.RENDERING_NOT_RECORDED.format(host=name)})"
     # the operator's consent is on record from this moment: the gate in `apply` reads it
     # (Q218 BH3 a, AC4) what is USED is what the facts the switch was given for called for - `consents_called_for` is the one table - never every name the form happened to send: a stray box is
     # dropped and named. (Q219 Decided 7) what is STORED is what the facts AFTER the act still call for: a consent the act used up (the discard) is never left on record to open the gate on a later edit
@@ -154,9 +158,12 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
             )
         return _done(line, revision=revision, discarded=wrote_a_file, consents=used, ignored=ignored)
     return _done(
-        f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
-        if revision
-        else f"{name}: switched to Live API; Kea rendered its file",
+        (
+            f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
+            if revision
+            else f"{name}: switched to Live API; Kea rendered its file"
+        )
+        + not_recorded,
         revision=revision,
         consents=used,
         ignored=ignored,
@@ -187,10 +194,15 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         if "discard_file_edit" not in consents:
             # (Q222, AG7) the card renders the box only once a readiness result is stored; the sentence names a control the page offers in the state it is read in
             way_out = (
-                "tick 'discard the file's edit' to overwrite it with what the daemon runs"
+                f"tick '{_words.CONSENT_TEXTS['discard_file_edit']}' on the server's card to overwrite it with what the daemon runs"
                 if _api.stored_probe(server.get("id"))
-                else "run the readiness check on the server's card and then tick 'discard the file's edit' to overwrite it with what the daemon runs"
-            )
+                else (
+                    f"run Check readiness on the server's card, select File over SSH and tick '{_words.CONSENT_TEXTS['discard_file_edit']}' to overwrite the file with what the daemon runs"
+                    if current == "api"
+                    # (Q223, AH5) the readiness check is a control of the Live API panel, which the card shows for the mode that is selected: a Read-only server's card opens on Read-only
+                    else f"select Live API on the server's card to show Check readiness, run it, select File over SSH again and tick '{_words.CONSENT_TEXTS['discard_file_edit']}' to overwrite the file with what the daemon runs"
+                )
+            )  # (Q223, AH4) the box is named by its label: the quoted name is the one the card prints
             return _refuse(
                 f"{name}: the file and the daemon differ (the daemon {_short(digest)}, the file {_short(raw)}): {proof['why']}; they must agree before the file becomes the thing Jen edits - restart Kea there, restore from Config history, or {way_out}",
                 needs="discard_file_edit",

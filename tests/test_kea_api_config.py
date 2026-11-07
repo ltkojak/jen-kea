@@ -613,9 +613,14 @@ class TestTheModuleIsTheOneSender:
         assert self._callers("difference_text") == ["kea_api_config:compare"]
         assert self._callers("file_against") == []
 
-    def test_file_in_daemon_is_asked_by_the_proof_and_by_step_eight_only(self):
-        """Decided 16 and BI1 d: the forward walk is (L)'s third condition in `file_proof`, and `apply` step (8) asks it of Kea's own rendering - the two statements of the Q agree on these two."""
-        assert self._callers("file_in_daemon") == ["kea_api_config:apply", "kea_api_config:file_proof"]
+    def test_file_in_daemon_is_asked_by_the_proof_and_by_apply_only(self):
+        """Decided 16 and BI1 d: the forward walk is (L)'s third condition in `file_proof`, and `apply` asks it of Kea's own rendering at step (8) - and (Q223, AH2) of the file a rollback found, before
+        its row is written, to tell the change it undoes from a hand edit. Two functions, three call sites."""
+        assert self._callers("file_in_daemon") == [
+            "kea_api_config:apply",
+            "kea_api_config:apply",
+            "kea_api_config:file_proof",
+        ]
 
     def test_file_proof_has_exactly_these_callers_and_fails_on_a_seventh(self):
         """Decided 16: `_ask_the_file`, `probe`, the Plan's `_unloaded_edit`, `_to_api`, `_to_file` and `api_daemon_differs` - `apply`'s proof for a caller with no Plan goes through `_ask_the_file`."""
@@ -663,6 +668,7 @@ class TestTheModuleIsTheOneSender:
             "datetime.timezone",
             "urllib.parse.urlsplit",  # `endpoint_key`: the host and port of an api_url (Q219, lazy)
             "jen.models.user",  # the stored probe is a settings row (lazy)
+            "jen.services.write_mode",  # (Q223, AH4) the label of the discard box, as the card prints it (lazy; a module of words with no imports of its own)
         }
         assert imported <= allowed, imported - allowed
         calls = {
@@ -2566,7 +2572,10 @@ class TestSecondPassRowsOfBeta5:
         store.record(SID, "dhcp4", cand, digest, "an older release", hash_kind="kea", source="pending")
         fake.set_running(cand["Dhcp4"])
         out = api.apply(server, "dhcp4", _candidate_of(cfg, 4), digest, "restore", source="restore", before_cfg=cfg)
-        assert not out["ok"] and "restart Kea there to load the file as it stands" in out["detail"]
+        assert not out["ok"] and "restart Kea there to run the file instead of the change" in out["detail"]
+        assert out["detail"].index("tick the box beside Settle it now") < out["detail"].index(
+            "restart Kea there"
+        )  # (Q223, AH2) the box first
 
     # H1 - a write that never ran
     def test_h1_a_write_that_may_not_have_run_over_the_planned_file_is_unverified(self, w, fake, server, store):

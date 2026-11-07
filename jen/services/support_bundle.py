@@ -51,6 +51,9 @@ SIZE_CAP_BYTES = 20 * 1024 * 1024
 DROPPABLE = ("logs/jen.log.tail", "audit-tail.json", "alerts-tail.json")
 
 LOG_TAIL_LINES = 2000
+_MEMBER_NAME_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*"
+)  # (Q223, AH14) what a member of the archive may be called
 NOTE_MAX_CHARS = 500  # (Q222, AG2) a collector's note in README.txt is cut here
 AUDIT_TAIL_ROWS = 500
 ALERT_TAIL_ROWS = 200
@@ -79,6 +82,7 @@ def redact_ini_text(text: str) -> str:
     survive even under a secret-looking key (`ssl_key = /etc/…`). A
     file that doesn't parse is replaced by a note, never echoed."""
     parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str  # (Q223, AH13) the key as written: `configparser` would lower-case `clientSecret` to `clientsecret`, which the name rule cannot read as a secret
     try:
         parser.read_string(text or "")
     except configparser.Error as e:
@@ -110,8 +114,11 @@ def _scrubbed(data, key=None):
     member. A string under an address key is a value (`secret_keys.without_userinfo`); any other string is text (`secret_keys.scrub_urls`). Keys, numbers, booleans and None are untouched."""
     if isinstance(data, dict):
         return {
-            (scrub_urls(k) if isinstance(k, str) else k): _scrubbed(v, k) for k, v in data.items()
-        }  # (Q222, AG11) a key is text too
+            (scrub_urls(k) if isinstance(k, str) else k): (
+                MASK if is_secret_key(k) and isinstance(v, str) and v else _scrubbed(v, k)
+            )
+            for k, v in data.items()
+        }  # (Q222, AG11) a key is text too; (Q223, AH7) a string under a secret-named key is masked here, in the pass every member goes through, whoever made the member
     if isinstance(data, (list, tuple)):
         return [_scrubbed(v, key) for v in data]
     if isinstance(data, str):
@@ -175,6 +182,11 @@ def readme_text(version: str, channel: str, hostname: str, when: str, notes: lis
     return "\n".join(body) + "\n"
 
 
+def cap_text(cap: int) -> str:
+    """The size cap as a person reads it (Q223, AH8): whole MB at or above 1 MiB, else KB - never "0 MB"."""
+    return f"{cap // (1024 * 1024)} MB" if cap >= 1024 * 1024 else f"{max(1, cap // 1024)} KB"
+
+
 def apply_size_cap(members: dict[str, bytes], cap: int = SIZE_CAP_BYTES) -> tuple[dict[str, bytes], list[str]]:
     """Drop the droppable members, largest first, until the raw total
     fits. Pure. Returns (members, dropped_names)."""
@@ -203,6 +215,10 @@ def build_bundle(collected: dict, *, now: datetime | None = None, cap: int = SIZ
     def put(name: str, text: str):
         # (Q222, AG2; CRED-005) THE choke point: every member of the archive is written here and none keeps the user-info of an address, whoever made it. `scrub_urls` is idempotent, so a
         # member a stricter pass already made (`_json`, `redact_ini_text`, `scrub_log_text`) is unchanged; README.txt and logs/README.txt are covered by being members
+        if not _MEMBER_NAME_RE.fullmatch(name):
+            raise ValueError(
+                f"a bundle member's name is a plain relative path: {name!r}"
+            )  # (Q223, AH14) never `..`, never absolute, never a backslash: the archive an operator extracts stays in its folder
         members[name] = scrub_urls(str(text)).encode("utf-8")
 
     put("jen.json", _json(collected.get("jen") or {}))
@@ -211,7 +227,7 @@ def build_bundle(collected: dict, *, now: datetime | None = None, cap: int = SIZ
     put("health.json", _json(collected.get("health") or {}))
     put("drift.json", _json(collected.get("drift") or []))
     for entry in collected.get("kea_configs") or []:
-        name = f"kea/{entry.get('server_id')}-{entry.get('service')}.json"
+        name = f"kea/{int(entry.get('server_id'))}-{entry.get('service')}.json"  # (Q223, AH14) the id is a number, as the producer's own database lookup already holds
         body = dict(entry)
         cfg = body.pop("config", None)
         if isinstance(cfg, dict):
@@ -240,7 +256,9 @@ def build_bundle(collected: dict, *, now: datetime | None = None, cap: int = SIZ
 
     members, dropped = apply_size_cap(members, cap)
     for d in dropped:
-        notes.append(f"{d} dropped to stay under the {cap // (1024 * 1024)} MB size cap")
+        notes.append(
+            f"{d} dropped to stay under the {cap_text(cap)} size cap"
+        )  # (Q223, AH8) the cap as it is, never "0 MB" for a cap below 1 MiB; it applies to the three tails, and README.txt is written after it
     jen_meta = collected.get("jen") or {}
     put(
         "README.txt",

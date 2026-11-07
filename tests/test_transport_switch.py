@@ -16,6 +16,7 @@ from jen.services import kea_api_config as api
 from jen.services import kea_changeset as cs
 from jen.services import kea_host
 from jen.services import kea_transport_switch as sw
+from jen.services import write_mode as words
 from tests import _kea_api_world as world
 from tests.e2e._fake_kea_server import TWO_SUBNET_DHCP4, StatefulKeaServer
 
@@ -413,7 +414,10 @@ class TestTheRefusalNamesAControlTheCardOffers:
         host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
         r = sw.switch(srv(daemon, "api", ssh=True), "file")
         assert not r["ok"] and r["needs"] == "discard_file_edit" and written == []
-        assert "run the readiness check on the server's card and then tick 'discard the file's edit'" in r["line"]
+        assert (
+            f"run Check readiness on the server's card, select File over SSH and tick '{words.CONSENT_TEXTS['discard_file_edit']}'"
+            in r["line"]
+        )  # (Q223, AH4/AH5) the box by its label; a Live API server's card already shows the check
         assert "restart Kea there, restore from Config history" in r["line"]
 
     def test_with_a_stored_result_the_sentence_names_the_box(self, daemon, store, probes, written, monkeypatch):
@@ -422,8 +426,8 @@ class TestTheRefusalNamesAControlTheCardOffers:
         r = sw.switch(srv(daemon, "api", ssh=True), "file")
         assert not r["ok"] and r["needs"] == "discard_file_edit" and written == []
         assert (
-            "or tick 'discard the file's edit' to overwrite it" in r["line"]
-            and "run the readiness check" not in r["line"]
+            f"or tick '{words.CONSENT_TEXTS['discard_file_edit']}' on the server's card to overwrite it" in r["line"]
+            and "Check readiness" not in r["line"]
         )
 
 

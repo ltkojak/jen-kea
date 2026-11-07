@@ -120,10 +120,15 @@ class TestApiKeyCreation:
 
 class TestSupportBundleDownload:
     def test_download_returns_a_zip(self, logged_in_page, base_url):
-        resp = logged_in_page.request.get(f"{base_url}/settings/system/support-bundle")
-        assert resp.status == 200
-        assert resp.headers.get("content-type", "").startswith("application/zip")
-        assert "attachment" in resp.headers.get("content-disposition", "")
+        # (Q223, AH15) the download is a POST from the page's own form (CSRF token and all): a GET answers 405 and builds nothing
+        page = logged_in_page
+        assert page.request.get(f"{base_url}/settings/system/support-bundle").status == 405
+        page.goto(f"{base_url}/settings/system")
+        button = page.locator('form[action="/settings/system/support-bundle"] button[type=submit]')
+        with page.expect_download(timeout=30000) as download_info:
+            button.click()
+        assert download_info.value.suggested_filename.startswith("jen-support-")
+        assert download_info.value.suggested_filename.endswith(".zip")
 
 
 class TestHealthCenterRefresh:

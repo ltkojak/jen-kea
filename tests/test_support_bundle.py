@@ -309,7 +309,7 @@ class TestNoSecretSurvives:
 
 class TestRoute:
     def test_superadmin_downloads_a_real_bundle(self, logged_in_client, db):
-        r = logged_in_client.get("/settings/system/support-bundle")
+        r = logged_in_client.post("/settings/system/support-bundle")  # (Q223, AH15) a POST: the build has side effects
         assert r.status_code == 200, r.data[:200]
         assert r.headers["Content-Type"].startswith("application/zip")
         assert r.headers["Content-Disposition"].startswith("attachment; filename=jen-support-")
@@ -326,12 +326,23 @@ class TestRoute:
         from tests.conftest import restricted_client
 
         c, _uid = restricted_client(client, db, allowed_subnets=None, role="admin", username="_bundle_admin")
-        r = c.get("/settings/system/support-bundle", follow_redirects=True)
+        r = c.post("/settings/system/support-bundle", follow_redirects=True)
         assert b"superadmin access required" in r.data.lower()
+
+    def test_a_get_does_not_build_one(self, logged_in_client, db):
+        """(Q223, AH15) a cross-site navigation is a GET; the build is a POST behind the CSRF token, so a link never runs the health checks or writes an audit row."""
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) c FROM audit_log WHERE action='SUPPORT_BUNDLE'")
+            before = cur.fetchone()["c"]
+        r = logged_in_client.get("/settings/system/support-bundle")
+        assert r.status_code == 405
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) c FROM audit_log WHERE action='SUPPORT_BUNDLE'")
+            assert cur.fetchone()["c"] == before
 
     def test_system_page_offers_the_button(self, logged_in_client):
         page = logged_in_client.get("/settings/system").get_data(as_text=True)
-        assert "/settings/system/support-bundle" in page and "Support bundle" in page
+        assert 'action="/settings/system/support-bundle"' in page and "Support bundle" in page
 
 
 class TestServersJsonNamesTheWriteMode:

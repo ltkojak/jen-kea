@@ -254,7 +254,8 @@ def pending(server_id: int, service: str) -> dict | None:
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source='pending' ORDER BY id DESC LIMIT 1",
+                # (Q223, AH1) `age_seconds` is measured by the clock that STAMPED the row - `created_at` is the database host's `CURRENT_TIMESTAMP` - so a reader never compares it with Jen's own
+                "SELECT *, TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_seconds FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source='pending' ORDER BY id DESC LIMIT 1",
                 (server_id, service),
             )
             row = cur.fetchone()

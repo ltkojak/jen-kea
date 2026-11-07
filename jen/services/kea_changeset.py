@@ -629,6 +629,15 @@ def _run_change_unlocked(
             rres = _restore_target(done, service, summary, helper_only)
             if not rres.get("ok"):
                 revert_failed.append(done)
+                if done.transport == "api":
+                    # (Q223, AH2) an api target's rollback is judged by the daemon's own answer, and its result says which half stood: the line carries it instead of "still have the NEW config",
+                    # which is true of a file target whose restore failed and may be false of a daemon that went back while its file did not
+                    lines.append(
+                        (
+                            "error",
+                            f"❌ {done.name}: rollback over the API: {_tail(rres.get('detail')) or rres.get('code') or 'no answer'}",
+                        )
+                    )
                 continue
             if restart and done.transport == "file":
                 rres_restart = _safe(_host.service_action, done.server, service, "restart")
@@ -659,14 +668,21 @@ def _run_change_unlocked(
             # opposite of reality.
             if revert_failed:
                 failed_keys = {d.key for d in revert_failed}  # by id: two servers may share a name
-                still_new = [d.name for d in revert_failed]
+                still_new = [d.name for d in revert_failed if d.transport != "api"]
+                api_half = [d.name for d in revert_failed if d.transport == "api"]
                 rolled_back = [d.name for d in committed if d.key not in failed_keys]
                 untouched = f"{t.name} was never changed" if not unproved else f"{t.name} may carry the change (below)"
+                parts = []
+                if still_new:
+                    parts.append(f"{', '.join(still_new)} still have the NEW config (their rollback failed)")
+                if api_half:
+                    parts.append(
+                        f"{', '.join(api_half)}: the rollback over the API did not complete (what the daemon and the file hold is in the line above; Settle it now on the Write mode card)"
+                    )
                 lines.append(
                     (
                         "error",
-                        f"🛑 ROLLBACK FAILED — {', '.join(still_new)} still have the NEW config (their rollback "
-                        f"failed); {', '.join(rolled_back) or '(none)'} were rolled back to the old config; "
+                        f"🛑 ROLLBACK FAILED — {'; '.join(parts)}; {', '.join(rolled_back) or '(none)'} were rolled back to the old config; "
                         f"{untouched}. Fix by hand: Servers → Config history → restore.",
                     )
                 )

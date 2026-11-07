@@ -287,7 +287,11 @@ def _lacks(running: object, candidate: object, defaults: frozenset, path: str = 
             renamed = running.get(alias)
             if isinstance(renamed, list) and len(renamed) == 1:
                 accounted.add(alias)
-                found = _lacks(renamed[0], v, defaults, here, scope + (running,))
+                # (Q223, AH10) the children are walked under the DAEMON's spelling (`hosts-databases[0]`): the defaults vector records the paths the daemon writes out, so a written-out default
+                # under the renamed key is a default here too, and a difference is named at a path Kea uses
+                found = _lacks(
+                    renamed[0], v, defaults, f"{path}.{alias}[0]" if path else f"{alias}[0]", scope + (running,)
+                )
                 if found is not None:
                     return found
         for k, v in running.items():
@@ -594,9 +598,10 @@ def read(
 RENDERING_NOT_RECORDED = "the file Kea wrote on {host} could not be recorded in Config history, so the next change to it will ask you to restart Kea there (or reload its configuration) first"
 PROOF_HOWS = ("rendering", "planned", "loaded", "no-file", "unreadable", "none")
 NO_PLANNED_SENTENCE = (
-    "the file on {host} cannot be proved against the file this change was planned over; restart Kea there to load the file as it stands, then Settle it now - or tick the box beside Settle it now to keep "
-    "the change (the file as it stands is kept in Config history first)"
-)  # (Q222, AG3) the second way out is the box: a row from before 7.0.0-beta.5 carries no planned file, and the box is the operator's word on the file whatever it holds
+    "the file on {host} cannot be proved against the file this change was planned over; tick the box beside Settle it now to keep what the daemon runs (the file as it stands is kept in Config "
+    "history first, then written over with the daemon's configuration) - or restart Kea there to run the file instead of the change, then Settle it now"
+)  # (Q222, AG3; Q223, AH2) the box is named first: it keeps the daemon's state, which is what a row left by a rollback or a half-done change wants kept; the restart runs the FILE, which may carry
+# the change the rollback undid. A row from before 7.0.0-beta.5 carries no planned file, and the box is the operator's word on the file whatever it holds
 
 
 def _utc(ts: int) -> str:
@@ -729,6 +734,9 @@ def file_proof(server: dict, service: str = "dhcp4", *, planned_sha: str | None 
         )
     elif mtime is not None and mtime > loaded_at:
         why = f"{written} and the daemon last loaded its configuration at {_utc(loaded_at)}; the daemon has not loaded that edit{at} - {way_out}"
+    elif mtime is None:
+        # (Q223, AH11) the host answered a time that is no time (out of range, or not an integer): the proof says so instead of placing the write before a load it cannot place
+        why = f"{written}; the time it was written could not be read on {host}, and the daemon does not run it{at} - {way_out}"
     else:
         why = f"{written}, before the daemon's last load at {_utc(loaded_at)}, but the daemon does not run it{at} - {way_out}"
     return _proof(False, "none", where=where, why=why, **facts)
@@ -839,13 +847,19 @@ def _api_only_guard(service: str, running: dict | None, candidate: dict) -> str:
 # ── the pending record (step 3) and its reconciliation ────────────────────────────────────────────────────────────────────
 
 
+UNDROPPED = "; the record of the attempt could not be removed from Config history - the next change, or Settle it now, removes it"  # (Q223, AH12)
 PENDING_SETTLE_SECONDS = 120  # an apply finishes inside its commands' waits; a pending row younger than this belongs to one in flight and no reader may settle it (fix row 3)
 
 
 def _row_age_seconds(row: dict) -> float:
-    """Seconds since a revision row was written (UTC); 0-age cannot be told apart from "unknown", so an unreadable stamp counts as old."""
+    """Seconds since a revision row was written. The store measures it (`age_seconds`, Q223 AH1): `created_at` is the DATABASE host's clock and the comparison is made by that same clock, so a
+    database a day ahead of Jen never makes a row read "in progress" for a day. A row with no measured age (a fake, an older reader) is judged against Jen's clock as before; 0-age cannot be told
+    apart from "unknown", so an unreadable stamp counts as old."""
     from datetime import datetime, timezone
 
+    measured = row.get("age_seconds")
+    if isinstance(measured, (int, float)) and not isinstance(measured, bool):
+        return float(measured)
     stamp = row.get("created_at")
     try:
         when = stamp if isinstance(stamp, datetime) else datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -1300,8 +1314,15 @@ def apply(
 
     row_sha = planned_sha if _has_ssh(server) else None
     if row_sha is None and source == "rollback" and _has_ssh(server):
-        # (Q219 E10) a rollback brings no Plan: its row carries the file as it stands now, so an interrupted rollback can be settled over the file it started from
-        _file_now, row_sha = _host.read_config_versioned(server, service, capture=False)
+        # (Q219 E10) a rollback brings no Plan: its row carries the file as it stands now, so an interrupted rollback can be settled over the file it started from. (Q223, AH2) When that file
+        # says what the daemon runs NOW - the change this rollback undoes, as Kea itself rendered it - the rollback proves its own step (6) against this same sha, as its settlement would: the
+        # forward change's rendering row may be missing (its read-back failed, or the store refused the row), and then (R) alone would leave the daemon rolled back and the file carrying the
+        # change. A file that says something the daemon does not run is a hand edit, and a rollback is refused over it as before (the read is a capturing one: the edit is in Config history)
+        file_now, row_sha = _host.read_config_versioned(server, service, capture=True)
+        if file_now is not None and row_sha:
+            live_now, _digest_now, _why_now = _get(server, service)
+            if live_now is not None and file_in_daemon(file_now, live_now, service):
+                planned_sha = row_sha
     if not (isinstance(row_sha, str) and len(row_sha) == 64):
         row_sha = None  # (a canonical sentinel, from a host with no raw hash, is no sha256 and the column is CHAR(64))
     pending_id = None
@@ -1329,22 +1350,27 @@ def apply(
                 "the record of this change could not be written to Config history; nothing was sent - the database refused the row, or an earlier change on this server is still on record",
             )
 
-    def _drop_pending():
-        if pending_id is not None:
-            _rev.discard(pending_id)
+    def _drop_pending(outcome: dict) -> dict:
+        # (Q223, AH12) a `discard` that answers False leaves a `pending` row behind a result that says nothing was sent: the result says so (the next change's `pending_block` removes the
+        # row by content, and `settle_pending` removes it when the daemon runs the state before it)
+        if pending_id is not None and not _rev.discard(pending_id):
+            outcome["detail"] = str(outcome.get("detail") or "") + UNDROPPED
+        return outcome
 
     now = hash(server, service)  # (4)
     if now is None:
-        _drop_pending()
-        return _result(False, "noanswer", f"{_name(server)} did not answer the digest question; nothing was sent")
+        return _drop_pending(
+            _result(False, "noanswer", f"{_name(server)} did not answer the digest question; nothing was sent")
+        )
     if expect_hash and now != expect_hash:
-        _drop_pending()
-        return _result(
-            False,
-            "conflict",
-            f"the daemon on {_name(server)} runs digest {now}, not the {expect_hash} this change was built from",
-            before_hash=expect_hash,
-            after_hash=now,
+        return _drop_pending(
+            _result(
+                False,
+                "conflict",
+                f"the daemon on {_name(server)} runs digest {now}, not the {expect_hash} this change was built from",
+                before_hash=expect_hash,
+                after_hash=now,
+            )
         )
 
     reply = _cmd(server, service, "config-set", _body(cfg, service))  # (5)
@@ -1356,15 +1382,11 @@ def apply(
             )
     elif _answered(reply):
         outcome = _after_a_set_failure(server, service, expect_hash or now, reply)
-        if not outcome.get("needs_hands"):
-            _drop_pending()
-        return outcome
+        return outcome if outcome.get("needs_hands") else _drop_pending(outcome)
     else:
         h1, stop = _after_a_set_without_an_answer(server, service, cfg, before_cfg, expect_hash or now)
         if stop is not None:
-            if not stop.get("needs_hands"):
-                _drop_pending()
-            return stop
+            return stop if stop.get("needs_hands") else _drop_pending(stop)
 
     if _has_ssh(
         server
@@ -1392,8 +1414,7 @@ def apply(
                     after_hash=h1,
                 )
             if proved_back:
-                _drop_pending()
-                return _result(False, "write-failed", _text(wrote) or "config-write was refused")
+                return _drop_pending(_result(False, "write-failed", _text(wrote) or "config-write was refused"))
             return _unproved(
                 "write-failed",
                 f"{_text(wrote) or 'config-write was refused'}; the change could not be proved undone - the daemon may run it without the file carrying it",
@@ -1560,9 +1581,25 @@ def _age_days(iso: str | None) -> float | None:
     return (datetime.now(timezone.utc) - when).total_seconds() / 86400
 
 
+BOUND_KEYS = (
+    "api_url",
+    "ssh_host",
+    "ssh_user",
+    "kea_conf",
+)  # (Q223, AH9) the four identity keys of a server (CLAUDE.md, "Configuration is a single choke point")
+
+
 def _bound(server: dict) -> str:
-    """Which endpoint a stored probe was read from: a hash of the API url and the SSH host (never stored in the clear). Server ids are reused (the next free number) and `api_url` can be re-pointed,
-    so consent given to one Kea must not carry to another that inherits its number (fix row 6)."""
+    """Which Kea, and which FILE, a stored probe was read from: a hash of the four identity keys (never stored in the clear). Server ids are reused (the next free number) and `api_url` can be re-pointed,
+    so consent given to one Kea must not carry to another that inherits its number (fix row 6); `include`, `agree` and `write` are facts about the file `ssh_user` reads at `kea_conf`, so a re-pointed
+    user or path is a different file (Q223, AH9). A result bound by the two keys an earlier release hashed (`_bound_legacy`) is checked again, never taken for the current file."""
+    import hashlib
+
+    return hashlib.sha256("|".join(str(server.get(k) or "") for k in BOUND_KEYS).encode()).hexdigest()[:16]
+
+
+def _bound_legacy(server: dict) -> str:
+    """The two-key binding of 7.0.0-beta.1 to beta.8: recognized so its sentence can say WHY the server is checked again."""
     import hashlib
 
     return hashlib.sha256(f"{server.get('api_url') or ''}|{server.get('ssh_host') or ''}".encode()).hexdigest()[:16]
@@ -1614,8 +1651,10 @@ def consent_gap(name: str, facts: dict | None, consents, *, has_ssh: bool, stric
             "confirm_no_include",
         )
     if has_ssh and facts.get("agree") is False and "discard_file_edit" not in consents:
+        from jen.services import write_mode as _words  # (Q223, AH4) the box is named by the label the card prints
+
         return (
-            f"{name}: the file on the host carries a configuration the daemon is not running - restart Kea first, or tick 'discard the file's edit' (the switch makes the file the daemon's configuration)",
+            f"{name}: the file on the host carries a configuration the daemon is not running - restart Kea first, or tick '{_words.CONSENT_TEXTS['discard_file_edit']}' (the switch makes the file the daemon's configuration)",
             "discard_file_edit",
         )
     write = facts.get("write")
@@ -1670,7 +1709,10 @@ def probe_gate(server: dict, source: str = "jen") -> str:
         # (Q218 BH3 d, AC6) a stored result that names no endpoint cannot say which Kea it was read from: it is checked again, never taken for the current one
         return f"{_name(server)} was checked before this version recorded which Kea it was - {PROBE_SENTENCE.replace('first', 'again')}"
     if stored["bound"] != _bound(server):
-        return f"{_name(server)} now points at a different Kea than the one that was checked - {PROBE_SENTENCE.replace('first', 'again')}"
+        if stored["bound"] == _bound_legacy(server):
+            # (Q223, AH9) a result from before this version was bound to the API url and the SSH host alone, not to the user and the path the file is read by
+            return f"{_name(server)} was checked before this version recorded which file its facts were read from (the SSH user and the config path) - {PROBE_SENTENCE.replace('first', 'again')}"
+        return f"{_name(server)} now points at a different Kea, or reads a different file, than the one that was checked - {PROBE_SENTENCE.replace('first', 'again')}"
     age = _age_days(stored.get("at"))
     if age is not None and age < 0:
         # (Q222, AG5) a time this box could not have written yet - the clock was ahead when the check was stored and has been put right since - is not a fresh check

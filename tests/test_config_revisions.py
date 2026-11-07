@@ -227,6 +227,13 @@ class TestOnePendingRowPerServer:
         assert rev.pending(_SID, "dhcp4")["id"] == first
         assert len([r for r in rev.list_revisions(_SID, "dhcp4") if r["source"] == "pending"]) == 1
 
+    def test_a_pending_row_carries_its_age_by_the_databases_own_clock(self):
+        """(Q223, AH1) `created_at` is the database host's stamp; the row's age is measured by that same clock in the query that reads it, so a reader never compares it with Jen's clock. A row
+        written just now is a few seconds old at most, and the value is a number."""
+        assert rev.record(_SID, "dhcp4", _cfg(1), "a" * 64, "x", hash_kind="kea", source="pending") is not None
+        row = rev.pending(_SID, "dhcp4")
+        assert isinstance(row["age_seconds"], int) and 0 <= row["age_seconds"] < 60, row["age_seconds"]
+
     def test_a_pending_row_of_another_server_or_service_is_not_in_the_way(self):
         assert rev.record(_SID, "dhcp4", _cfg(1), "a" * 64, "x", hash_kind="kea", source="pending") is not None
         assert rev.record(_SID, "dhcp6", _cfg(1), "a" * 64, "x", hash_kind="kea", source="pending") is not None

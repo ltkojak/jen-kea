@@ -121,7 +121,7 @@ def save_update_channel():
     return redirect(url_for("settings.settings_system"))
 
 
-@bp.route("/settings/system/support-bundle")
+@bp.route("/settings/system/support-bundle", methods=["POST"])
 @login_required
 @_superadmin_required
 @_recent_auth_required()
@@ -129,7 +129,9 @@ def support_bundle():
     """v5.33.0 (Q32) — one zip to attach to a bug report. Built in memory,
     never stored; every secret masked by construction (see
     jen/services/support_bundle.py and its sentinel test). Superadmin +
-    step-up: it reveals the whole topology."""
+    step-up: it reveals the whole topology. A POST (Q223, AH15): the build
+    runs the health checks against every Kea and writes an audit row, so a
+    cross-site navigation of a signed-in browser never starts one."""
     from flask import send_file
 
     from jen.services import support_bundle as _sb

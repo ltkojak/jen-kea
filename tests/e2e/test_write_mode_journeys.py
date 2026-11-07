@@ -104,9 +104,10 @@ def test_a_superadmin_moves_a_server_from_the_file_to_live_api_and_back(logged_i
     switch = card.locator('[data-wm-switch="1"][data-wm-target="api"]')
     assert switch.is_disabled() and "Waiting on step 2" in card.locator('[data-wm-holding="1"]').inner_text()
 
-    # Run check: the page reloads with the facts; the check passes
-    card.locator('[data-wm-check="1"]').click()
-    page.wait_for_load_state("load")
+    # Run check: the page reloads with the facts; the check passes. (Q223) The button is an async `jenFetch` followed by `location.reload()`, not a form submit: `wait_for_load_state("load")`
+    # returned for the document that was already loaded, and the radio below was ticked on the page the reload then discarded. The navigation is awaited as one
+    with page.expect_navigation():
+        card.locator('[data-wm-check="1"]').click()
     card = page.locator("#config-card-1")
     card.locator('input[name="transport"][value="api"]').check()
     assert card.locator('[data-wm-row="2"]').get_attribute("data-state") == "ok"
@@ -147,8 +148,8 @@ def test_a_box_in_the_hidden_panel_is_not_a_consent(logged_in_page, base_url, fi
     page.goto(f"{base_url}/settings/kea")
     card = page.locator("#config-card-1")
     card.locator('input[name="transport"][value="api"]').check()
-    card.locator('[data-wm-check="1"]').click()
-    page.wait_for_load_state("load")
+    with page.expect_navigation():  # (Q223) the check reloads the page itself; see above
+        card.locator('[data-wm-check="1"]').click()
     card = page.locator("#config-card-1")
 
     card.locator('input[name="transport"][value="file"]').check()
