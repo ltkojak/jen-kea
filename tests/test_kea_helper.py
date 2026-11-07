@@ -229,6 +229,21 @@ class TestBuildBumpReminder:
         )
 
     @staticmethod
+    def _is_next(since, tree):
+        """Is `since` the version the tree will ship as next? For a beta: its next beta, rc.1 or the final; for an rc: the next rc or the final; for a final: the next patch, the next minor or a
+        later major (6 was skipped), each as its first beta or its final."""
+        from jen.version import parse_version
+
+        s, (x, y, z, rank, n) = parse_version(since), parse_version(tree)
+        if rank == 2:
+            return s in {(x, y, z + 1, 0, 1), (x, y, z + 1, 2, 0), (x, y + 1, 0, 0, 1), (x, y + 1, 0, 2, 0)} or (
+                s[0] > x and s[1:3] == (0, 0) and s[3:] in ((0, 1), (2, 0))
+            )
+        if rank == 0:
+            return s in {(x, y, z, 0, n + 1), (x, y, z, 1, 1), (x, y, z, 2, 0)}
+        return s in {(x, y, z, 1, n + 1), (x, y, z, 2, 0)}
+
+    @staticmethod
     def _violations(history, file_sha, helper_build, released, jen_version):
         """Every way the pin is wrong, as sentences; [] when it is right. Pure, so the rule is tested over made-up histories and never only over the one on disk."""
         from jen.version import parse_version
@@ -260,6 +275,14 @@ class TestBuildBumpReminder:
             elif parse_version(h.get("since")) < parse_version(jen_version):
                 out.append(
                     f"build {build} has been carried since {h.get('since') or 'a version the entry does not name'}, before {jen_version}: add it to RELEASED with the sha256 that shipped"
+                )
+            elif parse_version(h.get("since")) > parse_version(jen_version) and not TestBuildBumpReminder._is_next(
+                h.get("since"), jen_version
+            ):
+                # (Q222, AG8) a `since` AHEAD of the tree would never be forced into RELEASED, and its sha could move in place for as long as it stayed ahead. The one version ahead that is
+                # legitimate is the NEXT one: a helper change is pinned in the code commit with the version its release commit will carry
+                out.append(
+                    f"build {build} says it has been carried since {h.get('since')}, which is later than this tree's {jen_version} and not the next version: `since` is the version that first shipped it"
                 )
         for build in released:
             if build not in builds:
@@ -330,6 +353,18 @@ class TestBuildBumpReminder:
                 {21: A},
                 "7.0.0-beta.7",
                 "the two must never disagree",
+            ),
+            (
+                "AG8: a `since` ahead of the tree, under which a sha could move in place for ever",
+                [
+                    {"build": 21, "sha256": A, "since": "7.0.0-beta.3"},
+                    {"build": 22, "sha256": B, "since": "9.9.9"},
+                ],
+                B,
+                22,
+                {21: A},
+                "7.0.0-beta.7",
+                "not the next version",
             ),
             (
                 "a build repeated",

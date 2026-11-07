@@ -51,13 +51,14 @@ SIZE_CAP_BYTES = 20 * 1024 * 1024
 DROPPABLE = ("logs/jen.log.tail", "audit-tail.json", "alerts-tail.json")
 
 LOG_TAIL_LINES = 2000
+NOTE_MAX_CHARS = 500  # (Q222, AG2) a collector's note in README.txt is cut here
 AUDIT_TAIL_ROWS = 500
 ALERT_TAIL_ROWS = 200
 LEASE_HISTORY_DAYS = 7
 
 # Which INI keys hold a secret is jen.services.secret_keys.is_secret_key - the one definition (Q204 AT4), shared with the Kea-config masker. A key that
-# names a *path* to a secret (key_path, api_client_key, ssl_key) is kept - the path is diagnostic, the file is never opened.
-_PATH_VALUE_RE = re.compile(r"^(/|[A-Za-z]:\\)")
+# names a *path* to a secret (key_path, api_client_key, ssl_key) is kept BY NAME - the path is diagnostic, the file is never opened. The VALUE is never consulted (Q222, AG1): until
+# 7.0.0-beta.8 a secret-named key whose value began with `/` or `X:\` was taken for a path and written in clear, and the name rule already excludes every path-naming key.
 MASK = "********"
 
 # Log scrubbing — anything that looks like a credential in a log line.
@@ -88,8 +89,8 @@ def redact_ini_text(text: str) -> str:
     for section in parser.sections():
         out.append(f"[{section}]")
         for key, value in parser.items(section):
-            if is_secret_key(key) and value and not _PATH_VALUE_RE.match(value):
-                value = MASK
+            if is_secret_key(key) and value:
+                value = MASK  # (Q222, AG1) by NAME only: a password that begins with `/` is a password
             else:
                 value = without_userinfo(
                     value
@@ -108,12 +109,18 @@ def _scrubbed(data, key=None):
     """`data` with no user-info left in any address, at any depth (Q221, AE7): THE pass every JSON member of the bundle goes through (`_json`), so a section added later is covered by being a
     member. A string under an address key is a value (`secret_keys.without_userinfo`); any other string is text (`secret_keys.scrub_urls`). Keys, numbers, booleans and None are untouched."""
     if isinstance(data, dict):
-        return {k: _scrubbed(v, k) for k, v in data.items()}
+        return {
+            (scrub_urls(k) if isinstance(k, str) else k): _scrubbed(v, k) for k, v in data.items()
+        }  # (Q222, AG11) a key is text too
     if isinstance(data, (list, tuple)):
         return [_scrubbed(v, key) for v in data]
     if isinstance(data, str):
         return without_userinfo(data) if _address_key(key) else scrub_urls(data)
-    return data
+    if isinstance(data, (int, float, bool)) or data is None:
+        return data
+    return scrub_urls(
+        str(data)
+    )  # (Q222, AG11) an object the encoder would print with `default=str`: printed here, as text, so the pass covers it
 
 
 def scrub_log_line(line: str) -> str:
@@ -129,7 +136,9 @@ def scrub_log_text(text: str, max_lines: int = LOG_TAIL_LINES) -> str:
 
 
 def _json(data) -> str:
-    return json.dumps(_scrubbed(data), indent=2, sort_keys=True, default=str) + "\n"
+    return (
+        json.dumps(_scrubbed(data), indent=2, sort_keys=True, default=lambda o: scrub_urls(str(o))) + "\n"
+    )  # (Q222, AG11) what the encoder adds is scrubbed too
 
 
 def readme_text(version: str, channel: str, hostname: str, when: str, notes: list[str]) -> str:
@@ -158,7 +167,11 @@ def readme_text(version: str, channel: str, hostname: str, when: str, notes: lis
         "Key FILE PATHS appear; key contents never do.",
     ]
     if notes:
-        body += ["", "Sections that could not be collected:"] + [f"  - {n}" for n in notes]
+        # (Q222, AG2) a note is a collector's exception message verbatim - a driver's error naming a user, a host and a port, a path - so it is scrubbed like a log line and cut: the
+        # README is written after the size cap and must stay small on its own
+        body += ["", "Sections that could not be collected:"] + [
+            f"  - {scrub_log_line(str(n))[:NOTE_MAX_CHARS]}" for n in notes
+        ]
     return "\n".join(body) + "\n"
 
 
@@ -188,7 +201,9 @@ def build_bundle(collected: dict, *, now: datetime | None = None, cap: int = SIZ
     members: dict[str, bytes] = {}
 
     def put(name: str, text: str):
-        members[name] = text.encode("utf-8")
+        # (Q222, AG2; CRED-005) THE choke point: every member of the archive is written here and none keeps the user-info of an address, whoever made it. `scrub_urls` is idempotent, so a
+        # member a stricter pass already made (`_json`, `redact_ini_text`, `scrub_log_text`) is unchanged; README.txt and logs/README.txt are covered by being members
+        members[name] = scrub_urls(str(text)).encode("utf-8")
 
     put("jen.json", _json(collected.get("jen") or {}))
     put("config.ini.redacted", redact_ini_text(collected.get("config_text") or ""))
@@ -213,7 +228,12 @@ def build_bundle(collected: dict, *, now: datetime | None = None, cap: int = SIZ
     if log_text is None:
         put(
             "logs/README.txt",
-            collected.get("log_note") or "No log file configured — Jen logs to journald: `journalctl -u jen -n 500`.\n",
+            scrub_log_line(
+                str(
+                    collected.get("log_note")
+                    or "No log file configured — Jen logs to journald: `journalctl -u jen -n 500`.\n"
+                )
+            ),  # (Q222, AG2) a note is text that may name a path or an address
         )
     else:
         put("logs/jen.log.tail", scrub_log_text(log_text))

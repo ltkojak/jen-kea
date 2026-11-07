@@ -462,3 +462,15 @@ class TestSecondPassRows:
         monkeypatch.setattr(api, "probe", probe_then_a_newer_consent)
         assert api.refresh_probe(server, "dhcp4") is True
         assert probes[4]["consents"] == ["consent_rendering", "discard_file_edit"]
+
+
+class TestTheConsentListIsOne:
+    """Q222 (AG10): the route's tuple was a second, unpinned copy of `kea_api_config.CONSENTS`; a consent added to the card and the module but not to the route would be rendered, ticked, dropped
+    and then refused by `consent_gap` naming the box just ticked."""
+
+    def test_the_route_the_module_and_the_card_name_the_same_consents(self):
+        from jen.routes.settings import kea_transport as route
+        from jen.services import write_mode
+
+        assert route.SWITCH_CONSENTS is api.CONSENTS
+        assert set(api.CONSENTS) == set(write_mode.CONSENT_TEXTS)

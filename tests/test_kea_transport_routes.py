@@ -16,7 +16,10 @@ from tests.conftest import restricted_client
 SERVER = {"id": 3, "name": "kea-c", "api_url": "http://127.0.0.1:9/", "ssh_host": "10.0.0.3", "config_transport": "off"}
 
 ROUTES = [
-    ("/settings/infrastructure/probe-kea-config/3", False),
+    (
+        "/settings/infrastructure/probe-kea-config/3",
+        "fetch",
+    ),  # (Q222, AG9) the step-up in its fetch form: 401 JSON naming the confirmation page
     ("/settings/infrastructure/kea-transport/3", True),
     ("/settings/infrastructure/allow-config-write/3", True),
     ("/settings/infrastructure/deny-config-write/3", True),
@@ -91,12 +94,11 @@ class TestTheFourThatChangeSomethingAskForARecentConfirmation:
         with logged_in_client.session_transaction() as sess:
             sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
         r = _post(logged_in_client, url)
-        if needs:
-            assert r.status_code == 302 and "reauth" in r.headers["Location"] and worked == []
+        if needs == "fetch":
+            # (Q222, AG9) the readiness check reaches the Kea host, stores what the gate answers from and can clear a remembered refusal: it asks for the confirmation like its siblings, as JSON
+            assert r.status_code == 401 and r.is_json and r.get_json().get("reauth") and worked == []
         else:
-            assert (
-                worked == ["probe"]
-            )  # the readiness check only READS: it asks for no confirmation (the consent is the switch, TestAConsentIsAnActNotAClick)
+            assert needs and r.status_code == 302 and "reauth" in r.headers["Location"] and worked == []
 
     def test_an_unknown_server_is_a_message_not_an_error(self, logged_in_client, worked):
         r = _post(logged_in_client, "/settings/infrastructure/kea-transport/99")
@@ -117,6 +119,22 @@ class TestAConsentIsAnActNotAClick:
             "/settings/infrastructure/probe-kea-config/3", data={"consent": "1", "consent_rendering": "1"}
         )
         assert seen == {}  # no consent, no consents: the route does not even read them
+
+    def test_the_readiness_check_leaves_an_audit_row(self, logged_in_client, worked, monkeypatch):
+        """Q222 (AG9): a run of the check is on the record - who asked the host, and what it answered."""
+        rows = []
+        monkeypatch.setattr(
+            "jen.models.user.audit", lambda action, entity, details="": rows.append((action, entity, details))
+        )
+        r = logged_in_client.post("/settings/infrastructure/probe-kea-config/3")
+        assert r.status_code == 200 and worked == ["probe"]
+        assert rows == [
+            (
+                "KEA_READINESS_CHECKED",
+                "server:3",
+                "kea-c: readiness check; daemon over the API: yes; file is the daemon's: None",
+            )
+        ]
 
     def test_a_stale_confirmation_stops_the_switch_before_any_work(self, logged_in_client, worked):
         with logged_in_client.session_transaction() as sess:

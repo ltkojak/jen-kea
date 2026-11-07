@@ -404,6 +404,29 @@ class TestToFile:
         assert sw.switch(srv(daemon, "off", ssh=True), "file")["ok"]
 
 
+class TestTheRefusalNamesAControlTheCardOffers:
+    """Q222 (AG7): the card renders the discard box only once a readiness result is stored; a server never readiness-checked was told to tick a box its card did not show."""
+
+    def test_with_no_stored_result_the_sentence_names_the_readiness_check(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
+        r = sw.switch(srv(daemon, "api", ssh=True), "file")
+        assert not r["ok"] and r["needs"] == "discard_file_edit" and written == []
+        assert "run the readiness check on the server's card and then tick 'discard the file's edit'" in r["line"]
+        assert "restart Kea there, restore from Config history" in r["line"]
+
+    def test_with_a_stored_result_the_sentence_names_the_box(self, daemon, store, probes, written, monkeypatch):
+        probes[5] = {"config_api": True}
+        host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
+        r = sw.switch(srv(daemon, "api", ssh=True), "file")
+        assert not r["ok"] and r["needs"] == "discard_file_edit" and written == []
+        assert (
+            "or tick 'discard the file's edit' to overwrite it" in r["line"]
+            and "run the readiness check" not in r["line"]
+        )
+
+
 class TestAnUnknownFactWithSshIsARefusal:
     """Fix row 4: SSH is configured but the helper (or SSH) did not answer: the file could not be compared, so nothing is overwritten."""
 

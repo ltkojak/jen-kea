@@ -598,6 +598,7 @@ def _run_change_unlocked(
                 summary,
                 before_cfg=t.before_cfg,
                 planned_sha=t.planned_sha,
+                refreshed=True,  # (Q222, AG6) the Plan asked `refresh_if_stale` for this change; one change, one re-read
             )
         else:
             res = _safe(

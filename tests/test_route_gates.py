@@ -37,8 +37,9 @@ NAMED_FORM_WRITERS = (
     ("jen/routes/settings/authoring.py", "install_kea_binary"),
     ("jen/routes/settings/infrastructure.py", "toggle_ipv6"),
     # Q212: the per-server card's routes (superadmin + step-up): the switch changes which path a configuration takes to a daemon, the two helper ops change who may write a root-owned file,
-    # and "I have fixed it" clears a remembered refusal on the operator's word (audited). `probe_kea_config` is a superadmin's read that stores a result and is pinned in
-    # tests/test_kea_transport_routes.py.
+    # and "I have fixed it" clears a remembered refusal on the operator's word (audited). `probe_kea_config` (Q222, AG9) reaches the host, stores the result the gate answers from and can clear a
+    # remembered refusal: it carries the step-up in its fetch form (tests/test_kea_transport_routes.py pins the 401).
+    ("jen/routes/settings/kea_transport.py", "probe_kea_config"),
     ("jen/routes/settings/kea_transport.py", "switch_kea_transport"),
     ("jen/routes/settings/kea_transport.py", "allow_config_write"),
     ("jen/routes/settings/kea_transport.py", "deny_config_write"),

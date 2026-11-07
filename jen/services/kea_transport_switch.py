@@ -185,8 +185,14 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         # (fix row 5, Q219) the proof FIRST: the file is not one the daemon has loaded or Jen rendered (a hand edit, or a change the daemon never wrote). Overwriting it is a named consent; a daemon that
         # was never granted the write (so `config-write` is refused) still leaves `api` once the proof holds, and it is asked again after the best-effort write
         if "discard_file_edit" not in consents:
+            # (Q222, AG7) the card renders the box only once a readiness result is stored; the sentence names a control the page offers in the state it is read in
+            way_out = (
+                "tick 'discard the file's edit' to overwrite it with what the daemon runs"
+                if _api.stored_probe(server.get("id"))
+                else "run the readiness check on the server's card and then tick 'discard the file's edit' to overwrite it with what the daemon runs"
+            )
             return _refuse(
-                f"{name}: the file and the daemon differ (the daemon {_short(digest)}, the file {_short(raw)}): {proof['why']}; they must agree before the file becomes the thing Jen edits - restart Kea there, restore from Config history, or tick 'discard the file's edit' to overwrite it with what the daemon runs",
+                f"{name}: the file and the daemon differ (the daemon {_short(digest)}, the file {_short(raw)}): {proof['why']}; they must agree before the file becomes the thing Jen edits - restart Kea there, restore from Config history, or {way_out}",
                 needs="discard_file_edit",
                 before_hash=digest,
                 after_hash=raw,

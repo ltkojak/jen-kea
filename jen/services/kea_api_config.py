@@ -387,7 +387,12 @@ def difference_text(
     if _is_container(mine) != _is_container(theirs):
         # (Q218 BH5 b, AC15) a difference of KIND is named at the parent, and the scalar on one side may sit where the other side keeps a secret one level below: a container prints its shape and the scalar only its type
         return f"at {path}: the file says {_kind(mine)}, the daemon {_kind(theirs)}"
-    return f"at {path}: the file says {_leaf(mine)}, the daemon {_leaf(theirs)}"
+    shown_mine, shown_theirs = _leaf(mine), _leaf(theirs)
+    if shown_mine == shown_theirs:
+        # (Q222, AG4) the two values differ and print alike: the user name or password inside an address, which `_leaf` removes (AE12), or anything past the 60th character. Printing one
+        # value on both sides would read as no difference
+        return f"at {path}: the file and the daemon differ only in what is not shown ({shown_mine}): a user name or password inside an address, or past the 60th character"
+    return f"at {path}: the file says {shown_mine}, the daemon {shown_theirs}"
 
 
 # ── Kea's written-out defaults, per minor version (Q217 AB6) ─────────────────────────────────────────────────────────────
@@ -588,7 +593,10 @@ def read(
 
 RENDERING_NOT_RECORDED = "the file Kea wrote on {host} could not be recorded in Config history, so the next change to it will ask you to restart Kea there (or reload its configuration) first"
 PROOF_HOWS = ("rendering", "planned", "loaded", "no-file", "unreadable", "none")
-NO_PLANNED_SENTENCE = "the file on {host} cannot be proved against the file this change was planned over; restart Kea there to load the file as it stands, then Settle it now"
+NO_PLANNED_SENTENCE = (
+    "the file on {host} cannot be proved against the file this change was planned over; restart Kea there to load the file as it stands, then Settle it now - or tick the box beside Settle it now to keep "
+    "the change (the file as it stands is kept in Config history first)"
+)  # (Q222, AG3) the second way out is the box: a row from before 7.0.0-beta.5 carries no planned file, and the box is the operator's word on the file whatever it holds
 
 
 def _utc(ts: int) -> str:
@@ -1015,7 +1023,9 @@ def _reconcile_pending(
             return cfg, digest, False
         # (Q218 BH1 b, Q219) the file is asked BEFORE it is replaced, and the question is the proof: the file is byte for byte the one the Plan proved (the row's `file_sha256`), or Jen's own
         # rendering. A row that carries none (an earlier release wrote it) cannot be proved, and a settlement that cannot prove the file never overwrites it
-        if _has_ssh(server) and not row.get("file_sha256"):
+        if _has_ssh(server) and not row.get("file_sha256") and not discard:
+            # (Q222, AG3) with the box ticked the file is judged by `_ask_the_file` like any settlement's: a loaded file or Jen's rendering is written over, a `none` is captured first and
+            # then written over, and a file that cannot be read is never written over
             if notes is not None:
                 notes.append(
                     f"a change of {at} is live and its file write waits: "
@@ -1195,8 +1205,10 @@ def apply(
     *,
     before_cfg: dict | None = None,
     planned_sha: str | None = None,
+    refreshed: bool = False,
 ) -> dict:
-    """Write `cfg` to the daemon over its own API: compare, set, write, verify - the HostResult of the file path's `apply_config`. `expect_hash` is the digest read with the configuration
+    """Write `cfg` to the daemon over its own API: compare, set, write, verify - the HostResult of the file path's `apply_config`. `refreshed` (Q222, AG6) is the change set's word that its Plan
+    asked `refresh_if_stale` for this change already: one change re-reads the facts once; a caller with no Plan leaves it False and the re-read is made here. `expect_hash` is the digest read with the configuration
     this change was built from (the Plan read); `before_cfg` is that configuration (the undo's target and the API-only guard's reference; read here when a caller has none). `planned_sha` (Q219) is the
     sha256 of the FILE the Plan proved before any `config-set`: the pending row carries it, and step (6) checks the file is still that one. A caller with no Plan (a restore, an import) proves the
     file itself before anything is sent (`guard`, nothing sent, when it cannot); a rollback has none and rests on Jen's own rendering.
@@ -1230,9 +1242,10 @@ def apply(
         if window:
             return _result(False, "investigation-on", window)
     # (1b) no write without the probe's facts, the operator's consent and a daemon that is not known to refuse its file
-    refresh_if_stale(
-        server, service
-    )  # (Q221, AE8) a caller with no Plan - a restore, an import - is never refused on a stored fact a restart has already answered
+    if not refreshed:
+        refresh_if_stale(
+            server, service
+        )  # (Q221, AE8) a caller with no Plan - a restore, an import - is never refused on a stored fact a restart has already answered; (Q222, AG6) the Plan's caller says it has asked
     gated = probe_gate(server, source)
     if gated:
         return _result(False, "guard", gated)
@@ -1659,6 +1672,9 @@ def probe_gate(server: dict, source: str = "jen") -> str:
     if stored["bound"] != _bound(server):
         return f"{_name(server)} now points at a different Kea than the one that was checked - {PROBE_SENTENCE.replace('first', 'again')}"
     age = _age_days(stored.get("at"))
+    if age is not None and age < 0:
+        # (Q222, AG5) a time this box could not have written yet - the clock was ahead when the check was stored and has been put right since - is not a fresh check
+        return f"the last check of {_name(server)} is dated in the future ({stored.get('at')}); the clock was wrong when it was stored - {PROBE_SENTENCE.replace('first', 'again')}"
     if age is None or age > PROBE_MAX_AGE_DAYS:
         return f"the last check of {_name(server)} is older than {PROBE_MAX_AGE_DAYS} days - {PROBE_SENTENCE.replace('first', 'again')}"
     if not stored.get("config_api"):
@@ -1757,12 +1773,15 @@ def refresh_probe(server: dict, service: str = "dhcp4") -> bool:
 def refresh_if_stale(server: dict, service: str = "dhcp4") -> bool:
     """The WRITE PATH's refresh, asked before the gate by the change set's Plan and by `apply`: facts older than a day are re-read, and so is a stored `agree` of False on a server with an SSH host
     (Q219 E1, moved here from the gate by Q221, AE8): a restart or a reload since the check may have made the file the daemon's, and a change must not be refused on a fact the operator has already
-    answered. One `at` covers every fact a refresh stores (AE10). True when the stored facts were replaced."""
+    answered. One `at` covers every fact a refresh stores (AE10). True when the stored facts were replaced. While the file stays unloaded every change re-reads once (Q222, AG6: the question is
+    whether a restart happened since the last change, and only the host can answer it), and never twice - `apply(refreshed=True)` is the Plan's word that it has asked."""
     stored = stored_probe(server.get("id"))
     if not stored:
         return False
     age = _age_days(stored.get("at"))
-    stale = age is not None and age * 24 >= PROBE_REFRESH_AFTER_HOURS
+    stale = (
+        age is None or age < 0 or age * 24 >= PROBE_REFRESH_AFTER_HOURS
+    )  # (Q222, AG5) a time the gate refuses - unreadable, or in the future - is re-read like an old one, and the re-read stores a time this box wrote
     unloaded = _has_ssh(server) and stored.get("agree") is False
     if not (stale or unloaded):
         return False

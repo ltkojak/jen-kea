@@ -25,7 +25,9 @@ from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 
-SWITCH_CONSENTS = ("consent_rendering", "consent_unauthenticated", "discard_file_edit", "confirm_no_include")
+SWITCH_CONSENTS = (
+    __api.CONSENTS
+)  # (Q222, AG10) the one list; `tests/test_kea_consent.py` holds it equal to the card's texts
 
 
 def _server(server_id):
@@ -44,14 +46,21 @@ def _gone():
 @bp.route("/settings/infrastructure/probe-kea-config/<int:server_id>", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(minutes=10, fetch=True)
 def probe_kea_config(server_id):
-    """The readiness check of the Write mode card (`kea_api_config.probe`): what an operator reads before switching to Live API, stored for the capability, the card and the gate. It READS - a consent
-    is not given here (Q217 BG2: the switch POST is the consent act, for the facts whose time the form carries). JSON, for `jenFetch`."""
+    """The readiness check of the Write mode card (`kea_api_config.probe`): what an operator reads before switching to Live API, stored for the capability, the card and the gate. A consent
+    is not given here (Q217 BG2: the switch POST is the consent act, for the facts whose time the form carries). It is not only a read (Q222, AG9): it reaches the Kea host, stores the result
+    the gate answers from and clears a remembered `config-write` refusal on the helper's evidence - so it carries the step-up its four siblings carry and leaves an audit row. JSON, for `jenFetch`."""
     server = _server(server_id)
     if server is None:
         return jsonify({"ok": False, "error": "That server is not configured."}), 404
     facts = __api.probe(server, "dhcp4")
     __caps.invalidate(server_id)
+    __user.audit(
+        "KEA_READINESS_CHECKED",
+        f"server:{server_id}",
+        f"{server.get('name') or server_id}: readiness check; daemon over the API: {'yes' if facts.get('config_api') else 'no'}; file is the daemon's: {facts.get('agree')}",
+    )
     return jsonify({"ok": True, "probe": facts, "transport": __api.declared_transport(server)})
 
 

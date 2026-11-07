@@ -163,3 +163,55 @@ class TestTheCardCarriesTheBox:
     def test_an_admin_never_sees_the_form(self, monkeypatch):
         _cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts()}, superadmin=False, pending=True)
         assert "data-settle-discard" not in html and "settle-pending-change" not in html
+
+
+class TestARowWithNoPlannedFileTakesTheBox:
+    """Q222 (AG3): a pending row from before 7.0.0-beta.5 carries no `file_sha256`; the settlement could not prove the file and refused, and the box was ignored while the audit row said it was
+    ticked. The box is the operator's word on the file whatever it holds: it is judged by `_ask_the_file` like any settlement's."""
+
+    @staticmethod
+    def _forget_the_planned_file(store):
+        rows = [row for row in store.rows if row["source"] == "pending"]
+        assert len(rows) == 1
+        rows[0]["file_sha256"] = None
+
+    def test_without_the_box_the_sentence_names_both_ways_out(self, w, store, fake, monkeypatch):
+        edited = _crash_then_edit(w, store, fake, monkeypatch)
+        self._forget_the_planned_file(store)
+        before = w.writes()
+        lines, settled = api.settle_pending(w.server, "dhcp4")
+        text = " ".join(lines)
+        assert settled is False and w.writes() == before and fake.file == edited
+        assert "cannot be proved against the file this change was planned over" in text
+        assert "restart Kea there" in text and "tick the box beside Settle it now" in text
+
+    def test_with_the_box_the_change_is_written_and_the_edit_is_in_config_history_first(
+        self, w, store, fake, monkeypatch
+    ):
+        edited = _crash_then_edit(w, store, fake, monkeypatch)
+        self._forget_the_planned_file(store)
+        before = w.writes()
+        edit_sha = api.file_proof(w.server, "dhcp4", capture=False)["sha256"]
+        lines, settled = api.settle_pending(w.server, "dhcp4", discard=True)
+        assert settled is True, lines
+        assert w.writes() == before + 1 and fake.file.get("valid-lifetime") == 7200 and fake.file != edited
+        assert store.pending(SID, "dhcp4") is None
+        rows = store.list_revisions(SID, "dhcp4")
+        captured = [row["id"] for row in rows if row["source"] == "external" and row["sha256"] == edit_sha]
+        rendered = [row["id"] for row in rows if row["source"] == "rendering"]
+        assert len(captured) == 1 and rendered and captured[0] < min(rendered)
+
+    def test_a_file_that_cannot_be_read_is_still_never_overwritten(self, w, store, fake, monkeypatch):
+        edited = _crash_then_edit(w, store, fake, monkeypatch)
+        self._forget_the_planned_file(store)
+        before = w.writes()
+        monkeypatch.setattr(api._host, "read_config_proof", lambda server, service, capture=True: (None, None, None))
+        lines, settled = api.settle_pending(w.server, "dhcp4", discard=True)
+        assert settled is False and w.writes() == before and fake.file == edited, lines
+
+    def test_the_plan_still_never_discards(self, w, store, fake, monkeypatch):
+        edited = _crash_then_edit(w, store, fake, monkeypatch)
+        self._forget_the_planned_file(store)
+        before = w.writes()
+        blocked = api.pending_block(w.server, "dhcp4")
+        assert blocked and w.writes() == before and fake.file == edited

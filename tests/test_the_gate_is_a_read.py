@@ -7,6 +7,7 @@ there, and the gate itself is a settings read and pure rules. The first class is
 
 import ast
 import pathlib
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -215,3 +216,62 @@ class TestHealthSaysWhatItKnowsAndWhen:
             in src
         )
         assert 'every gate open"' not in src
+
+
+class TestAStoredTimeInTheFutureIsNotFresh:
+    """Q222 (AG5): the 7-day rule was one-sided - a stored `at` ahead of the clock (the clock was wrong when the check was stored) kept the gate open and was never re-read."""
+
+    FUTURE = (datetime.now(timezone.utc) + timedelta(days=8)).isoformat(timespec="seconds")
+
+    def test_the_gate_closes_with_its_own_sentence(self, monkeypatch, tripwires):
+        monkeypatch.setattr(api, "stored_probe", lambda sid: _stored(at=self.FUTURE))
+        why = api.probe_gate(SSH)
+        assert (
+            "dated in the future" in why and self.FUTURE in why and api.PROBE_SENTENCE.replace("first", "again") in why
+        )
+
+    @pytest.mark.parametrize("at", [FUTURE, "not a time", None])
+    def test_the_write_path_reads_it_again(self, monkeypatch, at):
+        calls = []
+        monkeypatch.setattr(api, "stored_probe", lambda sid: _stored(at=at))
+        monkeypatch.setattr(api, "refresh_probe", lambda srv, service="dhcp4": calls.append(srv["id"]) or True)
+        assert api.refresh_if_stale(SSH) is True and calls == [SSH["id"]]
+
+    def test_a_fresh_time_is_still_fresh(self, monkeypatch, tripwires):
+        monkeypatch.setattr(api, "stored_probe", lambda sid: _stored())
+        assert api.probe_gate(SSH) == ""
+
+
+class TestOneChangeOneReRead:
+    """Q222 (AG6): the Plan and `apply` are one change's path; the Plan's re-read is the change's and `apply` takes its word (`refreshed=True`). A caller with no Plan still re-reads."""
+
+    def _quiet(self, monkeypatch, order):
+        monkeypatch.setattr(api._host, "guard_kea_write", lambda *a, **k: "")
+        monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
+        monkeypatch.setattr(api, "refresh_if_stale", lambda srv, service="dhcp4": order.append("refresh") or False)
+        monkeypatch.setattr(api, "probe_gate", lambda srv, source="jen": order.append("gate") or "the gate is closed")
+
+    def test_apply_with_the_plans_word_asks_no_second_re_read(self, monkeypatch):
+        order = []
+        self._quiet(monkeypatch, order)
+        result = api.apply(SSH, "dhcp4", {"Dhcp4": {}}, "digest", "a change", refreshed=True)
+        assert result["code"] == "guard" and order == ["gate"]
+
+    def test_apply_without_it_re_reads(self, monkeypatch):
+        order = []
+        self._quiet(monkeypatch, order)
+        api.apply(SSH, "dhcp4", {"Dhcp4": {}}, "digest", "a change")
+        assert order == ["refresh", "gate"]
+
+    def test_the_change_set_gives_its_word(self):
+        src = (ROOT / "jen/services/kea_changeset.py").read_text(encoding="utf-8")
+        calls = [
+            n
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.Call)
+            and ast.unparse(n.func) == "_safe"
+            and n.args
+            and ast.unparse(n.args[0]) == "_api.apply"
+        ]
+        assert len(calls) == 1
+        assert any(k.arg == "refreshed" and ast.unparse(k.value) == "True" for k in calls[0].keywords)
