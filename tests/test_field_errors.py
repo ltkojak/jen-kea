@@ -232,6 +232,23 @@ class TestAnErrorLandsOnItsOwnForm:
             assert not sess.get("field_errors") and not sess.get("_flashes")
         assert "A name is required." not in logged_in_client.get("/settings/api-keys").data.decode()
 
+    @pytest.mark.parametrize(
+        "headers",
+        [{"HX-Request": "true"}, {"Sec-Fetch-Mode": "same-origin"}, {"Sec-Fetch-Mode": "cors"}],
+    )
+    def test_an_error_for_a_request_nobody_reads_leaves_the_messages_for_the_next_page(self, logged_in_client, headers):
+        """Q215 second pass (F1): only a navigation consumes the pending messages. A status poll, an htmx swap or a Stay signed in click that gets the error page must not eat a message meant for the
+        page the person is about to see."""
+        with logged_in_client.session_transaction() as sess:
+            sess["field_errors"] = [["name", "A name is required.", "/subnets/add"]]
+            sess["_flashes"] = [("warning", "A flash waiting for a page.")]
+        r = logged_in_client.get("/no-such-page-q215", headers=headers)
+        assert r.status_code == 404 and "A name is required." not in r.data.decode()
+        with logged_in_client.session_transaction() as sess:
+            assert sess.get("field_errors") and sess.get("_flashes")
+        html = logged_in_client.get("/no-such-page-q215", headers={"Sec-Fetch-Mode": "navigate"}).data.decode()
+        assert "A name is required." in html and "A flash waiting for a page." in html
+
     def test_the_two_element_shape_prints_an_empty_form_path_and_lands_on_any_page(self, logged_in_client):
         with logged_in_client.session_transaction() as sess:
             sess["field_errors"] = [["name", "an old-shape message"]]

@@ -478,20 +478,23 @@ class TestAPageThatReloadsItselfLeavesTheDialogAlone:
 
     def test_the_servers_page_does_not_reload_under_the_dialog(self, page, base_url):
         self._servers(page, base_url)
-        self._age(page, 22_000)
-        # a 12-second span: the dialog opens 6 s before the end (t = 28 s), the page's own 30-second interval fires at t = 30 s, and the deadline itself is at t = 34 s
+        self._age(page, 5_000)
+        # a 40-second span: the dialog opens 20 s before the end (page age 25 s), the page's own 30-second interval fires at 30 s plus however long the script took to start (a slow render is a few
+        # seconds), and the deadline itself is at 45 s - so the check at 36 s is after the tick on any render that took under 6 s and before the sign-out.
+        # The state passed is above the session's real one on purpose: the page's own `/api/stats` reply every 30 s is then ignored by the watch's state guard instead of moving the deadline and
+        # closing the dialog (what a genuine reply would do - the test is about the reload, not about that).
         st = page.evaluate("window.jenSessionWatch.state()")
-        sn = st["lastServerNow"] + 1
-        page.evaluate(f"window.jenSessionWatch.ingest({sn + 12}, false, {sn}, {max(_active(page), sn)})")
-        self._age(page, 28_500)
+        sn = st["lastServerNow"] + 5
+        page.evaluate(f"window.jenSessionWatch.ingest({sn + 40}, false, {sn}, {max(_active(page), sn)})")
+        self._age(page, 26_000)
         expect(page.locator("#jen-session-overlay")).to_be_visible()
         before = _left_seconds(page)
-        self._age(page, 31_500)
+        self._age(page, 36_000)
         assert page.evaluate("window.__sentinel") == 1, "the 30-second reload fired under the open dialog"
         assert page.evaluate("window.jenSessionWatch.state().open") is True
         assert _left_seconds(page) < before, "the countdown continued"
 
-    def test_the_control_reloads_within_thirty_one_seconds(self, page, base_url):
-        """Without the dialog the same page reloads itself on schedule: the sentinel is gone by t = 31 s, so the test above proves the dialog is the reason and not a page that never reloads."""
+    def test_the_control_reloads_within_forty_seconds(self, page, base_url):
+        """Without the dialog the same page reloads itself on schedule: the sentinel is gone by then, so the test above proves the dialog is the reason and not a page that never reloads."""
         self._servers(page, base_url)
-        page.wait_for_function("window.__sentinel === undefined", polling=500, timeout=31_500)
+        page.wait_for_function("window.__sentinel === undefined", polling=500, timeout=40_000)

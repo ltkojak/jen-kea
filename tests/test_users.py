@@ -112,9 +112,21 @@ class TestUserManagement:
                 data={"username": name, "password": "testpass123", "role": "viewer", "timeout": timeout},
                 follow_redirects=True,
             )
+            db.commit()  # a fresh read view: the connection is REPEATABLE READ with autocommit off, and the route committed on another connection
             with db.cursor() as cur:
                 cur.execute("SELECT session_timeout FROM users WHERE username=%s", (name,))
                 assert cur.fetchone()["session_timeout"] == expected, name
+
+    @pytest.mark.parametrize(("stored", "shown"), [("x", "60"), ("99999", "60"), ("00005", "5"), ("45", "45")])
+    def test_the_users_page_shows_the_global_minutes_the_server_applies(self, logged_in_client, stored, shown):
+        """Q215 second pass (F3): the Users page printed the stored text (`xm (global)`) where the Security form shows what the server applies; both read `session_timeout.global_minutes()`."""
+        from tests.test_session_notice import _timeout_set
+
+        with _timeout_set(session_timeout_minutes=stored):
+            html = logged_in_client.get("/settings/users").data.decode()
+        assert f'placeholder="{shown} (global default)"' in html, stored
+        if stored != shown:
+            assert f'placeholder="{stored} (global default)"' not in html, stored
 
     def test_create_user_duplicate_fails(self, logged_in_client, db):
         """Cannot create user with duplicate username."""

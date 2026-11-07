@@ -243,7 +243,8 @@ def users():
         logger.error(f"Could not load users: {e}")
         flash("Could not load users. Check server logs for details.", "error")
         all_users = []
-    global_timeout = __user.get_global_setting("session_timeout_minutes", "60")
+    # Q215 (F3, Z18): the minutes the server APPLIES (a hand-edited row reads as 60 there), the same number the Security form shows
+    global_timeout = str(__session_timeout.global_minutes())
     mfa_mode = __mfa.get_mfa_mode()
     return render_template(
         "users.html",
@@ -273,13 +274,6 @@ def add_user():
             flash("Subnet ids must be numbers.", "error")
             return users(), 400
         subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
-    timeout_val = None
-    if timeout_raw:
-        # Q215: refused like the edit and set-timeout routes refuse it - an out-of-range or unreadable value used to create the account on the global timeout without a word
-        if (__session_timeout.parse_minutes(timeout_raw) or 0) < 1:
-            flash("Timeout must be 1–1440 minutes.", "error")
-            return redirect(url_for("users.users"))
-        timeout_val = __session_timeout.parse_minutes(timeout_raw)
 
     if not username:
         flash_field("username", "Username is required.")
@@ -293,6 +287,14 @@ def add_user():
     if role not in ("superadmin", "admin", "viewer"):
         flash("Invalid role.", "error")
         return redirect(url_for("users.users"))
+    # Q215: the timeout is refused the way the edit and set-timeout routes refuse it, after the name, the password and the role (an out-of-range or unreadable value used to create the account on the
+    # global timeout without a word) - so a form with several things wrong still says the field errors first
+    timeout_val = None
+    if timeout_raw:
+        if (__session_timeout.parse_minutes(timeout_raw) or 0) < 1:
+            flash("Timeout must be 1–1440 minutes.", "error")
+            return redirect(url_for("users.users"))
+        timeout_val = __session_timeout.parse_minutes(timeout_raw)
 
     try:
         with __db.jen_db() as db:
