@@ -405,8 +405,9 @@ class TestTwoTabsOfOneSignIn:
         )  # the second tab's own first paint reaches this one through the storage event: read the state AFTER it settles
         st = page.evaluate("window.jenSessionWatch.state()")
         later = st["expires"] + 7200
-        # Q215 (Z2): a value written by a tab carries `<deadline>:<clock>:<state>` - the watch ignores one without its state
-        active = _active(page)
+        # Q215 (Z2): a value written by a tab carries `<deadline>:<clock>:<state>` - the watch ignores one without its state. The state is the SECOND tab's own: both tabs share one session cookie, the
+        # second tab's navigation moved `last_active`, and the first tab may already have taken a reply that says so - its own first-paint state would then be an older one and would be ignored
+        active = _active(second)
         second.evaluate(
             f"localStorage.setItem('jen-session-expires:0123456789abcdef', '{later}:{st['lastServerNow'] + 5}:{active}')"
         )
