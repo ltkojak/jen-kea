@@ -535,15 +535,21 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 **Rule.** (Q190.) The credential rule's fields (`api_user`, `api_pass` and their per-daemon twins, resolved by `credentials.resolve`) are the ONLY place a Kea password lives. `auth.valid_api_url` refuses an address
 with user-info (`https://user:password@host:8004`, `https://user@host`), the forms say so (`auth.userinfo_sentence`), and the same function is the one definition at every form and in the wizard. An address
 that already carries user-info in jen.config is legacy input: `AppConfig.apply` logs ONE warning per section and key (never the value), Health's "Every endpoint has a credential" row names it and says to move
-it to the user and password fields, and Jen keeps dialing it as written (the credential rule is not touched). Every sentence that shows an address goes through `auth.shown_url` (LEAK-001).
-**Established.** Q190 (beta.20's review: `valid_api_url` accepted user-info and Rotate's probe-failure flash, the connection form's audit row and the authoring flash printed the address as typed).
-**Enforced at.** `auth.valid_api_url` / `userinfo_sentence` / `shown_url` / `scrub_urls` / `urls_with_userinfo`; `config._warn_userinfo_urls`; `health._endpoint_credentials`.
+it to the user and password fields, and Jen keeps dialing it as written (the credential rule is not touched). Every sentence that shows an address goes through `auth.shown_url` (LEAK-001). What LEAVES the box
+carries no user-info at all (5.70.1): the support bundle's JSON members, its INI text and its log lines remove the user-info of every address - a value by `secret_keys.without_userinfo` (split at the authority's last `@`,
+so a password with a quote, a space or an `@` in it goes too), text by `secret_keys.scrub_urls` (an address ends at whitespace, `/`, `?` or `#` and nowhere else). A secret-named INI key is masked BY NAME and its value is never
+consulted (a password that began with `/` was taken for a path and exported in clear; the name rule already keeps every path-naming key).
+**Established.** Q190 (beta.20's review: `valid_api_url` accepted user-info and Rotate's probe-failure flash, the connection form's audit row and the authoring flash printed the address as typed). 5.70.1 (Q215 carrying Q221's AE7: the bundle exported a legacy `api_url` in the clear beside a masked `api_pass`, in 5.70.0 too; and Q222's AG1: a secret whose value began with a path separator was written to `config.ini.redacted` in clear).
+**Enforced at.** `auth.valid_api_url` / `userinfo_sentence` / `shown_url` / `scrub_urls` / `urls_with_userinfo`; `config._warn_userinfo_urls`; `health._endpoint_credentials`. `secret_keys.scrub_urls` / `without_userinfo` (the one definition; `auth`'s names delegate); `support_bundle._json` / `_scrubbed` / `redact_ini_text` / `scrub_log_line`.
 **Tests.**
 - `tests/test_url_never_carries_a_password.py::TestValidApiUrl`
 - `tests/test_url_never_carries_a_password.py::TestLegacyUrls`
 - `tests/test_kea_tls_rotation.py::TestALegacyUrlWithAPasswordNeverReachesText`
 - `tests/test_direct_socket_lock.py::TestALegacyUrlWithAPasswordNeverReachesTheRecoveryLines`
 - `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
+- `tests/test_an_exported_address_carries_no_password.py::TestTheOneDefinition`
+- `tests/test_an_exported_address_carries_no_password.py::TestNoMemberOfTheBundleCarriesAPassword`
+- `tests/test_a_secret_leaves_the_box_masked.py::TestASecretIsMaskedByNameAlone`
 
 ### REMOTE-001 - A TLS or socket operation is one transaction: local state first, every step proved, the restored endpoint answers, every unproved state durable, every target from the configuration, every record the host's own
 **Rule.** (Final form, Q188; the target set and the record added by Q189.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:

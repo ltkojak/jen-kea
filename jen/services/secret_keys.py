@@ -30,3 +30,31 @@ def is_secret_key(name) -> bool:
     return bool(
         _SECRET_NAME_RE.search(_CAMEL.sub("_", name.strip()).lower().replace("-", "_"))
     )  # (camelCase reads as snake_case: `clientSecret`, `apiKey`)
+
+
+_PADDING = " \t\r\n"
+# (Q190 second pass, finding 5: the user-info runs to the LAST '@' before the path - a password may contain one - so the pattern is greedy up to a delimiter. Q221, AE7: a quote or an angle
+# bracket is NOT a delimiter - a password may contain those too - so an address ends at whitespace, `/`, `?` or `#` and nowhere else; over-scrubbing a sentence is the safe direction)
+_USERINFO_RE = re.compile(r"(?i)\b(https?://)[^\s/?#]*@")
+
+
+def scrub_urls(text) -> str:
+    """`text` with the user-info of every http(s) address in it removed (`https://u:p@h:8004/x` -> `https://h:8004/x`): for TEXT that may carry an address as it was typed - an exception's message, a
+    log line, a sentence. Idempotent; a text with no address comes back unchanged. THE definition (Q221, AE7); `auth.scrub_urls` is this."""
+    return _USERINFO_RE.sub(r"\1", str(text if text is not None else ""))
+
+
+def without_userinfo(value) -> str:
+    """A value that IS one address - a saved `api_url`, a Kea `url` key, a form field - without its user-info, whatever characters the user-info carries (Q221, AE7; CRED-005). The authority is split
+    by `urlsplit` at its LAST `@`, so a password with a space in it goes too, which no pattern over free text can promise; what is left goes through `scrub_urls`. A value that is not an http(s)
+    address is `scrub_urls` of it. Idempotent. The exported layer (the support bundle) and the compare's sentence use this for a value; `auth.without_userinfo` is this."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    text = str(value if value is not None else "")
+    try:
+        parts = urlsplit(text.strip(_PADDING))
+        if parts.scheme.lower() in ("http", "https") and "@" in parts.netloc:
+            text = urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+    except ValueError:
+        pass
+    return scrub_urls(text)
