@@ -374,7 +374,8 @@ if (updateForm && updateForm.tagName === 'FORM') {
                 if (s && (s.active_state === 'activating' || s.active_state === 'active')) {
                     msg.textContent = 'Installing update (' + (s.sub_state || 'running') + ')…';
                 }
-                return jenFetch('/settings/infrastructure/check-update', { cache: 'no-store' });
+                // Q215 (Z4): this request repeats every two seconds on its own - it is a poll like the update-status one above, and says so (the button's call at the top of the page is a click and stays unmarked)
+                return jenFetch('/settings/infrastructure/check-update', { cache: 'no-store', headers: { 'X-Jen-Poll': '1' } });
             })
             .then(function(r) {
                 if (r === null) return null;

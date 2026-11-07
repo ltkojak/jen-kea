@@ -70,6 +70,12 @@ def _global_minutes():
     return minutes
 
 
+def global_minutes():
+    """The global timeout in minutes the way the reader applies it (a hand-edited row that is not a whole number reads as the default) - what the settings form shows, so the box and the
+    server agree (Q215, Z18)."""
+    return _global_minutes()
+
+
 def timeout_minutes(user):
     """The idle timeout in minutes for `user`, or None when the timeout is off (the global switch, or a timeout of 0)."""
     if get_global_setting("session_timeout_enabled", "true") == "false":
@@ -131,16 +137,23 @@ def announcement(session, user):
     return expires_at(session, user)
 
 
-def is_poll(headers, args=None):
-    """True when the request says it only refreshes a view: `X-Jen-Poll: 1`, or `?_poll=1` for the one kind of request that cannot carry a header (a page that reloads itself: a navigation). It can only
-    stop an extension of the session, so a forged one is the forger's own loss."""
-    return headers.get(POLL_HEADER) == "1" or (args is not None and args.get(POLL_ARG) == "1")
+def is_poll(headers, args=None, method="GET"):
+    """True when the request says it only refreshes a view: `X-Jen-Poll: 1`, or `?_poll=1` for the one kind of request that cannot carry a header (a page that reloads itself: a navigation, which is a
+    GET - Q215, Z13: on a POST the query marker is not one, so `POST /settings/save-session?_poll=1` extends like the plain POST). It can only stop an extension of the session, so a forged one is the
+    forger's own loss; the header form stays as it is, and a value other than `1` is no marker (a marker denies an extension, it never grants one)."""
+    return headers.get(POLL_HEADER) == "1" or (method == "GET" and args is not None and args.get(POLL_ARG) == "1")
 
 
-def extends(path, headers, args=None):
-    """Whether an authenticated request to `path` moves `last_active` - the ONE definition. Not `/api/` (the dashboard's poll), `/metrics`, `/session/touch` (its own writer: a request it
-    refuses must not have extended the session) or a request marked `X-Jen-Poll: 1`. The one request that moves it on purpose is a CSRF-checked POST to `/session/touch`."""
-    return not (path.startswith("/api/") or path == "/metrics" or path in NO_TOUCH_PATHS or is_poll(headers, args))
+def extends(path, headers, args=None, method="GET"):
+    """Whether an authenticated request to `path` moves `last_active` - the ONE definition. Not `/static/` (Q215, Z15: the middleware returns before it for a static file, and the definition says what
+    the middleware does), `/api/` (the dashboard's poll), `/metrics`, `/session/touch` (its own writer: a request it refuses must not have extended the session) or a request marked `X-Jen-Poll: 1`
+    (or, for a GET, `?_poll=1`). The one request that moves it on purpose is a CSRF-checked POST to `/session/touch`."""
+    return not (
+        path.startswith(("/static/", "/api/"))
+        or path == "/metrics"
+        or path in NO_TOUCH_PATHS
+        or is_poll(headers, args, method)
+    )
 
 
 def new_login_id():

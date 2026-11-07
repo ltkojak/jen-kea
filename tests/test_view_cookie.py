@@ -101,10 +101,21 @@ class TestTheContract:
         cookies = {view_prefs.COOKIE: json.dumps({"leases": "100"})}
         assert view_prefs.resolve("leases", {"per_page": "all"}, cookies) == ("all", {"leases": "all"})
 
-    def test_a_value_the_table_does_not_hold_is_used_as_the_route_always_used_it_and_never_stored(self):
+    def test_a_whole_number_the_table_does_not_hold_is_used_as_the_route_always_used_it_and_never_stored(self):
         cookies = {view_prefs.COOKIE: json.dumps({"leases": "100"})}
         assert view_prefs.resolve("leases", {"per_page": "7"}, cookies) == ("7", {"leases": "100"})
-        assert view_prefs.resolve("leases", {"per_page": ""}, cookies) == ("", {"leases": "100"})
+        assert view_prefs.resolve("leases", {"per_page": "999"}, cookies) == ("999", {"leases": "100"})
+
+    @pytest.mark.parametrize(
+        "given",
+        ["", "x", "x&dir=asc&sort=ip#frag", " 7", "7 ", "-5", "1.5", "1e3", "\u0661\u0662", "1234567", "all ", "ALL"],
+    )
+    def test_an_unknown_per_page_is_the_tables(self, given):
+        """Q215 (Z3): a `per_page` that is not a whole number at all is treated as ABSENT - the page gets the remembered value (or "all") and the cookie is left as it was. It had no reason to reach the
+        page: it was printed into twenty page links."""
+        cookies = {view_prefs.COOKIE: json.dumps({"leases": "100"})}
+        assert view_prefs.resolve("leases", {"per_page": given}, cookies) == ("100", {"leases": "100"})
+        assert view_prefs.resolve("leases", {"per_page": given}, {}) == ("all", {})
 
     def test_another_pages_value_does_not_leak_across(self):
         cookies = {view_prefs.COOKIE: json.dumps({"leases": "100"})}

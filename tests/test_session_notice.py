@@ -9,9 +9,12 @@ The first class is pure (`py -m pytest --noconftest tests/test_session_notice.py
 """
 
 import contextlib
+import json
 import logging
 import pathlib
 import re
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
@@ -201,8 +204,21 @@ class TestTouch:
             assert sess["last_active"] == stale
 
     def test_anonymous_gets_the_login_redirect_and_nothing_moves(self, app, csrf_client):  # noqa: F811
-        r = csrf_client.post("/session/touch", headers={"X-CSRFToken": _valid_token_for(app, csrf_client)})
-        assert r.status_code == 302 and urlsplit(r.headers["Location"]).path == "/login"
+        """Q215 (Z5): an ANONYMOUS request gets the same `Location` an expired session gets - the WHOLE value, not its path. Six shapes answer the 6-character `/login`; an ordinary page keeps its `next`."""
+        token = {"X-CSRFToken": _valid_token_for(app, csrf_client)}
+        shapes = [
+            ("GET", "/api/stats", "/login"),
+            ("GET", "/logout", "/login"),
+            ("POST", "/session/touch", "/login"),
+            ("POST", "/users/add", "/login"),
+            ("POST", "/leases/release", "/login"),
+            ("GET", "/leases?q=" + "a" * 4000, "/login"),
+            ("GET", "/leases", "/login?next=%2Fleases"),
+        ]
+        for method, path, expected in shapes:
+            r = csrf_client.open(path, method=method, headers=token)
+            assert r.status_code == 302, (method, path[:40], r.status_code)
+            assert r.headers["Location"] == expected, (method, path[:40], r.headers["Location"])
         with csrf_client.session_transaction() as sess:
             assert "last_active" not in sess
 
@@ -358,7 +374,7 @@ class TestTheTouchPathIsNotTouchedByTheMiddleware:
         )
         assert (
             text.count("if extends:") == 3
-            and "session_timeout_svc.extends(request.path, request.headers, request.args)" in text
+            and "session_timeout_svc.extends(request.path, request.headers, request.args, request.method)" in text
         )
 
 
@@ -586,6 +602,75 @@ class TestAPollNeverExtends:
         assert "_poll" in pathlib.Path("templates/servers.html").read_text(encoding="utf-8")
         assert "searchParams.delete('_poll')" in pathlib.Path("templates/base.html").read_text(encoding="utf-8")
 
+    def test_every_fetch_inside_an_interval_carries_the_marker(self):
+        """Q215 (Z4): the source half asks EVERY `fetch(` / `jenFetch(` inside a `setInterval` body, read to the matching bracket (the Q210 test read 600 characters past each `setInterval`, and the update
+        screen's second request sat past them). A click is activity and stays unmarked; a request that repeats on its own is a poll."""
+        seen = []
+        for path, line, body in _set_interval_calls():
+            assert body, (path, line)
+            for m in re.finditer(r"\b(?:jenFetch|fetch)\(", body):
+                args = _call_args(body, m.end() - 1)
+                seen.append((path, line))
+                assert args and "'X-Jen-Poll': '1'" in args.replace('"', "'"), (path, line, (args or "")[:80])
+        assert len(seen) >= 4, f"the scan would be vacuous: {seen}"
+
+    def test_twelve_check_update_polls_end_in_a_sign_out(self, logged_in_client, monkeypatch):
+        """Q215 (Z4), through the real middleware: under a one-minute timeout, twelve marked polls 50 s apart do not keep the session alive (signed out at the second); the same twelve unmarked ones do
+        (that was the update screen's second request, which kept an unattended page signed in for as long as it polled)."""
+
+        class _Gone:
+            status_code = 404
+
+        monkeypatch.setattr("requests.get", lambda *a, **k: _Gone())
+
+        def shift(seconds):
+            with logged_in_client.session_transaction() as sess:
+                base = datetime.fromisoformat(sess["last_active"])
+                sess["last_active"] = (base - timedelta(seconds=seconds)).isoformat()
+
+        def run(headers):
+            logged_in_client.get("/leases")  # a click: the session starts from now
+            for n in range(1, 13):
+                shift(50)
+                r = logged_in_client.get("/settings/infrastructure/check-update", headers=headers)
+                if r.status_code == 302:
+                    return n
+            return None
+
+        with _timeout_set(session_timeout_minutes="1", session_timeout_enabled="true"):
+            assert run({"X-Jen-Poll": "1"}) == 2
+            with logged_in_client.session_transaction() as sess:
+                assert "_user_id" not in sess
+
+    def test_twelve_unmarked_check_update_calls_keep_a_session_alive(self, logged_in_client, monkeypatch):
+        class _Gone:
+            status_code = 404
+
+        monkeypatch.setattr("requests.get", lambda *a, **k: _Gone())
+        with _timeout_set(session_timeout_minutes="1", session_timeout_enabled="true"):
+            logged_in_client.get("/leases")
+            for _ in range(12):
+                with logged_in_client.session_transaction() as sess:
+                    base = datetime.fromisoformat(sess["last_active"])
+                    sess["last_active"] = (base - timedelta(seconds=50)).isoformat()
+                assert logged_in_client.get("/settings/infrastructure/check-update").status_code == 200
+
+    def test_a_post_with_the_query_marker_extends_like_the_plain_post(self, logged_in_client):
+        """Q215 (Z13): `?_poll=1` is a GET's marker (a navigation cannot carry the header). On a POST it is nothing: `POST /settings/save-session?_poll=1` moves `last_active` like the plain POST."""
+        stale = _iso(10)
+        form = {"timeout_minutes": "60", "timeout_enabled": "true"}
+        for url in ("/settings/save-session", "/settings/save-session?_poll=1"):
+            with logged_in_client.session_transaction() as sess:
+                sess["last_active"] = stale
+            assert logged_in_client.post(url, data=form).status_code == 302
+            with logged_in_client.session_transaction() as sess:
+                assert sess["last_active"] != stale, url
+        with logged_in_client.session_transaction() as sess:
+            sess["last_active"] = stale
+        logged_in_client.post("/settings/save-session", data=form, headers={"X-Jen-Poll": "1"})
+        with logged_in_client.session_transaction() as sess:
+            assert sess["last_active"] == stale, "the header form still denies an extension, on any method"
+
     def test_the_bounded_pollers_send_the_marker_too(self):
         for name in (
             "templates/plugins.html",
@@ -615,7 +700,7 @@ class TestAPollNeverExtends:
 
     def test_the_middleware_has_one_definition_of_what_extends(self):
         text = pathlib.Path("jen/__init__.py").read_text(encoding="utf-8")
-        assert "session_timeout_svc.extends(request.path, request.headers, request.args)" in text
+        assert "session_timeout_svc.extends(request.path, request.headers, request.args, request.method)" in text
         assert st.extends("/leases", {}) and not st.extends("/leases", {"X-Jen-Poll": "1"})
         assert not st.extends("/servers", {}, {"_poll": "1"}) and st.extends("/servers", {}, {"_poll": "0"})
         assert (
@@ -765,11 +850,48 @@ class TestEveryDeadlineCarriesNow:
 
     def test_the_script_ignores_a_reply_built_from_an_older_session_state(self):
         text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
-        assert "if (ac > 0 && ac < lastActive) return;" in text and "if (ac > lastActive) lastActive = ac;" in text
+        assert "if (!(ac >= 0) || ac < lastActive) return;" in text and "if (ac > lastActive) lastActive = ac;" in text
 
-    def test_the_script_ignores_a_deadline_that_arrives_without_it(self):
+    def test_the_script_ignores_a_deadline_that_arrives_without_a_clock(self):
         text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
         assert "if (!(sn > 0) || sn < lastServerNow) return;" in text
+
+    def test_the_script_ignores_a_deadline_that_arrives_without_its_state_source(self):
+        """The guard is a strict read of the state, and the server's word for "none" is `0` (the executed half is TestTheWatchScriptRuns)."""
+        text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
+        assert "/^[0-9]{1,12}$/.test(String(active)) ? parseInt(active, 10) : -1;" in text
+
+    @pytest.mark.parametrize("timeout_enabled", ["true", "false"])
+    def test_off_carries_a_numeric_state(self, logged_in_client, timeout_enabled):
+        """Q215 (Z2 a): `X-Jen-Session-Active` travels beside EVERY `X-Jen-Session-Expires` - `off` and a session with no readable `last_active` included (`0` there). Over the paths the
+        middleware answers differently (an extending page, a poll, an error page, the touch path) none carries a deadline without its state."""
+        paths = (
+            "/leases",
+            "/devices",
+            "/reservations",
+            "/servers",
+            "/api/stats",
+            "/no-such-page-q215",
+            "/session/touch",
+            "/settings/system",
+        )
+        seen = 0
+        with _timeout_set(session_timeout_enabled=timeout_enabled):
+            for kind in ("with_last_active", "without_last_active"):
+                for path in paths:
+                    with logged_in_client.session_transaction() as sess:
+                        if kind == "without_last_active":
+                            sess.pop("last_active", None)
+                    for headers in ({}, {"X-Jen-Poll": "1"}):
+                        r = logged_in_client.get(path, headers=headers)
+                        if "X-Jen-Session-Expires" in r.headers:
+                            seen += 1
+                            assert re.fullmatch(r"\d+", r.headers.get("X-Jen-Session-Active", "")), (
+                                kind,
+                                path,
+                                headers,
+                            )
+        assert seen >= 20, "the rule would be vacuous if the headers were seldom sent"
 
 
 class TestTheLoginIdIsPerLogin:
@@ -815,6 +937,17 @@ class TestTheLoginIdIsPerLogin:
         for page in pages:
             m = re.search(r'<body[^>]*\bdata-session-login="([0-9a-f]*)"', page)
             assert m and m.group(1) == mine
+
+    def test_a_poll_as_the_first_request_still_names_the_login(self, logged_in_client):
+        """Q215 (Z19): a poll never writes `last_active`, so a page whose FIRST authenticated request is one has no deadline to announce - and used to render no login label either, so the browser's
+        cross-tab key degenerated to the bare prefix. The label exists from the session's first request; only the deadline attributes depend on the announcement."""
+        with logged_in_client.session_transaction() as sess:
+            sess.pop("last_active", None)
+            sess.pop("login_id", None)
+        page = logged_in_client.get("/leases", headers={"X-Jen-Poll": "1"}).data.decode()
+        body = re.search(r"<body[^>]*>", page).group(0)
+        assert re.search(r'\bdata-session-login="[0-9a-f]{16}"', body), body
+        assert "data-session-expires" not in body and "data-session-active" not in body, body
 
     def test_every_place_that_signs_a_person_in_sets_it(self):
         """Whole tree, not a file list: any function in jen/ that calls `login_user` must also set `login_id` (Q210's own lesson: a definition's fix is a fix to every use)."""
@@ -881,3 +1014,232 @@ class TestTheForcedChangeScreenHasTheNotice:
         assert r.status_code == 200 and r.get_json()["ok"] is True and "Location" not in r.headers
         with c.session_transaction() as sess:
             assert sess["last_active"] != stale
+
+
+# ── Q215: the scans over every script in the tree, and the watch script run ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+def _script_files():
+    """Every page and script a browser runs from this tree: the core templates, the bundled plugins' templates and scripts, and our own static scripts (not the vendored, minified ones)."""
+    for root in ("templates", "plugins", "static"):
+        for path in sorted(pathlib.Path(root).rglob("*")):
+            if path.suffix in (".html", ".js") and ".min." not in path.name:
+                yield path
+
+
+def _call_args(text, open_at):
+    """The text of a call from its opening parenthesis to the matching closing one (strings, template literals and comments skipped), or None when it does not close. Q215: the pass's own blindness
+    was reading a fixed number of characters past a `setInterval(`; this reads to the matching bracket."""
+    depth, i, n = 0, open_at, len(text)
+    while i < n:
+        c = text[i]
+        if c in "'\"`":
+            quote = c
+            i += 1
+            while i < n and text[i] != quote:
+                i += 2 if text[i] == "\\" else 1
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_at : i + 1]
+        i += 1
+    return None
+
+
+def _in_own_frame(body, needle):
+    """True when `needle` occurs in the callback's OWN function body, not inside a function nested in it (a `.then(function...)`, a `setTimeout(function...)`, an arrow): a reload there runs once, after the
+    work the interval was waiting for, and clears the interval first."""
+    frames, pending_function, i, n = [], False, 0, len(body)
+    while i < n:
+        c = body[i]
+        if c in "'\"`":
+            quote = c
+            i += 1
+            while i < n and body[i] != quote:
+                i += 2 if body[i] == "\\" else 1
+        elif body.startswith("//", i):
+            end = body.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        elif body.startswith("/*", i):
+            end = body.find("*/", i + 2)
+            i = n if end < 0 else end + 1
+        elif (
+            body.startswith("function", i)
+            and not (body[i - 1].isalnum() or body[i - 1] == "_")
+            or body.startswith("=>", i)
+        ):
+            pending_function = True
+        elif c == "{":
+            frames.append(pending_function)
+            pending_function = False
+        elif c == "}":
+            if frames:
+                frames.pop()
+        elif body.startswith(needle, i) and sum(frames) == 1:
+            return True
+        i += 1
+    return False
+
+
+def _set_interval_calls():
+    found = []
+    for path in _script_files():
+        text = path.read_text(encoding="utf-8")
+        for m in re.finditer(r"\bsetInterval\(", text):
+            found.append((path.as_posix(), text.count("\n", 0, m.start()) + 1, _call_args(text, m.end() - 1)))
+    return found
+
+
+class TestARepeatingReloadReadsTheDialog:
+    """Q215 (Z1, BE1): a page that reloads ITSELF on a timer must leave the "Still there?" dialog alone - the Servers page's 30 s reload took the Stay signed in click with it. The scan is the whole
+    tree (templates, plugins, static), so the next page that reloads itself cannot ship without the term."""
+
+    def test_every_interval_in_the_tree_is_read_to_its_end(self):
+        calls = _set_interval_calls()
+        assert len(calls) >= 8, f"the scan found too few setInterval calls to be the tree: {calls}"
+        assert all(body for _, _, body in calls), [(p, ln) for p, ln, body in calls if not body]
+
+    def test_every_interval_that_reloads_its_own_page_reads_the_dialog(self):
+        reloading = [
+            (p, ln, body) for p, ln, body in _set_interval_calls() if body and _in_own_frame(body, "location.reload(")
+        ]
+        assert reloading, "the Servers page's refresh is one: the scan would be vacuous if it found none"
+        assert [p for p, _, _ in reloading] == ["templates/servers.html"], [(p, ln) for p, ln, _ in reloading]
+        for path, line, body in reloading:
+            assert "window.jenSessionWatch && window.jenSessionWatch.state().open" in body, (path, line)
+
+
+class TestTheOneDefinition:
+    """Q215 (Z13, Z15): `session_timeout.extends()` is the ONE definition of what moves `last_active`, and it says what the middleware does."""
+
+    def test_static_is_not_an_extension(self):
+        assert st.extends("/static/css/print.css", {}) is False
+        assert st.extends("/static/js/htmx.min.js", {}, {"_poll": "0"}) is False
+        assert st.extends("/leases", {}) is True
+
+    def test_the_query_marker_is_a_gets(self):
+        """A navigation cannot carry the header, so a GET may say `?_poll=1`; on a POST (or anything that is not a GET) the query marker is nothing, and the header form stays as it is."""
+        assert st.is_poll({}, {"_poll": "1"}, "GET") is True
+        for method in ("POST", "PUT", "DELETE", "PATCH"):
+            assert st.is_poll({}, {"_poll": "1"}, method) is False, method
+            assert st.is_poll({"X-Jen-Poll": "1"}, {}, method) is True, method
+        assert st.is_poll({"X-Jen-Poll": "yes"}, {"_poll": "true"}, "GET") is False, (
+            "a marker denies, it never grants: any value but 1 is no marker"
+        )
+        assert st.extends("/settings/save-session", {}, {"_poll": "1"}, "POST") is True
+        assert st.extends("/servers", {}, {"_poll": "1"}, "GET") is False
+
+
+class TestTheWatchScriptRuns:
+    """Q215: the watch script RUN, not read. Node is the engine (the suite's existing precedent, tests/test_dashboard_chart.py); the DOM it touches is a stub of exactly what the script reads. Skipped where
+    node is absent - the browser half of every row is tests/e2e/test_session_notice.py."""
+
+    NODE = shutil.which("node")
+    SECOND = 1_000_000_000
+
+    def _script(self):
+        text = pathlib.Path("templates/_session_watch.html").read_text(encoding="utf-8")
+        body = re.search(r'<script nonce="\{\{ csp_nonce \}\}">(.*?)</script>', text, re.S).group(1)
+        return body.replace("{{ csrf_token()|tojson }}", '"t"')
+
+    def _run(self, calls, attrs=None):
+        prelude = (
+            "var out = {}, pending = new Set(), listeners = {}, attrs = " + json.dumps(attrs or {}) + ";\n"
+            "var realST = setTimeout, realCT = clearTimeout;\n"
+            "globalThis.setTimeout = function(fn, ms) { var id = realST(function() { pending.delete(id); fn(); }, ms); pending.add(id); return id; };\n"
+            "globalThis.clearTimeout = function(id) { pending.delete(id); realCT(id); };\n"
+            "globalThis.window = globalThis;\n"
+            "globalThis.document = { hidden: false, activeElement: null,\n"
+            "  body: { getAttribute: function(n) { return n in attrs ? attrs[n] : null; } },\n"
+            "  getElementById: function() { return null; },\n"
+            "  addEventListener: function(t, f) { (listeners[t] = listeners[t] || []).push(f); },\n"
+            "  removeEventListener: function() {} };\n"
+            "globalThis.addEventListener = function() {};\n"
+            "globalThis.localStorage = { setItem: function() {}, removeItem: function() {}, getItem: function() { return null; } };\n"
+            "globalThis.location = { assign: function(u) { out.assigned = u; }, pathname: '/', search: '' };\n"
+        )
+        js = (
+            prelude
+            + self._script()
+            + "\nvar w = window.jenSessionWatch, S = "
+            + str(self.SECOND)
+            + ";\n"
+            + calls
+            + "\nconsole.log(JSON.stringify(out)); process.exit(0);\n"
+        )
+        done = subprocess.run(  # nosec B603 - a fixed interpreter and a script built in this file
+            [self.NODE, "-e", js], capture_output=True, text=True, timeout=30, check=True, encoding="utf-8"
+        )
+        return json.loads(done.stdout)
+
+    @pytest.mark.skipif(
+        NODE is None, reason="node is not installed; the e2e tests drive the same script in a real browser"
+    )
+    def test_a_deadline_without_its_state_or_its_clock_moves_nothing(self):
+        out = self._run(
+            """
+w.ingest(String(S + 3600), false, String(S), String(S - 5));
+out.first = w.state().expires;
+out.noState = [undefined, null, '', 'abc', '-5', '1.5', '1234567890123'].map(function(a) { w.ingest(String(S + 7200), false, String(S + 1), a); return w.state().expires; });
+out.noClock = [undefined, null, '', 'abc', '0', '-1'].map(function(c) { w.ingest(String(S + 9000), false, c, String(S - 5)); return w.state().expires; });
+out.zeroAfterAReal = (function() { w.ingest(String(S + 9000), false, String(S + 2), '0'); return w.state().expires; })();
+w.ingest(String(S + 7200), false, String(S + 1), String(S - 5));
+out.genuine = w.state().expires;
+"""
+        )
+        assert out["first"] == self.SECOND + 3600
+        assert out["noState"] == [self.SECOND + 3600] * 7, out["noState"]
+        assert out["noClock"] == [self.SECOND + 3600] * 6, out["noClock"]
+        assert out["zeroAfterAReal"] == self.SECOND + 3600, (
+            "a reply that says the session has no state is older than one that had it"
+        )
+        assert out["genuine"] == self.SECOND + 7200, (
+            "the guard is not a wedge: the same reply WITH its state and clock is taken"
+        )
+
+    @pytest.mark.skipif(
+        NODE is None, reason="node is not installed; the e2e tests drive the same script in a real browser"
+    )
+    def test_the_first_reply_of_a_session_with_no_state_is_taken_with_a_zero(self):
+        out = self._run("w.ingest(String(S + 3600), false, String(S), '0'); out.expires = w.state().expires;")
+        assert out["expires"] == self.SECOND + 3600
+
+    @pytest.mark.skipif(
+        NODE is None, reason="node is not installed; the e2e tests drive the same script in a real browser"
+    )
+    def test_a_clock_a_day_ahead_of_the_anchor_is_ignored_and_a_genuine_one_still_re_anchors(self):
+        out = self._run(
+            """
+w.ingest(String(S + 3600), false, String(S), String(S - 5));
+w.ingest(String(S + 86400 + 900), false, String(S + 86400 + 500), String(S - 5));
+out.afterTheDayAheadClock = w.state().expires;
+w.ingest(String(S + 10000), false, String(S + 50), String(S - 5));
+out.afterAGenuineOne = w.state().expires;
+out.lastServerNow = w.state().lastServerNow;
+"""
+        )
+        assert out["afterTheDayAheadClock"] == self.SECOND + 3600
+        assert out["afterAGenuineOne"] == self.SECOND + 10000 and out["lastServerNow"] == self.SECOND + 50
+
+    @pytest.mark.skipif(
+        NODE is None, reason="node is not installed; the e2e tests drive the same script in a real browser"
+    )
+    def test_twenty_focus_events_leave_one_pending_timer(self):
+        """Z16: every tab focus stacked one more `setTimeout` (the pass: 1 at rest, 29 after twenty). A timer is cleared before its id is forgotten."""
+        out = self._run(
+            """
+w.ingest(String(S + 3600), false, String(S), String(S - 5));
+out.atRest = pending.size;
+for (var i = 0; i < 20; i++) { listeners.visibilitychange.forEach(function(f) { f(); }); }
+out.afterTwenty = pending.size;
+"""
+        )
+        assert out["atRest"] == 1 and out["afterTwenty"] <= 1, out

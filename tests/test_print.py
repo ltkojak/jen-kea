@@ -55,6 +55,12 @@ class TestThePrintSheet:
         for selector in (".tabbar", ".sheet", ".skip-link", "#jen-progress"):
             assert selector in hide, selector
 
+    def test_it_hides_the_sign_in_canvas_and_the_card_contents_row(self):
+        """Q215 (Z8, Z9): the sign-in page's animated `.bg-canvas` printed as a blank block and the cards' `.card-toc` chip row printed a row of links that go nowhere on paper."""
+        hide = _print_block().split("}")[0]
+        for selector in (".bg-canvas", ".card-toc"):
+            assert selector in hide, selector
+
     def test_the_hidden_columns_print(self):
         assert re.search(r"\.hide-mobile, \.hide-tablet \{ display: table-cell !important; \}", _print_block())
 
@@ -92,7 +98,7 @@ class TestPrintIsNotAPhone:
         (
             "templates/base.html",
             "(max-width: 768px)",
-        ): "the tap handler that shows a time's UTC reading: a touch gesture exists only on a screen",
+        ): "the row-tap handler that opens a row's primary link: a tap is a touch gesture and exists only on a screen (the narrower pointer query beside it, for the UTC reading of a time, is not a width)",
         (
             "templates/reports.html",
             "(max-width: 768px)",
@@ -120,7 +126,11 @@ class TestPrintIsNotAPhone:
     def test_the_python_that_emits_css_names_the_screen_too(self):
         """Second pass 9: jen/services/theme.py writes an `@media (min-width:769px)` block into the page; the tree walk read only .html, .css and .js."""
         offenders = []
-        for p in sorted(pathlib.Path("jen").rglob("*.py")):
+        # Q215 (Z12): the tree, not a directory - `jen/`, `plugins/`, `tools/` and the top-level scripts (the tests are the rule's own subject and are left out)
+        sources = [p for top in ("jen", "plugins", "tools") for p in sorted(pathlib.Path(top).rglob("*.py"))]
+        sources += sorted(pathlib.Path(".").glob("*.py"))
+        assert len(sources) > 50, "the walk found too few Python files to be the tree"
+        for p in sources:
             for m in re.finditer(r"@media([^{]*)\{", p.read_text(encoding="utf-8")):
                 if self.WIDTH.search(m.group(1)) and not re.search(r"\bscreen\b", m.group(1)):
                     offenders.append(f"{p.as_posix()}: {m.group(0).strip()}")

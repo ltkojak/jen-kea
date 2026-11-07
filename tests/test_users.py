@@ -92,6 +92,30 @@ class TestUserManagement:
         assert user is not None
         assert user["role"] == "viewer"
 
+    @pytest.mark.parametrize("timeout", ["9999", "x", "0", "-5", "60.5", "1441"])
+    def test_add_refuses_an_out_of_range_timeout(self, logged_in_client, db, timeout):
+        """Q215: `/users/add` refuses a timeout the way edit and set-timeout do. It used to create the account on the global timeout without a word, so the person who typed 9999 believed it applied."""
+        r = logged_in_client.post(
+            "/users/add",
+            data={"username": "badtimeout", "password": "testpass123", "role": "viewer", "timeout": timeout},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200 and b"Timeout must be 1" in r.data
+        with db.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE username='badtimeout'")
+            assert cur.fetchone() is None
+
+    def test_add_takes_a_timeout_in_range_and_a_blank_one(self, logged_in_client, db):
+        for name, timeout, expected in (("okminutes", "45", 45), ("noneblank", "", None)):
+            logged_in_client.post(
+                "/users/add",
+                data={"username": name, "password": "testpass123", "role": "viewer", "timeout": timeout},
+                follow_redirects=True,
+            )
+            with db.cursor() as cur:
+                cur.execute("SELECT session_timeout FROM users WHERE username=%s", (name,))
+                assert cur.fetchone()["session_timeout"] == expected, name
+
     def test_create_user_duplicate_fails(self, logged_in_client, db):
         """Cannot create user with duplicate username."""
         # First create the user directly in DB

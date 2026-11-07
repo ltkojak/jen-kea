@@ -274,7 +274,11 @@ def add_user():
             return users(), 400
         subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
     timeout_val = None
-    if timeout_raw and (__session_timeout.parse_minutes(timeout_raw) or 0) >= 1:
+    if timeout_raw:
+        # Q215: refused like the edit and set-timeout routes refuse it - an out-of-range or unreadable value used to create the account on the global timeout without a word
+        if (__session_timeout.parse_minutes(timeout_raw) or 0) < 1:
+            flash("Timeout must be 1–1440 minutes.", "error")
+            return redirect(url_for("users.users"))
         timeout_val = __session_timeout.parse_minutes(timeout_raw)
 
     if not username:

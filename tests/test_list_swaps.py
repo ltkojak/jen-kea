@@ -277,6 +277,26 @@ class TestThePageLinksEncodeTheSort:
         assert "'&sort=' ~ (sort|urlencode) ~ '&dir=' ~ (direction|urlencode)" in text, name
         assert "'&sort=' ~ sort ~" not in text
 
+    @pytest.mark.parametrize("name", SOURCES)
+    def test_every_per_page_in_a_link_is_encoded(self, name):
+        """Q215 (Z3): `per_page` was concatenated raw into twenty links (leases 12, reservations 10, devices 2 after the fix); it is `|urlencode`d at every one."""
+        text = pathlib.Path("templates", name).read_text(encoding="utf-8")
+        assert "per_page={{ per_page }}" not in text and "per_page=' ~ per_page ~" not in text, name
+        assert "per_page|urlencode" in text, name
+
+    @pytest.mark.parametrize("path", sorted(TestAnUnknownSortStillSaysWhichColumnIsSorted.DEFAULTS))
+    def test_per_page(self, logged_in_client, three_rows, path):
+        """Q215 (Z3): a hostile `per_page` reaches 0 links raw (the pass: 6/6, 8/8 and 4/4 raw). It is not a page size, so the page is the unpaginated list and carries no page link at all; and in an
+        empty-state link or a sort header the value is never printed unencoded."""
+        hostile = "x%26dir%3Dasc%26sort%3Dip%23frag"
+        html = logged_in_client.get(f"{path}?per_page={hostile}", headers=HX).data.decode()
+        assert "x&dir=asc&sort=ip#frag" not in html and "per_page=x&" not in html and "per_page=x%26dir" not in html
+        for a in parse(html).page_links + parse(html).th_links:
+            assert "x&dir" not in a["href"] and "#frag" not in a["href"], a["href"]
+        numeric = logged_in_client.get(f"{path}?per_page=1", headers=HX).data.decode()
+        links = parse(numeric).page_links
+        assert links and all(a["href"].count("per_page=1") == 1 for a in links), "a whole number still paginates"
+
     @pytest.mark.parametrize("path", sorted(TestAnUnknownSortStillSaysWhichColumnIsSorted.DEFAULTS))
     def test_a_hostile_value_reaches_no_page_link_raw(self, logged_in_client, three_rows, path):
         """`sort=a b&c` is not a sort: the effective sort replaces it, so the page links carry the default column encoded once and never the raw text or a stray `&c`."""

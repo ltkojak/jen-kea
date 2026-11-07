@@ -420,13 +420,15 @@
 {% endblock %}
 {% block scripts %}
 // Auto-refresh server status every 30 seconds
-// (v5.69.0-beta.4, Q173: not while a menu, a <details>, the confirm dialog, a sheet or a field is open - the reload dismissed them mid-use - nor in a hidden tab)
+// (v5.69.0-beta.4, Q173: not while a menu, a <details>, the confirm dialog, a sheet or a field is open - the reload dismissed them mid-use - nor in a hidden tab;
+// Q215: nor while the Still there? dialog is open - the reload took the Stay signed in click with it)
 setInterval(function() {
     var overlay = document.getElementById('jen-confirm-overlay');
     var busy = document.hidden ||
         document.querySelector('.action-menu-toggle:checked, details[open]') ||
         (overlay && overlay.style.display !== 'none') ||
         document.body.classList.contains('sheet-open') ||
+        (window.jenSessionWatch && window.jenSessionWatch.state().open) ||
         /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
     if (!busy) {
         // Q210: this reload is a refresh, not activity - the marker lets the server leave the idle clock alone (a navigation cannot carry the X-Jen-Poll header)

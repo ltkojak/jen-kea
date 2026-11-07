@@ -26,6 +26,8 @@
     var CSRF = {{ csrf_token()|tojson }};
     var MAX_TIMER = 2147000000;
     var MAX_AHEAD = 31622400;
+    // Q215 (Z17): the server's clock a reply carries is measured against THIS page's own anchor (the last accepted reply carried forward by performance.now()); one more than a day ahead of it is ignored
+    var MAX_DRIFT = 86400;
     var expires = 0, lead = 120, warnTimer = null, armedMs = null, tickTimer = null, opener = null, leaving = false;
     var lastServerNow = 0, lastActive = 0, anchored = false, anchorServer = 0, anchorPerf = 0;
     var SESSION_KEY = KEY_PREFIX + (document.body.getAttribute('data-session-login') || '');
@@ -93,8 +95,8 @@
     }
     // the dialog opens when left <= lead BEFORE the timer is re-armed, so a timer that fires with no time left can never ask for a new one with no delay
     function check() {
-        warnTimer = null;
-        armedMs = null;
+        // Q215 (Z16): stopWarn() clears the timer BEFORE its id is forgotten - a call that nulled the id first left the pending timeout behind, and every tab focus stacked one more
+        stopWarn();
         if (!expires) return;
         var left = expires - nowS();
         if (left <= 0) { goToLogin(); return; }
@@ -104,18 +106,20 @@
     function arm() {
         stopWarn();
         if (!expires) return;
-        armedMs = Math.max(0, Math.min((expires - lead - nowS()) * 1000, 2147000000));
+        armedMs = Math.max(0, Math.min((expires - lead - nowS()) * 1000, MAX_TIMER));
         warnTimer = setTimeout(check, armedMs);
     }
     // value: an epoch second, or the word "off"; serverNow: the server's clock when it said so; active: the session state (the epoch second of last_active) the deadline was computed from.
-    // A value with no clock beside it, from a reply older than one already taken, or computed from an OLDER session state than one already taken (a slow reply built from the cookie before a touch,
-    // which the server's clock cannot tell from a newer one), is ignored. A reply is authoritative in both directions - a timeout cut or switched off keeps last_active and moves the deadline;
+    // A value with no clock beside it, with no readable session state beside it (Q215, Z2: `0` is the server's word for "the session has none", a missing or non-numeric one is a reply that is not ours),
+    // from a reply older than one already taken, or computed from an OLDER session state than one already taken (a slow reply built from the cookie before a touch,
+    // which the server's clock cannot tell from a newer one), is ignored. A clock more than MAX_DRIFT ahead of this page's own anchor is ignored too (Q215, Z17). A reply is authoritative in both directions - a timeout cut or switched off keeps last_active and moves the deadline;
     // a value from a second tab only ever moves the deadline forward, and only a whole number of seconds that lies in the server's future and within a year is a deadline.
     function ingest(value, fromStorage, serverNow, active) {
         var sn = parseInt(serverNow, 10);
         if (!(sn > 0) || sn < lastServerNow) return;
-        var ac = parseInt(active, 10) || 0;
-        if (ac > 0 && ac < lastActive) return;
+        if (anchored && sn > nowS() + MAX_DRIFT) return;
+        var ac = /^[0-9]{1,12}$/.test(String(active)) ? parseInt(active, 10) : -1;
+        if (!(ac >= 0) || ac < lastActive) return;
         var off = value === 'off';
         if (!off && !/^[0-9]{1,12}$/.test(String(value))) return;
         var n = off ? 0 : parseInt(value, 10);
@@ -183,7 +187,7 @@
         var v = x && x.getResponseHeader ? x.getResponseHeader('X-Jen-Session-Expires') : null;
         if (v) ingest(v, false, x.getResponseHeader('X-Jen-Session-Now'), x.getResponseHeader('X-Jen-Session-Active'));
     });
-    // a value written by a tab of THIS sign-in is `<deadline>:<its server clock>`; a key that names a different sign-in means this one is over, so its leftover is dropped
+    // a value written by a tab of THIS sign-in is `<deadline>:<its server clock>:<its session state>`; a key that names a DIFFERENT sign-in means another person signed in in this profile and this one is over, so this tab's own key is dropped
     window.addEventListener('storage', function(e) {
         if (!e.key || e.key.indexOf(KEY_PREFIX) !== 0 || !e.newValue) return;
         if (e.key !== SESSION_KEY) { forget(); return; }
@@ -195,7 +199,7 @@
         var f = e.target;
         if (f && f.getAttribute && !e.defaultPrevented && /\/logout$/.test(f.getAttribute('action') || '')) forget();
     }, true);
-    document.addEventListener('visibilitychange', function() { if (!document.hidden && expires) check(); });
+    document.addEventListener('visibilitychange', function() { if (!document.hidden && expires) arm(); });
     var firstDeadline = document.body.getAttribute('data-session-expires');
     if (firstDeadline) ingest(firstDeadline, false, document.body.getAttribute('data-session-now'), document.body.getAttribute('data-session-active'));
 })();
