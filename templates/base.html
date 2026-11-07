@@ -864,7 +864,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
     <link rel="stylesheet" href="/static/css/print.css?v={{ jen_version }}" media="print">
 </head>
-<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_login is defined and session_login %} data-session-login="{{ session_login }}"{% endif %}{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}" data-session-active="{{ session_active }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}" data-session-login="{{ session_login }}" data-session-active="{{ session_active }}"{% elif session_login is defined and session_login %} data-session-login="{{ session_login }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <a href="#main" class="skip-link">Skip to content</a>
 <div id="jen-progress"></div>
 {% include "_icon_sprite.html" %}

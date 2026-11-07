@@ -291,7 +291,8 @@ class TestThePageLinksEncodeTheSort:
         empty-state link or a sort header the value is never printed unencoded."""
         hostile = "x%26dir%3Dasc%26sort%3Dip%23frag"
         html = logged_in_client.get(f"{path}?per_page={hostile}", headers=HX).data.decode()
-        assert "x&dir=asc&sort=ip#frag" not in html and "per_page=x&" not in html and "per_page=x%26dir" not in html
+        # the subnet badge on a row echoes the request's own query - ENCODED (`per_page=x%26dir...`), which is the point; raw is what must not appear
+        assert "x&dir=asc&sort=ip#frag" not in html and "per_page=x&" not in html and "per_page=x#" not in html
         for a in parse(html).page_links + parse(html).th_links:
             assert "x&dir" not in a["href"] and "#frag" not in a["href"], a["href"]
         numeric = logged_in_client.get(f"{path}?per_page=1", headers=HX).data.decode()
