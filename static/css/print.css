@@ -5,7 +5,7 @@
 @page { margin: 12mm; }
 @media print {
     .nav, .section-tabs-wrap, .filter-bar, .pagination, .btn, #jen-toasts, #jen-toasts-alert, .toast-stack, .alert-close, #kb-modal, #jen-confirm-overlay, #jen-prompt-overlay,
-    #jen-session-overlay, .pw-toggle, .tone-menu, .tabbar, .sheet, .sheet-backdrop, .skip-link, #jen-progress { display: none !important; }
+    #jen-session-overlay, .pw-toggle, .tone-menu, .tabbar, .sheet, .sheet-backdrop, .skip-link, #jen-progress, .bg-canvas, .card-toc { display: none !important; }
     .hide-mobile, .hide-tablet { display: table-cell !important; }
     table.rowlist { width: 100%; font-size: 10pt; }
     details > *:not(summary) { display: block; }

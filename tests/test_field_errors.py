@@ -219,6 +219,19 @@ class TestAnErrorLandsOnItsOwnForm:
             html = logged_in_client.get(page).data.decode()
             assert 'data-field="name" data-form="/subnets/add"' in html and "A name is required." in html, page
 
+    def test_a_404_prints_the_pending_error_and_ends_it(self, logged_in_client):
+        """Q215 (Z6): the error page is one of the four standalone pages and printed nothing it held, so a pending field error (or a flash) outlived one full page - FIELD-001 said it never does. A
+        404 prints it plain, and the next page does not."""
+        with logged_in_client.session_transaction() as sess:
+            sess["field_errors"] = [["name", "A name is required.", "/subnets/add"]]
+            sess["_flashes"] = [("warning", "A flash waiting for a page.")]
+        r = logged_in_client.get("/no-such-page-q215")
+        html = r.data.decode()
+        assert r.status_code == 404 and "A name is required." in html and "A flash waiting for a page." in html
+        with logged_in_client.session_transaction() as sess:
+            assert not sess.get("field_errors") and not sess.get("_flashes")
+        assert "A name is required." not in logged_in_client.get("/settings/api-keys").data.decode()
+
     def test_the_two_element_shape_prints_an_empty_form_path_and_lands_on_any_page(self, logged_in_client):
         with logged_in_client.session_transaction() as sess:
             sess["field_errors"] = [["name", "an old-shape message"]]

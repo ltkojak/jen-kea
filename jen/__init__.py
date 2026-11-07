@@ -262,6 +262,18 @@ def create_app() -> Flask:
     login_manager.login_view = "auth.login"
     login_manager.login_message = "Please log in to access Jen."
 
+    @login_manager.unauthorized_handler
+    def _anonymous_to_login():
+        """Q215 (Z5): an ANONYMOUS request is sent to the sign-in page by the SAME builder an expired session is (`session_timeout.login_redirect_location`), so the two producers of that
+        `Location` cannot disagree about what is worth coming back to (`/api/`, `/logout`, `/session/` and a POST carry no `next`; a long address is dropped). Flask-Login's own message still flashes."""
+        if login_manager.login_message:
+            flash(login_manager.login_message, login_manager.login_message_category)
+        return redirect(
+            session_timeout_svc.login_redirect_location(
+                url_for("auth.login"), request.method, request.full_path, request.args.get("next", "")
+            )
+        )
+
     @login_manager.user_loader
     def load_user(user_id):
         from flask import g as _g
@@ -469,7 +481,7 @@ def create_app() -> Flask:
         # v5.70.0-beta.4 (Q208, AX2): the deadline is defined once (jen/services/session_timeout.py) and the same number goes to the browser (X-Jen-Session-Expires, below)
         # v5.70.0-beta.5 (Q210, AZ3): a request marked X-Jen-Poll: 1 only refreshes a view and never moves `last_active`, in any branch below (the bootstrap included)
         # session_timeout.extends() is the ONE definition, asked in all three branches (second pass 5)
-        extends = session_timeout_svc.extends(request.path, request.headers, request.args)
+        extends = session_timeout_svc.extends(request.path, request.headers, request.args, request.method)
         if session_timeout_svc.timeout_minutes(current_user) is None:
             if extends:
                 session["last_active"] = datetime.now(timezone.utc).isoformat()
@@ -509,10 +521,10 @@ def create_app() -> Flask:
                 response.headers["X-Jen-Session-Expires"] = str(said)
                 # the server's own clock beside it: the page counts down against THIS (a client clock that is wrong changes nothing), and orders replies by it (Q210, AZ9 a)
                 response.headers["X-Jen-Session-Now"] = str(session_timeout_svc.now_epoch())
-                # the session state the deadline was computed from: the browser orders replies by THIS (Q210, second pass 1)
+                # the session state the deadline was computed from: the browser orders replies by THIS (Q210, second pass 1). Q215 (Z2): beside EVERY Expires, `off` included, and `0` when the session
+                # has no readable last_active - a deadline without its state is ignored by the page, so the two travel together
                 active = session_timeout_svc.active_epoch(session)
-                if active is not None:
-                    response.headers["X-Jen-Session-Active"] = str(active)
+                response.headers["X-Jen-Session-Active"] = str(0 if active is None else active)
         except Exception:  # a header is a convenience; the page is served without it
             pass
         return response
@@ -538,7 +550,9 @@ def create_app() -> Flask:
                 out["session_expires"] = session_timeout_svc.announcement(session, current_user)
                 out["session_now"] = session_timeout_svc.now_epoch()
                 out["session_login"] = session.get("login_id") or ""
-                out["session_active"] = session_timeout_svc.active_epoch(session) or ""
+                # Q215 (Z2): the session state the deadline was computed from; `0` when the session has no readable last_active (never an empty string: the page ignores a deadline whose state it cannot read)
+                active = session_timeout_svc.active_epoch(session)
+                out["session_active"] = 0 if active is None else active
                 out["print_stamp"] = _tf.fmt_filter(datetime.now(timezone.utc))
         except Exception:  # the first paint without them still arms from the next response's header
             pass

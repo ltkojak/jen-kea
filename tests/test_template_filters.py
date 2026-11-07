@@ -118,6 +118,11 @@ class TestDurationShort:
     def test_a_number_as_text_or_float_is_read(self):
         assert reltime.duration_short("43200") == "12 h" and reltime.duration_short(43200.0) == "12 h"
 
+    def test_duration_short_on_inf(self):
+        """Q215 (Z7): `float("inf")` raised OverflowError out of `duration_short` (a 500 on a page that printed it); the three helpers share one coercion now."""
+        assert reltime.duration_short(float("inf")) == "—" and reltime.duration_short(float("-inf")) == "—"
+        assert reltime.number(float("inf")) == "0" and reltime.plural(float("inf"), "lease") == "0 leases"
+
     def test_no_template_does_its_own_hour_or_day_arithmetic_on_a_timer(self):
         import pathlib
 

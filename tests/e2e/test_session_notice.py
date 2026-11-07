@@ -94,6 +94,20 @@ def _to_remaining(page, remaining):
     page.clock.fast_forward(jump * 1000)
 
 
+def _active(page):
+    """The session state the page's first deadline was computed from (`data-session-active`). Q215 (Z2): the watch takes a deadline only with the state it came from beside it, so a test that drives
+    `ingest` by hand names one - this one is the state the page already holds, which is what a genuine reply to the same session says."""
+    return int(page.locator("body").get_attribute("data-session-active"))
+
+
+#: counts the timers that are PENDING (set, and neither fired nor cleared): the number that grew by one with every tab focus before Q215 (Z16); it wraps the page's own `setTimeout`/`clearTimeout`
+PENDING_COUNTER = (
+    "window.__pending = new Set(); (function() { var set = window.setTimeout, clear = window.clearTimeout; "
+    "window.setTimeout = function(fn, ms) { var id = set.call(window, function() { window.__pending.delete(id); return fn.apply(this, arguments); }, ms); window.__pending.add(id); return id; }; "
+    "window.clearTimeout = function(id) { window.__pending.delete(id); return clear.call(window, id); }; })();"
+)
+
+
 def _left_seconds(page):
     m, s = page.locator("#jen-session-left").inner_text().split(":")
     return int(m) * 60 + int(s)
@@ -161,7 +175,9 @@ class TestTheSessionDialog:
         expect(overlay).to_be_visible()
         # what the second tab's response would do: a later deadline arrives through the storage event, with that tab's server clock beside it
         later = page.evaluate("window.jenSessionWatch.expires()") + 3600
-        page.evaluate(f"window.jenSessionWatch.ingest({later}, true, window.jenSessionWatch.state().lastServerNow)")
+        page.evaluate(
+            f"window.jenSessionWatch.ingest({later}, true, window.jenSessionWatch.state().lastServerNow, {_active(page)})"
+        )
         expect(overlay).to_be_hidden()
 
     def test_sign_out_now_signs_out(self, page, base_url, server_clock):
@@ -199,17 +215,19 @@ class TestTheBrowsersClockIsNotTheServers:
             "window.__timers = 0; (function() { var orig = window.setTimeout; "
             "window.setTimeout = function() { window.__timers++; return orig.apply(this, arguments); }; })();"
         )
-        counts = {}
+        counts, pending = {}, {}
         for label, skew in (("control", 0), ("ahead", 7_200)):
             ctx = browser.new_context()
             try:
                 page = ctx.new_page()
-                _signed_in_on_leases(page, base_url, skew_seconds=skew, init_script=counter)
+                _signed_in_on_leases(page, base_url, skew_seconds=skew, init_script=counter + PENDING_COUNTER)
                 page.wait_for_timeout(1500)
                 counts[label] = page.evaluate("window.__timers")
+                pending[label] = page.evaluate("window.__pending.size")
             finally:
                 ctx.close()
         assert abs(counts["ahead"] - counts["control"]) <= 2, counts
+        assert pending["control"] <= 1 and pending["ahead"] <= 1, pending  # Q215 (Z16): pending timers, not calls
 
     def test_a_wall_clock_jump_while_the_page_is_open_moves_nothing(self, page, base_url):
         """AZ9 (c): the countdown is the monotonic clock's. Moving the browser's system time an hour on mid-countdown leaves the dialog counting down from where it was."""
@@ -231,14 +249,15 @@ class TestTheDeadlineIsTheServersWord:
         _signed_in_on_leases(page, base_url)
         st = page.evaluate("window.jenSessionWatch.state()")
         d, s = st["expires"], st["lastServerNow"]
-        page.evaluate(f"window.jenSessionWatch.ingest({d + 600}, false, {s + 200})")
+        a = _active(page)
+        page.evaluate(f"window.jenSessionWatch.ingest({d + 600}, false, {s + 200}, {a})")
         assert page.evaluate("window.jenSessionWatch.expires()") == d + 600
-        page.evaluate(f"window.jenSessionWatch.ingest({d + 100}, false, {s + 100})")
+        page.evaluate(f"window.jenSessionWatch.ingest({d + 100}, false, {s + 100}, {a})")
         after = page.evaluate("window.jenSessionWatch.state()")
         assert after["expires"] == d + 600 and after["lastServerNow"] == s + 200, (
             "a reply from an earlier second is ignored, either way"
         )
-        page.evaluate(f"window.jenSessionWatch.ingest({d + 900}, false, {s + 200})")
+        page.evaluate(f"window.jenSessionWatch.ingest({d + 900}, false, {s + 200}, {a})")
         assert page.evaluate("window.jenSessionWatch.expires()") == d + 900, (
             "two replies from one second: the later arrival is taken"
         )
@@ -271,12 +290,23 @@ class TestTheDeadlineIsTheServersWord:
         page.evaluate(f"window.jenSessionWatch.ingest({d + 600}, false)")
         assert page.evaluate("window.jenSessionWatch.expires()") == d
 
+    def test_a_deadline_with_no_state_beside_it_is_ignored(self, page, base_url):
+        """Q215 (Z2): the clock guard's sibling. A deadline that arrives without the session state it was computed from - missing, empty, or not a number - is a reply that is not ours, and moves nothing."""
+        _signed_in_on_leases(page, base_url)
+        st = page.evaluate("window.jenSessionWatch.state()")
+        d, s = st["expires"], st["lastServerNow"]
+        for n, state in enumerate(("undefined", "null", "''", "'abc'", "'-5'")):
+            page.evaluate(f"window.jenSessionWatch.ingest({d + 600}, false, {s + 1 + n}, {state})")
+            assert page.evaluate("window.jenSessionWatch.expires()") == d, state
+        page.evaluate(f"window.jenSessionWatch.ingest({d + 600}, false, {s + 10}, {_active(page)})")
+        assert page.evaluate("window.jenSessionWatch.expires()") == d + 600, "the same reply WITH its state is taken"
+
     def test_a_shortened_deadline_rearms_at_once(self, page, base_url):
         _signed_in_on_leases(page, base_url)
         st = page.evaluate("window.jenSessionWatch.state()")
         s = st["lastServerNow"] + 1
         assert st["armed"] > 3_000_000, "an hour away: the timer is long"
-        page.evaluate(f"window.jenSessionWatch.ingest({s + 600}, false, {s})")
+        page.evaluate(f"window.jenSessionWatch.ingest({s + 600}, false, {s}, {_active(page)})")
         st = page.evaluate("window.jenSessionWatch.state()")
         assert st["expires"] == s + 600 and st["lead"] == 120
         assert 478_000 <= st["armed"] <= 480_000, st
@@ -293,7 +323,7 @@ class TestTheDeadlineIsTheServersWord:
             "the deadline was written under this sign-in's key"
         )
         s = page.evaluate("window.jenSessionWatch.state().lastServerNow") + 1
-        page.evaluate(f"window.jenSessionWatch.ingest('off', false, {s})")
+        page.evaluate(f"window.jenSessionWatch.ingest('off', false, {s}, {_active(page)})")
         st = page.evaluate("window.jenSessionWatch.state()")
         assert st["expires"] == 0 and st["armed"] is None and st["open"] is False
         stored = page.evaluate(f"localStorage.getItem('jen-session-expires:{login_id}')")
@@ -306,9 +336,9 @@ class TestTheDeadlineIsTheServersWord:
         _signed_in_on_leases(page, base_url)
         d = page.evaluate("window.jenSessionWatch.expires()")
         s = page.evaluate("window.jenSessionWatch.state().lastServerNow")
-        page.evaluate(f"window.jenSessionWatch.ingest('off', false, {s + 1})")
+        page.evaluate(f"window.jenSessionWatch.ingest('off', false, {s + 1}, {_active(page)})")
         assert page.evaluate("window.jenSessionWatch.state().armed") is None
-        page.evaluate(f"window.jenSessionWatch.ingest({d}, false, {s + 2})")
+        page.evaluate(f"window.jenSessionWatch.ingest({d}, false, {s + 2}, {_active(page)})")
         st = page.evaluate("window.jenSessionWatch.state()")
         assert st["expires"] == d and st["armed"] is not None and st["armed"] > 0
 
@@ -361,7 +391,7 @@ class TestTwoTabsOfOneSignIn:
         second.goto(f"{base_url}/leases?subnet=1")
         page.wait_for_timeout(500)
         s = second.evaluate("window.jenSessionWatch.state().lastServerNow") + 1
-        second.evaluate(f"window.jenSessionWatch.ingest('off', false, {s})")
+        second.evaluate(f"window.jenSessionWatch.ingest('off', false, {s}, {_active(second)})")
         page.wait_for_function("() => window.jenSessionWatch.expires() === 0")
         second.close()
 
@@ -414,3 +444,54 @@ class TestABackgroundTabAndTheServer:
         page.goto(f"{base_url}/leases?subnet=1")
         page.wait_for_url(re.compile(r".*/login"), timeout=15000)
         server_clock.offset = timedelta(0)
+
+
+class TestTheTimersDoNotStack:
+    """Q215 (Z16): the watch holds ONE pending timer. Every tab focus used to call `check()`, which forgot the pending timer's id without clearing it and armed another - the pass counted 1 at rest and
+    29 after twenty focus events (each of them a call to `check()` a minute from now)."""
+
+    def test_twenty_tab_focus_events_leave_one_pending_timer(self, browser, base_url):
+        ctx = browser.new_context()
+        try:
+            page = ctx.new_page()
+            _signed_in_on_leases(page, base_url, init_script=PENDING_COUNTER)
+            at_rest = page.evaluate("window.__pending.size")
+            for _ in range(20):
+                page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            after = page.evaluate("window.__pending.size")
+            assert at_rest <= 1 and after <= 1, (at_rest, after)
+        finally:
+            ctx.close()
+
+
+class TestAPageThatReloadsItselfLeavesTheDialogAlone:
+    """Q215 (Z1): the Servers page reloads itself every 30 s unless a menu, a <details>, the confirm overlay, a sheet or a field is open. The Still there? dialog was not on that list, so the reload landed
+    under it and took a Stay signed in click in flight - the session then ended with the person sitting at the page. The browser half is real time: the page's interval is real, and so is the wait."""
+
+    def _servers(self, page, base_url):
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        page.goto(f"{base_url}/servers")
+        page.evaluate("window.__sentinel = 1")
+
+    def _age(self, page, ms):
+        page.wait_for_function(f"performance.now() >= {ms}", polling=250, timeout=ms + 15000)
+
+    def test_the_servers_page_does_not_reload_under_the_dialog(self, page, base_url):
+        self._servers(page, base_url)
+        self._age(page, 22_000)
+        # a 12-second span: the dialog opens 6 s before the end (t = 28 s), the page's own 30-second interval fires at t = 30 s, and the deadline itself is at t = 34 s
+        st = page.evaluate("window.jenSessionWatch.state()")
+        sn = st["lastServerNow"] + 1
+        page.evaluate(f"window.jenSessionWatch.ingest({sn + 12}, false, {sn}, {max(_active(page), sn)})")
+        self._age(page, 28_500)
+        expect(page.locator("#jen-session-overlay")).to_be_visible()
+        before = _left_seconds(page)
+        self._age(page, 31_500)
+        assert page.evaluate("window.__sentinel") == 1, "the 30-second reload fired under the open dialog"
+        assert page.evaluate("window.jenSessionWatch.state().open") is True
+        assert _left_seconds(page) < before, "the countdown continued"
+
+    def test_the_control_reloads_within_thirty_one_seconds(self, page, base_url):
+        """Without the dialog the same page reloads itself on schedule: the sentinel is gone by t = 31 s, so the test above proves the dialog is the reason and not a page that never reloads."""
+        self._servers(page, base_url)
+        page.wait_for_function("window.__sentinel === undefined", polling=500, timeout=31_500)

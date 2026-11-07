@@ -35,6 +35,7 @@ import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.capabilities as __caps
 import jen.services.mfa as __mfa
+import jen.services.session_timeout as __session_timeout
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 
@@ -219,7 +220,8 @@ def grafana_dashboard_json():
 @_admin_required
 def settings_security():
     session_settings = {
-        "timeout": __user.get_global_setting("session_timeout_minutes", "60"),
+        # Q215 (Z18): the minutes the server APPLIES, not the stored text (a hand-edited row reads as 60 there)
+        "timeout": str(__session_timeout.global_minutes()),
         "enabled": __user.get_global_setting("session_timeout_enabled", "true"),
     }
     rl_settings = {

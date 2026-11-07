@@ -15,10 +15,14 @@ Not remembered: the history (`expired=1`) and stale (`stale=1`) modes. A page th
 """
 
 import json
+import re
 
 COOKIE = "jen_view"
 MAX_COOKIE_BYTES = 200
 MAX_AGE = 365 * 24 * 3600
+
+#: ASCII digits only (`str.isdigit()` accepts a full-width digit the routes' int() would read as a number, and a sign or a space is not part of one); up to six, as the routes need no more
+_WHOLE_NUMBER = re.compile(r"[0-9]{1,6}")
 
 # Each page's own table of accepted values. Today they happen to be the same four, but the TABLE is per page: a value valid for one page is not valid for another until it is
 # written into that page's row.
@@ -56,15 +60,18 @@ def dump(prefs):
 def resolve(page, args, cookies):
     """(per_page, stored) for `page`: the page size to use and the clean dict to keep.
 
-    A `per_page` in the URL wins and is stored when it is in the page's table; absent, the cookie's value for this page; absent too, "all". An argument that is NOT in the table is
-    used the way the routes always used it (their own int() fallback) and is never stored."""
+    A `per_page` in the URL wins and is stored when it is in the page's table; absent, the cookie's value for this page; absent too, "all". An argument that is NOT in the table but is a whole
+    number (`?per_page=7`) is used the way the routes always used it (their own int()) and is never stored. Q215 (Z3): an argument that is not a whole number at all - free text, `x&dir=asc#frag`, an
+    empty string - is treated as absent: it had no reason to reach the page (it was printed into twenty page links), so the page gets the remembered value or "all"."""
     stored = parse(cookies.get(COOKIE))
     table = PER_PAGE_TABLE[page]
     explicit = args.get("per_page")
     if explicit is not None:
         if explicit in table:
             stored = {**stored, page: explicit}
-        return explicit, stored
+            return explicit, stored
+        if _WHOLE_NUMBER.fullmatch(explicit):
+            return explicit, stored
     return stored.get(page, "all"), stored
 
 
