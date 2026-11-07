@@ -10,6 +10,10 @@ item below. The previous page, covering everything since 5.68.0 through
 the 5.69.0 baseline, is archived at
 [`docs/release-history/upgrading-5.68.0-to-5.69.0.md`](release-history/upgrading-5.68.0-to-5.69.0.md).
 
+## 5.70.1: a support bundle never carries a password, and the idle dialog is no longer closed from underneath
+
+Nothing to do on the upgrade: no migration, no new setting, no sudoers line, no helper build and no change to how Jen talks to Kea. What changes: the support bundle removes the user name and password from every address it carries and masks a secret by the name of its key and never by its value (**a bundle made by an earlier 5.70 release on a box where a saved `api_url` has a user name or password inside it, or where an `api_pass`, a database password or a token begins with `/` or a drive letter, carries that secret: treat such a file as a secret**, and if a saved `api_url` still has one inside it, Health's "Every endpoint has a credential" row names it - move it to the user and password fields); the Servers page no longer reloads itself under the "Still there?" dialog; the update screen's second request no longer keeps an unattended session signed in; and the Users page and Settings, Access & Security show the timeout in minutes the server applies.
+
 ## The idle notice follows the server's clock, a page that refreshes itself no longer holds a session open, and a printed Settings page is whole
 
 One step (5.70.0-beta.5). It adds no migration and changes nothing about how Jen talks to Kea. Nothing needs a manual step: no restart beyond the upgrade's own, and `static/css/print.css` is a new static file the upgrade installs with the rest.
