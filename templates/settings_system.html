@@ -202,7 +202,7 @@
         This is the <strong>redacted</strong> one, safe to attach to a bug report — the recovery bundle (Settings → Databases) is not.
     </p>
     {% if current_user.role == 'superadmin' %}
-    <form method="POST" action="/settings/system/support-bundle" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/system/support-bundle" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-secondary">{{ icon("life-buoy") }} Download support bundle</button>
     </form>
     <a href="https://github.com/ltkojak/jen-kea/issues/new?title={{ ('v' ~ jen_version ~ ': ') | urlencode }}" target="_blank" rel="noopener" class="btn btn-secondary">{{ icon("bug") }} Report an issue</a>
