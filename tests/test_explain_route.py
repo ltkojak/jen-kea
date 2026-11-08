@@ -502,6 +502,8 @@ class TestAReservationInAHiddenSubnetIsNotAnOracle:
         page = re.sub(
             r'data-session-(expires|now|active)="\d+"', r'data-session-="<epoch>"', page
         )  # the body's per-request clock: two requests a second apart differ here and nowhere else
+        # the print sheet's stamp ("Printed from Jen · host · <time>") is the same clock: two renders that straddle a second differ in its datetime and nothing else - this one stamp only, so every other <time> is still compared
+        page = re.sub(r'(class="print-only">Printed from Jen · [^<]*· )<time [^>]*>[^<]*</time>', r"<now>", page)
         return re.sub(r"\s+", " ", page.replace(mac, "<mac>"))
 
     def test_a_hidden_reservation_and_a_never_seen_mac_render_the_same_page(self, client, db, hidden, mock_kea):
