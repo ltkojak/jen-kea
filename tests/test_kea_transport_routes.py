@@ -238,7 +238,9 @@ class TestATickWithoutAStoredResultNamesTheCheck:
         must_check = (target == "api" or tick) and not stored
         if must_check:
             assert worked == [], (target, tick, stored)
-            assert b"run the readiness check first (Check readiness on the card)" in r.data, r.data[:300]
+            assert b"run the readiness check first (press Run check under Readiness check on the card)" in r.data, (
+                r.data[:300]
+            )
         else:
             assert worked == ["switch"], (target, tick, stored)
 

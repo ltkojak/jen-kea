@@ -36,6 +36,7 @@ import jen.services.capabilities as __caps
 import jen.services.capacity as __capacity
 import jen.services.kea as __kea
 from jen import extensions
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 
@@ -764,7 +765,7 @@ def _endpoint_credentials(ctx) -> Check:
                 f"the DNS provider's URL ({section} {key}) carries a user name or password; move them to the provider's user and token fields"
             )
             continue
-        if section.startswith("kea_server_") and section[len("kea_server_") :].isdigit():
+        if section.startswith("kea_server_") and is_whole(section[len("kea_server_") :]):
             who = next(
                 (_server_name(s) for s in extensions.KEA_SERVERS if str(s.get("id")) == section[len("kea_server_") :]),
                 section,
@@ -989,7 +990,10 @@ def _lease_snapshot_fresh(ctx) -> Check:
         interval = 30 * 60
     try:
         with __db.jen_db() as db, db.cursor() as cur:
-            cur.execute("SELECT MAX(snapshot_time) AS mx FROM lease_history")
+            # (Q224, AJ10) `snapshot_time` is the database host's stamp (its DEFAULT): its age is measured by that same clock, in the query, never against Jen's
+            cur.execute(
+                "SELECT MAX(snapshot_time) AS mx, TIMESTAMPDIFF(SECOND, MAX(snapshot_time), NOW()) AS age_seconds FROM lease_history"
+            )
             row = cur.fetchone()
     except Exception as e:
         _log_err("lease_snapshot_fresh", e)
@@ -999,9 +1003,14 @@ def _lease_snapshot_fresh(ctx) -> Check:
     if mx is None:
         c.status, c.detail = "skip", "no snapshot recorded yet"
         return c
-    if mx.tzinfo is None:
-        mx = mx.replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - mx).total_seconds()
+    age = row.get("age_seconds")
+    if not isinstance(age, (int, float)) or isinstance(age, bool) or age < 0:
+        c.status, c.detail = (
+            "warn",
+            "the newest snapshot's age could not be measured (the database's clock stepped back?)",
+        )
+        return c
+    age = float(age)
     if age > 2 * interval:
         c.status = "warn"
         c.detail = f"newest snapshot is {age / 60:.0f} min old (interval {interval // 60} min) — background worker not running?"

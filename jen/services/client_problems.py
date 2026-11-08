@@ -61,6 +61,7 @@ from jen.services import kea_host as _host
 from jen.services import kea_log_trace as _klt
 from jen.services import log_tail as _log_tail
 from jen.services.leases_sql import active_lease4
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 
@@ -444,7 +445,7 @@ def _clear_orphan_server_keys() -> int:
                 for key in stale:
                     cur.execute("DELETE FROM settings WHERE setting_key=%s", (key,))
                     tail = key[len(prefix) :]
-                    if tail.isdigit() and int(tail) != DB_SERVER_ID:
+                    if is_whole(tail) and int(tail) != DB_SERVER_ID:
                         gone_ids.add(int(tail))
                 removed += len(stale)
             # (Q178, PROBLEMS-IDENTITY-002) The generation counter went with the rest, and a server number can be given to a NEW server later (a save assigns the next free one):

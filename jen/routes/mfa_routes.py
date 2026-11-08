@@ -23,6 +23,7 @@ import jen.services.passkeys as __passkeys
 import jen.services.session_timeout as __session_timeout
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("mfa_routes", __name__)
@@ -215,7 +216,7 @@ def _set_trusted_cookie(resp, user_id, days_raw):
             secure=__config.ssl_configured(),
         )
     else:
-        days = int(days_raw) if str(days_raw).isdigit() else 30
+        days = int(days_raw) if is_whole(str(days_raw)) else 30
         resp.set_cookie(
             "jen_trusted",
             token,
@@ -332,7 +333,7 @@ def mfa_enroll():
         if action == "remove_passkey":
             # v5.31.0 (Q31) — same last-factor rule as TOTP below.
             cred_id = request.form.get("cred_id", "")
-            cred_id = int(cred_id) if cred_id.isdigit() else 0
+            cred_id = int(cred_id) if is_whole(cred_id) else 0
             if __mfa.user_needs_mfa(enrolling) and not _remaining_mfa_factor_count(uid, excluding_cred_id=cred_id):
                 flash("MFA is required for your account — add another factor before removing this passkey.", "error")
                 return redirect(url_for("mfa_routes.mfa_enroll"))

@@ -579,6 +579,11 @@ def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
 # ─────────────────────────────────────────
 # Rate limiting
 # ─────────────────────────────────────────
+#: the bounds the Security page accepts (Q224, AJ18): a lockout of a week, a thousand attempts; 0 keeps its meanings (until cleared; unlimited)
+MAX_LOCKOUT_MINUTES = 7 * 24 * 60
+MAX_ATTEMPTS_BOUND = 1000
+
+
 def get_rate_limit_settings():
     return {
         "max_attempts": int(__get_global_setting("rl_max_attempts", "10")),
@@ -654,22 +659,23 @@ def is_locked_out(ip, username):
             # This ensures old attempts don't contribute to new lockouts.
             # If lockout_minutes=0 (permanent lockout), use a 24h detection
             # window to find the triggering burst, then lock permanently.
-            if lockout_minutes > 0:
-                window = f"DATE_SUB(NOW(), INTERVAL {lockout_minutes} MINUTE)"
-            else:
-                window = "DATE_SUB(NOW(), INTERVAL 1440 MINUTE)"  # 24h rolling window
+            # (Q224, AJ18) the minutes are a parameter, bounded on save (`MAX_LOCKOUT_MINUTES`), never interpolated into the statement
+            window_minutes = (
+                lockout_minutes if lockout_minutes > 0 else 1440
+            )  # 24h rolling window when the lockout is permanent
+            window = "DATE_SUB(NOW(), INTERVAL %s MINUTE)"
 
             count = 0
             if mode in ("ip", "both"):
                 cur.execute(
                     f"SELECT COUNT(*) as cnt FROM login_attempts WHERE ip_address=%s AND attempted_at >= {window}",
-                    (ip,),
+                    (ip, window_minutes),
                 )
                 count = max(count, cur.fetchone()["cnt"])
             if mode in ("username", "both"):
                 cur.execute(
                     f"SELECT COUNT(*) as cnt FROM login_attempts WHERE username=%s AND attempted_at >= {window}",
-                    (username,),
+                    (username, window_minutes),
                 )
                 count = max(count, cur.fetchone()["cnt"])
 
@@ -683,13 +689,13 @@ def is_locked_out(ip, username):
                     cur.execute(
                         f"""
                             SELECT CEIL(
-                                ({lockout_minutes} * 60) -
+                                (%s * 60) -
                                 TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW())
                             ) as remaining
                             FROM login_attempts
                             WHERE {field}=%s AND attempted_at >= {window}
                         """,
-                        (val,),
+                        (lockout_minutes, val, window_minutes),
                     )
                     row = cur.fetchone()
                     remaining_secs = max(0, int(row["remaining"] or 0)) if row else 0
@@ -699,8 +705,10 @@ def is_locked_out(ip, username):
                 return True, remaining_mins
         return False, 0
     except Exception as e:
+        # (Q224, AJ11) FAIL CLOSED: a lockout that cannot be measured is a lockout. The user query may answer while this one fails (a table dropped, a statement refused), and "not
+        # locked out, 0 minutes" from here would let every attempt through unmeasured. One minute: the next attempt asks again, and the operator's clear-lockouts button clears nothing wrong
         logger.error(f"Rate limit check error: {e}")
-        return False, 0
+        return True, 1
 
 
 # ─────────────────────────────────────────
@@ -768,8 +776,10 @@ def is_mfa_locked_out(user_id):
                 return True, max(1, (remaining_secs + 59) // 60)
         return False, 0
     except Exception as e:
-        logger.error(f"MFA rate limit check error: {e}")
-        return False, 0
+        logger.error(
+            f"MFA rate limit check error: {e}"
+        )  # (Q224, AJ11) fail closed, as `is_locked_out` does: an unmeasured second factor is not an open one
+        return True, 1
 
 
 # ─────────────────────────────────────────

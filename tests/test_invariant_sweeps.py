@@ -819,6 +819,25 @@ S10_ALLOWED = {
     ("jen/services/config_revisions.py", "mark_damaged", "Exception", "return False"): (
         "a pending row that could not be marked damaged STAYS pending and keeps blocking the next change; `settle_pending` says nothing was settled - fail closed (Q217 AB10-AB12)"
     ),
+    # (Q224, AJ11) the tuple returns the detector could not see before. The first element is the verdict; each is the empty verdict a caller reads as "unknown", never as "fine"
+    ("jen/services/kea_host.py", "_read_config_proof", "HelperUnreachable", "return (None, None, None)"): (
+        "a file that could not be read: `file_proof` answers `unreadable` and every write path refuses on it (the proof is the gate, Q219); the rollback refuses before its set (Q224 AJ9) - fail closed"
+    ),
+    ("jen/services/kea_host.py", "_read_config_proof", "HelperError", "return (None, None, None)"): (
+        "the same: a helper that answered an error has read nothing, and nothing is proved"
+    ),
+    ("jen/services/kea_tls.py", "record_groups", "FileNotFoundError", "return ([], [])"): (
+        "a certificate directory that does not EXIST holds no record (Q199 AO6); one that exists and cannot be listed raises under `strict` (Q189 AE1) - the empty inventory is the true one"
+    ),
+    ("jen/services/kea_api_config.py", "load_vector", "OSError", "return (None, '')"): (
+        "no defaults vector is `None`, which every reader treats as UNKNOWN: the card says which version is uncovered (`defaults_for` facts), `file_in_daemon` asks one direction only and says so, and a rollback is refused over it (Q224 AJ2) - never read as 'no defaults'"
+    ),
+    (
+        "jen/services/kea_api_config.py",
+        "load_vector",
+        "(OSError, ValueError, KeyError, TypeError, AttributeError)",
+        "return (None, '')",
+    ): ("the same for a vector file that cannot be read as one"),
     ("jen/services/kea_api_config.py", "_pending_candidate", "(TypeError, ValueError, KeyError)", "return None"): (
         "a body that cannot be read as a configuration is a DAMAGED record: `pending_block` refuses with it, a read says it, `settle_pending` compares digests and marks it - it never reads as live or as nothing pending (Q217 AB10-AB12)"
     ),
@@ -854,6 +873,18 @@ def _s10_effect(stmt):
             return "return []"
         if isinstance(value, ast.Tuple) and not value.elts:
             return "return ()"
+        if isinstance(value, ast.Tuple) and value.elts:
+            # (Q224, AJ11) a tuple whose FIRST element is an empty value is a fail-open answer wearing a shape: `return False, 0` from a lockout check said "not locked out, 0 minutes".
+            # The first element is the verdict; the rest describe it
+            head = value.elts[0]
+            empty_constant = isinstance(head, ast.Constant) and (
+                head.value is None or head.value is False or head.value == ""
+            )
+            empty_container = isinstance(head, (ast.Dict, ast.List, ast.Tuple)) and not (
+                getattr(head, "keys", None) or getattr(head, "elts", None)
+            )
+            if empty_constant or empty_container:
+                return "return (" + ", ".join(ast.unparse(e) for e in value.elts) + ")"
         if isinstance(value, ast.Name) and value.id == "default":
             return "return default"
     return None

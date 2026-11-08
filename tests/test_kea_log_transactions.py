@@ -239,7 +239,32 @@ class TestTheServerThatHandledTheClient:
 
 class TestAClassListFromBeforeTheConfigChanged:
     def _revision(self, monkeypatch, created):
-        monkeypatch.setattr("jen.services.config_revisions.latest", lambda server_id, service: {"created_at": created})
+        # (Q224, AJ10) the store measures the row's age with the database's own clock; the comparison is made in Jen's clock from that age, never from the stamp
+        from datetime import timezone
+
+        age = (datetime.now(timezone.utc).replace(tzinfo=None) - created).total_seconds()
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest",
+            lambda server_id, service: {"created_at": created, "age_seconds": int(age)},
+        )
+
+    def test_a_row_with_no_measured_age_is_never_a_guess(self, servers, monkeypatch):
+        # (Q224, AJ10) the stamp alone is the database's clock; without the measured age the comparison is not made, as it is not made with the host's clock unknown
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": OWN_LOG}
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest",
+            lambda server_id, service: {"created_at": datetime(2026, 10, 4, 11, 0, 0)},
+        )
+        assert ctx.read_log(MAC, allowed=True)["transaction"]["before_config_change"] is False
+        ctx.clear_log_cache()
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest",
+            lambda server_id, service: {"created_at": datetime(2026, 10, 4, 11, 0, 0), "age_seconds": -5},
+        )
+        assert ctx.read_log(MAC, allowed=True)["transaction"]["before_config_change"] is False, (
+            "a negative age is a clock that stepped back, not a row from the future"
+        )
 
     def test_it_is_labeled_when_the_newest_revision_is_newer_than_the_exchange(self, servers, monkeypatch):
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": OWN_LOG}

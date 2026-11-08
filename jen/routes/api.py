@@ -34,6 +34,7 @@ from jen.services.kea import (
     probe_kea_health,
 )
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
+from jen.services.text import is_whole
 
 bp = Blueprint("api", __name__)
 
@@ -1081,11 +1082,11 @@ def api_keys_create():
         if not subnet_ids_raw or "all" in subnet_ids_raw:
             subnet_access = None
         else:
-            ids = [int(s) for s in subnet_ids_raw if s.isdigit()]
+            ids = [int(s) for s in subnet_ids_raw if is_whole(s)]
             subnet_access = _json.dumps(ids) if ids else None
     else:
         allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-        ids = [int(s) for s in subnet_ids_raw if s.isdigit() and int(s) in allowed]
+        ids = [int(s) for s in subnet_ids_raw if is_whole(s) and int(s) in allowed]
         if not ids:
             flash_field("subnet_ids", "Select at least one subnet this key should have access to.")
             return redirect(url_for("api.api_keys"))

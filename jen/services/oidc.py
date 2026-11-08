@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from jen import extensions
 from jen.services import auth as _auth
 from jen.services import session_timeout as _session_timeout
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,9 @@ def parse_subnet_map(raw: str) -> dict[str, set[int] | str]:
         if values_raw == "*":
             out[group] = "*"
             continue
-        ids = {int(v) for v in values_raw.split(",") if v.strip().isdigit()}
+        ids = {
+            int(v.strip()) for v in values_raw.split(",") if is_whole(v.strip())
+        }  # (Q224, AJ17) the id as checked, stripped: ` 2` was checked stripped and converted unstripped
         if ids:
             out[group] = ids
     return out

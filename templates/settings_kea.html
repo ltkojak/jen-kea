@@ -317,7 +317,7 @@
                         </li>
                         <li class="wm-step" data-state="{{ c.row2.state }}" data-wm-row="2">
                             <span class="wm-icon wm-icon-{{ c.row2.state }}">{{ icon({'ok': 'circle-check', 'warn': 'triangle-alert', 'bad': 'circle-x', 'idle': 'circle'}[c.row2.state]) }}</span>
-                            <span class="wm-text"><strong>2.</strong> Readiness check: {{ c.row2.text }}{% if c.probe and c.row2.state == 'ok' %} {{ c.probe.at|utcfmt }}{% endif %}</span>
+                            <span class="wm-text"><strong>2.</strong> {{ c.check_row }}: {{ c.row2.text }}{% if c.probe and c.row2.state == 'ok' %} {{ c.probe.at|utcfmt }}{% endif %}</span>
                             <button type="button" class="btn btn-sm btn-secondary" data-wm-check="{{ c.id }}">{{ c.row2.button }}</button>
                             <span class="form-hint" data-wm-check-result="{{ c.id }}"></span>
                             {% if c.can_allow %}

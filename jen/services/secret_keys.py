@@ -21,6 +21,9 @@ _SECRET_NAME_RE = re.compile(
     r"(^|_)(password|passwd|passphrase|pass|pwd|secret|secret_key|token|api_key|apikey|private_key|authorization|credentials)$"
 )
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_SPACES = re.compile(
+    r"\s+"
+)  # (Q224, AJ13) `Client Secret` is `client_secret`: a space is a word boundary like `-` and `_`
 
 
 def is_secret_key(name) -> bool:
@@ -28,8 +31,8 @@ def is_secret_key(name) -> bool:
     if not isinstance(name, str):
         return False
     return bool(
-        _SECRET_NAME_RE.search(_CAMEL.sub("_", name.strip()).lower().replace("-", "_"))
-    )  # (camelCase reads as snake_case: `clientSecret`, `apiKey`)
+        _SECRET_NAME_RE.search(_SPACES.sub("_", _CAMEL.sub("_", name.strip()).lower().replace("-", "_")))
+    )  # (camelCase reads as snake_case: `clientSecret`, `apiKey`; a spaced name as a snake_case one: `Client Secret`)
 
 
 _PADDING = " \t\r\n"

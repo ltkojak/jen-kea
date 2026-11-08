@@ -40,6 +40,7 @@ from jen.services import explain_context as __ctx
 from jen.services import investigation_providers as __providers
 from jen.services.access import accessible_subnet6_map, diagnostic_surface, get_accessible_subnet_map
 from jen.services.subnet_context import dhcp4_config
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("client", __name__)
@@ -110,7 +111,7 @@ def _explain_inputs(view) -> tuple[dict, int | None, str]:
     raw_subnet = (request.args.get("subnet") or "").strip()
     subnet_id = None
     chosen_how = ""
-    if raw_subnet.isdigit():
+    if is_whole(raw_subnet):
         subnet_id = int(raw_subnet)
         chosen_how = "chosen"
     elif view.lease and view.lease.get("subnet_id"):

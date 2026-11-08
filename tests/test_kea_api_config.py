@@ -614,13 +614,13 @@ class TestTheModuleIsTheOneSender:
         assert self._callers("file_against") == []
 
     def test_file_in_daemon_is_asked_by_the_proof_and_by_apply_only(self):
-        """Decided 16 and BI1 d: the forward walk is (L)'s third condition in `file_proof`, and `apply` asks it of Kea's own rendering at step (8) - and (Q223, AH2) of the file a rollback found, before
-        its row is written, to tell the change it undoes from a hand edit. Two functions, three call sites."""
+        """Decided 16 and BI1 d: the forward walk is (L)'s third condition in `file_proof`, and `apply` asks it of Kea's own rendering at step (8). (Q223 AH2 asked it of the file a rollback found;
+        Q224 AJ2 asks THAT question both ways, of two renderings, through `mirrors` - its one caller is the rollback branch of `apply`.) Two functions, two call sites; `mirrors`, one."""
         assert self._callers("file_in_daemon") == [
-            "kea_api_config:apply",
             "kea_api_config:apply",
             "kea_api_config:file_proof",
         ]
+        assert self._callers("mirrors") == ["kea_api_config:apply"]
 
     def test_file_proof_has_exactly_these_callers_and_fails_on_a_seventh(self):
         """Decided 16: `_ask_the_file`, `probe`, the Plan's `_unloaded_edit`, `_to_api`, `_to_file` and `api_daemon_differs` - `apply`'s proof for a caller with no Plan goes through `_ask_the_file`."""
@@ -1954,7 +1954,8 @@ class TestApplyAsksTheFileAtStepSix:
         assert out["ok"], out
         assert fake.running["valid-lifetime"] == cfg["Dhcp4"]["valid-lifetime"] and fake.file == fake.running
 
-    def test_a_rollback_over_a_hand_edit_is_unverified_with_the_sentence(self, fake, ssh, store):
+    def test_a_rollback_over_a_hand_edit_is_refused_before_the_set_with_the_sentence(self, fake, ssh, store):
+        # (Q219 E10 refused it at step (6), after `config-set`; Q224 AJ9 refuses it before: the daemon and its file keep the change, nothing is sent, no row is left)
         cfg, digest = _plan(ssh)
         first = api.apply(ssh, "dhcp4", _candidate(cfg), digest, "x", before_cfg=cfg)
         assert first["ok"]
@@ -1962,8 +1963,16 @@ class TestApplyAsksTheFileAtStepSix:
         self.w.hand_edit({**fake.file, EDIT_KEY: copy.deepcopy(EDIT)})
         fake.commands.clear()
         out = api.revert(ssh, "dhcp4", cfg, after_digest, "rollback: x", before_cfg=_candidate(cfg))
-        assert out["code"] == "unverified" and "not yet in its file" in out["detail"]
-        assert "config-write" not in fake.commands
+        assert (
+            out["code"] == "guard"
+            and "does not say what the daemon runs" in out["detail"]
+            and "nothing was sent" in out["detail"]
+        )
+        assert "config-set" not in fake.commands and "config-write" not in fake.commands
+        assert (
+            fake.running["valid-lifetime"] == _candidate(cfg)["Dhcp4"]["valid-lifetime"]
+            and store.pending(SID, "dhcp4") is None
+        )
 
 
 class TestAScalarIsJudgedByItsValueToo:

@@ -8,6 +8,21 @@ import re
 
 from markupsafe import Markup, escape
 
+#: ASCII digits only, up to eighteen (Q224, AJ16). `str.isdigit()` is True for a full-width or an Arabic-Indic digit, and `int()` then raises on it (a 500 from a form) or, in a
+#: comprehension that filters with `isdigit()` and converts with `int()`, drops the whole selection on the floor. THE whole-number test for every form value and every path segment under
+#: `jen/`; `tests/test_whole_numbers.py` refuses an `isdigit()` anywhere else in the tree.
+WHOLE_NUMBER = re.compile(r"[0-9]{1,18}")
+
+
+def is_whole(text) -> bool:
+    """Is `text` a str of ASCII digits - a whole number `int()` reads as written? False for a bool, a non-str, "", a sign, a space, a point, a full-width digit, or nineteen digits or more."""
+    return isinstance(text, str) and WHOLE_NUMBER.fullmatch(text) is not None
+
+
+def whole(text, default=None):
+    """`int(text)` when `is_whole(text)`, else `default`."""
+    return int(text) if is_whole(text) else default
+
 
 def mark_match(text, q) -> Markup:
     """`text` with every case-insensitive occurrence of `q` wrapped in `<mark>` - the `|mark` filter.

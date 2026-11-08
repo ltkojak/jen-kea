@@ -19,6 +19,7 @@ import jen.services.view_prefs as __view_prefs
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("devices", __name__)
@@ -499,7 +500,7 @@ def bulk_delete_devices():
 @_admin_required
 def save_device_settings():
     stale_days = request.form.get("stale_days", "30").strip()
-    if not stale_days.isdigit() or not (1 <= int(stale_days) <= 365):
+    if not is_whole(stale_days) or not (1 <= int(stale_days) <= 365):
         flash("Stale threshold must be between 1 and 365 days.", "error")
         return redirect(url_for("devices.devices"))
     __user.set_global_setting("stale_device_days", stale_days)

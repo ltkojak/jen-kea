@@ -334,6 +334,23 @@ SURFACES = [
         (),
     ),
     (
+        # (Q224, AJ4) rows with no subnet - audit and alert-delivery rows - are for unrestricted callers only (ARCHITECTURE §2): a scoped admin is refused, as Doctor refuses one
+        "settings logs",
+        "GET",
+        "/settings/logs",
+        None,
+        {"viewer_A": {302, 403}, "admin_A": {302, 403}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
+        "settings logs, alerts tab",
+        "GET",
+        "/settings/logs?tab=alerts",
+        None,
+        {"viewer_A": {302, 403}, "admin_A": {302, 403}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
         "reconcile limit 50",
         "GET",
         "/ddns/reconcile?limit=50",
@@ -844,9 +861,9 @@ ROUTE_ALLOWLIST = {
     # Subnet management — admin-scoped, not a per-client surface.
     "subnets.subnets": "subnet list with aggregate counts — tests/test_subnets.py",
     "subnets.delete_subnet": "write route, admin-only — tests/test_subnets.py",
-    # Users — audit_log is the superadmin-only audit trail (unrestricted by
-    # design, like Doctor); about lists the subnets themselves, so it is filtered like every other subnet surface (v5.68.0-beta.21, Q156).
-    "users.audit_log": "superadmin-only audit trail, unrestricted by design — tests/test_users.py",
+    # Users — audit_log is for UNRESTRICTED callers only (admin or superadmin with every subnet; a scoped admin is refused at the route, Q224 AJ4 - the matrix row "settings logs"
+    # asserts it); about lists the subnets themselves, so it is filtered like every other subnet surface (v5.68.0-beta.21, Q156).
+    "users.audit_log": "unrestricted callers only, refused at the route like Doctor — the matrix rows 'settings logs' and tests/test_a_scoped_admin_reads_no_log.py",
     "users.about": "subnet-filtered (filter_subnet_map), aggregate lease counts only, no per-client fields — tests/test_users.py",
     # Other REST v1 routes — scoped via _api_key_subnet_ids()/filter_subnet_ids()
     # already; not in Q81's named six (devices/devices-by-mac/leases-by-mac/

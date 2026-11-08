@@ -23,8 +23,36 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.forms import flash_field
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
+
+
+def _session_looser(enabled: str, minutes: int) -> bool:
+    """Would storing (`enabled`, `minutes`) make the idle timeout LESS strict than the one applied now? Off and 0 (never) are the least strict, equal to each other; otherwise fewer minutes is stricter."""
+
+    def rank(on: bool, m: int) -> int:
+        return 0 if not on or m == 0 else __session_timeout.MAX_MINUTES + 1 - m  # 1440 min -> 1, 1 min -> 1440
+
+    now_on = __user.get_global_setting("session_timeout_enabled", "true") != "false"
+    return rank(enabled == "true", minutes) < rank(now_on, __session_timeout.global_minutes())
+
+
+def _rate_limit_looser(mode: str, max_attempts: int, lockout_minutes: int) -> bool:
+    """Would storing these make login rate limiting LESS strict than it is now? `off` (or 0 attempts) is the least strict; more attempts allowed, or a shorter lockout (0 is until cleared, the
+    longest), is looser. `ip`, `username` and `both` are three measures of one strictness and move freely among themselves."""
+    now = __auth.get_rate_limit_settings()
+    now_off = now["mode"] == "off" or now["max_attempts"] == 0
+    new_off = mode == "off" or max_attempts == 0
+    if new_off:
+        return not now_off
+    if now_off:
+        return False
+
+    def longer(a: int, b: int) -> bool:  # is lockout `a` longer than `b`, with 0 the longest?
+        return (a == 0 and b != 0) or (a != 0 and b != 0 and a > b)
+
+    return max_attempts > now["max_attempts"] or longer(now["lockout_minutes"], lockout_minutes)
 
 
 @bp.route("/settings/save-session", methods=["POST"])
@@ -41,6 +69,11 @@ def save_session_settings():
         flash_field("timeout_minutes", "Session timeout must be between 0 and 1440 minutes (0 = never).")
         return redirect(url_for("settings.settings_security"))
     timeout = str(minutes)  # the canonical text: `00005` is stored as 5, and what is stored is what the reader applies
+    # (Q224, AJ14) an admin makes the policy STRICTER only, as for the MFA mode (Q171): the idle timeout is one of three global authentication knobs on this page. Off, or 0 (never), is the least
+    # strict; among timeouts a shorter one is stricter. A superadmin may loosen it
+    if current_user.role != "superadmin" and _session_looser(enabled, minutes):
+        flash("Only a superadmin can make the session timeout less strict.", "error")
+        return redirect(url_for("settings.settings_security"))
 
     __user.set_global_setting("session_timeout_minutes", timeout)
     __user.set_global_setting("session_timeout_enabled", enabled)
@@ -63,14 +96,29 @@ def save_rate_limit():
     lockout_minutes = request.form.get("lockout_minutes", "15").strip()
     mode = request.form.get("mode", "both").strip()
 
-    if not max_attempts.isdigit() or int(max_attempts) < 0:
-        flash_field("max_attempts", "Max attempts must be 0 or a positive number.")
+    # (Q224, AJ18) bounded, as `save_config_revision_keep` bounds its own: the minutes reach a `DATE_SUB(NOW(), INTERVAL %s MINUTE)` and a count beyond any login's reach is a typo, not a policy
+    if not is_whole(max_attempts) or not 0 <= int(max_attempts) <= __auth.MAX_ATTEMPTS_BOUND:
+        flash_field(
+            "max_attempts", f"Max attempts must be a whole number from 0 (unlimited) to {__auth.MAX_ATTEMPTS_BOUND}."
+        )
         return redirect(url_for("settings.settings_security"))
-    if not lockout_minutes.isdigit() or int(lockout_minutes) < 0:
-        flash_field("lockout_minutes", "Lockout duration must be 0 or a positive number.")
+    if not is_whole(lockout_minutes) or not 0 <= int(lockout_minutes) <= __auth.MAX_LOCKOUT_MINUTES:
+        flash_field(
+            "lockout_minutes",
+            f"Lockout duration must be a whole number of minutes from 0 (until cleared) to {__auth.MAX_LOCKOUT_MINUTES} (a week).",
+        )
         return redirect(url_for("settings.settings_security"))
     if mode not in ("ip", "username", "both", "off"):
         flash("Invalid lockout mode.", "error")
+        return redirect(url_for("settings.settings_security"))
+    max_attempts, lockout_minutes = (
+        str(int(max_attempts)),
+        str(int(lockout_minutes)),
+    )  # the canonical text, as the session route stores its minutes
+    # (Q224, AJ14) an admin makes the policy STRICTER only (Q171's rule for the MFA mode): rate limiting cannot be turned off, the attempts allowed cannot grow (0 is unlimited) and the lockout
+    # cannot shorten (0 is until cleared). A superadmin may loosen it
+    if current_user.role != "superadmin" and _rate_limit_looser(mode, int(max_attempts), int(lockout_minutes)):
+        flash("Only a superadmin can make login rate limiting less strict.", "error")
         return redirect(url_for("settings.settings_security"))
 
     __user.set_global_setting("rl_max_attempts", max_attempts)

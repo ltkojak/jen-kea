@@ -82,7 +82,7 @@ def switch_kea_transport(server_id):
         if not stored:
             # (Q219 BI3 c, AD7) a tick with nothing stored has no facts to be given for: the sentence names the way out
             flash(
-                f"{server.get('name') or 'The server'}: run the readiness check first (Check readiness on the card), then tick what you accept; nothing was changed.",
+                f"{server.get('name') or 'The server'}: run the readiness check first (press {__write_mode.CHECK_BUTTON} under {__write_mode.CHECK_ROW} on the card), then tick what you accept; nothing was changed.",
                 "error",
             )
             return _back()

@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from jen.services import auth as _auth
 from jen.services import dhcp_options as _opts
 from jen.services import win_dhcp_import as _win
+from jen.services.text import is_whole
 from jen.services.win_dhcp_import import Plan, Policy, Reservation, Scope, to_kea  # noqa: F401  (re-exported)
 
 DHCPD_DEFAULT_LEASE_SECONDS = 43200  # dhcpd's own default-lease-time default
@@ -216,7 +217,7 @@ def option_statement(toks: list[Tok], context: str) -> tuple[tuple[int, str] | N
         return None, f"{context} (line {line}): option space definitions are not supported — skipped"
     if "code" in texts and "=" in texts:
         return None, f"{context} (line {line}): option definition `{name}` is not supported — its uses are skipped"
-    if "." in name and not name.replace(".", "").isdigit():
+    if "." in name and not is_whole(name.replace(".", "")):
         return None, f"{context} (line {line}): option space `{name.split('.')[0]}` is not supported — skipped"
     m = _OPTION_NAME_RE.match(name)
     if m:

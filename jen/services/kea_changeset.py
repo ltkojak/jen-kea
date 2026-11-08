@@ -624,12 +624,15 @@ def _run_change_unlocked(
             lines.append(("error", _failure_line(t.name, res, daemon_label)))
 
         revert_failed: list[Target] = []  # the revert call itself failed: still on the NEW config
+        api_refused: set = set()  # (Q224, AJ9) an api target whose rollback was refused before anything was sent: daemon AND file keep the new config, no row
         restart_stuck: list[Target] = []  # the previous config is back but the daemon would not restart on it
         for done in reversed(committed):
             rres = _restore_target(done, service, summary, helper_only)
             if not rres.get("ok"):
                 revert_failed.append(done)
                 if done.transport == "api":
+                    if rres.get("code") == "guard":
+                        api_refused.add(done.key)
                     # (Q223, AH2) an api target's rollback is judged by the daemon's own answer, and its result says which half stood: the line carries it instead of "still have the NEW config",
                     # which is true of a file target whose restore failed and may be false of a daemon that went back while its file did not
                     lines.append(
@@ -668,13 +671,15 @@ def _run_change_unlocked(
             # opposite of reality.
             if revert_failed:
                 failed_keys = {d.key for d in revert_failed}  # by id: two servers may share a name
-                still_new = [d.name for d in revert_failed if d.transport != "api"]
-                api_half = [d.name for d in revert_failed if d.transport == "api"]
+                still_new = [d.name for d in revert_failed if d.transport != "api" or d.key in api_refused]
+                api_half = [d.name for d in revert_failed if d.transport == "api" and d.key not in api_refused]
                 rolled_back = [d.name for d in committed if d.key not in failed_keys]
                 untouched = f"{t.name} was never changed" if not unproved else f"{t.name} may carry the change (below)"
                 parts = []
                 if still_new:
-                    parts.append(f"{', '.join(still_new)} still have the NEW config (their rollback failed)")
+                    parts.append(
+                        f"{', '.join(still_new)} still have the NEW config (their rollback failed)"
+                    )  # true of a file target, and (Q224, AJ9) of an api target refused before its set: daemon and file alike
                 if api_half:
                     parts.append(
                         f"{', '.join(api_half)}: the rollback over the API did not complete (what the daemon and the file hold is in the line above; Settle it now on the Write mode card)"

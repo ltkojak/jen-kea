@@ -41,6 +41,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.forms import flash_field
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("database", __name__)
@@ -832,8 +833,8 @@ def kea_identifiers_repair():
     from jen.models.db import kea_db
     from jen.services import kea_identifiers as __ident
 
-    ids = [i for i in request.form.getlist("host_id") if i.isdigit()]
-    option_ids = [i for i in request.form.getlist("option_id") if i.isdigit()]
+    ids = [i for i in request.form.getlist("host_id") if is_whole(i)]
+    option_ids = [i for i in request.form.getlist("option_id") if is_whole(i)]
     if not ids and not option_ids:
         flash("Nothing was selected.", "warning")
         return redirect(url_for("database.kea_identifiers"))

@@ -43,6 +43,7 @@ import shlex
 
 from jen import extensions
 from jen.services.secret_keys import is_secret_key
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,7 @@ def autodetect_interfaces(ssh, service: str) -> list:
         interfaces = []
         for line in out.splitlines():
             line = line.strip()
-            if line and line[0].isdigit() and ":" in line:
+            if line and is_whole(line[0]) and ":" in line:
                 name = line.split(":")[1].strip().split("@")[0]
                 if name and name != "lo" and name not in interfaces:
                     interfaces.append(name)

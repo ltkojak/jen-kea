@@ -281,13 +281,20 @@ def _before_config_change(server: dict, at_text: str) -> bool:
     if when is None:
         return False
     try:
-        from datetime import timedelta
+        from datetime import datetime, timedelta, timezone
 
         from jen.services import config_revisions as _rev
 
         latest = _rev.latest(server.get("id"), "dhcp4")
-        created = (latest or {}).get("created_at")
-        return bool(created is not None and created > when - timedelta(seconds=offset) + timedelta(seconds=5))
+        # (Q224, AJ10) `created_at` is the DATABASE host's stamp and `when` the Kea host's, corrected by the Kea host's offset into Jen's clock: the revision is placed in Jen's clock the same
+        # way, by the age the database measured with its own clock (`age_seconds`), never by its stamp. A row with no measured age (an older store) answers False, as an absent row does
+        age = (latest or {}).get("age_seconds")
+        if not isinstance(age, (int, float)) or isinstance(age, bool) or age < 0:
+            return False
+        created = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=float(age)
+        )  # naive UTC, as `when` is
+        return bool(created > when - timedelta(seconds=offset) + timedelta(seconds=5))
     except Exception as e:
         logger.warning(f"explain_context: config revision lookup failed: {type(e).__name__}")
         return False

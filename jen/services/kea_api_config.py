@@ -323,6 +323,15 @@ def file_in_daemon(
     return defaults is None or _lacks(running, said, defaults) is None
 
 
+def mirrors(file_cfg: dict | None, live_cfg: dict | None, service: str) -> bool:
+    """Are the FILE and the daemon's running configuration two renderings of one configuration - every key the file says carried by the daemon, and every key the daemon runs said by the file
+    (Q224, AJ2)? Asked of a file Kea itself wrote (`config-write` after a change over the API): Kea renders the configuration it runs into the file and into `config-get` alike, so a key in one
+    and not the other is a hand edit - one deleted from the file, or one added to it. No defaults vector: a rendering carries the defaults written out on both sides. Not for a file Jen
+    authored (`file_in_daemon` is that question, one direction, the vector naming the keys Kea adds)."""
+    running, said = _section(live_cfg, service), _section(file_cfg, service)
+    return _carries(running, said) and _carries(said, running)
+
+
 def _secret_path(path: str) -> bool:
     """Is any segment of `path` a key whose VALUE is a secret? (`hosts-databases[0].password` is on a path Jen prints.) The one definition is `secret_keys.is_secret_key` (LEAK-001)."""
     from jen.services.secret_keys import is_secret_key
@@ -859,7 +868,9 @@ def _row_age_seconds(row: dict) -> float:
 
     measured = row.get("age_seconds")
     if isinstance(measured, (int, float)) and not isinstance(measured, bool):
-        return float(measured)
+        # (Q224, AJ1) a NEGATIVE age is a stamp the database could not have written yet - its own clock stepped back since (an NTP step, a resumed virtual machine, a restored snapshot) - and
+        # is not a row in flight: the same rule `_age_days`'s consumers apply to the readiness result (AG5). It reads as old, like an unreadable stamp
+        return float(measured) if measured >= 0 else PENDING_SETTLE_SECONDS + 1
     stamp = row.get("created_at")
     try:
         when = stamp if isinstance(stamp, datetime) else datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -1317,12 +1328,31 @@ def apply(
         # (Q219 E10) a rollback brings no Plan: its row carries the file as it stands now, so an interrupted rollback can be settled over the file it started from. (Q223, AH2) When that file
         # says what the daemon runs NOW - the change this rollback undoes, as Kea itself rendered it - the rollback proves its own step (6) against this same sha, as its settlement would: the
         # forward change's rendering row may be missing (its read-back failed, or the store refused the row), and then (R) alone would leave the daemon rolled back and the file carrying the
-        # change. A file that says something the daemon does not run is a hand edit, and a rollback is refused over it as before (the read is a capturing one: the edit is in Config history)
+        # change. A file that says something the daemon does not run is a hand edit, and a rollback is refused over it as before (the read is a capturing one: the edit is in Config history).
+        # (Q224, AJ2) the question is asked in BOTH directions (`mirrors`): the file this rollback may write over is Kea's OWN rendering of what the daemon runs, so every key the daemon
+        # runs is in it and every key in it the daemon runs; a file from which a key was DELETED is not that rendering, and the one-way ask made it the rollback's planned file and
+        # wrote over the deletion. No defaults vector is needed or used (Q219: the vector decides no write): two renderings by one daemon of one configuration carry the same keys.
+        # (AJ3) a file this ask does not prove is NOT the row's either: a settlement over such a row accepted the file by proof (P) and wrote over the edit
         file_now, row_sha = _host.read_config_versioned(server, service, capture=True)
+        why_not = f"the file on {_name(server)} could not be read"
         if file_now is not None and row_sha:
-            live_now, _digest_now, _why_now = _get(server, service)
-            if live_now is not None and file_in_daemon(file_now, live_now, service):
+            live_now, _digest_now, why_now = _get(server, service)
+            if live_now is None:
+                why_not = f"the running configuration of {_name(server)} could not be read ({why_now})"
+            elif mirrors(file_now, live_now, service):
                 planned_sha = row_sha
+            else:
+                why_not = f"the file on {_name(server)} does not say what the daemon runs (it was edited since Kea wrote it; the file as it stands is in Config history)"
+        if planned_sha is None:
+            # (Q224, AJ9) a rollback whose file is not proved is refused BEFORE the set, never at step (6) after it: the daemon and its file both keep the change this rollback would
+            # have undone, which is one state and not two. Step (6)'s refusal left the daemon rolled back, the file carrying the change, and a row that named a restart first (AH2) or
+            # a settlement over a file Jen had not proved (AJ3); and the one `config-get` this ask needs is asked BEFORE anything is sent, so a Control Agent that stops answering
+            # refuses the rollback whole instead of leaving half of it
+            return _result(
+                False,
+                "guard",
+                f"{why_not}; nothing was sent - the daemon and its file both keep the change this rollback would have undone (Config history holds the configuration before it: restore it from there)",
+            )
     if not (isinstance(row_sha, str) and len(row_sha) == 64):
         row_sha = None  # (a canonical sentinel, from a host with no raw hash, is no sha256 and the column is CHAR(64))
     pending_id = None
@@ -1375,7 +1405,10 @@ def apply(
 
     reply = _cmd(server, service, "config-set", _body(cfg, service))  # (5)
     if _ok(reply):
-        h1 = _digest(reply) or hash(server, service)
+        answered = _digest(
+            reply
+        )  # (Q224, AJ19) a set that answers no digest is proved by CONTENT at (7), as a set with no answer is: a digest read in a second call is a different instant
+        h1 = answered or hash(server, service)
         if not h1:
             return _unproved(
                 "unverified", f"{_name(server)} accepted the change but returned no digest; it may be live"
@@ -1387,6 +1420,7 @@ def apply(
         h1, stop = _after_a_set_without_an_answer(server, service, cfg, before_cfg, expect_hash or now)
         if stop is not None:
             return stop if stop.get("needs_hands") else _drop_pending(stop)
+        answered = h1  # that function proved the content itself (`_carries`) before it handed back the digest
 
     if _has_ssh(
         server
@@ -1423,7 +1457,7 @@ def apply(
         unwritten = "the file may not carry this change"
 
     got, digest, why = _get(server, service)  # (7)
-    if got is None or digest != h1:
+    if got is None or digest != h1 or (not answered and not _carries(_section(got, service), _section(cfg, service))):
         return _unproved(
             "unverified",
             f"{_name(server)} did not confirm the change ({why or f'its digest is {digest}, not the {h1} the set returned'}); the daemon's own answer is the record and nothing was undone",

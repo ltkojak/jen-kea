@@ -19,6 +19,7 @@ from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
 from jen.services.alerts import ALERT_TYPE_LABELS, DEFAULT_TEMPLATES, GLYPH_LEGEND, PLUGIN_ALERT_TYPES
 from jen.services.forms import flash_field
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 
@@ -123,11 +124,11 @@ def save_alert_channel():
         if not subnet_ids_raw or "all" in subnet_ids_raw:
             subnet_scope = None
         else:
-            ids = [int(s) for s in subnet_ids_raw if s.isdigit()]
+            ids = [int(s) for s in subnet_ids_raw if is_whole(s)]
             subnet_scope = json.dumps(ids) if ids else None
     else:
         allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-        ids = [int(s) for s in subnet_ids_raw if s.isdigit() and int(s) in allowed]
+        ids = [int(s) for s in subnet_ids_raw if is_whole(s) and int(s) in allowed]
         subnet_scope = json.dumps(ids) if ids else None
 
     if not channel_name:
@@ -371,10 +372,10 @@ def save_alert_global():
         flash_field("summary_time", "The daily summary time must be HH:MM in UTC, for example 07:00.")
         __user.audit("SAVE_ALERT_GLOBAL_REFUSED", "settings", f"daily summary time {summary_time[:20]!r} is not HH:MM")
         return redirect(url_for("settings.settings_alerts"))
-    if not pool_free.isdigit() or int(pool_free) < 1:
+    if not is_whole(pool_free) or int(pool_free) < 1:
         flash_field("pool_exhaustion_free", "Pool exhaustion threshold must be a positive number.")
         return redirect(url_for("settings.settings_alerts"))
-    if not threshold.isdigit() or not (1 <= int(threshold) <= 100):
+    if not is_whole(threshold) or not (1 <= int(threshold) <= 100):
         flash_field("alert_threshold_pct", "Utilization threshold must be between 1 and 100.")
         return redirect(url_for("settings.settings_alerts"))
     if reserved_lease_mode not in ("always", "once"):

@@ -67,7 +67,7 @@
             {% endif %}
         </td>
         <td data-m="hide" class="u-865c33">
-            {% if u.session_timeout %}{{ u.session_timeout }}m{% else %}{{ global_timeout }}m (global){% endif %}
+            {% if u.own_minutes %}{{ u.own_minutes }}m{% else %}{{ global_timeout }}m (global){% endif %}
         </td>
         <td data-m="trailing">
             <button class="btn btn-sm btn-secondary edit-user-btn"

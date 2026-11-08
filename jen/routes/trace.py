@@ -30,6 +30,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.dhcp_explain import explain
 from jen.services.subnet_context import dhcp4_config
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("trace", __name__)
@@ -47,7 +48,7 @@ NEEDS_HELPER = "Trace needs the Kea host helper (Settings → Kea → SSH → In
 
 def _pick_server(raw: str) -> dict | None:
     servers = extensions.KEA_SERVERS or []
-    if raw.isdigit():
+    if is_whole(raw):
         for s in servers:
             if str(s.get("id")) == raw:
                 return s

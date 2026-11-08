@@ -23,6 +23,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.forms import flash_field
 from jen.services.leases_sql import ACTIVE_LEASE4
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("users", __name__)
@@ -48,6 +49,11 @@ def audit_log():
     """v5.9.0 — Settings → Logs: the audit log (tab=audit, default) and the
     alert delivery log (tab=alerts, which used to be a card at the bottom
     of the Alerts page)."""
+    # (Q224, AJ4) rows that carry no subnet - audit and alert-delivery rows - are for unrestricted callers only (docs/ARCHITECTURE.md §2): their text names subnets, clients and
+    # servers a scoped admin cannot see. The same rule Doctor and Config history apply, at the route, before the query
+    if not current_user.all_subnets:
+        flash("Logs need access to all subnets.", "error")
+        return redirect(url_for("servers.servers"))
     tab = request.args.get("tab", "audit")
     if tab == "alerts":
         recent_alerts = []
@@ -232,6 +238,9 @@ def users():
                     (u["id"], u["id"]),
                 )
                 u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
+                # (Q224, AJ15) the minutes the server APPLIES for this account (Q215 Z18's rule, one column over): a stored row outside 0..1440 - a hand edit, an earlier release - reads as
+                # the global, and the page says so instead of printing the row
+                u["own_minutes"] = __session_timeout.parse_minutes(u.get("session_timeout")) or None
                 # Parse subnet_access for display
                 try:
                     import json as _json
@@ -270,7 +279,7 @@ def add_user():
     if subnet_ids_raw and "all" not in subnet_ids_raw and role != "superadmin":
         # v5.69.0-beta.2 (Q171): a value that is not a whole number used to raise and fall back to None - an UNRESTRICTED account - while the edit routes read the same
         # list as "no access". Fail closed: the form is refused whole, and what is stored is only ever a list of the numbers submitted.
-        if not all(s.isdigit() for s in subnet_ids_raw):
+        if not all(is_whole(s) for s in subnet_ids_raw):
             flash("Subnet ids must be numbers.", "error")
             return users(), 400
         subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
@@ -509,10 +518,12 @@ def set_user_subnets(user_id):
     if not subnet_ids_raw or "all" in subnet_ids_raw:
         subnet_access = None
     else:
-        try:
-            subnet_access = _json.dumps([int(s) for s in subnet_ids_raw if s.isdigit()])
-        except Exception:
-            subnet_access = None
+        # (Q224, AJ5) the rule `add_user` has had since Q171, carried to its sibling: a value that is not a whole number refuses the form whole; nothing here ever falls back to None (an
+        # UNRESTRICTED account) or drops one id from a selection
+        if not all(is_whole(s) for s in subnet_ids_raw):
+            flash("Subnet ids must be numbers.", "error")
+            return redirect(url_for("users.users"))
+        subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -624,10 +635,11 @@ def edit_user(user_id):
     if not subnet_ids_raw or "all" in subnet_ids_raw or role == "superadmin":
         subnet_access = None
     else:
-        try:
-            subnet_access = _json.dumps([int(s) for s in subnet_ids_raw if s.isdigit()])
-        except Exception:
-            subnet_access = None
+        # (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short
+        if not all(is_whole(s) for s in subnet_ids_raw):
+            flash("Subnet ids must be numbers.", "error")
+            return redirect(url_for("users.users"))
+        subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
 
     try:
         with __db.jen_db() as db:

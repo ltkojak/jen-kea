@@ -27,6 +27,7 @@ from jen.services import explain_context as __ctx
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.dhcp_explain import INPUT_LABELS
 from jen.services.subnet_context import dhcp4_config
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("explain", __name__)
@@ -129,7 +130,7 @@ def explain_page():
         reservations = [
             r for r in _load_reservations(mac_hex, cid_hex) if r["subnet_id"] == 0 or r["subnet_id"] in subnet_map
         ]
-        if raw_subnet.isdigit():
+        if is_whole(raw_subnet):
             subnet_id = int(raw_subnet)
             chosen_how = "chosen"
         elif lease and lease.get("subnet_id"):

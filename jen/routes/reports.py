@@ -18,6 +18,7 @@ from jen import extensions
 from jen.services.access import accessible_subnet6_map, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
 from jen.services.leases_sql import ACTIVE_LEASE4
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reports", __name__)
@@ -165,10 +166,10 @@ def reports():
 def save_report_settings():
     interval = request.form.get("snapshot_interval", "30").strip()
     retention = request.form.get("retention_days", "90").strip()
-    if not interval.isdigit() or not (5 <= int(interval) <= 1440):
+    if not is_whole(interval) or not (5 <= int(interval) <= 1440):
         flash("Snapshot interval must be between 5 and 1440 minutes.", "error")
         return redirect(url_for("reports.reports"))
-    if not retention.isdigit() or not (1 <= int(retention) <= 365):
+    if not is_whole(retention) or not (1 <= int(retention) <= 365):
         flash("Retention must be between 1 and 365 days.", "error")
         return redirect(url_for("reports.reports"))
     __user.set_global_setting("snapshot_interval_minutes", interval)

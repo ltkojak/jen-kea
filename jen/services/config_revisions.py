@@ -158,18 +158,18 @@ def _decrypted(row: dict | None) -> dict | None:
 
 
 def latest(server_id: int, service: str, exclude_kind: str | None = None) -> dict | None:
-    """The newest SETTLED revision of (server, service); `exclude_kind` skips one `hash_kind` (the FILE reader skips the daemon's `kea` rows: its digests are not comparable with a file hash). A `pending` or
+    """The newest SETTLED revision of (server, service), with `age_seconds` measured by the database's own clock (Q224, AJ10: `created_at` is its stamp); `exclude_kind` skips one `hash_kind` (the FILE reader skips the daemon's `kea` rows: its digests are not comparable with a file hash). A `pending` or
     `damaged` row is the record of a change the daemon may be running, never the last known configuration (Q218 D3, CFG-006): the recovery bundle, the support bundle, Explain and the capture read this."""
     try:
         with _jen_db() as db, db.cursor() as cur:
             if exclude_kind is None:
                 cur.execute(
-                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
+                    "SELECT *, TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_seconds FROM kea_config_revisions WHERE server_id=%s AND service=%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
                     (server_id, service),
                 )
             else:
                 cur.execute(
-                    "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind<>%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
+                    "SELECT *, TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_seconds FROM kea_config_revisions WHERE server_id=%s AND service=%s AND hash_kind<>%s AND source NOT IN ('pending', 'damaged') ORDER BY id DESC LIMIT 1",
                     (server_id, service, exclude_kind),
                 )
             row = cur.fetchone()

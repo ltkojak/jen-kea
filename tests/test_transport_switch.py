@@ -415,9 +415,9 @@ class TestTheRefusalNamesAControlTheCardOffers:
         r = sw.switch(srv(daemon, "api", ssh=True), "file")
         assert not r["ok"] and r["needs"] == "discard_file_edit" and written == []
         assert (
-            f"run Check readiness on the server's card, select File over SSH and tick '{words.CONSENT_TEXTS['discard_file_edit']}'"
+            f"press {words.CHECK_BUTTON} under {words.CHECK_ROW} on the server's card, select File over SSH and tick '{words.CONSENT_TEXTS['discard_file_edit']}'"
             in r["line"]
-        )  # (Q223, AH4/AH5) the box by its label; a Live API server's card already shows the check
+        )  # (Q223, AH4/AH5) the box by its label; a Live API server's card already shows the check; (Q224, AJ8) the check by the card's own words
         assert "restart Kea there, restore from Config history" in r["line"]
 
     def test_with_a_stored_result_the_sentence_names_the_box(self, daemon, store, probes, written, monkeypatch):
@@ -427,7 +427,7 @@ class TestTheRefusalNamesAControlTheCardOffers:
         assert not r["ok"] and r["needs"] == "discard_file_edit" and written == []
         assert (
             f"or tick '{words.CONSENT_TEXTS['discard_file_edit']}' on the server's card to overwrite it" in r["line"]
-            and "Check readiness" not in r["line"]
+            and words.CHECK_BUTTON not in r["line"]
         )
 
 

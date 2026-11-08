@@ -36,6 +36,7 @@ import jen.models.user as __user
 import jen.services.capabilities as __caps
 import jen.services.mfa as __mfa
 import jen.services.session_timeout as __session_timeout
+import jen.services.text as _text
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 
@@ -304,15 +305,22 @@ def settings_appearance():
 # ── Save handlers that stay here ────────────────────────────────────────────
 
 
+MAX_AUDIT_RETENTION_DAYS = 3650
+
+
 @bp.route("/settings/save-audit-retention", methods=["POST"])
 @login_required
 @_admin_required
 def save_audit_retention():
     days_raw = request.form.get("audit_retention_days", "90").strip()
-    try:
-        days = max(0, int(days_raw))
-    except ValueError:
-        flash("Invalid value — must be a number of days.", "error")
+    days = _text.whole(
+        days_raw
+    )  # (Q224, AJ18) a whole number of days from 0 (forever) to ten years, as `save_config_revision_keep` bounds its own
+    if days is None or days > MAX_AUDIT_RETENTION_DAYS:
+        flash(
+            f"Invalid value — must be a whole number of days from 0 (keep forever) to {MAX_AUDIT_RETENTION_DAYS}.",
+            "error",
+        )
         return redirect(url_for("settings.settings_system"))
     __user.set_global_setting("audit_retention_days", str(days))
     # Run cleanup immediately if retention > 0

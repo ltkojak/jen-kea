@@ -1779,6 +1779,14 @@ place; a concurrency conflict on B did too. `jen/services/kea_changeset.py`'s
    `config-write` was refused at the file, so "still have the NEW config"
    is said of file targets only; an api target gets its own line with the
    revert's result and is named in the group line as "did not complete".
+   **7.0.0-beta.10 (Q224, AJ2, AJ3, AJ9)** — a rollback whose file is not
+   proved is refused BEFORE its `config-set` (the file is Kea's own
+   rendering of what the daemon runs, asked in both directions by
+   `kea_api_config.mirrors`; a file with a key deleted is a hand edit),
+   so the daemon and its file both keep the new configuration: such an
+   api target is in `still_new`, like a file target, and no pending row
+   is left behind. "Did not complete" is said only of an api target whose
+   rollback was sent and did not finish.
    **v5.65.6 (Q95)** — a revert whose own *restart* fails (the previous
    config is back on disk but the daemon will not start on it) is the same
    state as the restart-phase rollback below: an `error` line, `rollback_failed`,

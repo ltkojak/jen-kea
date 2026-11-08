@@ -80,7 +80,9 @@ def remember(response, request, stored):
     held = request.cookies.get(COOKIE)
     if not stored:
         if held is not None:  # a cookie with nothing usable in it: take it away rather than keep rewriting nothing
-            response.delete_cookie(COOKIE, path="/", samesite="Lax")
+            response.delete_cookie(
+                COOKIE, path="/", samesite="Lax", secure=bool(request.is_secure)
+            )  # (Q224, AJ20) the attributes the cookie was set with, so the clearing `Set-Cookie` matches the one it clears
         return response
     text = dump(stored)
     if held != text:

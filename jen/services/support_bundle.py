@@ -109,13 +109,23 @@ def _address_key(key) -> bool:
     return str(key if key is not None else "").lower().replace("-", "_").endswith("url")
 
 
+def _is_secret_shape(value) -> bool:
+    """Is `value` a thing that can CARRY a secret under a secret-named key? A non-empty string, bytes, or any container (a list of credentials, a dict of passwords - the value is masked whole,
+    as `kea_authoring.redact_secrets` masks any shape). A bool, a number and None say that a secret exists or how long it is, never what it is: kept (Q223 AH7 decided; Q224 AJ12 the containers)."""
+    if isinstance(value, (bool, int, float)) or value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value)
+    return isinstance(value, (bytes, bytearray, dict, list, tuple, set, frozenset))
+
+
 def _scrubbed(data, key=None):
     """`data` with no user-info left in any address, at any depth (Q221, AE7): THE pass every JSON member of the bundle goes through (`_json`), so a section added later is covered by being a
     member. A string under an address key is a value (`secret_keys.without_userinfo`); any other string is text (`secret_keys.scrub_urls`). Keys, numbers, booleans and None are untouched."""
     if isinstance(data, dict):
         return {
             (scrub_urls(k) if isinstance(k, str) else k): (
-                MASK if is_secret_key(k) and isinstance(v, str) and v else _scrubbed(v, k)
+                MASK if is_secret_key(k) and _is_secret_shape(v) else _scrubbed(v, k)
             )
             for k, v in data.items()
         }  # (Q222, AG11) a key is text too; (Q223, AH7) a string under a secret-named key is masked here, in the pass every member goes through, whoever made the member

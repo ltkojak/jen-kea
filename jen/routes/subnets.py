@@ -40,6 +40,7 @@ from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.config_revisions import RevisionStoreUnreadable
 from jen.services.forms import flash_field
 from jen.services.leases_sql import ACTIVE_LEASE4
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("subnets", __name__)
@@ -460,7 +461,7 @@ def add_subnet_post():
     if shared_network and not __auth.valid_shared_network_name(shared_network):
         flash("Invalid shared network name.", "error")
         return redirect(url_for("subnets.add_subnet"))
-    if not new_id or not new_id.isdigit() or int(new_id) <= 0:
+    if not new_id or not is_whole(new_id) or int(new_id) <= 0:
         flash_field("id", "Subnet ID must be a positive whole number.")
         return redirect(url_for("subnets.add_subnet"))
     new_id = int(new_id)
@@ -1037,10 +1038,10 @@ def _parse_option_level_key(level, key_raw):
     if level == "shared-network":
         return ("shared-network", key_raw) if key_raw else (None, None)
     if level == "subnet":
-        return ("subnet", int(key_raw)) if key_raw.isdigit() else (None, None)
+        return ("subnet", int(key_raw)) if is_whole(key_raw) else (None, None)
     if level == "pool":
         sid_str, sep, pool_str = (key_raw or "").partition(":")
-        if sep and sid_str.isdigit() and pool_str:
+        if sep and is_whole(sid_str) and pool_str:
             return "pool", (int(sid_str), pool_str)
         return None, None
     if level == "class":

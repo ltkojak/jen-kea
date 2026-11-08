@@ -34,6 +34,7 @@ from jen.services.access import diagnostic_surface
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.forms import flash_field
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 
@@ -293,7 +294,7 @@ def _config_cards() -> list:
                 "state": "idle",
                 "text": "Not run yet",
                 "holds": True,
-                "button": "Run check",
+                "button": __words.CHECK_BUTTON,
                 "sentence": "Run the readiness check",
             }
         elif gap:
@@ -301,11 +302,11 @@ def _config_cards() -> list:
                 "state": "bad" if not probe.get("config_api") or probe.get("include") else "warn",
                 "text": gap,
                 "holds": True,
-                "button": "Run check again",
+                "button": __words.CHECK_AGAIN,
                 "sentence": gap,
             }
         else:
-            row2 = {"state": "ok", "text": "Passed", "holds": False, "button": "Run check again", "sentence": ""}
+            row2 = {"state": "ok", "text": "Passed", "holds": False, "button": __words.CHECK_AGAIN, "sentence": ""}
         for row in (row1, row2):
             row.setdefault("button", "")
             row.setdefault("sentence", "")
@@ -324,6 +325,7 @@ def _config_cards() -> list:
                 "helper_build": build,
                 "helper_min": helper_min,
                 "consent_texts": __words.CONSENT_TEXTS,
+                "check_row": __words.CHECK_ROW,  # (Q224, AJ8) the row's word, from the one place the sentences that send an operator to the check take it
                 "consent_value": __words.CONSENT_VALUE,
                 "proof_text": _proof_text(probe),
                 "row1": row1,
@@ -1394,7 +1396,7 @@ def probe_kea():
         ), 400
     raw_id = request.form.get("server_id", "").strip()
     server = None
-    if raw_id.isdigit():
+    if is_whole(raw_id):
         server = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == raw_id), None)
     if server is None:
         server = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
@@ -2218,7 +2220,7 @@ def _rotation_dependencies(inventory, rotated: set) -> list:
         if incident.get("category") == "record-forgotten":
             candidates.append((str(incident.get("server_id")), str(incident.get("service"))))
     for sid_text, svc in candidates:
-        server = _server_by_id(int(sid_text)) if sid_text.isdigit() else None
+        server = _server_by_id(int(sid_text)) if is_whole(sid_text) else None
         key = (sid_text, svc)
         if server is None or (server.get("id"), svc) in rotated or key in seen:
             continue
@@ -2703,7 +2705,7 @@ def setup_direct_socket(server_id, service):
         )
         return back
     raw_port = request.form.get("port", "").strip() or str(DIRECT_SOCKET_DEFAULT_PORTS[service])
-    if not raw_port.isdigit() or not 1 <= int(raw_port) <= 65535:
+    if not is_whole(raw_port) or not 1 <= int(raw_port) <= 65535:
         flash("The port must be a number between 1 and 65535.", "error")
         return back
     port = int(raw_port)
@@ -3905,7 +3907,7 @@ def forget_stale_kea_records():
     def _fact_first(ident):
         # Q200 (AP2): the durable fact is stored AND read back before a parked record is deleted; False keeps every file (`forget_report` names it in `no_fact`)
         sid_text, _sep, svc = ident.partition("-")
-        server = _server_by_id(int(sid_text)) if sid_text.isdigit() else None
+        server = _server_by_id(int(sid_text)) if is_whole(sid_text) else None
         if server is None:
             return False
         stored = bool(
@@ -3985,7 +3987,7 @@ def forget_stale_kea_records():
             continue
         # Q200 (AP2): the fact was stored first; a deletion that then failed makes it say so, so a restart or a retry sees the truth
         word_sid, _sep, word_svc = ident.partition("-")
-        word_server = _server_by_id(int(word_sid)) if word_sid.isdigit() else None
+        word_server = _server_by_id(int(word_sid)) if is_whole(word_sid) else None
         if word_server is not None:
             _record_incident(
                 word_server,
@@ -4826,7 +4828,7 @@ def save_extra_servers():
         return redirect(url_for("settings.settings_kea"))
     for row_id, h, row_url in rows_to_validate:
         # (Q202 AR3: a row's exemption is its OWN saved host, found by its `extra_id[]` - never position, never another record's host; a new row has none)
-        own = row_id.strip() if row_id.strip().isdigit() and row_id.strip() != "1" else ""
+        own = row_id.strip() if is_whole(row_id.strip()) and row_id.strip() != "1" else ""
         if not own and not row_id.strip() and h.strip():
             # (second pass F5: a row posted with a BLANK id whose SSH host and API address are exactly a saved server's IS that server - Q199 AO2 - so it keeps that server's exemption)
             for saved_server in extensions.KEA_SERVERS:
@@ -4887,7 +4889,7 @@ def save_extra_servers():
     kept = {
         int(i.strip())
         for i, url, host in zip(ids, api_urls, ssh_hosts, strict=False)
-        if i.strip().isdigit() and url.strip() and host.strip()
+        if is_whole(i.strip()) and url.strip() and host.strip()
     }
     refusal = __inv.removal_refusal(
         [s["id"] for s in extensions.KEA_SERVERS if s["id"] != 1 and s["id"] not in kept], actor=current_user.username
@@ -4900,9 +4902,9 @@ def save_extra_servers():
     # an SSH host, is a tampered form (Jen's own page never sends either): refused outright, before any comparison. (Whether a row that keeps a configured
     # id may change its four identity fields is the config writer's question since v5.68.0-beta.28, Q164.)
     configured_extra = {s["id"] for s in extensions.KEA_SERVERS if s["id"] != 1}
-    submitted = [int(i.strip()) for i in ids if i.strip().isdigit()]
+    submitted = [int(i.strip()) for i in ids if is_whole(i.strip())]
     for i, host in zip(ids, ssh_hosts, strict=False):
-        n = int(i.strip()) if i.strip().isdigit() else None
+        n = int(i.strip()) if is_whole(i.strip()) else None
         if n is not None and (submitted.count(n) > 1 or (n not in configured_extra and host.strip())):
             flash("Refused: duplicate or unknown server id in the submitted form.", "error")
             return redirect(url_for("settings.settings_kea"))
@@ -4994,7 +4996,7 @@ def save_extra_servers():
             if not api_url.strip():
                 continue
             raw_id = extra_id.strip()
-            orig_id = int(raw_id) if raw_id.isdigit() else None
+            orig_id = int(raw_id) if is_whole(raw_id) else None
             if orig_id is not None and (orig_id not in existing or orig_id in seen_ids):
                 orig_id = None  # unknown or duplicated — treat the row as new
 

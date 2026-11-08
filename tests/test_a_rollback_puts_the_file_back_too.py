@@ -157,9 +157,9 @@ class TestARowIsAgedByTheClockThatStampedIt:
                 r["age_seconds"] = 400
         fake.set_running(cand["Dhcp4"])
         assert "in progress" not in api.pending_note(w.server, "dhcp4")
-        assert (
-            api._stale_pending(w.server, "dhcp4") != "live" or True
-        )  # a live row that carries the change IS live; it is not "in progress"
+        assert api._stale_pending(w.server, "dhcp4") == "live", (
+            "a row older than the settle window whose change the daemon runs is `live` (to be finished), not in progress"
+        )  # (Q224: the earlier form of this line could not fail)
         lines, settled = api.settle_pending(w.server, "dhcp4")
         assert settled is True, lines
         assert store.pending(SID, "dhcp4") is None
@@ -194,25 +194,54 @@ class TestARollbackPutsTheFileBackToo:
         edited["subnet4"][0]["option-data"] = [{"name": "routers", "data": "10.97.0.254"}]
         w.hand_edit(edited)
         writes = w.writes()
+        sets = fake.calls.count("config-set") if hasattr(fake, "calls") else None
         out = api.revert(w.server, "dhcp4", before, after_digest, "rollback: x", before_cfg=_candidate(before))
-        assert out["code"] == "unverified" and "not yet in its file" in out["detail"]
+        # (Q224, AJ9, AJ3) refused BEFORE the set: the daemon and its file both keep the change (one state, not two), nothing was sent, and no row is left that a settlement could accept
+        assert (
+            out["code"] == "guard"
+            and "nothing was sent" in out["detail"]
+            and "does not say what the daemon runs" in out["detail"]
+        )
         assert fake.file == edited and w.writes() == writes
-        assert fake.running["valid-lifetime"] == before["Dhcp4"]["valid-lifetime"], "the daemon went back"
+        assert fake.running["valid-lifetime"] == _candidate(before)["Dhcp4"]["valid-lifetime"], (
+            "the daemon keeps the change"
+        )
+        if sets is not None:
+            assert fake.calls.count("config-set") == sets, "nothing was sent"
+        assert store.pending(SID, "dhcp4") is None
         assert any(r["source"] == "external" and r["sha256"] == w.seen["sha"]({"Dhcp4": edited}) for r in store.rows), (
             "the edit is in Config history"
         )
 
-    def test_a_rollback_whose_file_cannot_be_read_leaves_a_row_that_names_the_box_first(
-        self, w, store, fake, monkeypatch
-    ):
+    def test_a_rollback_whose_file_cannot_be_read_is_refused_before_the_set(self, w, store, fake, monkeypatch):
+        # (Q223 pinned a row that named the box first; Q224 AJ9 refuses before the set, so there is no row and no half state)
         before, after_digest = _forward_without_a_rendering_row(w, store, monkeypatch)
         real_read = kea_host.read_config_versioned
         monkeypatch.setattr(kea_host, "read_config_versioned", lambda *a, **k: (None, None))
         out = api.revert(w.server, "dhcp4", before, after_digest, "rollback: x", before_cfg=_candidate(before))
         monkeypatch.setattr(kea_host, "read_config_versioned", real_read)
-        assert out["code"] == "unverified"
-        row = store.pending(SID, "dhcp4")
-        assert row is not None and row["file_sha256"] is None
+        assert out["code"] == "guard" and "could not be read" in out["detail"] and "nothing was sent" in out["detail"]
+        assert store.pending(SID, "dhcp4") is None
+        assert fake.running["valid-lifetime"] == _candidate(before)["Dhcp4"]["valid-lifetime"], (
+            "the daemon keeps the change"
+        )
+
+    def test_a_row_with_no_planned_file_names_the_box_before_the_restart(self, w, store, fake, monkeypatch):
+        # (Q223 AH2's sentence; since Q224 such a row comes only from an earlier release or a server with no SSH host, so it is recorded here directly)
+        before, _after_digest = _forward_without_a_rendering_row(w, store, monkeypatch)
+        from tests.e2e._fake_kea_server import digest_of
+
+        # the row of a change that IS live (the daemon runs the candidate; `sha256` is the digest BEFORE it), written by a release that recorded no planned file
+        store.record(
+            SID,
+            "dhcp4",
+            _candidate(before),
+            digest_of(before["Dhcp4"]),
+            "x",
+            hash_kind="kea",
+            source="pending",
+            file_sha256=None,
+        )
         monkeypatch.setattr(api, "_row_age_seconds", lambda row: api.PENDING_SETTLE_SECONDS + 10)
         note = api.pending_note(w.server, "dhcp4")
         assert "cannot be proved against the file this change was planned over" in note
@@ -278,10 +307,14 @@ class TestARollbackPutsTheFileBackToo:
             second.stop()
         assert result.status == "rollback_failed", result.lines
         text = " ".join(t for _k, t in result.lines)
-        assert "kea-a: rollback over the API: " in text and "the record of the change stays" in text, text
-        assert "still have the NEW config" not in text
-        assert "kea-a: the rollback over the API did not complete" in text and "Settle it now" in text
-        assert fake.running["valid-lifetime"] != 7200, "the daemon went back"
+        # (Q224, AJ9) the rollback is refused before its set: the line carries the daemon's answer, the group line says kea-a still has the NEW config - true of the daemon AND the file - and
+        # names no settlement (nothing was sent, so there is no row to settle)
+        assert "kea-a: rollback over the API: " in text and "nothing was sent" in text, text
+        assert (
+            "kea-a still have the NEW config" in text and "did not complete" not in text and "Settle it now" not in text
+        )
+        assert fake.running["valid-lifetime"] == 7200 and fake.file["valid-lifetime"] == 7200, "daemon and file alike"
+        assert store.pending(SID, "dhcp4") is None
 
 
 class TestTwoValuesThatPrintAlikeAreSaidSo:
@@ -323,7 +356,10 @@ class TestTheRefusalNamesTheBoxByItsLabel:
         html = (ROOT / "templates/settings_kea.html").read_text(encoding="utf-8")
         assert "CONSENT_TEXTS" in (ROOT / "jen/services/write_mode.py").read_text(encoding="utf-8")
         # the card prints each consent's text from the one table (the module is the template's source); the literal is in no template of its own
-        assert LABEL not in html or "consent" in html
+        # (Q224) the card prints the consent's text from the one table: the template reads `c.text` (or the like) from the route, so the LITERAL is in no template - and the route's table IS the
+        # module's (Opus's pass on beta.9 found the earlier form of this assertion could not fail)
+        assert LABEL not in html, "the label is written once, in write_mode.CONSENT_TEXTS"
+        assert "CONSENT_TEXTS" in (ROOT / "jen/routes/settings/infrastructure.py").read_text(encoding="utf-8")
 
     def test_consent_gap_names_the_label(self):
         gap, needs = api.consent_gap(
@@ -345,7 +381,8 @@ class TestTheRefusalNamesTheBoxByItsLabel:
         assert not out["ok"] and out.get("needs") == "discard_file_edit"
         assert (
             f"tick '{LABEL}'" in out["line"]
-            and "select Live API on the server's card to show Check readiness" in out["line"]
+            and f"select Live API on the server's card to show {words.CHECK_ROW}, press {words.CHECK_BUTTON}"
+            in out["line"]
         )
         assert "discard the file's edit'" not in out["line"]
         api.store_probe(SID, {"at": api._now_iso(), "bound": api._bound(server), "config_api": True})

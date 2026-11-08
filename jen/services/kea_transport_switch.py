@@ -84,6 +84,7 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     discard = "discard_file_edit" in (set(consents) & called_before)
     discarded_at = None
     wrote_a_file = True
+    nothing_to_discard = ""
     if current == "api":
         # a server already in Live API RECORDS a consent; it renders nothing, unless the file carries an edit and the operator said to discard it
         wrote_a_file = False
@@ -93,6 +94,13 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 wrote_a_file = True
                 newest = _rev.latest(sid, SERVICE, exclude_kind="kea") if sid is not None else None
                 discarded_at = (newest or {}).get("id")
+            else:
+                # (Q224, AJ6) the box was ticked for a fact the stored result carried and the file no longer has (the daemon loaded it, or Jen rendered it since): nothing is discarded, the
+                # consent is given for the facts as they ARE, and the line says so
+                nothing_to_discard = "; nothing was discarded - the file is " + NOTHING_TO_DISCARD.get(
+                    proof["how"], f"proved ({proof['how']})"
+                )
+                facts = _api.probe(server, SERVICE)
     if wrote_a_file:
         wrote = _api.write_file(server, SERVICE, discard=discard)
         if not wrote["ok"]:
@@ -132,17 +140,19 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
         rendering_recorded = True
     # (Q223, AH6) a rendering row the store refused is the one fact that closes the gate this act opens (the re-probe finds a file written after the daemon's last load and no row to prove it by):
     # the switch says so in its own line instead of an unqualified success
-    not_recorded = "" if rendering_recorded else f" ({_api.RENDERING_NOT_RECORDED.format(host=name)})"
+    not_recorded = (
+        "" if rendering_recorded or not has_ssh else f" ({_api.RENDERING_NOT_RECORDED.format(host=name)})"
+    )  # (Q224, AJ7) a server with no SSH host has no file Jen can read: there is no rendering to record and nothing to say
     # the operator's consent is on record from this moment: the gate in `apply` reads it
     # (Q218 BH3 a, AC4) what is USED is what the facts the switch was given for called for - `consents_called_for` is the one table - never every name the form happened to send: a stray box is
     # dropped and named. (Q219 Decided 7) what is STORED is what the facts AFTER the act still call for: a consent the act used up (the discard) is never left on record to open the gate on a later edit
     used = sorted(set(consents) & called_before)
     ignored = sorted(set(consents) - called_before)
     recorded = sorted(set(used) & set(_api.consents_called_for(facts, has_ssh=has_ssh)))
-    if wrote_a_file:
-        recorded = [
-            c for c in recorded if c != "discard_file_edit"
-        ]  # (Q219 E4) a discard the act made is USED, whatever the facts afterward say - it is never left on record to open the gate on a later edit
+    recorded = [
+        c for c in recorded if c != "discard_file_edit"
+    ]  # (Q219 E4) a discard the act made is USED, whatever the facts afterward say - it is never left on record to open the gate on a later edit; (Q224, AJ6) and a discard that found
+    # nothing to discard is used up the same way: the facts it was given for are gone, and a consent stored over them would stop the gate refusing a LATER edit
     stored = _api.stored_probe(sid) or facts
     stored["consented_at"] = _api._now_iso()
     stored["consents"] = recorded
@@ -156,7 +166,9 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 if discarded_at
                 else ", and the file's edit was discarded"
             )
-        return _done(line, revision=revision, discarded=wrote_a_file, consents=used, ignored=ignored)
+        return _done(
+            line + nothing_to_discard, revision=revision, discarded=wrote_a_file, consents=used, ignored=ignored
+        )
     return _done(
         (
             f"{name}: switched to Live API; Kea rendered its file; revision #{revision} is the baseline"
@@ -168,6 +180,14 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
         consents=used,
         ignored=ignored,
     )
+
+
+# (Q224, AJ6) what the file turned out to be when a discard found nothing to discard, by `file_proof`'s `how`
+NOTHING_TO_DISCARD = {
+    "loaded": "one the daemon has loaded",
+    "rendering": "Jen's own rendering of what the daemon runs",
+    "planned": "the file an unfinished change was planned over",
+}
 
 
 def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
@@ -197,10 +217,10 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
                 f"tick '{_words.CONSENT_TEXTS['discard_file_edit']}' on the server's card to overwrite it with what the daemon runs"
                 if _api.stored_probe(server.get("id"))
                 else (
-                    f"run Check readiness on the server's card, select File over SSH and tick '{_words.CONSENT_TEXTS['discard_file_edit']}' to overwrite the file with what the daemon runs"
+                    f"press {_words.CHECK_BUTTON} under {_words.CHECK_ROW} on the server's card, select File over SSH and tick '{_words.CONSENT_TEXTS['discard_file_edit']}' to overwrite the file with what the daemon runs"
                     if current == "api"
                     # (Q223, AH5) the readiness check is a control of the Live API panel, which the card shows for the mode that is selected: a Read-only server's card opens on Read-only
-                    else f"select Live API on the server's card to show Check readiness, run it, select File over SSH again and tick '{_words.CONSENT_TEXTS['discard_file_edit']}' to overwrite the file with what the daemon runs"
+                    else f"select Live API on the server's card to show {_words.CHECK_ROW}, press {_words.CHECK_BUTTON}, select File over SSH again and tick '{_words.CONSENT_TEXTS['discard_file_edit']}' to overwrite the file with what the daemon runs"
                 )
             )  # (Q223, AH4) the box is named by its label: the quoted name is the one the card prints
             return _refuse(

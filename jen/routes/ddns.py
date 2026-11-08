@@ -41,6 +41,7 @@ from jen.services.access import diagnostic_surface
 from jen.services.csv_safe import safe_row as _safe_row
 from jen.services.forms import flash_field
 from jen.services.leases_sql import NOT_ACTIVE_LEASE4, active_lease4
+from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("ddns", __name__)
@@ -674,7 +675,7 @@ def _parse_dns_servers(raw: str):
                 ip, port_s = chunk, ""
             else:
                 maybe_ip, _, maybe_port = chunk.rpartition(":")
-                if __auth.valid_ip(maybe_ip) and maybe_port.isdigit():
+                if __auth.valid_ip(maybe_ip) and is_whole(maybe_port):
                     return [], f"'{chunk}' looks like an IPv6 address with a port — use [addr]:port for IPv6."
                 return [], f"'{chunk}' is not a valid IP address."
         else:

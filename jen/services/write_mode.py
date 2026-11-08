@@ -24,6 +24,12 @@ CONSENT_TEXTS = {
 }
 
 
+# The readiness check's row and its button on the card (Q224, AJ8): a sentence that sends the operator to the check names it by THESE words, never by a name of its own. `CHECK_BUTTON` is the
+# button's first label; `CHECK_AGAIN` the label once a result is stored.
+CHECK_ROW = "Readiness check"
+CHECK_BUTTON = "Run check"
+CHECK_AGAIN = "Run check again"
+
 # The ONE value a consent checkbox carries (Q219 BI3 d, AD15): the card writes `value="{{ c.consent_value }}"` and the route reads it back with this constant, so the two cannot drift apart unseen.
 CONSENT_VALUE = "1"
 
