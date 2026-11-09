@@ -94,7 +94,23 @@ DYNAMIC = {
     ),
 }
 
-PURE_BUILTINS = {"bool", "str", "len", "int", "set", "zip", "enumerate", "range", "sum", "any", "all", "list", "tuple"}
+#: `is_whole` (jen/services/text.py, Q224 AJ16) is the one whole-number test: a regex match over its argument, nothing else - what `.isdigit()` was on this list's method side
+PURE_BUILTINS = {
+    "bool",
+    "str",
+    "len",
+    "int",
+    "set",
+    "zip",
+    "enumerate",
+    "range",
+    "sum",
+    "any",
+    "all",
+    "list",
+    "tuple",
+    "is_whole",
+}
 PURE_METHODS = {"strip", "lower", "upper", "startswith", "endswith", "isdigit"}
 FORM_RECEIVERS = {"request.form"}
 FORM_METHODS = {"get", "getlist"}

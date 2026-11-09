@@ -334,23 +334,6 @@ SURFACES = [
         (),
     ),
     (
-        # (Q224, AJ4) rows with no subnet - audit and alert-delivery rows - are for unrestricted callers only (ARCHITECTURE §2): a scoped admin is refused, as Doctor refuses one
-        "settings logs",
-        "GET",
-        "/settings/logs",
-        None,
-        {"viewer_A": {302, 403}, "admin_A": {302, 403}, "admin_all": {200}, "superadmin": {200}},
-        (),
-    ),
-    (
-        "settings logs, alerts tab",
-        "GET",
-        "/settings/logs?tab=alerts",
-        None,
-        {"viewer_A": {302, 403}, "admin_A": {302, 403}, "admin_all": {200}, "superadmin": {200}},
-        (),
-    ),
-    (
         "reconcile limit 50",
         "GET",
         "/ddns/reconcile?limit=50",
@@ -627,6 +610,52 @@ def test_cell(client, db, seeded, label, method, path, body, role, codes, typed)
         # a followed redirect (a role gate's flash page) must not leak either
         if r.status_code in (301, 302, 303):
             assert_no_marker(client.open(path, method=method, follow_redirects=True, **kwargs).data, ignore=typed)
+
+
+#: (Q224, AJ4) the Logs page is an allowlisted route (rows with no subnet, for unrestricted callers only), not a per-client diagnostic: its cells live here, as the IP map's do, because SURFACES
+#: must name exactly the @diagnostic_surface routes (TestDiagnosticSurfaceCoverage). The rows and their expected statuses are the ones the patch put in SURFACES.
+LOG_SURFACES = [
+    (
+        # (Q224, AJ4) rows with no subnet - audit and alert-delivery rows - are for unrestricted callers only (ARCHITECTURE §2): a scoped admin is refused, as Doctor refuses one
+        "settings logs",
+        "GET",
+        "/settings/logs",
+        None,
+        {"viewer_A": {302, 403}, "admin_A": {302, 403}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
+        "settings logs, alerts tab",
+        "GET",
+        "/settings/logs?tab=alerts",
+        None,
+        {"viewer_A": {302, 403}, "admin_A": {302, 403}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+]
+
+LOG_CELLS = [
+    pytest.param(label, method, path, body, role, codes, typed, id=f"{label}|{role}")
+    for (label, method, path, body, expected, typed) in LOG_SURFACES
+    for role, codes in expected.items()
+]
+
+
+@pytest.mark.parametrize("label,method,path,body,role,codes,typed", LOG_CELLS)
+def test_log_cell(client, db, seeded, label, method, path, body, role, codes, typed):
+    """The same cell as `test_cell`, for the Logs page: a scoped caller is refused at the route and sees no B marker on the redirect either; an unrestricted admin and a superadmin read it."""
+    headers = _caller(client, db, role)
+    r = client.open(path, method=method, follow_redirects=False, **({"headers": headers} if headers else {}))
+    assert r.status_code in codes, f"{label} as {role}: HTTP {r.status_code}, expected one of {sorted(codes)}"
+    if role in MUST_NOT_SEE_B:
+        assert_no_marker(r.data, ignore=typed)
+        if r.status_code in (301, 302, 303):
+            assert_no_marker(
+                client.open(
+                    path, method=method, follow_redirects=True, **({"headers": headers} if headers else {})
+                ).data,
+                ignore=typed,
+            )
 
 
 IPMAP_CELLS = [
