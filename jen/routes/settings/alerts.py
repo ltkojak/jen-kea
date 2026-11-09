@@ -128,8 +128,14 @@ def save_alert_channel():
             subnet_scope = json.dumps(ids) if ids else None
     else:
         allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-        ids = [int(s) for s in subnet_ids_raw if is_whole(s) and int(s) in allowed]
-        subnet_scope = json.dumps(ids) if ids else None
+        ids = sorted({int(s) for s in subnet_ids_raw if is_whole(s) and int(s) in allowed})
+        if not ids:
+            # (Q225, AK1) the API-key route's rule, which this clamp was copied from without it: a subnet-restricted admin's selection that names none of their subnets - the untouched form,
+            # since the "All Subnets" option is rendered only for an unrestricted account - used to store NULL, which `channel_allows_subnet` reads as EVERY subnet, and the channel then
+            # carried the lease, device and client alerts of subnets its creator cannot see. The form is refused; nothing is written
+            flash_field("subnet_ids", "Select at least one subnet this channel should cover.")
+            return redirect(url_for("settings.settings_alerts"))
+        subnet_scope = json.dumps(ids)
 
     if not channel_name:
         flash("Channel name is required.", "error")

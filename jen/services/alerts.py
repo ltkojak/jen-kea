@@ -950,11 +950,11 @@ def purge_history() -> dict:
     removed = {}
 
     def days(key, default):
-        try:
-            value = int(__get_global_setting(key, str(default)))
-        except (TypeError, ValueError):
-            return default
-        return value
+        # (Q225, AK13) read as the Security and System pages BOUND it (`MAX_RETENTION_DAYS`): a value stored past the bound by an earlier release reached `INTERVAL %s DAY`, the DELETE failed
+        # on every pass and the table was never pruned, silently. A row that is not a whole number is the default, as before
+        from jen.services.text import whole
+
+        return min(whole(__get_global_setting(key, str(default)), default), MAX_RETENTION_DAYS)
 
     history = days("history_retention_days", 90)
     plan = (
@@ -988,6 +988,8 @@ def purge_history() -> dict:
 
 ALERT_LOG_DEFAULT_RETENTION_DAYS = 180
 ALERT_LOG_PRUNED_KEY = "alert_log_pruned_totals"
+#: the longest retention a page accepts and a reader applies (Q224 AJ18 bounded the form; Q225 AK13 bounds the read): ten years of days
+MAX_RETENTION_DAYS = 3650
 
 
 def alert_log_retention_days() -> int:

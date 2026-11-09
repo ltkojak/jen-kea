@@ -182,10 +182,13 @@ caller can.
 ### RBAC-003 - The settings that decide who the superadmins are, and the restart that applies them, are superadmin and step-up
 **Rule.** Where Jen's own database and Kea's database point, and the restart of Jen, are changed only by a superadmin whose password was confirmed in the last ten minutes: an admin who could
 repoint `[jen_db]` at a database of their own and restart Jen would be whatever role that database says; and who may sign in, and with what role, is the same question (Q203: the `[oidc]` settings - `role_map`, `default_role` which accepts `superadmin`, `auto_create` - are a superadmin's with a recent password, as are the routes that write the Kea host's config file or restart its daemon by a call written in the route, authoring a Kea config, installing the helper, and replacing Jen's only SSH key: one `ast` walk over `jen/routes/` follows every chain of functions in `jen/` to the five writes (Q204 AT8 a) and a named list asks the rest. Q204: `install_kea_binary` (`apt` on every SSH host; a fetch route, so a stale confirmation is a 401 JSON with `reauth` that `jenFetch` follows - `recent_auth_required(fetch=True)`) and `toggle_ipv6` carry the step-up too, and `KNOWN_OPEN` is empty. The open population is exactly two ADMIN routes, named with their reasons: `restart_kea_server` (the Servers page's operational restart of kea-dhcp4 on its own saved host: it writes no config and chooses no destination - the maintainer's standing decision) and `investigation_logging` (an admin's by Q138/Q167)). Subnet creation, and the DDNS log and hostname lookup, are for a caller who may see
-every subnet (the DDNS Verify tab too: it resolves any name and address through the Jen host). An admin makes the MFA policy stricter and never less strict.
-**Established.** Q171.
+every subnet (the DDNS Verify tab too: it resolves any name and address through the Jen host). An admin makes the MFA policy stricter and never less strict - and the idle session timeout
+and login rate limiting the same (Q224, AJ14): off or 0 is the least strict, fewer minutes, fewer attempts and a longer lockout are stricter, and the rate-limit MODE is part of the
+strictness (Q225, AK2: `both` counts two buckets and locks on the larger, so an admin may move to it and may not leave it or trade one bucket for the other). The three measures are judged
+together, so an admin cannot trade attempts for lockout length in either direction (AK24: the conservative side; a superadmin makes the trade).
+**Established.** Q171. Q224 (AJ14: the two knobs beside the MFA mode had no ratchet). Q225 (AK2: the mode).
 **Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db`, `save_infra_kea6`, `save_oidc`, `generate_ssh_key`, `config_history_restore`, `import_windows_apply`, `author_kea_config_post`, `install_kea_helper` (Q203 AS2), `install_kea_binary` and `toggle_ipv6` (Q204 AT6) and EVERY route that restarts Jen (Q202 AR6: `restart_jen`, `save_ports`, `upload_cert`, `remove_cert` - the verifier is the `ast` test over every caller of `runtime.restart_service()`); `current_user.all_subnets` in `add_subnet`, `add_subnet_post`,
-the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_mfa_mode`.
+the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_mfa_mode`; `_session_looser` and `_rate_limit_looser` in `jen/routes/settings/security.py`.
 **Tests.**
 - `tests/test_q171_access.py::TestDatabaseCardsAndRestartAreSuperadminWithStepUp`
 - `tests/test_kea_tls_rotation.py::TestEveryRestartOfJenIsBehindTheOneGate`
@@ -199,6 +202,9 @@ the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_m
 - `tests/test_q171_access.py::TestAddSubnetNeedsEverySubnet`
 - `tests/test_q171_access.py::TestDdnsStatusIsScoped`
 - `tests/test_settings.py::TestMfaPolicyIsNeverWeakenedByAnAdmin`
+- `tests/test_a_rollback_is_refused_before_its_set.py::TestTheSecurityRatchetAndTheBounds`
+- `tests/test_a_scoped_admin_reads_no_log.py::TestAnAdminMakesThePolicyStricterOnly`
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestTheModeIsPartOfTheStrictness`
 
 ### RBAC-004 - Where Jen reaches a Kea server, and so where its credentials go, is a superadmin's setting with a recent password
 **Rule.** A config write that changes where Jen reaches a Kea server or sends a credential - the API URL, the SSH host, user or config path, the connection mode, a server added or removed, AND
@@ -259,6 +265,15 @@ that made the change is rebuilt and stays. `token_version` moves in the same sta
 - `tests/test_pool_used.py::TestNoPathReadsActiveLeasesAsPoolUse`
 - `tests/test_pool_used.py::TestAnUnmeasuredPoolUseIsNeverReplacedByAnotherNumber`
 - `tests/test_health_center.py::TestPoolUtilization`
+
+### DEF-003 - One whole-number test for every form value and path segment
+**Rule.** A value that must be a whole number is judged by `jen.services.text.is_whole` (ASCII digits, one to eighteen) and converted with `int()` only after it; `str.isdigit()`,
+`isnumeric()` and `isdecimal()` are never the test under `jen/` (they accept a full-width or an Arabic-Indic digit that `int()` then raises on, or that a filter-and-convert comprehension
+drops on the floor). A refusal is of the form whole, never of one value out of a list.
+**Established.** Q224 (AJ16: forty sites in nineteen files; AJ17: the OIDC subnet map raised on every login over one such digit).
+**Enforced at.** `jen/services/text.py` (`is_whole`, `whole`), held by a whole-`jen/` source test.
+**Tests.**
+- `tests/test_a_rollback_is_refused_before_its_set.py::TestOneWholeNumberTest`
 
 ## Delivery, configuration, files, migrations, transactions, liveness
 
@@ -457,6 +472,21 @@ fails CLOSED there (a refusal, not a permission). A failed settings read answers
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS10FailedReadsOnSecurityPathsAreNotEmptyResults`
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestTheLockoutChecksFailClosed`
+
+### BOUND-001 - A stored number is bounded where it is written AND where it is read, and a reader puts a row the form never wrote where the policy is strictest
+**Rule.** A settings number that reaches a statement (`INTERVAL %s DAY`, `INTERVAL %s MINUTE`) or a policy decision is bounded on the form (a thousand attempts, a week of lockout
+minutes, ten years of retention days) and is a `%s` parameter, never text in the statement; and the READER applies the same bound and the same whole-number test, because a value
+stored by an earlier release, or by hand, is past the form. A row the form never wrote reads as the STRICTEST policy, never as none: a rate-limit mode outside its four words is `both`,
+a count or a duration that is not whole is its default, one past the bound is the bound, and a retention past the bound prunes at the bound (it used to make the DELETE fail on every
+pass and the table was never pruned).
+**Established.** Q224 (AJ18: the three bounds and the parameterized window). Q225 (AK3, AK13, AK19: the readers).
+**Enforced at.** `auth.get_rate_limit_settings` (the one reader of the three `rl_*` rows: `RATE_LIMIT_MODES`, `MAX_ATTEMPTS_BOUND`, `MAX_LOCKOUT_MINUTES`); `alerts.purge_history`'s
+`days()` (`alerts.MAX_RETENTION_DAYS`, which the System page's `MAX_AUDIT_RETENTION_DAYS` is); the three save routes' `is_whole` + bound checks.
+**Tests.**
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestARateLimitThatCannotBeReadIsTheStrictest`
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestARetentionPastTheBoundIsTheBound`
+- `tests/test_a_rollback_is_refused_before_its_set.py::TestTheSecurityRatchetAndTheBounds`
+- `tests/test_a_scoped_admin_reads_no_log.py::TestTheSecurityPageBoundsItsNumbers`
 
 ### LEAK-001 - A route never shows what a broad `except` caught
 **Rule.** (Q190, second half:) an ADDRESS is shown by one helper, `auth.shown_url` - scheme, host and port, never user-info, a path or a query - in every flash, audit row, log line and incident, and text Jen did not write (a `requests` message) goes through `auth.scrub_urls`; `tests/test_invariant_sweeps.py` S14 refuses a route that formats a `*url` name into text without it (the reviewed list is empty). 

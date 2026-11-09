@@ -33,6 +33,7 @@ from flask_login import current_user, login_required
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.alerts as __alerts
 import jen.services.capabilities as __caps
 import jen.services.mfa as __mfa
 import jen.services.session_timeout as __session_timeout
@@ -305,7 +306,9 @@ def settings_appearance():
 # ── Save handlers that stay here ────────────────────────────────────────────
 
 
-MAX_AUDIT_RETENTION_DAYS = 3650
+MAX_AUDIT_RETENTION_DAYS = (
+    __alerts.MAX_RETENTION_DAYS
+)  # (Q225, AK13) one bound: the page refuses above it and the daily prune reads no higher
 
 
 @bp.route("/settings/save-audit-retention", methods=["POST"])

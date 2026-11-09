@@ -18,9 +18,11 @@ import re
 # a bare secret word, or a name that ends in one after an underscore: `smtp_password`, `basic_auth_password`, `client_secret`, `metrics_token`, `api_token`,
 # `api_pass`, `db_passwd`, and `api_key` (the one two-word secret: a bare `key` is not one - `ssl_key` and `api_client_key` name files)
 _SECRET_NAME_RE = re.compile(
-    r"(^|_)(password|passwd|passphrase|pass|pwd|secret|secret_key|token|api_key|apikey|private_key|authorization|credentials)$"
-)
-_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+    r"(^|_)(password|passwd|passphrase|pass_phrase|pass|pwd|secret|secret_key|token|api_key|apikey|private_key|authorization|credentials?)$"
+)  # (Q225, AK16) `pass_phrase` and the singular `credential` beside the forms that were already here
+_CAMEL = re.compile(
+    r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+)  # (Q225, AK16) a word boundary also falls inside an upper-case run before its last letter: `DBPassword` is `DB_Password`, `SMTPPass` is `SMTP_Pass`
 _SPACES = re.compile(
     r"\s+"
 )  # (Q224, AJ13) `Client Secret` is `client_secret`: a space is a word boundary like `-` and `_`
@@ -31,8 +33,10 @@ def is_secret_key(name) -> bool:
     if not isinstance(name, str):
         return False
     return bool(
-        _SECRET_NAME_RE.search(_SPACES.sub("_", _CAMEL.sub("_", name.strip()).lower().replace("-", "_")))
-    )  # (camelCase reads as snake_case: `clientSecret`, `apiKey`; a spaced name as a snake_case one: `Client Secret`)
+        _SECRET_NAME_RE.search(
+            _SPACES.sub("_", _CAMEL.sub("_", name.strip()).lower().replace("-", "_").replace(".", "_"))
+        )
+    )  # (camelCase reads as snake_case: `clientSecret`, `apiKey`; a spaced or a dotted name as a snake_case one: `Client Secret`, `smtp.password` - Q225, AK16)
 
 
 _PADDING = " \t\r\n"

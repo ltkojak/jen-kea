@@ -114,9 +114,13 @@ def map_role(claims: dict) -> str | None:
 def parse_subnet_map(raw: str) -> dict[str, set[int] | str]:
     """`"group1:1,2;group2:*"` -> `{"group1": {1, 2}, "group2": "*"}`.
     Same forgiving-on-typo behavior as parse_role_map(): a malformed
-    segment (no ':', an empty group name, or a value list with no valid
-    subnet id and not exactly '*') is skipped rather than raised — a
-    config typo must not turn into a 500 on every login."""
+    segment (no ':', an empty group name) is skipped rather than raised — a
+    config typo must not turn into a 500 on every login. (Q225, AK11) A group
+    whose value list holds no valid subnet id and is not exactly '*' is kept,
+    mapped to NO subnets: a dropped group matched nothing, and under
+    `subnet_map_default = all` an account the operator had scoped came in
+    unrestricted on the strength of one mistyped id. A typo scopes to
+    nothing, never to everything."""
     out: dict[str, set[int] | str] = {}
     for segment in (raw or "").split(";"):
         segment = segment.strip()
@@ -130,11 +134,9 @@ def parse_subnet_map(raw: str) -> dict[str, set[int] | str]:
         if values_raw == "*":
             out[group] = "*"
             continue
-        ids = {
+        out[group] = {
             int(v.strip()) for v in values_raw.split(",") if is_whole(v.strip())
         }  # (Q224, AJ17) the id as checked, stripped: ` 2` was checked stripped and converted unstripped
-        if ids:
-            out[group] = ids
     return out
 
 

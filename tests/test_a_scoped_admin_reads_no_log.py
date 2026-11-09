@@ -165,6 +165,12 @@ class TestAnAdminMakesThePolicyStricterOnly:
             {"max_attempts": "11", "lockout_minutes": "15", "mode": "both"},
             {"max_attempts": "10", "lockout_minutes": "14", "mode": "both"},
             {"max_attempts": "0", "lockout_minutes": "15", "mode": "both"},
+            {
+                "max_attempts": "5",
+                "lockout_minutes": "30",
+                "mode": "ip",
+            },  # (Q225, AK2) leaving `both` drops the account's bucket: looser, whatever the numbers do
+            {"max_attempts": "10", "lockout_minutes": "15", "mode": "username"},
         ):
             r = c.post("/settings/save-rate-limit", data=data, follow_redirects=True)
             assert b"Only a superadmin can make login rate limiting less strict" in r.data, data
@@ -175,15 +181,22 @@ class TestAnAdminMakesThePolicyStricterOnly:
         )
         r = c.post(
             "/settings/save-rate-limit",
-            data={"max_attempts": "5", "lockout_minutes": "30", "mode": "ip"},
+            data={"max_attempts": "5", "lockout_minutes": "30", "mode": "both"},
             follow_redirects=True,
         )
         assert b"Rate limiting settings saved" in r.data
         assert (_setting(db, "rl_mode"), _setting(db, "rl_max_attempts"), _setting(db, "rl_lockout_minutes")) == (
-            "ip",
+            "both",
             "5",
             "30",
         )
+        _set(db, "rl_mode", "ip")  # (Q225, AK2) and an admin may move TO `both` from a single bucket
+        r = c.post(
+            "/settings/save-rate-limit",
+            data={"max_attempts": "5", "lockout_minutes": "30", "mode": "both"},
+            follow_redirects=True,
+        )
+        assert b"Rate limiting settings saved" in r.data and _setting(db, "rl_mode") == "both"
         _set(db, "rl_mode", "both")
         _set(db, "rl_max_attempts", "10")
         _set(db, "rl_lockout_minutes", "15")

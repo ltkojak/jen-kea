@@ -10,7 +10,7 @@ from markupsafe import Markup, escape
 
 #: ASCII digits only, up to eighteen (Q224, AJ16). `str.isdigit()` is True for a full-width or an Arabic-Indic digit, and `int()` then raises on it (a 500 from a form) or, in a
 #: comprehension that filters with `isdigit()` and converts with `int()`, drops the whole selection on the floor. THE whole-number test for every form value and every path segment under
-#: `jen/`; `tests/test_whole_numbers.py` refuses an `isdigit()` anywhere else in the tree.
+#: `jen/`; `tests/test_a_rollback_is_refused_before_its_set.py::TestOneWholeNumberTest` refuses an `isdigit()` anywhere under `jen/` (the plugins are their own repositories; Q225, AK9).
 WHOLE_NUMBER = re.compile(r"[0-9]{1,18}")
 
 

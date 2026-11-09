@@ -81,7 +81,9 @@ def redact_ini_text(text: str) -> str:
     """The INI re-emitted with every secret-looking value masked. Paths
     survive even under a secret-looking key (`ssl_key = /etc/…`). A
     file that doesn't parse is replaced by a note, never echoed."""
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = configparser.ConfigParser(
+        interpolation=None, default_section="\x00"
+    )  # (Q225, AK20) a `[DEFAULT]` section is re-emitted as the section it is, not folded into every other one and dropped: the redacted file keeps the operator's shape
     parser.optionxform = str  # (Q223, AH13) the key as written: `configparser` would lower-case `clientSecret` to `clientsecret`, which the name rule cannot read as a secret
     try:
         parser.read_string(text or "")

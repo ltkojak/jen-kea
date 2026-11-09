@@ -385,7 +385,7 @@ class TestOneWholeNumberTest:
     def test_the_oidc_map_never_raises_on_a_typo(self):
         from jen.services import oidc
 
-        assert oidc.parse_subnet_map("g1:²") == {}
+        assert oidc.parse_subnet_map("g1:²") == {"g1": set()}  # (Q225, AK11) kept, scoped to nothing - never dropped
         assert oidc.parse_subnet_map("g1: 2, 3;g2:*") in ({"g1": {2, 3}, "g2": "*"}, {"g1": {2, 3}})
 
 
@@ -494,7 +494,7 @@ class TestTheSecurityRatchetAndTheBounds:
         assert security._rate_limit_looser("both", 0, 15) is True
         assert security._rate_limit_looser("both", 11, 15) is True
         assert security._rate_limit_looser("both", 10, 14) is True
-        assert security._rate_limit_looser("ip", 10, 15) is False
+        assert security._rate_limit_looser("ip", 10, 15) is True, "(Q225, AK2) leaving `both` drops a bucket"
         assert security._rate_limit_looser("both", 9, 0) is False, "0 is until cleared: the longest lockout"
         assert security._rate_limit_looser("both", 10, 15) is False
         monkeypatch.setattr(

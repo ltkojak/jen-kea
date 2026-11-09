@@ -503,6 +503,9 @@ def save_device_settings():
     if not is_whole(stale_days) or not (1 <= int(stale_days) <= 365):
         flash("Stale threshold must be between 1 and 365 days.", "error")
         return redirect(url_for("devices.devices"))
+    stale_days = str(
+        int(stale_days)
+    )  # (Q225, AK23) the canonical text, as its neighbors store theirs: `007` is stored as 7
     __user.set_global_setting("stale_device_days", stale_days)
     flash(f"Stale device threshold set to {stale_days} days.", "success")
     return redirect(url_for("devices.devices"))

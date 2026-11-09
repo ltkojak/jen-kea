@@ -194,7 +194,9 @@ class TestARollbackPutsTheFileBackToo:
         edited["subnet4"][0]["option-data"] = [{"name": "routers", "data": "10.97.0.254"}]
         w.hand_edit(edited)
         writes = w.writes()
-        sets = fake.calls.count("config-set") if hasattr(fake, "calls") else None
+        sets = fake.commands.count(
+            "config-set"
+        )  # (Q225, AK8) the fake's list is `commands`; a `hasattr` over a name it does not have made the assertion below never run
         out = api.revert(w.server, "dhcp4", before, after_digest, "rollback: x", before_cfg=_candidate(before))
         # (Q224, AJ9, AJ3) refused BEFORE the set: the daemon and its file both keep the change (one state, not two), nothing was sent, and no row is left that a settlement could accept
         assert (
@@ -206,8 +208,7 @@ class TestARollbackPutsTheFileBackToo:
         assert fake.running["valid-lifetime"] == _candidate(before)["Dhcp4"]["valid-lifetime"], (
             "the daemon keeps the change"
         )
-        if sets is not None:
-            assert fake.calls.count("config-set") == sets, "nothing was sent"
+        assert fake.commands.count("config-set") == sets, "nothing was sent"
         assert store.pending(SID, "dhcp4") is None
         assert any(r["source"] == "external" and r["sha256"] == w.seen["sha"]({"Dhcp4": edited}) for r in store.rows), (
             "the edit is in Config history"

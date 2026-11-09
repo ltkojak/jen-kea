@@ -318,6 +318,8 @@ def file_in_daemon(
     minor version, `defaults_for`), every key the daemon runs that is not one of those defaults is in the file: a key deleted from the file is a difference, not an agreement (Q217 AB6). Without
     `defaults` only the first direction can be asked."""
     running, said = _section(live_cfg, service), _section(file_cfg, service)
+    if not said:
+        return False  # (Q225, AK17) a file with no section for this service says nothing, and nothing is carried vacuously: it is not the daemon's configuration
     if not _carries(running, said):
         return False
     return defaults is None or _lacks(running, said, defaults) is None
@@ -329,6 +331,8 @@ def mirrors(file_cfg: dict | None, live_cfg: dict | None, service: str) -> bool:
     and not the other is a hand edit - one deleted from the file, or one added to it. No defaults vector: a rendering carries the defaults written out on both sides. Not for a file Jen
     authored (`file_in_daemon` is that question, one direction, the vector naming the keys Kea adds)."""
     running, said = _section(live_cfg, service), _section(file_cfg, service)
+    if not said or not running:
+        return False  # (Q225, AK17) two empty renderings mirror nothing: `_get` refuses a reply with no section before this is asked, and the function says the same on its own
     return _carries(running, said) and _carries(said, running)
 
 
@@ -1458,9 +1462,17 @@ def apply(
 
     got, digest, why = _get(server, service)  # (7)
     if got is None or digest != h1 or (not answered and not _carries(_section(got, service), _section(cfg, service))):
+        if not why:
+            # (Q225, AK4) the sentence names the check that fired: a set that answered no digest is proved by content, and "its digest is X, not the X the set returned" was the digest
+            # sentence printed with the same digest twice
+            why = (
+                f"its digest is {digest}, not the {h1} the set returned"
+                if digest != h1
+                else f"its configuration does not carry what was sent ({first_difference(_section(got, service), _section(cfg, service))})"
+            )
         return _unproved(
             "unverified",
-            f"{_name(server)} did not confirm the change ({why or f'its digest is {digest}, not the {h1} the set returned'}); the daemon's own answer is the record and nothing was undone",
+            f"{_name(server)} did not confirm the change ({why}); the daemon's own answer is the record and nothing was undone",
             before_hash=expect_hash or now,
             after_hash=digest,
         )

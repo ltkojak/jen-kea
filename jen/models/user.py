@@ -26,13 +26,17 @@ class User(UserMixin):
         # subnet_access: None = all subnets; list of int subnet_ids = restricted
         if subnet_access is None:
             self._subnet_access = None
-        elif isinstance(subnet_access, str):
-            try:
-                self._subnet_access = json.loads(subnet_access)
-            except Exception:
-                self._subnet_access = None
         else:
-            self._subnet_access = subnet_access
+            # (Q225, AK21) a stored scope that is not a LIST OF IDS is NO subnets, never every subnet: the three forms write only a JSON list or NULL (Q171, Q224 AJ5), so a row that is not
+            # JSON, or is JSON that is not a list (`"abc"`, `5`, `{}` - what a JSON column lets through), was not written by them, and an account whose scope cannot be read fails closed the
+            # way an unreadable record does everywhere else (FAIL-001). It used to be read as None - every subnet - or to raise on the first page
+            parsed = subnet_access
+            if isinstance(subnet_access, str):
+                try:
+                    parsed = json.loads(subnet_access)
+                except Exception:
+                    parsed = []
+            self._subnet_access = parsed if isinstance(parsed, list) else []
 
     def get_id(self):
         return str(self.id)

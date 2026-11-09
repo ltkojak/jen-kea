@@ -282,7 +282,7 @@ def add_user():
         if not all(is_whole(s) for s in subnet_ids_raw):
             flash("Subnet ids must be numbers.", "error")
             return users(), 400
-        subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
+        subnet_access = _json.dumps(sorted({int(s) for s in subnet_ids_raw}))  # (Q225, AK22) each id once, in order
 
     if not username:
         flash_field("username", "Username is required.")
@@ -523,7 +523,7 @@ def set_user_subnets(user_id):
         if not all(is_whole(s) for s in subnet_ids_raw):
             flash("Subnet ids must be numbers.", "error")
             return redirect(url_for("users.users"))
-        subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
+        subnet_access = _json.dumps(sorted({int(s) for s in subnet_ids_raw}))  # (Q225, AK22) each id once, in order
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -639,7 +639,7 @@ def edit_user(user_id):
         if not all(is_whole(s) for s in subnet_ids_raw):
             flash("Subnet ids must be numbers.", "error")
             return redirect(url_for("users.users"))
-        subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
+        subnet_access = _json.dumps(sorted({int(s) for s in subnet_ids_raw}))  # (Q225, AK22) each id once, in order
 
     try:
         with __db.jen_db() as db:

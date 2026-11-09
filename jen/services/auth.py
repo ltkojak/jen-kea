@@ -582,13 +582,21 @@ def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
 #: the bounds the Security page accepts (Q224, AJ18): a lockout of a week, a thousand attempts; 0 keeps its meanings (until cleared; unlimited)
 MAX_LOCKOUT_MINUTES = 7 * 24 * 60
 MAX_ATTEMPTS_BOUND = 1000
+#: the four words the Security page writes; `both` is the strictest (two buckets, the larger decides)
+RATE_LIMIT_MODES = ("ip", "username", "both", "off")
 
 
 def get_rate_limit_settings():
+    """The stored policy, read as the login applies it (Q225, AK3, AK19). The form writes only the four words and two bounded whole numbers; a row that says anything else was not written by
+    it, and the reader puts it where the policy is STRICTEST: a mode outside the four is `both` (it used to count nothing and answer "not locked out" - no rate limiting, silently), a count or
+    a duration that is not a whole number is its default (it used to raise out of `/login`), and one past the page's bound is the bound (a value stored before the bound existed)."""
+    from jen.services.text import whole
+
+    mode = __get_global_setting("rl_mode", "both")
     return {
-        "max_attempts": int(__get_global_setting("rl_max_attempts", "10")),
-        "lockout_minutes": int(__get_global_setting("rl_lockout_minutes", "15")),
-        "mode": __get_global_setting("rl_mode", "both"),  # ip, username, both, off
+        "max_attempts": min(whole(__get_global_setting("rl_max_attempts", "10"), 10), MAX_ATTEMPTS_BOUND),
+        "lockout_minutes": min(whole(__get_global_setting("rl_lockout_minutes", "15"), 15), MAX_LOCKOUT_MINUTES),
+        "mode": mode if mode in RATE_LIMIT_MODES else "both",
     }
 
 
@@ -665,27 +673,31 @@ def is_locked_out(ip, username):
             )  # 24h rolling window when the lockout is permanent
             window = "DATE_SUB(NOW(), INTERVAL %s MINUTE)"
 
-            count = 0
+            ip_count = username_count = 0
             if mode in ("ip", "both"):
                 cur.execute(
                     f"SELECT COUNT(*) as cnt FROM login_attempts WHERE ip_address=%s AND attempted_at >= {window}",
                     (ip, window_minutes),
                 )
-                count = max(count, cur.fetchone()["cnt"])
+                ip_count = cur.fetchone()["cnt"]
             if mode in ("username", "both"):
                 cur.execute(
                     f"SELECT COUNT(*) as cnt FROM login_attempts WHERE username=%s AND attempted_at >= {window}",
                     (username, window_minutes),
                 )
-                count = max(count, cur.fetchone()["cnt"])
+                username_count = cur.fetchone()["cnt"]
+            count = max(ip_count, username_count)
 
             if count >= max_attempts:
                 if lockout_minutes > 0:
                     # Calculate time remaining in the lockout window from
                     # the FIRST attempt in the current window, not the last.
                     # Lock expires when the oldest attempt in the window ages out.
-                    field = "ip_address" if mode in ("ip", "both") else "username"
-                    val = ip if mode in ("ip", "both") else username
+                    # (Q225, AK12) measured in the bucket that went over the line: under `both` it used to be the address's always, and a lockout the ACCOUNT's attempts triggered from
+                    # many addresses read MIN() over an empty bucket - "1 minute" of a fifteen-minute lockout
+                    by_username = username_count > ip_count
+                    field = "username" if by_username else "ip_address"
+                    val = username if by_username else ip
                     cur.execute(
                         f"""
                             SELECT CEIL(

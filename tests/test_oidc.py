@@ -128,10 +128,11 @@ class TestParseSubnetMap:
         assert oidc.parse_subnet_map(None) == {}
 
     def test_malformed_segments_skipped_not_raised(self):
-        # no ':', empty group name, no valid subnet id and not '*' —
-        # none of these may raise; a config typo must not turn login
-        # into a 500.
-        assert oidc.parse_subnet_map("garbage;:1,2;net-c:not-a-number") == {}
+        # no ':', empty group name — skipped, never raised; a config typo must
+        # not turn login into a 500. (Q225, AK11) a group with no valid subnet
+        # id is KEPT and scoped to nothing: dropped, it matched nothing, and
+        # `subnet_map_default = all` then let the account in unrestricted.
+        assert oidc.parse_subnet_map("garbage;:1,2;net-c:not-a-number") == {"net-c": set()}
 
     def test_whitespace_tolerant(self):
         assert oidc.parse_subnet_map(" net-a : 1 , 2 ; net-b : * ") == {"net-a": {1, 2}, "net-b": "*"}

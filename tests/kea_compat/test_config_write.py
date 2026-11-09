@@ -1233,6 +1233,39 @@ def test_13_the_daemons_own_load_time(facts):
             _write_conf_as_root(good)  # the file the job had: the rows after this one start from it
 
 
+def test_14_the_file_kea_wrote_mirrors_config_get(facts):
+    """Q225 (the beta.10 pass's one named gap): the property the rollback gate `kea_api_config.mirrors` rests on, asked of the daemon itself. Kea renders the configuration it runs into the file
+    (`config-write`) and into `config-get` from one configuration, so the two carry the same keys BOTH ways - a key in one and not the other is a hand edit. The beta.9 fake rendered this by
+    construction; here the daemon does. Three facts: the file Kea wrote mirrors `config-get` (the assertion); a key deleted from that file by hand does not (control, the path named); a key
+    added to it or changed in it by hand does not (control). The job's file is written back as root afterward, as row 13 leaves it."""
+    from jen.services import kea_api_config as api
+
+    assert ORIGINAL is not None, "test_01 did not record the original configuration"
+    written = __kea.kea_command("config-write")
+    facts["mirrors_config_write"] = _brief(written)
+    assert written.get("result") == 0, _brief(written)
+    on_disk = _file()
+    live = _get()
+    facts["mirrors_file_keys_not_in_config_get"] = sorted(set(on_disk["Dhcp4"]) - set(live["Dhcp4"]))
+    facts["mirrors_config_get_keys_not_in_file"] = sorted(set(live["Dhcp4"]) - set(on_disk["Dhcp4"]))
+    facts["mirrors_first_difference_file_to_daemon"] = api.first_difference(_section_of(live), _section_of(on_disk))
+    facts["mirrors_first_difference_daemon_to_file"] = api.first_difference(_section_of(on_disk), _section_of(live))
+    facts["mirrors_holds"] = api.mirrors(on_disk, live, "dhcp4")
+    assert facts["mirrors_holds"], (
+        facts["mirrors_first_difference_file_to_daemon"],
+        facts["mirrors_first_difference_daemon_to_file"],
+    )
+    deleted = copy.deepcopy(on_disk)
+    key = next(k for k in ("valid-lifetime", "renew-timer", "rebind-timer") if k in deleted["Dhcp4"])
+    del deleted["Dhcp4"][key]
+    facts["mirrors_a_deleted_key_reads_as"] = api.first_difference(_section_of(deleted), _section_of(live))
+    assert not api.mirrors(deleted, live, "dhcp4") and key in facts["mirrors_a_deleted_key_reads_as"]
+    added = copy.deepcopy(on_disk)
+    added["Dhcp4"]["echo-client-id"] = not added["Dhcp4"].get("echo-client-id", True)
+    assert not api.mirrors(added, live, "dhcp4")
+    assert _hash(), "the daemon does not answer after row 14"
+
+
 def test_90_restore_puts_the_original_back(facts):
     """The configuration the job started with goes back into the daemon, into the file, and then the original file's own bytes replace it."""
     assert ORIGINAL is not None, "test_01 did not record the original configuration"

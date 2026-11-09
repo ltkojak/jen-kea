@@ -40,7 +40,10 @@ def _session_looser(enabled: str, minutes: int) -> bool:
 
 def _rate_limit_looser(mode: str, max_attempts: int, lockout_minutes: int) -> bool:
     """Would storing these make login rate limiting LESS strict than it is now? `off` (or 0 attempts) is the least strict; more attempts allowed, or a shorter lockout (0 is until cleared, the
-    longest), is looser. `ip`, `username` and `both` are three measures of one strictness and move freely among themselves."""
+    longest), is looser. (Q225, AK2) The mode is part of the strictness: `both` counts the address's attempts AND the account's and locks on the larger (`is_locked_out`), so it is at least as
+    strict as either alone - leaving it drops a bucket, and `ip` <-> `username` drops one and adds one, which is not a tightening. An admin may move TO `both` from either and may not leave it
+    or trade one bucket for the other. The three measures are judged together and a change is looser when any one of them is (AK24: an admin cannot trade attempts for lockout length in
+    either direction; that is the rule's conservative side, and a superadmin makes such a trade)."""
     now = __auth.get_rate_limit_settings()
     now_off = now["mode"] == "off" or now["max_attempts"] == 0
     new_off = mode == "off" or max_attempts == 0
@@ -52,7 +55,8 @@ def _rate_limit_looser(mode: str, max_attempts: int, lockout_minutes: int) -> bo
     def longer(a: int, b: int) -> bool:  # is lockout `a` longer than `b`, with 0 the longest?
         return (a == 0 and b != 0) or (a != 0 and b != 0 and a > b)
 
-    return max_attempts > now["max_attempts"] or longer(now["lockout_minutes"], lockout_minutes)
+    mode_looser = mode != now["mode"] and mode != "both"
+    return max_attempts > now["max_attempts"] or longer(now["lockout_minutes"], lockout_minutes) or mode_looser
 
 
 @bp.route("/settings/save-session", methods=["POST"])
@@ -108,7 +112,7 @@ def save_rate_limit():
             f"Lockout duration must be a whole number of minutes from 0 (until cleared) to {__auth.MAX_LOCKOUT_MINUTES} (a week).",
         )
         return redirect(url_for("settings.settings_security"))
-    if mode not in ("ip", "username", "both", "off"):
+    if mode not in __auth.RATE_LIMIT_MODES:
         flash("Invalid lockout mode.", "error")
         return redirect(url_for("settings.settings_security"))
     max_attempts, lockout_minutes = (

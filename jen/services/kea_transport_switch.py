@@ -94,12 +94,13 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 wrote_a_file = True
                 newest = _rev.latest(sid, SERVICE, exclude_kind="kea") if sid is not None else None
                 discarded_at = (newest or {}).get("id")
+            elif not proof["ok"]:
+                # (Q225, AK6) a file that could not be read is not proved and not "nothing to discard": the switch is refused, as every write over such a file is (CFG-005)
+                return _refuse(f"{name}: {proof.get('why') or 'the file could not be read'}; nothing was changed")
             else:
                 # (Q224, AJ6) the box was ticked for a fact the stored result carried and the file no longer has (the daemon loaded it, or Jen rendered it since): nothing is discarded, the
-                # consent is given for the facts as they ARE, and the line says so
-                nothing_to_discard = "; nothing was discarded - the file is " + NOTHING_TO_DISCARD.get(
-                    proof["how"], f"proved ({proof['how']})"
-                )
+                # consent is given for the facts as they ARE, and the line says so. (Q225, AK6) `NOTHING_TO_DISCARD` names every `how` a proof that is `ok` can carry; a test holds it total
+                nothing_to_discard = "; nothing was discarded - the file is " + NOTHING_TO_DISCARD[proof["how"]]
                 facts = _api.probe(server, SERVICE)
     if wrote_a_file:
         wrote = _api.write_file(server, SERVICE, discard=discard)
@@ -166,6 +167,10 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 if discarded_at
                 else ", and the file's edit was discarded"
             )
+        if not wrote_a_file:
+            used = [
+                c for c in used if c != "discard_file_edit"
+            ]  # (Q225, AK6) the audit row names a discard only when one was made
         return _done(
             line + nothing_to_discard, revision=revision, discarded=wrote_a_file, consents=used, ignored=ignored
         )
@@ -187,6 +192,7 @@ NOTHING_TO_DISCARD = {
     "loaded": "one the daemon has loaded",
     "rendering": "Jen's own rendering of what the daemon runs",
     "planned": "the file an unfinished change was planned over",
+    "no-file": "not there: the server has no file Jen reads",  # (Q225, AK6) total over the `ok` answers of `file_proof`; unreachable here (the branch is under `has_ssh`), named anyway
 }
 
 

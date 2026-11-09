@@ -631,7 +631,10 @@ def _run_change_unlocked(
             if not rres.get("ok"):
                 revert_failed.append(done)
                 if done.transport == "api":
-                    if rres.get("code") == "guard":
+                    if not rres.get("needs_hands"):
+                        # (Q225, AK5) every rollback result WITHOUT `needs_hands` leaves the daemon in ONE state, the change still standing: a refusal before the set (`guard`, `noanswer`,
+                        # `conflict`, `unreadable` - nothing was sent), a set Kea refused (`set-failed`), or a write refused and the set proved undone (`write-failed`). Only a `guard`
+                        # was counted, and the three other nothing-sent refusals read "did not complete ... Settle it now" with no pending row for the button to settle
                         api_refused.add(done.key)
                     # (Q223, AH2) an api target's rollback is judged by the daemon's own answer, and its result says which half stood: the line carries it instead of "still have the NEW config",
                     # which is true of a file target whose restore failed and may be false of a daemon that went back while its file did not
