@@ -450,7 +450,7 @@ class TestASettingThatIsNotANumberIsTheDefault:
     def test_the_alert_loops_integer_settings(self, monkeypatch):
         from jen.services import alerts
 
-        monkeypatch.setattr(alerts, "__get_global_setting", lambda key, default=None: "oops", raising=False)
+        # one way only: monkeypatch undoes every setattr BEFORE every setitem, so a setattr and a setitem on the same name left the first stub in the module for the rest of the session
         monkeypatch.setitem(alerts.__dict__, "__get_global_setting", lambda key, default=None: "oops")
         assert alerts._int_setting("alert_threshold_pct", 80) == 80
         monkeypatch.setitem(alerts.__dict__, "__get_global_setting", lambda key, default=None: "75")
