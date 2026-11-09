@@ -109,12 +109,14 @@ var JEN_CHANNELS = {
         </span>
         {% endfor %}
         </div>
-        {% if ch.subnet_scope %}
         <div style="margin-top:8px;font-size:11px;color:var(--text-muted);">
+            {% if ch.subnet_scope %}
             {{ icon("map-pin") }} Subnet-specific alerts limited to:
             {% for sid in ch.subnet_scope %}{{ subnet_map.get(sid, {}).get('name', 'Subnet ' + sid|string) }}{% if not loop.last %}, {% endif %}{% endfor %}
+            {% else %}
+            {{ icon("map-pin") }} Subnet-specific alerts for all subnets
+            {% endif %}
         </div>
-        {% endif %}
     </div>
     {% endfor %}
     </div>
@@ -237,7 +239,7 @@ var JEN_CHANNELS = {
                 <div class="form-row">
                     <div class="form-group">
                         <label for="tgToken">Bot Token</label>
-                        <input type="text" name="token" id="tgToken" placeholder="From @BotFather">
+                        <input type="password" name="token" id="tgToken" placeholder="From @BotFather" data-secret="1" autocomplete="off">
                     </div>
                     <div class="form-group">
                         <label for="tgChatId">Chat ID</label>
@@ -265,7 +267,7 @@ var JEN_CHANNELS = {
                     </div>
                     <div class="form-group">
                         <label for="f-smtp_pass">SMTP Password</label>
-                        <input id="f-smtp_pass" type="password" name="smtp_pass" placeholder="(app password)">
+                        <input id="f-smtp_pass" type="password" name="smtp_pass" placeholder="(app password)" data-secret="1" autocomplete="off">
                     </div>
                 </div>
                 <div class="form-row">
@@ -280,7 +282,7 @@ var JEN_CHANNELS = {
                 </div>
                 <div class="form-group">
                     <label class="u-015a5e">
-                        <input type="checkbox" name="use_tls" checked> Use STARTTLS
+                        <input type="checkbox" name="use_tls" id="f-use_tls" checked> Use STARTTLS
                     </label>
                 </div>
             </div>
@@ -289,7 +291,7 @@ var JEN_CHANNELS = {
             <div id="fields-slack" style="display:none;">
                 <div class="form-group">
                     <label for="f-slack_webhook">Slack Webhook URL</label>
-                    <input id="f-slack_webhook" type="text" name="slack_webhook" placeholder="https://hooks.slack.com/services/...">
+                    <input id="f-slack_webhook" type="password" name="slack_webhook" placeholder="https://hooks.slack.com/services/..." data-secret="1" autocomplete="off">
                 </div>
             </div>
 
@@ -313,7 +315,7 @@ var JEN_CHANNELS = {
                     </div>
                     <div class="form-group">
                         <label for="f-header_value">Custom Header Value (optional)</label>
-                        <input id="f-header_value" type="text" name="header_value" placeholder="Bearer token123">
+                        <input id="f-header_value" type="password" name="header_value" placeholder="Bearer token123" data-secret="1" autocomplete="off">
                     </div>
                 </div>
             </div>
@@ -334,7 +336,7 @@ var JEN_CHANNELS = {
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-ntfy_token">Access Token (optional)</label>
-                        <input id="f-ntfy_token" type="password" name="ntfy_token" placeholder="(for protected topics)">
+                        <input id="f-ntfy_token" type="password" name="ntfy_token" placeholder="(for protected topics)" data-secret="1" autocomplete="off">
                     </div>
                     <div class="form-group">
                         <label for="f-ntfy_priority">Priority</label>
@@ -353,7 +355,7 @@ var JEN_CHANNELS = {
             <div id="fields-discord" style="display:none;">
                 <div class="form-group">
                     <label for="f-discord_webhook">Discord Webhook URL</label>
-                    <input id="f-discord_webhook" type="text" name="discord_webhook" placeholder="https://discord.com/api/webhooks/..." aria-describedby="f-discord_webhook-hint">
+                    <input id="f-discord_webhook" type="password" name="discord_webhook" placeholder="https://discord.com/api/webhooks/..." aria-describedby="f-discord_webhook-hint" data-secret="1" autocomplete="off">
                     <div class="form-hint" id="f-discord_webhook-hint">Server Settings → Integrations → Webhooks → New Webhook → Copy URL</div>
                 </div>
             </div>
@@ -367,12 +369,12 @@ var JEN_CHANNELS = {
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-pushover_user_key">User Key</label>
-                        <input id="f-pushover_user_key" type="text" name="pushover_user_key" placeholder="Your Pushover user key" aria-describedby="f-pushover_user_key-hint">
+                        <input id="f-pushover_user_key" type="password" name="pushover_user_key" placeholder="Your Pushover user key" aria-describedby="f-pushover_user_key-hint" data-secret="1" autocomplete="off">
                         <div class="form-hint" id="f-pushover_user_key-hint">Found on your Pushover dashboard</div>
                     </div>
                     <div class="form-group">
                         <label for="f-pushover_api_token">API Token</label>
-                        <input id="f-pushover_api_token" type="password" name="pushover_api_token" placeholder="Application API token" aria-describedby="f-pushover_api_token-hint">
+                        <input id="f-pushover_api_token" type="password" name="pushover_api_token" placeholder="Application API token" aria-describedby="f-pushover_api_token-hint" data-secret="1" autocomplete="off">
                         <div class="form-hint" id="f-pushover_api_token-hint">Create an Application at pushover.net to get this</div>
                     </div>
                 </div>
@@ -501,12 +503,24 @@ function showAddChannel() {
     document.querySelectorAll('.alert-type-cb').forEach(cb => cb.checked = false);
     // Clear all fields
     ['tgToken','tgChatId'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    // (Q226, AL2) a new channel's secret fields say what they are for; an edit's say the secret is saved (setWriteOnlyPlaceholders)
+    setWriteOnlyPlaceholders(false);
+    const tlsEl = document.getElementById('f-use_tls'); if (tlsEl) tlsEl.checked = true;
     const subnetEl = document.getElementById('channelSubnetIds');
     if (subnetEl) {
         Array.from(subnetEl.options).forEach(opt => { opt.selected = (opt.value === 'all'); });
     }
     showChannelFields('telegram');
     document.getElementById('channelModal').style.display = 'flex';
+}
+
+// (Q226, AL2) the write-only inputs: the page never carries their values, so an edit shows them blank with a placeholder that says the secret is saved and a blank keeps it
+function setWriteOnlyPlaceholders(editing) {
+    document.querySelectorAll('[data-secret]').forEach(el => {
+        if (!el.dataset.placeholder) el.dataset.placeholder = el.placeholder;
+        el.placeholder = editing ? 'Saved - leave blank to keep' : el.dataset.placeholder;
+        el.value = '';
+    });
 }
 
 function editChannelFromBtn(id) {
@@ -534,6 +548,7 @@ function editChannel(id, ctype, cname, enabled, config, alertTypes, subnetScope)
     document.getElementById('channelName').value = cname;
     document.getElementById('channelEnabled').checked = enabled == 1;
     const cfg = config || {};
+    setWriteOnlyPlaceholders(true);
     if (ctype === 'telegram') {
         document.getElementById('tgToken').value = cfg.token || '';
         document.getElementById('tgChatId').value = cfg.chat_id || '';
@@ -558,6 +573,7 @@ function editChannel(id, ctype, cname, enabled, config, alertTypes, subnetScope)
             const el = document.querySelector(`[name=${name}]`);
             if (el) el.value = cfg[cfgKey] || '';
         });
+        const tlsEl = document.getElementById('f-use_tls'); if (tlsEl) tlsEl.checked = cfg.use_tls !== 'false';  // (Q226, AL3) the flag round-trips
     }
     const types = alertTypes || [];
     document.querySelectorAll('.alert-type-cb').forEach(cb => {

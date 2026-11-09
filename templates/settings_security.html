@@ -187,12 +187,12 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-max_attempts">Max Failed Attempts</label>
-                <input id="f-max_attempts" type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100" aria-describedby="f-max_attempts-hint">
+                <input id="f-max_attempts" type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="1000" aria-describedby="f-max_attempts-hint">
                 <div class="form-hint" id="f-max_attempts-hint">0 = disabled</div>
             </div>
             <div class="form-group">
                 <label for="f-lockout_minutes">Lockout Duration (minutes)</label>
-                <input id="f-lockout_minutes" type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440" aria-describedby="f-lockout_minutes-hint">
+                <input id="f-lockout_minutes" type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="10080" aria-describedby="f-lockout_minutes-hint">
                 <div class="form-hint" id="f-lockout_minutes-hint">0 = permanent until admin clears</div>
             </div>
             <div class="form-group">
