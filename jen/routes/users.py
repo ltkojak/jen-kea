@@ -18,6 +18,7 @@ import jen.services.client_subject as __client_subject
 import jen.services.kea as __kea
 import jen.services.mfa as __mfa
 import jen.services.session_timeout as __session_timeout
+import jen.services.text as __text
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
@@ -82,10 +83,9 @@ def audit_log():
             alert_retention_days=__alerts.alert_log_retention_days(),
         )
 
-    try:
-        page = max(1, int(request.args.get("page", 1)))
-    except ValueError:
-        page = 1
+    page = max(
+        1, __text.whole(request.args.get("page", "1"), 1)
+    )  # (Q226, AL14) the one whole-number test (DEF-003), never a bare `int()` over a query string
     search = __auth.sanitize_search(request.args.get("search", "").strip())
     per_page = 50
     logs = []

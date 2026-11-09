@@ -1082,11 +1082,14 @@ def api_keys_create():
         if not subnet_ids_raw or "all" in subnet_ids_raw:
             subnet_access = None
         else:
-            ids = [int(s) for s in subnet_ids_raw if is_whole(s)]
-            subnet_access = _json.dumps(ids) if ids else None
+            # (Q226, AL19) the shape its siblings have: refused whole for a value that is not a whole number (DEF-003), never None for an all-garbage selection, each id once, in order
+            if not all(is_whole(s) for s in subnet_ids_raw):
+                flash_field("subnet_ids", "Subnet ids must be numbers.")
+                return redirect(url_for("api.api_keys"))
+            subnet_access = _json.dumps(sorted({int(s) for s in subnet_ids_raw}))
     else:
         allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-        ids = [int(s) for s in subnet_ids_raw if is_whole(s) and int(s) in allowed]
+        ids = sorted({int(s) for s in subnet_ids_raw if is_whole(s) and int(s) in allowed})
         if not ids:
             flash_field("subnet_ids", "Select at least one subnet this key should have access to.")
             return redirect(url_for("api.api_keys"))

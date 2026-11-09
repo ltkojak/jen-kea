@@ -102,8 +102,12 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 # consent is given for the facts as they ARE, and the line says so. (Q225, AK6) `NOTHING_TO_DISCARD` names every `how` a proof that is `ok` can carry; a test holds it total
                 nothing_to_discard = "; nothing was discarded - the file is " + NOTHING_TO_DISCARD[proof["how"]]
                 facts = _api.probe(server, SERVICE)
+    discarded_an_edit = False
     if wrote_a_file:
         wrote = _api.write_file(server, SERVICE, discard=discard)
+        discarded_an_edit = bool(
+            wrote.get("discarded")
+        )  # (Q226, AL28) in every direction, the write says whether it discarded
         if not wrote["ok"]:
             if (
                 wrote.get("code") == "unloaded-edit"
@@ -167,12 +171,12 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
                 if discarded_at
                 else ", and the file's edit was discarded"
             )
-        if not wrote_a_file:
+        if not discarded_an_edit:
             used = [
                 c for c in used if c != "discard_file_edit"
             ]  # (Q225, AK6) the audit row names a discard only when one was made
         return _done(
-            line + nothing_to_discard, revision=revision, discarded=wrote_a_file, consents=used, ignored=ignored
+            line + nothing_to_discard, revision=revision, discarded=discarded_an_edit, consents=used, ignored=ignored
         )
     return _done(
         (
@@ -182,7 +186,9 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
         )
         + not_recorded,
         revision=revision,
-        consents=used,
+        consents=[
+            c for c in used if c != "discard_file_edit" or discarded_an_edit
+        ],  # (Q226, AL28) `file -> api` and `off -> api` too
         ignored=ignored,
     )
 
@@ -314,8 +320,8 @@ def switch(server: dict, target: str, *, consents=(), actor: str = "") -> dict:
             except Exception as e:  # (Q216 AA10) the file was rendered and the setting could not be written: say so, never a 500 over a half-done switch
                 logger.warning("kea_transport_switch: the setting could not be written: %s", type(e).__name__)
                 return _refuse(
-                    f"{name}: the switch was done but the setting could not be saved ({e}); the transport did not change - run the switch again"
-                )
+                    f"{name}: the switch was done but the setting could not be saved ({type(e).__name__}); the transport did not change - run the switch again"
+                )  # (Q226, AL25) the exception's class, never its text, in a line an operator reads (LEAK-001's shape)
             if current == "api" and target != "api":
                 # (Q219 BI3 b, AD3) a remembered refusal of `config-write` belongs to Live API: it is cleared when the server leaves it, after the setting is written
                 had = bool((_api.stored_probe(server.get("id")) or {}).get("refused"))

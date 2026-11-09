@@ -36,7 +36,12 @@ class User(UserMixin):
                     parsed = json.loads(subnet_access)
                 except Exception:
                     parsed = []
-            self._subnet_access = parsed if isinstance(parsed, list) else []
+            # (Q226, AL20) and a LIST is a scope only when every element is an id: `[1, "abc"]` raised on the first access check, `[true]` read as subnet 1
+            self._subnet_access = (
+                parsed
+                if isinstance(parsed, list) and all(isinstance(s, int) and not isinstance(s, bool) for s in parsed)
+                else []
+            )
 
     def get_id(self):
         return str(self.id)
@@ -199,11 +204,9 @@ def get_stale_device_days() -> int:
     """`stale_device_days` as a positive integer, or the default of 30 when the stored value is not one (v5.69.0-beta.5, Q174). Three readers did `int(get_global_setting(...))`
     on their own - the Devices page and the Reservations page outside any `try`, so one corrupt row in the settings table was a 500 for both lists; the alert loop inside one
     whose handler skipped the stale, drift, snapshot and summary work of every cycle. A table edit is the only way to store a bad value; this makes it harmless."""
-    try:
-        days = int(get_global_setting("stale_device_days", str(STALE_DEVICE_DAYS_DEFAULT)))
-    except (TypeError, ValueError):
-        return STALE_DEVICE_DAYS_DEFAULT
-    return days if days > 0 else STALE_DEVICE_DAYS_DEFAULT
+    from jen.services.setting_bounds import bounded_setting
+
+    return bounded_setting("stale_device_days")  # (Q226, AL9) and inside the Devices form's 1..365
 
 
 def get_global_setting(key: str, default=None, strict: bool = False):
@@ -288,6 +291,33 @@ def set_global_setting(key: str, value: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"set_global_setting({key}): {e}")
+        return False
+
+
+def set_global_settings(values: dict) -> bool:
+    """Upsert SEVERAL settings in ONE transaction (Q226, the beta.11 review's P2 #5): a policy that is three rows (`rl_max_attempts`, `rl_lockout_minutes`, `rl_mode`) was three commits, so a
+    failure after the first left a third of the new policy applied while the route said "saved". Every row is written or none is; True only when all are committed; False - logged, never
+    raised - otherwise, and the caller says so instead of "saved" and writes no SAVE audit row. The settings cache is invalidated on success."""
+    from jen.models.db import jen_db
+
+    if not values:
+        return True
+    try:
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO settings (setting_key, setting_value)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)
+                """,
+                    [(str(k), str(v)) for k, v in values.items()],
+                )
+            db.commit()
+        _invalidate_settings_cache()
+        return True
+    except Exception as e:
+        logger.error(f"set_global_settings({sorted(values)}): {type(e).__name__}")
         return False
 
 

@@ -18,8 +18,9 @@ import re
 # a bare secret word, or a name that ends in one after an underscore: `smtp_password`, `basic_auth_password`, `client_secret`, `metrics_token`, `api_token`,
 # `api_pass`, `db_passwd`, and `api_key` (the one two-word secret: a bare `key` is not one - `ssl_key` and `api_client_key` name files)
 _SECRET_NAME_RE = re.compile(
-    r"(^|_)(password|passwd|passphrase|pass_phrase|pass|pwd|secret|secret_key|token|api_key|apikey|private_key|authorization|credentials?)$"
-)  # (Q225, AK16) `pass_phrase` and the singular `credential` beside the forms that were already here
+    r"(^|_)(password|passwd|passphrase|pass_phrase|pass|pwd|secrets?|secret_key|tokens?|api_keys?|apikeys?|private_key|authorization|credentials?)\d*$"
+)  # (Q225, AK16) `pass_phrase` and the singular `credential` beside the forms that were already here; (Q226, AL17) the plurals `secrets`, `tokens`, `api_keys`, and a trailing number
+# (`password2`). An all-upper-case run with no boundary (`DBPASSWORD`) stays outside the rule on purpose: the rule is "ends in a secret word", and a word boundary is what makes a word
 _CAMEL = re.compile(
     r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
 )  # (Q225, AK16) a word boundary also falls inside an upper-case run before its last letter: `DBPassword` is `DB_Password`, `SMTPPass` is `SMTP_Pass`

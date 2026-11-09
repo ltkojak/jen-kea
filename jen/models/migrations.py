@@ -1350,6 +1350,27 @@ def _m038_revisions_file_sha256(db):
     logger.info("Migration 38: kea_config_revisions.file_sha256")
 
 
+def _m039_login_lockouts(db):
+    """
+    v7.0.0-beta.12 (Q226, the beta.11 review's P2 #3) - `login_lockouts`: a lockout the Security page calls permanent (`lockout_minutes = 0`, "until cleared") was the rolling window
+    alone, and the `login_attempts` rows it was counted from are pruned, so every "permanent" lockout ended within a day and nobody cleared it. A permanent lockout is a ROW now:
+    `auth.is_locked_out` writes one (`kind` is `ip` or `username`, `subject` the address or the account) the moment a bucket crosses the threshold under a lockout of 0, reads the
+    table before it counts, and the Security page's clear-lockouts button is the one statement that deletes it. ONE DDL statement, idempotent (CREATE TABLE IF NOT EXISTS): a crash
+    before the version was recorded is finished by the next start, and a rerun over the final state changes nothing. No row is touched.
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS login_lockouts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                kind VARCHAR(16) NOT NULL,
+                subject VARCHAR(255) NOT NULL,
+                locked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_lockout (kind, subject)
+            )"""
+        )
+    logger.info("Migration 39: login_lockouts table")
+
+
 _LEGACY_TELEGRAM_KEYS = ("telegram_token", "telegram_chat_id", "telegram_enabled")
 
 
@@ -1499,6 +1520,11 @@ MIGRATIONS = [
         38,
         "kea_config_revisions.file_sha256: the file the Plan proved, carried by the pending row (v7.0.0-beta.5, Q219)",
         _m038_revisions_file_sha256,
+    ),
+    (
+        39,
+        "login_lockouts: a permanent login lockout is a row, ended only by clear-lockouts (v7.0.0-beta.12, Q226)",
+        _m039_login_lockouts,
     ),
 ]
 

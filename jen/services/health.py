@@ -869,14 +869,10 @@ def _latest_lease_history() -> list[dict]:
 
 def _pool_utilization(ctx) -> Check:
     c = Check("pool_utilization", "Pool utilization", "capacity", fix_url="/subnets")
-    try:
-        threshold = int(__get_setting("alert_threshold_pct", "80"))
-    except (TypeError, ValueError):
-        threshold = 80
-    try:
-        exhaustion = int(__get_setting("pool_exhaustion_free", "5"))
-    except (TypeError, ValueError):
-        exhaustion = 5
+    from jen.services.setting_bounds import bounded_setting
+
+    threshold = bounded_setting("alert_threshold_pct")  # (Q226, AL9) the one bounded reader, as the alert loop's
+    exhaustion = bounded_setting("pool_exhaustion_free")
     try:
         rows = _latest_lease_history()
     except Exception as e:
@@ -984,10 +980,9 @@ def _pool_exhaustion_forecast(ctx) -> Check:
 
 def _lease_snapshot_fresh(ctx) -> Check:
     c = Check("lease_snapshot_fresh", "Lease snapshots current", "capacity", fix_url="/settings/system")
-    try:
-        interval = int(__get_setting("snapshot_interval_minutes", "30")) * 60
-    except (TypeError, ValueError):
-        interval = 30 * 60
+    from jen.services.setting_bounds import bounded_setting
+
+    interval = bounded_setting("snapshot_interval_minutes") * 60  # (Q226, AL9)
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             # (Q224, AJ10) `snapshot_time` is the database host's stamp (its DEFAULT): its age is measured by that same clock, in the query, never against Jen's

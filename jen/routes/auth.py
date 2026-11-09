@@ -124,7 +124,7 @@ def login():
         locked, remaining = __auth.is_locked_out(ip, username)
 
         if locked:
-            if remaining >= 999:
+            if remaining == __auth.PERMANENT_LOCKOUT:  # (Q226, AL12) the sentinel, never a magnitude
                 flash("Account is locked. Contact an administrator.", "error")
             else:
                 flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")
@@ -253,7 +253,7 @@ def login_oidc_callback():
     ip = request.remote_addr
     locked, remaining = __auth.is_locked_out(ip, "oidc")
     if locked:
-        if remaining >= 999:
+        if remaining == __auth.PERMANENT_LOCKOUT:
             flash("Sign-in is locked. Contact an administrator.", "error")
         else:
             flash(f"Too many failed sign-in attempts. Try again in {remaining} minute(s).", "error")
@@ -369,7 +369,7 @@ def reauth():
 
     locked, remaining = __auth.is_locked_out(ip, username)
     if locked:
-        if remaining >= 999:
+        if remaining == __auth.PERMANENT_LOCKOUT:
             flash("Account is locked. Contact an administrator.", "error")
         else:
             flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")

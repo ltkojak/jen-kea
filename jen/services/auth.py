@@ -88,13 +88,6 @@ def valid_dns(dns):
     return all(valid_ip(ip.strip()) for ip in dns.split(","))
 
 
-def valid_positive_int(val):
-    try:
-        return int(val) > 0
-    except (ValueError, TypeError):
-        return False
-
-
 def sanitize_search(search):
     """Strip characters that could cause SQL issues"""
     return re.sub(r"[^\w\s\.\:\-]", "", search)[:100]
@@ -579,23 +572,27 @@ def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
 # ─────────────────────────────────────────
 # Rate limiting
 # ─────────────────────────────────────────
-#: the bounds the Security page accepts (Q224, AJ18): a lockout of a week, a thousand attempts; 0 keeps its meanings (until cleared; unlimited)
-MAX_LOCKOUT_MINUTES = 7 * 24 * 60
-MAX_ATTEMPTS_BOUND = 1000
+from jen.services import setting_bounds as __bounds  # noqa: E402
+
+#: the bounds the Security page accepts (Q224, AJ18): a lockout of a week, a thousand attempts; 0 keeps its meanings (until cleared; unlimited). The table is `setting_bounds` (Q226, AL5)
+MAX_LOCKOUT_MINUTES = __bounds.bounds("rl_lockout_minutes")[2]
+MAX_ATTEMPTS_BOUND = __bounds.bounds("rl_max_attempts")[2]
 #: the four words the Security page writes; `both` is the strictest (two buckets, the larger decides)
 RATE_LIMIT_MODES = ("ip", "username", "both", "off")
+#: (Q226, AL12) what `is_locked_out` answers as the minutes of a lockout that ends only when an administrator clears it. It was 999, and a configured lockout of 999 minutes or more read as
+#: permanent at `/login` ("Contact an administrator") - inside the form's own range. A caller tests `remaining == PERMANENT_LOCKOUT`, never a magnitude
+PERMANENT_LOCKOUT = -1
 
 
 def get_rate_limit_settings():
     """The stored policy, read as the login applies it (Q225, AK3, AK19). The form writes only the four words and two bounded whole numbers; a row that says anything else was not written by
     it, and the reader puts it where the policy is STRICTEST: a mode outside the four is `both` (it used to count nothing and answer "not locked out" - no rate limiting, silently), a count or
-    a duration that is not a whole number is its default (it used to raise out of `/login`), and one past the page's bound is the bound (a value stored before the bound existed)."""
-    from jen.services.text import whole
-
+    a duration that is not a whole number is its default (it used to raise out of `/login`), and one past the page's bound is the bound (a value stored before the bound existed). The two
+    numbers are read through `setting_bounds.bounded_setting`, the one reader of a bounded number (Q226, AL5): the Security page reads this same tuple and prints what the server applies."""
     mode = __get_global_setting("rl_mode", "both")
     return {
-        "max_attempts": min(whole(__get_global_setting("rl_max_attempts", "10"), 10), MAX_ATTEMPTS_BOUND),
-        "lockout_minutes": min(whole(__get_global_setting("rl_lockout_minutes", "15"), 15), MAX_LOCKOUT_MINUTES),
+        "max_attempts": __bounds.bounded_setting("rl_max_attempts"),
+        "lockout_minutes": __bounds.bounded_setting("rl_lockout_minutes"),
         "mode": mode if mode in RATE_LIMIT_MODES else "both",
     }
 
@@ -610,7 +607,11 @@ def _maybe_prune_login_attempts(cur, now=None):
     now = time.time() if now is None else now
     if now - _last_prune < 3600:
         return False
-    cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+    # (Q226, the beta.11 review's P2 #3) rows live as long as the longest lockout the page accepts: a week-long lockout, and the detection window of a permanent one, were cut to 24 hours by this
+    # DELETE while the page promised a week. The table holds failed attempts only, so a week of them is small
+    cur.execute(
+        "DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)", (MAX_LOCKOUT_MINUTES,)
+    )
     _last_prune = now
     return True
 
@@ -661,59 +662,55 @@ def is_locked_out(ip, username):
     if mode == "off" or max_attempts == 0:
         return False, 0
 
+    buckets = []  # (column, value, kind): the buckets the mode counts
+    if mode in ("ip", "both"):
+        buckets.append(("ip_address", ip, "ip"))
+    if mode in ("username", "both"):
+        buckets.append(("username", username, "username"))
     try:
         with __jen_db_ctx() as db, db.cursor() as cur:
-            # Rolling window: only count attempts within the lockout period.
-            # This ensures old attempts don't contribute to new lockouts.
-            # If lockout_minutes=0 (permanent lockout), use a 24h detection
-            # window to find the triggering burst, then lock permanently.
-            # (Q224, AJ18) the minutes are a parameter, bounded on save (`MAX_LOCKOUT_MINUTES`), never interpolated into the statement
-            window_minutes = (
-                lockout_minutes if lockout_minutes > 0 else 1440
-            )  # 24h rolling window when the lockout is permanent
+            # (Q226, the beta.11 review's P2 #3) a PERMANENT lockout is a row in `login_lockouts`, read first: the rolling window alone ended every "until cleared" lockout within a day,
+            # because the attempts it was counted from are pruned. The row is written below the moment a bucket crosses the threshold under `lockout_minutes = 0`, and only
+            # `clear_lockouts` removes it
+            for _column, value, kind in buckets:
+                cur.execute(
+                    "SELECT 1 AS locked FROM login_lockouts WHERE kind=%s AND subject=%s LIMIT 1", (kind, value)
+                )
+                if cur.fetchone():
+                    return True, PERMANENT_LOCKOUT
+            # Rolling window: only count attempts within the lockout period, so old attempts never contribute to a new lockout. (Q224, AJ18) the minutes are a parameter, bounded on save,
+            # never interpolated into the statement. (Q226, AL18) for a permanent lockout the detection window is the longest lockout the page accepts (a week; it was 24 hours, so the
+            # ratchet's "0 is the longest lockout" was true of the lock and false of the window)
+            window_minutes = lockout_minutes if lockout_minutes > 0 else MAX_LOCKOUT_MINUTES
             window = "DATE_SUB(NOW(), INTERVAL %s MINUTE)"
-
-            ip_count = username_count = 0
-            if mode in ("ip", "both"):
+            locked = False
+            remaining_mins = 0
+            for column, value, kind in buckets:
                 cur.execute(
-                    f"SELECT COUNT(*) as cnt FROM login_attempts WHERE ip_address=%s AND attempted_at >= {window}",
-                    (ip, window_minutes),
+                    f"SELECT COUNT(*) AS cnt FROM login_attempts WHERE {column}=%s AND attempted_at >= {window}",
+                    (value, window_minutes),
                 )
-                ip_count = cur.fetchone()["cnt"]
-            if mode in ("username", "both"):
+                if cur.fetchone()["cnt"] < max_attempts:
+                    continue
+                locked = True
+                if lockout_minutes == 0:
+                    cur.execute("INSERT IGNORE INTO login_lockouts (kind, subject) VALUES (%s, %s)", (kind, value))
+                    remaining_mins = PERMANENT_LOCKOUT
+                    continue
+                # (Q226, the review's P2 #4) the lock ends when the count falls BELOW the threshold: when the Nth most recent attempt (N = max_attempts) ages out of the window, not when
+                # the oldest does - with four attempts aged 14, 10, 2 and 1 minutes under a threshold of 3 and a 15-minute lockout, MIN() promised one minute and the account stayed
+                # locked for five. Under `both` each bucket over the line is measured and the LATER deadline is the answer (Q225's AK12 chose the fuller bucket, which is not the same)
                 cur.execute(
-                    f"SELECT COUNT(*) as cnt FROM login_attempts WHERE username=%s AND attempted_at >= {window}",
-                    (username, window_minutes),
+                    f"SELECT TIMESTAMPDIFF(SECOND, attempted_at, NOW()) AS age FROM login_attempts WHERE {column}=%s AND attempted_at >= {window} "
+                    "ORDER BY attempted_at DESC LIMIT 1 OFFSET %s",
+                    (value, window_minutes, max_attempts - 1),
                 )
-                username_count = cur.fetchone()["cnt"]
-            count = max(ip_count, username_count)
-
-            if count >= max_attempts:
-                if lockout_minutes > 0:
-                    # Calculate time remaining in the lockout window from
-                    # the FIRST attempt in the current window, not the last.
-                    # Lock expires when the oldest attempt in the window ages out.
-                    # (Q225, AK12) measured in the bucket that went over the line: under `both` it used to be the address's always, and a lockout the ACCOUNT's attempts triggered from
-                    # many addresses read MIN() over an empty bucket - "1 minute" of a fifteen-minute lockout
-                    by_username = username_count > ip_count
-                    field = "username" if by_username else "ip_address"
-                    val = username if by_username else ip
-                    cur.execute(
-                        f"""
-                            SELECT CEIL(
-                                (%s * 60) -
-                                TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW())
-                            ) as remaining
-                            FROM login_attempts
-                            WHERE {field}=%s AND attempted_at >= {window}
-                        """,
-                        (lockout_minutes, val, window_minutes),
-                    )
-                    row = cur.fetchone()
-                    remaining_secs = max(0, int(row["remaining"] or 0)) if row else 0
-                    remaining_mins = max(1, (remaining_secs + 59) // 60)
-                else:
-                    remaining_mins = 999  # permanent until admin clears
+                row = cur.fetchone()
+                secs = max(0, lockout_minutes * 60 - int(row["age"] or 0)) if row else 0
+                if remaining_mins != PERMANENT_LOCKOUT:
+                    remaining_mins = max(remaining_mins, max(1, (secs + 59) // 60))
+            db.commit()
+            if locked:
                 return True, remaining_mins
         return False, 0
     except Exception as e:

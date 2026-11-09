@@ -14,6 +14,8 @@ from flask_login import current_user, login_required
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.alerts as __alerts
+import jen.services.auth as __auth
+import jen.services.setting_bounds as __bounds
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
@@ -22,6 +24,94 @@ from jen.services.forms import flash_field
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
+
+#: (Q226, AL2) the config keys that are WRITE-ONLY, by channel type: the page never prints them (the edit form's data carries "" for them and its inputs say "saved - leave blank to keep"),
+#: and a blank on an edit keeps the stored value - only while the channel still names the same place (`_kept_secrets`, CRED-002). A Slack or Discord webhook URL is the secret itself.
+WRITE_ONLY_KEYS = {
+    "telegram": ("token",),
+    "email": ("smtp_pass",),
+    "slack": ("webhook_url",),
+    "discord": ("webhook_url",),
+    "webhook": ("header_value",),
+    "ntfy": ("token",),
+    "pushover": ("user_key", "api_token"),
+}
+#: the form field that carries each write-only key, for the refusal that names it
+WRITE_ONLY_FIELDS = {
+    ("telegram", "token"): "token",
+    ("email", "smtp_pass"): "smtp_pass",
+    ("slack", "webhook_url"): "slack_webhook",
+    ("discord", "webhook_url"): "discord_webhook",
+    ("webhook", "header_value"): "header_value",
+    ("ntfy", "token"): "ntfy_token",
+    ("pushover", "user_key"): "pushover_user_key",
+    ("pushover", "api_token"): "pushover_api_token",
+}
+
+
+def _endpoint(channel_type: str, config: dict) -> str:
+    """Where a channel's secret is SENT, as `auth.same_endpoint` compares places (CRED-002): the SMTP server with its port and whether STARTTLS is on (a password kept onto the same host with
+    TLS turned off goes over the wire in clear, so the wire is part of the place), a webhook's URL, the ntfy server. Telegram, Pushover, Slack and Discord deliver to their provider's own
+    address, which the form does not name: one fixed place."""
+    if channel_type == "email":
+        scheme = "smtps" if config.get("use_tls") == "true" else "smtp"
+        return f"{scheme}://{config.get('smtp_host', '')}:{config.get('smtp_port', '')}"
+    if channel_type == "webhook":
+        return config.get("webhook_url", "")
+    if channel_type == "ntfy":
+        return config.get("url", "")
+    return "provider.invalid"
+
+
+def _stored_channel(channel_id):
+    with __db.jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
+        return cur.fetchone()
+
+
+def _scope_list(raw) -> list | None:
+    """The stored `subnet_scope` as a list of ids, None for every subnet (NULL or unreadable, the service's own reading)."""
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, list) and parsed else None
+
+
+def _may_act_on(channel: dict) -> bool:
+    """(Q226, AL24, AL2) A subnet-restricted admin reads, edits, tests and deletes only a channel whose scope lies inside their own; a channel scoped wider, or to every subnet, is not theirs to see
+    (RBAC-001: its config is a secret and its alerts name what they cannot see), and a denial and a not-found are one message (RBAC-002). An unrestricted account acts on every channel."""
+    if current_user.all_subnets:
+        return True
+    scope = _scope_list(channel.get("subnet_scope"))
+    if not scope:
+        return False
+    allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+    return all(isinstance(s, int) and not isinstance(s, bool) and s in allowed for s in scope)
+
+
+def _kept_secrets(channel_id, channel_type: str, config: dict, stored: dict | None):
+    """(Q226, AL3) A write-only key left blank on an EDIT keeps the stored value - only while the channel names the same place (CRED-002, `auth.same_endpoint`); a blank secret for a server, a
+    port, a wire or a URL the admin typed anew is REFUSED with the field named, never carried and never silently emptied. Returns the config to store, or the name of the form field to refuse on."""
+    blanks = [k for k in WRITE_ONLY_KEYS.get(channel_type, ()) if not config.get(k)]
+    if not blanks or stored is None:
+        return config
+    old = __alerts.get_channel_config(stored)
+    if stored.get("channel_type") != channel_type or not __auth.same_endpoint(
+        _endpoint(channel_type, config), _endpoint(channel_type, old)
+    ):
+        return WRITE_ONLY_FIELDS[(channel_type, blanks[0])]
+    for k in blanks:
+        config[k] = old.get(k, "")
+    return config
+
+
+def _shown(channel_type: str, config: dict) -> dict:
+    """The config as the page carries it: every write-only key blank (AL2)."""
+    hidden = WRITE_ONLY_KEYS.get(channel_type, ())
+    return {k: ("" if k in hidden else v) for k, v in (config or {}).items()}
 
 
 @bp.route("/settings/alerts")
@@ -34,12 +124,16 @@ def settings_alerts():
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute("SELECT * FROM alert_channels ORDER BY channel_type, channel_name")
-            channels = cur.fetchall()
+            channels = [
+                ch for ch in cur.fetchall() if _may_act_on(ch)
+            ]  # (Q226, AL24) a restricted admin's list is the channels inside their scope
             # Parse JSON fields
             for ch in channels:
                 # config is encrypted at rest (v5.7.0) — decode via the
                 # service helper, which also handles legacy plaintext rows
-                ch["config"] = __alerts.get_channel_config(ch)
+                ch["config"] = _shown(
+                    ch.get("channel_type"), __alerts.get_channel_config(ch)
+                )  # (Q226, AL2) never a secret into the page
                 if isinstance(ch.get("alert_types"), str):
                     try:
                         ch["alert_types"] = json.loads(ch["alert_types"])
@@ -112,6 +206,13 @@ def save_alert_channel():
         # the type is written now (it used to be stored only on INSERT, so an edit that changed it saved a config for one type under another) - and it is one of ours
         flash("Choose a channel type from the list.", "error")
         return redirect(url_for("settings.settings_alerts"))
+    stored = None
+    if channel_id:
+        # (Q226, AL24) an edit names a row: it is read FIRST, and a row the caller may not act on - or none - is one message (RBAC-002)
+        stored = _stored_channel(channel_id) if is_whole(channel_id) else None
+        if stored is None or not _may_act_on(stored):
+            flash("Channel not found.", "error")
+            return redirect(url_for("settings.settings_alerts"))
 
     # v5.1.16 — per-channel subnet scope, same NULL-means-unrestricted
     # convention and same creator-can't-exceed-their-own-access clamp as
@@ -124,8 +225,12 @@ def save_alert_channel():
         if not subnet_ids_raw or "all" in subnet_ids_raw:
             subnet_scope = None
         else:
-            ids = [int(s) for s in subnet_ids_raw if is_whole(s)]
-            subnet_scope = json.dumps(ids) if ids else None
+            # (Q226, AL13) the unrestricted branch has the shape its sibling got in Q225: a value that is not a whole number refuses the form whole (DEF-003), never one id out of the list
+            # and never None for an all-garbage selection; each id once, in order
+            if not all(is_whole(s) for s in subnet_ids_raw):
+                flash_field("subnet_ids", "Subnet ids must be numbers.")
+                return redirect(url_for("settings.settings_alerts"))
+            subnet_scope = json.dumps(sorted({int(s) for s in subnet_ids_raw}))
     else:
         allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
         ids = sorted({int(s) for s in subnet_ids_raw if is_whole(s) and int(s) in allowed})
@@ -149,9 +254,14 @@ def save_alert_channel():
             "chat_id": request.form.get("chat_id", "").strip(),
         }
     elif channel_type == "email":
+        port = request.form.get("smtp_port", "587").strip()
+        if not is_whole(port) or not 1 <= int(port) <= 65535:
+            # (Q226, AL23) validated where it is typed: `int()` used to raise at send time and the operator read "failed"
+            flash_field("smtp_port", "SMTP port must be a whole number from 1 to 65535.")
+            return redirect(url_for("settings.settings_alerts"))
         config = {
             "smtp_host": request.form.get("smtp_host", "").strip(),
-            "smtp_port": request.form.get("smtp_port", "587").strip(),
+            "smtp_port": str(int(port)),
             "smtp_user": request.form.get("smtp_user", "").strip(),
             "smtp_pass": request.form.get("smtp_pass", "").strip(),
             "from_addr": request.form.get("from_addr", "").strip(),
@@ -179,31 +289,18 @@ def save_alert_channel():
             "user_key": request.form.get("pushover_user_key", "").strip(),
             "api_token": request.form.get("pushover_api_token", "").strip(),
         }
-        # Don't overwrite api_token if blank (treat like smtp_pass)
-        if channel_id and not config["api_token"]:
-            try:
-                with __db.jen_db() as db, db.cursor() as cur:
-                    cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
-                    row = cur.fetchone()
-                    if row:
-                        config["api_token"] = __alerts.get_channel_config(row).get("api_token", "")
-            except Exception:
-                pass
     elif channel_type == "discord":
         config = {
             "webhook_url": request.form.get("discord_webhook", "").strip(),
         }
 
-    # Don't overwrite password if blank
-    if channel_id and channel_type == "email" and not config["smtp_pass"]:
-        try:
-            with __db.jen_db() as db, db.cursor() as cur:
-                cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
-                row = cur.fetchone()
-                if row:
-                    config["smtp_pass"] = __alerts.get_channel_config(row).get("smtp_pass", "")
-        except Exception:
-            pass
+    # (Q226, AL2, AL3) every write-only key left blank on an edit keeps the stored value - while the channel names the same place; the two keys that used to be kept (`smtp_pass`, `api_token`)
+    # were kept across a changed SMTP host, which CRED-002 forbids by name
+    kept = _kept_secrets(channel_id, channel_type, config, stored)
+    if isinstance(kept, str):
+        flash_field(kept, "The channel's destination changed - enter the secret again.")
+        return redirect(url_for("settings.settings_alerts"))
+    config = kept
 
     try:
         # config carries the channel's notification tokens — encrypt at rest (v5.7.0)
@@ -255,13 +352,15 @@ def save_alert_channel():
 @_admin_required
 def delete_alert_channel(channel_id):
     try:
+        row = _stored_channel(channel_id)
+        if row is None or not _may_act_on(row):  # (Q226, AL24)
+            flash("Channel not found.", "error")
+            return redirect(url_for("settings.settings_alerts"))
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT channel_name FROM alert_channels WHERE id=%s", (channel_id,))
-                row = cur.fetchone()
                 cur.execute("DELETE FROM alert_channels WHERE id=%s", (channel_id,))
             db.commit()
-        name = row["channel_name"] if row else str(channel_id)
+        name = row["channel_name"]
         flash(f"Alert channel '{name}' deleted.", "success")
         __user.audit("DELETE_ALERT_CHANNEL", str(channel_id), f"name={name}")
     except Exception as e:
@@ -277,10 +376,10 @@ def test_alert_channel(channel_id):
     config = {}
     name = "that channel"
     try:
-        with __db.jen_db() as db, db.cursor() as cur:
-            cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
-            channel = cur.fetchone()
-        if not channel:
+        channel = _stored_channel(channel_id)
+        if not channel or not _may_act_on(
+            channel
+        ):  # (Q226, AL24) a test sends the channel's secret: the caller must be one who may act on it
             flash("Channel not found.", "error")
             return redirect(url_for("settings.settings_alerts"))
         config = __alerts.get_channel_config(channel)
@@ -378,18 +477,26 @@ def save_alert_global():
         flash_field("summary_time", "The daily summary time must be HH:MM in UTC, for example 07:00.")
         __user.audit("SAVE_ALERT_GLOBAL_REFUSED", "settings", f"daily summary time {summary_time[:20]!r} is not HH:MM")
         return redirect(url_for("settings.settings_alerts"))
-    if not is_whole(pool_free) or int(pool_free) < 1:
-        flash_field("pool_exhaustion_free", "Pool exhaustion threshold must be a positive number.")
+    # (Q226, AL9) the forms' bounds are the table's (`setting_bounds`), so the way in and the way out agree; the exhaustion threshold had no upper bound
+    if not __bounds.in_bounds("pool_exhaustion_free", pool_free):
+        flash_field("pool_exhaustion_free", "Pool exhaustion threshold must be a whole number from 1 to 1000000.")
         return redirect(url_for("settings.settings_alerts"))
-    if not is_whole(threshold) or not (1 <= int(threshold) <= 100):
+    if not __bounds.in_bounds("alert_threshold_pct", threshold):
         flash_field("alert_threshold_pct", "Utilization threshold must be between 1 and 100.")
         return redirect(url_for("settings.settings_alerts"))
+    pool_free, threshold = str(int(pool_free)), str(int(threshold))
     if reserved_lease_mode not in ("always", "once"):
         reserved_lease_mode = "always"
-    __user.set_global_setting("daily_summary_time", summary_time)
-    __user.set_global_setting("pool_exhaustion_free", pool_free)
-    __user.set_global_setting("alert_threshold_pct", threshold)
-    __user.set_global_setting("reserved_lease_mode", reserved_lease_mode)
+    if not __user.set_global_settings(
+        {
+            "daily_summary_time": summary_time,
+            "pool_exhaustion_free": pool_free,
+            "alert_threshold_pct": threshold,
+            "reserved_lease_mode": reserved_lease_mode,
+        }
+    ):  # (Q226, the review's P2 #5) one transaction, and "saved" only when it is
+        flash("Global alert settings could not be saved. Check server logs for details.", "error")
+        return redirect(url_for("settings.settings_alerts"))
     flash("Global alert settings saved.", "success")
     __user.audit(
         "SAVE_ALERT_GLOBAL",

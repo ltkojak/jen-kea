@@ -170,7 +170,7 @@ class TestARateLimitThatCannotBeReadIsTheStrictest:
         from jen.services import auth
 
         _settings(monkeypatch, rl_mode="everyone", rl_max_attempts="3", rl_lockout_minutes="15")
-        cur = _Cursor(ip=0, username=5)
+        cur = _Cursor(username=[5 * 60, 4 * 60, 3 * 60, 2 * 60, 60])
         monkeypatch.setattr(auth, "__jen_db_ctx", _ctx(cur), raising=False)
         locked, minutes = auth.is_locked_out("10.0.0.1", "admin")
         assert locked is True and minutes >= 1
@@ -178,11 +178,13 @@ class TestARateLimitThatCannotBeReadIsTheStrictest:
 
 
 class _Cursor:
-    """A `login_attempts` table with one count per bucket and one remaining time per bucket; the statements are recorded with the parameters they came with."""
+    """A `login_attempts` table as a list of attempt AGES (seconds, most recent first) per bucket, a `login_lockouts` table as a set of (kind, subject), and every statement recorded with its
+    parameters. (Q226) `is_locked_out` reads the permanent rows first, counts each bucket inside the window, writes a permanent row under a lockout of 0, and measures the countdown by the Nth
+    most recent attempt (`LIMIT 1 OFFSET N-1`)."""
 
-    def __init__(self, ip: int, username: int, remaining_ip: int = 60, remaining_username: int = 780):
-        self.counts = {"ip_address": ip, "username": username}
-        self.remaining = {"ip_address": remaining_ip, "username": remaining_username}
+    def __init__(self, ip=(), username=(), locked=()):
+        self.ages = {"ip_address": sorted(ip), "username": sorted(username)}
+        self.locked = set(locked)
         self.queries: list[str] = []
         self.params: list[tuple] = []
         self._last = None
@@ -190,11 +192,22 @@ class _Cursor:
     def execute(self, sql, params=()):
         self.queries.append(sql)
         self.params.append(tuple(params))
-        field = "username" if "username=%s" in sql else "ip_address"
+        if "FROM login_lockouts" in sql:
+            kind, subject = params
+            self._last = {"locked": 1} if (kind, subject) in self.locked else None
+            return
+        if sql.startswith("INSERT IGNORE INTO login_lockouts"):
+            self.locked.add(tuple(params))
+            self._last = None
+            return
+        column = "username" if "username=%s" in sql else "ip_address"
+        window = params[1] * 60
+        inside = [a for a in self.ages[column] if a <= window]
         if "COUNT(*)" in sql:
-            self._last = {"cnt": self.counts[field]}
+            self._last = {"cnt": len(inside)}
         else:
-            self._last = {"remaining": self.remaining[field]}
+            offset = params[2]
+            self._last = {"age": inside[offset]} if offset < len(inside) else None
 
     def fetchone(self):
         return self._last
@@ -211,51 +224,58 @@ def _ctx(cur):
 
                 return c()
 
+            def commit(self):
+                pass
+
         yield _Db()
 
     return ctx
 
 
-class TestTheRemainingTimeIsMeasuredInTheBucketThatLocked:
-    """AK12: under `both` the remaining time was read from the address's bucket always; a lockout the ACCOUNT's attempts triggered from many addresses measured MIN() over an empty bucket and
-    said "1 minute" of a fifteen-minute lockout."""
+class TestTheRemainingTimeIsTheNthMostRecentAttempt:
+    """AK12 (Q225) measured the countdown in the fuller bucket; the beta.11 review's P2 #4 showed the measure itself was wrong: MIN() promised the oldest attempt's expiry, and with four
+    attempts aged 14, 10, 2 and 1 minutes under a threshold of 3 and a 15-minute lockout the account read "1 minute" and stayed locked for five. The lock ends when the Nth most recent
+    attempt (N = the threshold) ages out; under `both` each bucket over the line is measured and the later deadline wins."""
 
     @pytest.fixture(autouse=True)
     def _policy(self, monkeypatch):
         _settings(monkeypatch, rl_mode="both", rl_max_attempts="3", rl_lockout_minutes="15")
 
-    def test_the_account_bucket_decides_when_it_is_the_one_over_the_line(self, monkeypatch):
+    def test_the_reviews_case_four_attempts_the_third_decides(self, monkeypatch):
         from jen.services import auth
 
-        cur = _Cursor(ip=0, username=5, remaining_username=780)
+        cur = _Cursor(ip=[14 * 60, 10 * 60, 2 * 60, 60])
         monkeypatch.setattr(auth, "__jen_db_ctx", _ctx(cur), raising=False)
-        assert auth.is_locked_out("10.0.0.1", "admin") == (True, 13)
-        remaining = [p for q, p in zip(cur.queries, cur.params, strict=True) if "CEIL" in q]
-        assert remaining == [(15, "admin", 15)], remaining
+        assert auth.is_locked_out("10.0.0.1", "admin") == (True, 5), (
+            "the third most recent attempt is 10 minutes old: 5 minutes left"
+        )
+        offsets = [p[2] for q, p in zip(cur.queries, cur.params, strict=True) if "OFFSET" in q]
+        assert offsets == [2], offsets
 
-    def test_the_address_bucket_decides_when_it_is(self, monkeypatch):
+    def test_exactly_the_threshold_is_the_oldest(self, monkeypatch):
         from jen.services import auth
 
-        cur = _Cursor(ip=4, username=1, remaining_ip=60)
+        cur = _Cursor(ip=[14 * 60, 10 * 60, 60])
         monkeypatch.setattr(auth, "__jen_db_ctx", _ctx(cur), raising=False)
         assert auth.is_locked_out("10.0.0.1", "admin") == (True, 1)
-        remaining = [p for q, p in zip(cur.queries, cur.params, strict=True) if "CEIL" in q]
-        assert remaining == [(15, "10.0.0.1", 15)], remaining
 
-    def test_a_tie_reads_the_address(self, monkeypatch):
+    def test_under_both_the_later_deadline_wins_whichever_bucket_is_fuller(self, monkeypatch):
         from jen.services import auth
 
-        cur = _Cursor(ip=3, username=3, remaining_ip=120, remaining_username=780)
+        cur = _Cursor(ip=[14 * 60, 13 * 60, 12 * 60, 11 * 60, 10 * 60], username=[3 * 60, 2 * 60, 60])
         monkeypatch.setattr(auth, "__jen_db_ctx", _ctx(cur), raising=False)
-        assert auth.is_locked_out("10.0.0.1", "admin") == (True, 2)
+        assert auth.is_locked_out("10.0.0.1", "admin") == (True, 12), (
+            "the address bucket is fuller but ends in 3 minutes; the account's ends in 12"
+        )
 
-    def test_under_the_line_nothing_is_measured(self, monkeypatch):
+    def test_a_bucket_under_the_line_is_not_measured(self, monkeypatch):
         from jen.services import auth
 
-        cur = _Cursor(ip=1, username=2)
+        cur = _Cursor(ip=[60], username=[20 * 60, 60])
         monkeypatch.setattr(auth, "__jen_db_ctx", _ctx(cur), raising=False)
         assert auth.is_locked_out("10.0.0.1", "admin") == (False, 0)
-        assert not [q for q in cur.queries if "CEIL" in q]
+        assert not [q for q in cur.queries if "OFFSET" in q]
+        assert not [q for q in cur.queries if q.startswith("INSERT")]
 
 
 class TestARetentionPastTheBoundIsTheBound:
@@ -302,7 +322,9 @@ class TestARetentionPastTheBoundIsTheBound:
 
     def test_a_stored_value_past_the_bound_prunes_at_the_bound(self, monkeypatch):
         kept = self._purge(monkeypatch, audit_retention_days="99999999", history_retention_days="4000")
-        assert kept["audit_log"] == 3650 and kept["lease_history"] == 3650
+        assert (
+            kept["audit_log"] == 3650 and kept["lease_history"] == 365
+        )  # (Q226, AL9) the history bound is its own form's, 365
 
     def test_a_value_inside_the_bound_and_a_bad_one_read_as_before(self, monkeypatch):
         kept = self._purge(

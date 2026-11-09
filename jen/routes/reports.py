@@ -14,11 +14,11 @@ import jen.models.user as __user
 import jen.services.capacity as __capacity
 import jen.services.health as __health
 import jen.services.kea6 as __kea6
+import jen.services.setting_bounds as __bounds
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
 from jen.services.leases_sql import ACTIVE_LEASE4
-from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reports", __name__)
@@ -166,14 +166,19 @@ def reports():
 def save_report_settings():
     interval = request.form.get("snapshot_interval", "30").strip()
     retention = request.form.get("retention_days", "90").strip()
-    if not is_whole(interval) or not (5 <= int(interval) <= 1440):
+    # (Q226, AL9) the bounds are the table's (`setting_bounds`), the same the readers apply
+    if not __bounds.in_bounds("snapshot_interval_minutes", interval):
         flash("Snapshot interval must be between 5 and 1440 minutes.", "error")
         return redirect(url_for("reports.reports"))
-    if not is_whole(retention) or not (1 <= int(retention) <= 365):
+    if not __bounds.in_bounds("history_retention_days", retention):
         flash("Retention must be between 1 and 365 days.", "error")
         return redirect(url_for("reports.reports"))
-    __user.set_global_setting("snapshot_interval_minutes", interval)
-    __user.set_global_setting("history_retention_days", retention)
+    interval, retention = str(int(interval)), str(int(retention))
+    if not __user.set_global_settings({"snapshot_interval_minutes": interval, "history_retention_days": retention}):
+        flash(
+            "Report settings could not be saved. Check server logs for details.", "error"
+        )  # (Q226) one transaction, "saved" only when it is
+        return redirect(url_for("reports.reports"))
     flash(f"Report settings saved — snapshots every {interval} minutes, kept for {retention} days.", "success")
     __user.audit("SAVE_SETTINGS", "reports", f"interval={interval}min retention={retention}days")
     return redirect(url_for("reports.reports"))

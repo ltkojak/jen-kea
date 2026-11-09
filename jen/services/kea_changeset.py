@@ -631,7 +631,9 @@ def _run_change_unlocked(
             if not rres.get("ok"):
                 revert_failed.append(done)
                 if done.transport == "api":
-                    if not rres.get("needs_hands"):
+                    if not rres.get("needs_hands") or rres.get("sent") is False:
+                        # (Q226, AL27) and a refusal BEFORE the send that carries `needs_hands` (`pending_block`: an EARLIER change's row is unresolved) says `sent: False` - the daemon
+                        # and the file keep the change, and the line must not call a rollback that never started "half done"
                         # (Q225, AK5) every rollback result WITHOUT `needs_hands` leaves the daemon in ONE state, the change still standing: a refusal before the set (`guard`, `noanswer`,
                         # `conflict`, `unreadable` - nothing was sent), a set Kea refused (`set-failed`), or a write refused and the set proved undone (`write-failed`). Only a `guard`
                         # was counted, and the three other nothing-sent refusals read "did not complete ... Settle it now" with no pending row for the button to settle

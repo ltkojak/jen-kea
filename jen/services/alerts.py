@@ -14,6 +14,7 @@ import requests
 
 from jen import extensions
 from jen.services import pools as __pools
+from jen.services import setting_bounds as __bounds
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
 logger = logging.getLogger(__name__)
@@ -70,11 +71,11 @@ def __classify_device(*a, **kw):
 
 def _int_setting(key, default):
     """A setting read as an integer; a value that is not one (a table edit is the only way to store it) is `default`, never an exception that stops the rest of the cycle
-    (v5.69.0-beta.5, Q174: the threshold reads raised out of `check_utilization_alerts` and the outer handler skipped every later check of every pass)."""
-    try:
-        return int(__get_global_setting(key, str(default)))
-    except (TypeError, ValueError):
-        return default
+    (v5.69.0-beta.5, Q174: the threshold reads raised out of `check_utilization_alerts` and the outer handler skipped every later check of every pass). (Q226, AL9) read through the one
+    bounded reader: the value is also held inside the bound its form has; `default` is the table's and is kept as an argument for the three callers' readability."""
+    from jen.services.setting_bounds import bounded_setting
+
+    return bounded_setting(key)
 
 
 def __get_stale_device_days():
@@ -407,38 +408,46 @@ SCOPED_ALERT_TYPES = frozenset({"client_problems"})
 
 
 def channel_allows_subnet(channel, subnet_id, scoped=False):
-    """v5.1.16 — per-channel subnet scoping for notifications. NULL/empty
-    scope means unrestricted (every channel's existing default, and what
-    every channel had implicitly before this existed). subnet_id=None
-    means the alert isn't tied to one specific subnet (kea_down,
-    ha_failover, daily_summary, etc.) — those always go through
+    """v5.1.16 — per-channel subnet scoping for notifications. A NULL
+    scope means unrestricted (what an unrestricted account's form stores
+    for "All Subnets", and what every channel had before this existed).
+    subnet_id=None means the alert isn't tied to one specific subnet
+    (kea_down, ha_failover, daily_summary, etc.) — those always go through
     regardless of scope, since "which subnets do you want lease/device
     alerts for" doesn't apply to them.
 
-    A malformed/unparseable scope value fails OPEN (sends anyway), not
-    closed — this is a notification preference, not an access-control
-    boundary, and silently going quiet on every alert because of a
-    stored JSON typo is a worse outcome here than occasionally
-    over-notifying.
+    (Q226, the beta.11 review's P1 #2) A scope that is present but empty,
+    not a list of ids, or unreadable fails CLOSED for a subnet-specific
+    alert. It used to fail open ("a notification preference, not an
+    access-control boundary"); Q225's AK1 showed the boundary: the alert's
+    text names clients and subnets the channel's creator may not see.
 
     `scoped=True` (v5.68.0-beta.9, Q144) is for an alert about one client: with no subnet_id it FAILS CLOSED for a channel that has a
-    scope (a channel with no scope still receives it). A malformed scope still fails open."""
+    scope (a channel with no scope still receives it). (Q226) A malformed or empty scope fails CLOSED for a subnet-specific alert: see the body."""
     scope = channel.get("subnet_scope")
     if subnet_id is None and not scoped:
         return True
-    if not scope:
-        return True
+    if scope is None:
+        return True  # NULL is the one deliberate "every subnet": what an unrestricted account's form stores for "All Subnets"
+    # (Q226, the beta.11 review's P1 #2) a scope that is PRESENT but empty, not a list, or unreadable was read as every subnet. No form writes one (Q225: a restricted admin's branch never
+    # stores `[]` or NULL; the unrestricted branch stores NULL for "all"), so such a row is damaged, and a damaged scope delivers NO subnet-specific alert: the alert's text names clients
+    # and subnets the channel's creator may not see. A server-level alert (no subnet) still goes to it. The old sentence said a malformed scope "fails open - a notification preference,
+    # not an access-control boundary"; Q225's AK1 showed it is one
     try:
         import json
 
         allowed = json.loads(scope) if isinstance(scope, str) else scope
-        if not allowed:
-            return True
-        if subnet_id is None:
-            return False
-        return int(subnet_id) in [int(s) for s in allowed]
     except Exception:
-        return True
+        return False
+    if (
+        not isinstance(allowed, list)
+        or not allowed
+        or not all(isinstance(s, int) and not isinstance(s, bool) for s in allowed)
+    ):
+        return False
+    if subnet_id is None:
+        return False
+    return int(subnet_id) in allowed
 
 
 def get_channel_config(channel):
@@ -950,11 +959,10 @@ def purge_history() -> dict:
     removed = {}
 
     def days(key, default):
-        # (Q225, AK13) read as the Security and System pages BOUND it (`MAX_RETENTION_DAYS`): a value stored past the bound by an earlier release reached `INTERVAL %s DAY`, the DELETE failed
-        # on every pass and the table was never pruned, silently. A row that is not a whole number is the default, as before
-        from jen.services.text import whole
-
-        return min(whole(__get_global_setting(key, str(default)), default), MAX_RETENTION_DAYS)
+        # (Q225, AK13) read as the pages BOUND it: a value stored past the bound by an earlier release reached `INTERVAL %s DAY`, the DELETE failed on every pass and the table was never
+        # pruned, silently. (Q226, AL11) and BELOW it: a stored 0 on a history key rendered `INTERVAL 0 DAY` and deleted the whole table on every pass - only the audit log may say 0 (keep
+        # forever), and the table's lower bound says which. `default` is the table's and is kept for the plan's readability
+        return __bounds.bounded_setting(key)
 
     history = days("history_retention_days", 90)
     plan = (
@@ -988,19 +996,17 @@ def purge_history() -> dict:
 
 ALERT_LOG_DEFAULT_RETENTION_DAYS = 180
 ALERT_LOG_PRUNED_KEY = "alert_log_pruned_totals"
-#: the longest retention a page accepts and a reader applies (Q224 AJ18 bounded the form; Q225 AK13 bounds the read): ten years of days
-MAX_RETENTION_DAYS = 3650
+#: the longest retention a page accepts and a reader applies (Q224 AJ18 bounded the form; Q225 AK13 bounds the read): ten years of days - the table is `setting_bounds` (Q226, AL9)
+MAX_RETENTION_DAYS = __bounds.bounds("audit_retention_days")[2]
 
 
 def alert_log_retention_days() -> int:
     """v5.68.0-beta.17 (Q152) - how long a delivery-log row is kept: the `alert_log_retention_days` setting (a settings key beside
     `events_retention_days`), default 180. A value that is not a whole number of days, or is below 1, is the default - a typo must
     not turn into "delete everything" or "keep nothing"."""
-    try:
-        days = int(__get_global_setting("alert_log_retention_days", str(ALERT_LOG_DEFAULT_RETENTION_DAYS)))
-    except (TypeError, ValueError):
-        return ALERT_LOG_DEFAULT_RETENTION_DAYS
-    return days if days >= 1 else ALERT_LOG_DEFAULT_RETENTION_DAYS
+    return __bounds.bounded_setting(
+        "alert_log_retention_days"
+    )  # (Q226, AL8) the fourth retention key, through the one bounded reader
 
 
 def _purge_old_alert_log():

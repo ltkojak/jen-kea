@@ -544,6 +544,9 @@ S10_ALLOWED = {
     ("jen/models/user.py", "set_global_setting", "Exception", "return False"): (
         "the write is reported as NOT stored; every caller that needs the write (the investigation record, the audit) acts on that False (Q158)"
     ),
+    ("jen/models/user.py", "set_global_settings", "Exception", "return False"): (
+        "the whole policy is reported as NOT stored (one transaction, rolled back); every route that writes a policy through it refuses to say 'saved' and writes no SAVE audit row (Q226)"
+    ),
     ("jen/models/user.py", "set_global_setting_and_audit", "Exception", "return False"): (
         "both statements are rolled back and the caller is told it did not happen; the decision stays open"
     ),
@@ -580,9 +583,6 @@ S10_ALLOWED = {
         "ValueError",
         "return False",
     ): "input validation: a value that does not parse is rejected",
-    ("jen/services/auth.py", "valid_positive_int", "(ValueError, TypeError)", "return False"): (
-        "input validation: a value that does not parse is rejected"
-    ),
     (
         "jen/services/auth.py",
         "valid_oidc_issuer",

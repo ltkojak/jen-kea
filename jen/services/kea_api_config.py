@@ -318,8 +318,10 @@ def file_in_daemon(
     minor version, `defaults_for`), every key the daemon runs that is not one of those defaults is in the file: a key deleted from the file is a difference, not an agreement (Q217 AB6). Without
     `defaults` only the first direction can be asked."""
     running, said = _section(live_cfg, service), _section(file_cfg, service)
-    if not said:
-        return False  # (Q225, AK17) a file with no section for this service says nothing, and nothing is carried vacuously: it is not the daemon's configuration
+    if not isinstance(said, dict) or not said or not isinstance(running, dict):
+        # (Q225, AK17; Q226, AL29) a file with no section for this service, or a "section" that is not an object (a string, a number), says nothing, and nothing is carried vacuously:
+        # it is not the daemon's configuration. `_section` collapses the falsy shapes; a truthy non-dict fell through to `running == candidate` and two equal scalars answered True
+        return False
     if not _carries(running, said):
         return False
     return defaults is None or _lacks(running, said, defaults) is None
@@ -331,8 +333,11 @@ def mirrors(file_cfg: dict | None, live_cfg: dict | None, service: str) -> bool:
     and not the other is a hand edit - one deleted from the file, or one added to it. No defaults vector: a rendering carries the defaults written out on both sides. Not for a file Jen
     authored (`file_in_daemon` is that question, one direction, the vector naming the keys Kea adds)."""
     running, said = _section(live_cfg, service), _section(file_cfg, service)
-    if not said or not running:
-        return False  # (Q225, AK17) two empty renderings mirror nothing: `_get` refuses a reply with no section before this is asked, and the function says the same on its own
+    if not isinstance(said, dict) or not isinstance(running, dict) or not said:
+        # (Q225, AK17; Q226, AL29, AL30) two renderings mirror each other only when both are objects and the file's is not empty (an empty daemon section against a non-empty file fails
+        # the second `_carries` on its own, so no clause is needed for it). `_get` refuses a reply with no `Dhcp4` KEY (`nokey`) before this is asked; a reply whose `Dhcp4` is an empty
+        # object reaches here and is answered False by the caller's own sentence (`mirrors_refusal`)
+        return False
     return _carries(running, said) and _carries(said, running)
 
 
@@ -806,7 +811,9 @@ def write_file(server: dict, service: str = "dhcp4", *, planned_sha: str | None 
         return refusal
     reply, ok, _maybe = _send_write(server, service, 1)
     if ok:
-        return _result(True, "ok")
+        # (Q226, AL28) the result says whether an edit was DISCARDED by this write (the proof was `none` and the caller said to write over it), so a caller's audit line names a discard
+        # only when one was made
+        return _result(True, "ok", discarded=bool(discard and (_proof or {}).get("how") == "none"))
     if not _answered(reply):
         return _result(False, "noanswer", _text(reply))
     return _result(False, "write-failed", _text(reply) or "config-write was refused")
@@ -1319,7 +1326,9 @@ def apply(
     else:
         blocked = pending_block(server, service)
         if blocked:
-            return _unproved("unverified", blocked)
+            return _unproved(
+                "unverified", blocked, sent=False
+            )  # (Q226, AL27) hands are needed for the EARLIER change; this one was never sent
     if planned_sha is None and source != "rollback" and _has_ssh(server):
         # (Q219) a caller with no Plan (a restore, an import) proves the file itself, BEFORE anything is sent: the proof is true now, while no pending row makes the daemon's last commit Jen's own
         refusal, proof = _ask_the_file(server, service)
@@ -1345,6 +1354,10 @@ def apply(
                 why_not = f"the running configuration of {_name(server)} could not be read ({why_now})"
             elif mirrors(file_now, live_now, service):
                 planned_sha = row_sha
+            elif not isinstance(_section(live_now, service), dict) or not _section(live_now, service):
+                # (Q226, AL31) one sentence per cause: a daemon that answers an empty or shapeless section is the daemon's doing, not the file's, and the operator was pointed at a
+                # Config-history row holding an unedited file
+                why_not = f"the running configuration of {_name(server)} came back empty; the file was not judged"
             else:
                 why_not = f"the file on {_name(server)} does not say what the daemon runs (it was edited since Kea wrote it; the file as it stands is in Config history)"
         if planned_sha is None:

@@ -293,3 +293,92 @@ class TestRateLimiting:
         r = client.post("/login", data={"username": "admin", "password": "admin"}, follow_redirects=True)
         assert r.status_code == 200
         assert b"Too many failed" in r.data or b"locked" in r.data.lower()
+
+
+class TestAPermanentLockoutIsARowInTheDatabase:
+    """Q226 (the beta.11 review's P2 #3): under `lockout_minutes = 0` a locked account used to be free again within a day - the rolling window counted `login_attempts`, and those are pruned.
+    The lockout is a row in `login_lockouts` now: written when the bucket crosses the line, read before the count, ended only by clear-lockouts."""
+
+    def _policy(self, db, minutes):
+        from jen.models.user import set_global_settings
+
+        assert set_global_settings({"rl_max_attempts": "2", "rl_lockout_minutes": minutes, "rl_mode": "username"})
+
+    def _reset(self, db):
+        from jen.models.user import set_global_settings
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM login_attempts WHERE username LIKE '_perm_%%'")
+            cur.execute("DELETE FROM login_lockouts WHERE subject LIKE '_perm_%%'")
+        db.commit()
+        assert set_global_settings({"rl_max_attempts": "10", "rl_lockout_minutes": "15", "rl_mode": "both"})
+
+    def test_the_row_outlives_the_attempts_and_clear_lockouts_ends_it(self, logged_in_client, db):
+        from jen.services import auth
+
+        self._policy(db, "0")
+        try:
+            with db.cursor() as cur:
+                # two failures three days ago: inside the week the window counts, outside the 24 hours the old prune kept
+                cur.execute(
+                    "INSERT INTO login_attempts (ip_address, username, attempted_at) VALUES "
+                    "('198.51.100.7', '_perm_user', DATE_SUB(NOW(), INTERVAL 3 DAY)), ('198.51.100.8', '_perm_user', DATE_SUB(NOW(), INTERVAL 3 DAY))"
+                )
+            db.commit()
+            assert auth.is_locked_out("198.51.100.9", "_perm_user") == (True, auth.PERMANENT_LOCKOUT)
+            with db.cursor() as cur:
+                cur.execute("SELECT kind FROM login_lockouts WHERE subject='_perm_user'")
+                assert cur.fetchone() == {"kind": "username"}, "the lockout is a row from this moment"
+                cur.execute("DELETE FROM login_attempts WHERE username='_perm_user'")  # the prune, done by hand
+            db.commit()
+            assert auth.is_locked_out("198.51.100.9", "_perm_user") == (True, auth.PERMANENT_LOCKOUT), (
+                "the attempts are gone and the lockout stands"
+            )
+            r = logged_in_client.post("/settings/clear-lockouts", follow_redirects=True)
+            assert r.status_code == 200
+            assert auth.is_locked_out("198.51.100.9", "_perm_user") == (False, 0), "clear-lockouts is the one way out"
+        finally:
+            self._reset(db)
+
+    def test_a_timed_lockout_writes_no_row_and_counts_down_by_the_second_attempt(self, db):
+        from jen.services import auth
+
+        self._policy(db, "15")
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO login_attempts (ip_address, username, attempted_at) VALUES "
+                    "('198.51.100.7', '_perm_timed', DATE_SUB(NOW(), INTERVAL 14 MINUTE)), ('198.51.100.7', '_perm_timed', DATE_SUB(NOW(), INTERVAL 10 MINUTE)), "
+                    "('198.51.100.7', '_perm_timed', DATE_SUB(NOW(), INTERVAL 1 MINUTE))"
+                )
+            db.commit()
+            locked, minutes = auth.is_locked_out("198.51.100.9", "_perm_timed")
+            assert locked and minutes == 5, (
+                "the second most recent attempt (the threshold is 2) is 10 minutes old: 5 left, not the 1 the oldest promised"
+            )
+            with db.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS n FROM login_lockouts WHERE subject='_perm_timed'")
+                assert cur.fetchone()["n"] == 0
+        finally:
+            self._reset(db)
+
+
+class TestAPolicySaveThatFailsSaysSo:
+    """Q226 (the beta.11 review's P2 #5): `set_global_setting` answered False on a failed write and the route said "saved" and audited it anyway."""
+
+    def test_rate_limit_save_reports_the_failure_and_audits_nothing(self, logged_in_client, db, monkeypatch):
+        monkeypatch.setattr("jen.models.user.set_global_settings", lambda values: False)
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='SAVE_SETTINGS' AND entity='rate_limit'")
+            before = cur.fetchone()["n"]
+        r = logged_in_client.post(
+            "/settings/save-rate-limit",
+            data={"max_attempts": "10", "lockout_minutes": "15", "mode": "both"},
+            follow_redirects=True,
+        )
+        assert (
+            r.status_code == 200 and b"could not be saved" in r.data and b"Rate limiting settings saved" not in r.data
+        )
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='SAVE_SETTINGS' AND entity='rate_limit'")
+            assert cur.fetchone()["n"] == before, "no SAVE row for a save that did not happen"

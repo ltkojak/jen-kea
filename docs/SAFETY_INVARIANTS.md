@@ -161,14 +161,19 @@ a unix control socket is used only under `/run/kea`, `/var/run/kea` or `/tmp`; a
 ### RBAC-001 - Stored data is judged by its own subnet; a hidden object never influences a visible answer
 **Rule.** Subnet-scoped data is judged by the stored object's own subnet, a live act by the current subnet, and an object in a subnet the caller cannot see never influences an answer the
 caller can.
-**Established.** Q143, Q144, Q145, Q146, Q147. Q224 (AJ4: `/settings/logs` - audit and alert-delivery rows carry no subnet - is for unrestricted callers only, refused at the route as Doctor is; AJ5: a subnet id that is not a whole number refuses the Users form whole in `set_user_subnets` and `edit_user`, as in `add_user` since Q171).
-**Enforced at.** `add_subnet_restriction` / `assert_subnet_access` (`jen/services/access.py`) and the authorization matrix.
+**Established.** Q143, Q144, Q145, Q146, Q147. Q224 (AJ4: `/settings/logs` - audit and alert-delivery rows carry no subnet - is for unrestricted callers only, refused at the route as Doctor is; AJ5: a subnet id that is not a whole number refuses the Users form whole in `set_user_subnets` and `edit_user`, as in `add_user` since Q171). Q225 (AK1: a subnet-restricted admin's alert channel never stores NULL - every subnet). Q226 (AL1, AL2, AL24: a restricted admin reads, edits, tests and deletes only an alert channel whose scope lies inside their own, and the channel list is the same set; a channel for every subnet prints that it is). Q226 (the review's P1 #2, Fable: P2 - no form writes it: `channel_allows_subnet` delivers NO subnet-specific alert for a scope that is present but empty, not a list of ids or unreadable; NULL stays the one deliberate "every subnet").
+**Enforced at.** `add_subnet_restriction` / `assert_subnet_access` (`jen/services/access.py`) and the authorization matrix; `_may_act_on` in `jen/routes/settings/alerts.py` at the page and the three acting routes (Q226); `alerts.channel_allows_subnet` at every delivery
 **Tests.**
 - `tests/test_authz_matrix.py::TestEveryDiagnosticRouteIsAccountedFor`
 - `tests/test_authz_matrix_plugins.py::TestAStoredObjectIsJudgedByItsOwnSubnet`
 - `tests/test_a_scoped_admin_reads_no_log.py::TestAScopedAdminReadsNoLog`
 - `tests/test_a_scoped_admin_reads_no_log.py::TestASubnetIdThatIsNotAWholeNumberRefusesTheForm`
 - `tests/test_authz_matrix.py` (the rows `settings logs`)
+- `tests/test_a_restricted_admins_channel_covers_its_subnets.py::TestARestrictedAdminsChannelCoversItsSubnets`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestARestrictedAdminSeesOnlyChannelsInsideTheirScope`
+- `tests/test_the_alerts_page_keeps_its_secrets.py::TestARestrictedAdminSeesOnlyTheirChannels`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestADamagedScopeDeliversNoSubnetSpecificAlert`
+- `tests/test_client_problems.py::TestAnAlertAboutAClientWithNoSubnetFailsClosedForAScopedChannel`
 
 ### RBAC-002 - A denial and a not-found are one message
 **Rule.** A request for an object the caller may not see answers exactly as one for an object that does not exist; there is no oracle for what a hidden subnet holds.
@@ -186,8 +191,8 @@ every subnet (the DDNS Verify tab too: it resolves any name and address through 
 and login rate limiting the same (Q224, AJ14): off or 0 is the least strict, fewer minutes, fewer attempts and a longer lockout are stricter, and the rate-limit MODE is part of the
 strictness (Q225, AK2: `both` counts two buckets and locks on the larger, so an admin may move to it and may not leave it or trade one bucket for the other). The three measures are judged
 together, so an admin cannot trade attempts for lockout length in either direction (AK24: the conservative side; a superadmin makes the trade).
-**Established.** Q171. Q224 (AJ14: the two knobs beside the MFA mode had no ratchet). Q225 (AK2: the mode).
-**Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db`, `save_infra_kea6`, `save_oidc`, `generate_ssh_key`, `config_history_restore`, `import_windows_apply`, `author_kea_config_post`, `install_kea_helper` (Q203 AS2), `install_kea_binary` and `toggle_ipv6` (Q204 AT6) and EVERY route that restarts Jen (Q202 AR6: `restart_jen`, `save_ports`, `upload_cert`, `remove_cert` - the verifier is the `ast` test over every caller of `runtime.restart_service()`); `current_user.all_subnets` in `add_subnet`, `add_subnet_post`,
+**Established.** Q171. Q224 (AJ14: the two knobs beside the MFA mode had no ratchet). Q225 (AK2: the mode). Q226 (AL12: a permanent lockout is `PERMANENT_LOCKOUT`, never 999 minutes; AL18: the detection window for a lockout of 0 is the longest lockout the page accepts, so 0 is the strictest in both halves). Q226 (the beta.11 review's P2 #3 and #4: a PERMANENT lockout is a row in `login_lockouts` - migration 39 - read before the count, written when a bucket crosses the line under a lockout of 0 and ended only by clear-lockouts, since the attempts it was counted from are pruned; the countdown of a timed lockout is the Nth most recent attempt's expiry, N the threshold, the later bucket under `both`; the prune keeps a week, the longest lockout the page accepts). Clear-lockouts stays an ADMIN's act by decision (AL22): it resets counters and ends lockouts, changes no policy, and is audited.
+**Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db`, `save_infra_kea6`, `save_oidc`, `generate_ssh_key`, `config_history_restore`, `import_windows_apply`, `author_kea_config_post`, `install_kea_helper` (Q203 AS2), `install_kea_binary` and `toggle_ipv6` (Q204 AT6) and EVERY route that restarts Jen (Q202 AR6: `restart_jen`, `save_ports`, `upload_cert`, `remove_cert` - the verifier is the `ast` test over every caller of `runtime.restart_service()`); `current_user.all_subnets` in `add_subnet`, `add_subnet_post`,; `auth.is_locked_out` (the one reader and writer of `login_lockouts`), `clear_lockouts` (its one deleter)
 the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_mfa_mode`; `_session_looser` and `_rate_limit_looser` in `jen/routes/settings/security.py`.
 **Tests.**
 - `tests/test_q171_access.py::TestDatabaseCardsAndRestartAreSuperadminWithStepUp`
@@ -205,6 +210,10 @@ the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_m
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestTheSecurityRatchetAndTheBounds`
 - `tests/test_a_scoped_admin_reads_no_log.py::TestAnAdminMakesThePolicyStricterOnly`
 - `tests/test_the_mode_is_part_of_the_strictness.py::TestTheModeIsPartOfTheStrictness`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestTheLockoutSentinelAndTheWindow`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestAPermanentLockoutIsARow`
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestTheRemainingTimeIsTheNthMostRecentAttempt`
+- `tests/test_auth.py::TestAPermanentLockoutIsARowInTheDatabase`
 
 ### RBAC-004 - Where Jen reaches a Kea server, and so where its credentials go, is a superadmin's setting with a recent password
 **Rule.** A config write that changes where Jen reaches a Kea server or sends a credential - the API URL, the SSH host, user or config path, the connection mode, a server added or removed, AND
@@ -270,12 +279,13 @@ that made the change is rebuilt and stays. `token_version` moves in the same sta
 **Rule.** A value that must be a whole number is judged by `jen.services.text.is_whole` (ASCII digits, one to eighteen) and converted with `int()` only after it; `str.isdigit()`,
 `isnumeric()` and `isdecimal()` are never the test under `jen/` (they accept a full-width or an Arabic-Indic digit that `int()` then raises on, or that a filter-and-convert comprehension
 drops on the floor). A refusal is of the form whole, never of one value out of a list.
-**Established.** Q224 (AJ16: forty sites in nineteen files; AJ17: the OIDC subnet map raised on every login over one such digit).
+**Established.** Q224 (AJ16: forty sites in nineteen files; AJ17: the OIDC subnet map raised on every login over one such digit). Q226 (AL13, AL19: the unrestricted branch of the channel's and the API key's scope writers refuse the form whole too; AL14: a query-string page number goes through `whole`, never a bare `int()`).
 **Enforced at.** `jen/services/text.py` (`is_whole`, `whole`), held by a whole-`jen/` source test.
 **Tests.**
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestOneWholeNumberTest`
 
 ## Delivery, configuration, files, migrations, transactions, liveness
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestTheTreesSmallerRows`
 
 ### ALERT-001 - Attempted, delivered and recorded are different states
 **Rule.** An alert's date or state is persisted only on delivery: a channel that failed leaves the alert due again, and a recovery follows a delivered warning.
@@ -319,7 +329,7 @@ updater's allowlist.
 
 ### CFG-002 - A configuration change over the daemon's API stands only when the daemon's own answer proves it
 **Rule.** A change written to a Kea daemon over its own API stands only when the daemon's `config-get` afterward carries the digest `config-set` returned AND `config-write` answered 0 (proved through the file where SSH exists); otherwise it is undone, or `needs_hands` with both digests, and a pending change (a record written before `config-set`) is reconciled by content on the next read. Kea has no compare-and-set: Jen compares `config-hash-get` with the digest its change was built from before it sets, a set that cannot be proved is never reported as done, and a `config-write` timeout is never "ok". An API write is refused when it would change a control socket, a hook library or Jen's TLS material (those go through the file path), when no probe has been read and allowed on the server's card, and while a refused `config-write` is remembered.
-**Established.** Q212. Q224 (AJ19: a `config-set` that answers no digest is proved by CONTENT at step (7), as a set with no answer is).
+**Established.** Q212. Q224 (AJ19: a `config-set` that answers no digest is proved by CONTENT at step (7), as a set with no answer is). Q225 (AK4: the `unverified` sentence names the check that fired; AK17: a file with no section is not the daemon's; the kea-compat row `test_14` asks the daemon itself whether the file it wrote mirrors `config-get`). Q226 (AL27: a refusal before the send that needs hands for an EARLIER change says `sent: False`).
 **Enforced at.** `jen/services/kea_api_config.py` (`apply`: the nine steps; `probe_gate`; `remember_refusal`), the change set's per-target transport (`kea_changeset._transport`, the commit order and the dispatch of every revert), the one change lock (`kea_changeset.change_lock`).
 **Tests.**
 - `tests/test_kea_api_config.py` (`TestApplyInOrder`, `TestConflictSendsNothing`, `TestTheApiOnlyGuard`, `TestSetFailedLeavesTheDaemon`, `TestWriteFailedIsUndone`, `TestAWriteTimeoutIsNeverOk`, `TestASetTimeoutIsAsked`, `TestUnverifiedIsNotUndone`, `TestThePendingRecord`)
@@ -327,6 +337,9 @@ updater's allowlist.
 - `tests/test_kea_api_probe.py` (`TestTheGate`, `TestARefusedWriteIsRemembered`)
 - `tests/test_transport_switch.py`
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestASetWithoutADigestIsProvedByContent`
+- `tests/kea_compat/test_config_write.py::test_14_the_file_kea_wrote_mirrors_config_get`
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestTheUnverifiedSentenceNamesTheCheckThatFired`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestARefusalBeforeTheSendSaysSo`
 
 ### CFG-003 - A consent is given on the switch, for the facts whose time the form carries, by a superadmin with a recent confirmation; the gate's table is the oracle
 **Rule.** The act of accepting what a switch to Live API changes (Kea rewrites the file in its own format; an endpoint with no authentication; a file edit discarded; no SSH so no include) is the POST that switches, not a click that reads: it is a superadmin's, it needs a recent confirmation of the password, it is given for the readiness check whose time (`probe_at`) the form carries - a check that ran again since is refused - and `kea_api_config.consent_gap` is the one table that says which consents the facts call for, asked by the switch, by the gate every change meets and by the card that offers the boxes. A consent is never recorded by the readiness check, and only the consents the facts call for are recorded (`consents_called_for` is the one table: a box the form sent that the facts never asked for is dropped and named, so it can never cover a fact that appears later). A consent of any kind - whatever the target - is given for the readiness check whose time the form carries, and a stored result that names no endpoint (`bound` absent) is checked again, never taken for the current one.
@@ -350,8 +363,8 @@ updater's allowlist.
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestTheNoteIsForAServerWithAFile`
 
 ### CFG-004 - A file is the daemon's configuration when the daemon loaded it after it was written, or it is Jen's own rendering or the file the Plan proved; a model of Kea's defaults never decides
-**Rule.** Whether the file on a Kea host may be replaced by the daemon's `config-write` is answered by facts the host and the daemon give themselves, never by a model of Kea inside Jen (`file_proof`, the one definition): the file's sha256 is the newest `rendering` row's - the file Kea itself wrote after a change over the API (R); or it is byte for byte the file the Plan proved before any `config-set` (P); or the daemon last committed a configuration at or after the file was written - the host's one clock: `mtime <= now - reload`, from helper build 22's `config-loaded` - AND the file is in the daemon one way (a reload that did not take is not a load) AND no change of Jen's is pending (then the daemon's last commit is Jen's own `config-set` and the time proves nothing) (L). In that order; none of them is a refusal that prints both times. A file that cannot be read, or a host that cannot say, is never overwritten without the named consent. The comparison with Kea's written-out defaults survives for one job: naming a path in the sentence, best effort - it decides nothing, and the verdicts are identical with the vector absent and with every key a default.
-**Established.** Q217 (AB6, AB8), Q218 (D1), Q219 (AD1, AD20, AD21: the third kind - built-in, inherited, derived - a recording cannot tell apart; the fourth patch to a model is the proof).
+**Rule.** Whether the file on a Kea host may be replaced by the daemon's `config-write` is answered by facts the host and the daemon give themselves, never by a model of Kea inside Jen (`file_proof`, the one definition): the file's sha256 is the newest `rendering` row's - the file Kea itself wrote after a change over the API (R); or it is byte for byte the file the Plan proved before any `config-set` (P); or the daemon last committed a configuration at or after the file was written - the host's one clock: `mtime <= now - reload`, from helper build 22's `config-loaded` - AND the file is in the daemon one way (a reload that did not take is not a load) AND no change of Jen's is pending (then the daemon's last commit is Jen's own `config-set` and the time proves nothing) (L). In that order; none of them is a refusal that prints both times. A file that cannot be read, or a host that cannot say, is never overwritten without the named consent. The comparison with Kea's written-out defaults survives for one job: naming a path in the sentence, best effort - it decides nothing, and the verdicts are identical with the vector absent and with every key a default. A section that is empty, or is not an object, is not the daemon's configuration and mirrors nothing (Q225, Q226).
+**Established.** Q217 (AB6, AB8), Q218 (D1), Q219 (AD1, AD20, AD21: the third kind - built-in, inherited, derived - a recording cannot tell apart; the fourth patch to a model is the proof). Q225 (AK17: an EMPTY section is never carried vacuously - a combined file holding only `Dhcp6` under a dhcp4 `kea_conf` was proved `loaded` and a change set sent it `config-set` and `config-write`). Q226 (AL29: a section is an OBJECT - a string or a number on both sides is no agreement).
 **Enforced at.** `jen/services/kea_api_config.py` (`file_proof`, `compare`, `_ask_the_file`), `jen/services/kea_host.py` (`read_config_proof`), `jen-kea-helper` (`op_config_loaded`, build 22), `jen/services/config_revisions.py` (`latest_rendering`).
 **Tests.**
 - `tests/test_kea_api_config.py::TestTheProofIsTheDaemonsOwnAnswer`
@@ -365,10 +378,12 @@ updater's allowlist.
 - `tests/kea_compat/test_config_write.py::test_13_the_daemons_own_load_time` (the clock's own facts, per Kea minor)
 - `tests/system/test_boundaries.py::test_24_a_hand_edit_without_a_reload_is_refused_and_the_edit_survives`
 - `tests/system/test_boundaries.py::test_25_a_hand_edit_the_daemon_reloaded_is_accepted_and_rendered`
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestAFileWithNoSectionIsNotTheDaemons`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestASectionIsAnObject`
 
 ### CFG-005 - A `config-write` is sent only after the file it replaces has been read into Config history and proved: the daemon loaded it, it is Jen's own rendering, or it is the file the Plan proved
 **Rule.** The daemon's `config-write` renders ITS configuration over the file on its host, so whatever the file carries that the daemon never loaded is destroyed. It is therefore sent only by `kea_api_config` (`_send_write`, the one sender), and only after `_ask_the_file`, which is `file_proof` and nothing else: on a server with an SSH host the file is READ (capturing: an edit is an `external` row in Config history before it can be lost) and proved (CFG-004). A `none` is refused with the times and the path (`unloaded-edit`, nothing sent) unless `discard_file_edit` was given on THIS act and the facts called for it; a file that cannot be read is refused with or without it. The Plan proves BEFORE any `config-set` and carries the proved file's sha256 as `planned_sha`; `apply` records it in the pending row and step (6) checks the file is still that one (or Jen's own rendering); a settlement of a pending change (the Plan's, and *Settle it now*) writes only over the file the row's `file_sha256` names, and a row that carries none - an earlier release wrote it - is refused with the restart sentence. A caller with no Plan (a restore, an import) proves the file itself before anything is sent.
-**Established.** Q218 (AC1, AC2, AC14), Q219 (AD1). Q223 (AH2: a rollback whose forward change had no rendering row sent its `config-set` and was refused at its file, so the daemon went back and the file kept the change; a rollback now proves step (6) against the file it found when that file says what the daemon runs - a hand edit is still refused - and the row it leaves names the box before the restart). Q224 (AJ2, AJ3, AJ9: the rollback's ask is asked both ways - `mirrors`, two renderings of one configuration, a key deleted from the file is a hand edit; a rollback whose file is not proved is refused BEFORE its `config-set`, so the daemon and its file both keep the change and no row is left that a settlement could accept by proof (P)).
+**Established.** Q218 (AC1, AC2, AC14), Q219 (AD1). Q223 (AH2: a rollback whose forward change had no rendering row sent its `config-set` and was refused at its file, so the daemon went back and the file kept the change; a rollback now proves step (6) against the file it found when that file says what the daemon runs - a hand edit is still refused - and the row it leaves names the box before the restart). Q224 (AJ2, AJ3, AJ9: the rollback's ask is asked both ways - `mirrors`, two renderings of one configuration, a key deleted from the file is a hand edit; a rollback whose file is not proved is refused BEFORE its `config-set`, so the daemon and its file both keep the change and no row is left that a settlement could accept by proof (P)). Q225 (AK6: a discard ticked over a file that could not be read is a REFUSAL, never 'nothing to discard'; AK5: every one-state rollback refusal reads still-new). Q226 (AL28: the audit line names a discard only when the write discarded one, in every direction).
 **Enforced at.** `jen/services/kea_api_config.py` (`write_file`, `_ask_the_file`, `_send_write`, `_reconcile_pending`, `apply` steps (3) and (6)), `jen/services/kea_changeset.py` (`_unloaded_edit`: the Plan's proof), `jen/services/kea_transport_switch.py` (`_to_api`, `_to_file`: the only callers that pass `discard`).
 **Tests.**
 - `tests/test_kea_api_config.py::TestWriteFileAsksTheFile`
@@ -383,6 +398,9 @@ updater's allowlist.
 - `tests/test_a_rollback_puts_the_file_back_too.py::TestARollbackPutsTheFileBackToo`
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestARollbackIsRefusedBeforeItsSet`
 - `tests/test_kea_api_config.py::TestTheModuleIsTheOneSender::test_file_in_daemon_is_asked_by_the_proof_and_by_apply_only` (`mirrors` has one caller)
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestADiscardOverAnUnreadableFileIsRefused`
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestEveryOneStateRollbackResultIsBucketedAsStillNew`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestTheAuditLineNamesADiscardOnlyWhenOneWasMade`
 
 ### CFG-006 - A pending or damaged revision is the record of a change the daemon may be running: its write precedes the send, its finish precedes `ok`, the prune never removes it, no reader takes it for the last known state; there is one per server, and it carries the file the Plan proved
 **Rule.** A change over the API is recorded as a `pending` revision BEFORE `config-set` and turned into the daemon's own record once the daemon proves it. A record that cannot be WRITTEN - the store refused the row, raised, or already holds a pending row for that server and service - stops the change with nothing sent (`unreadable`); a record that cannot be FINISHED is not `ok` (`unverified`) and the row is not discarded - it is the one record of what the daemon runs, and the next change or *Settle it now* finishes it by content; a settlement whose finish fails is not settled. At most ONE pending row exists per (server, service) and the STORE keeps it so (`record` answers None for a second); a restore over a live one is refused ("settle the unresolved change first") and over a stale one supersedes it. The row carries `file_sha256`, the file the Plan proved, which the settlement checks. The retention prune never deletes a `pending` or `damaged` row and does not count one among the rows kept; `latest`, `latest_of_kind` and `by_digest` never return one, so no reader compares the daemon with a digest a damaged row kept. A service section that is no object is a damaged row, not an unresolved candidate.
@@ -436,12 +454,13 @@ updater's allowlist.
 
 ### MIG-001 - Every DDL statement has its own guard, and an interrupted migration re-runs to the final schema
 **Rule.** A schema change is a new numbered migration; every DDL statement in it has its own guard so a migration interrupted between statements finishes when it runs again.
-**Established.** Q150, Q151.
+**Established.** Q150, Q151. Q226 (migration 39, `login_lockouts`: one `CREATE TABLE IF NOT EXISTS`).
 **Enforced at.** `jen/models/migrations.py`.
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS3EveryMigrationStatementHasItsOwnGuard`
 - `tests/test_migrations.py::TestMigration33ClientProblemsScopeKey::test_an_interrupted_migration_finishes_the_key_it_never_reached`
 - `tests/test_migration_6_interrupted.py`
+- `tests/test_migrations.py::TestMigration39LoginLockouts`
 
 ### TXN-001 - A multi-server change validates every target before the first write and compensates or stays visibly unresolved
 **Rule.** One config edit pushed to several Kea servers is planned and preflighted on every target before the first write, committed sequentially, and reverted on the committed targets if a
@@ -467,11 +486,13 @@ later one fails; a revert that cannot finish is a persistent, named rollback fai
 ### FAIL-001 - A failed read on a security or safety path is distinguished from an empty result
 **Rule.** In the modules that make security or safety decisions, an `except` that returns an empty value (`None`, `{}`, `[]`, `""`, `False`) or passes is on a reviewed list with the reason it
 fails CLOSED there (a refusal, not a permission). A failed settings read answers "unknown", never "nothing outstanding".
-**Established.** Q159, Q164, Q166. Q224 (AJ11: sweep S10 sees a tuple return whose first element is empty; `is_locked_out` and `is_mfa_locked_out` fail CLOSED - a lockout that cannot be measured is a lockout for a minute).
-**Enforced at.** The sweep S10 over the listed modules; `settings_ever_loaded` in `jen/models/user.py`.
+**Established.** Q159, Q164, Q166. Q224 (AJ11: sweep S10 sees a tuple return whose first element is empty; `is_locked_out` and `is_mfa_locked_out` fail CLOSED - a lockout that cannot be measured is a lockout for a minute). Q225 (AK21: a stored `users.subnet_access` that is not a JSON list is NO subnets, never every subnet). Q226 (AL20: a list with an element that is not an id is no subnets either).
+**Enforced at.** The sweep S10 over the listed modules; `settings_ever_loaded` in `jen/models/user.py`; `User.__init__` in `jen/models/user.py` (the one reader of a stored scope)
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS10FailedReadsOnSecurityPathsAreNotEmptyResults`
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestTheLockoutChecksFailClosed`
+- `tests/test_the_mode_is_part_of_the_strictness.py::TestAnUnreadableScopeIsNoSubnets`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestAScopeListWithABadElementIsNoSubnets`
 
 ### BOUND-001 - A stored number is bounded where it is written AND where it is read, and a reader puts a row the form never wrote where the policy is strictest
 **Rule.** A settings number that reaches a statement (`INTERVAL %s DAY`, `INTERVAL %s MINUTE`) or a policy decision is bounded on the form (a thousand attempts, a week of lockout
@@ -479,20 +500,31 @@ minutes, ten years of retention days) and is a `%s` parameter, never text in the
 stored by an earlier release, or by hand, is past the form. A row the form never wrote reads as the STRICTEST policy, never as none: a rate-limit mode outside its four words is `both`,
 a count or a duration that is not whole is its default, one past the bound is the bound, and a retention past the bound prunes at the bound (it used to make the DELETE fail on every
 pass and the table was never pruned).
-**Established.** Q224 (AJ18: the three bounds and the parameterized window). Q225 (AK3, AK13, AK19: the readers).
-**Enforced at.** `auth.get_rate_limit_settings` (the one reader of the three `rl_*` rows: `RATE_LIMIT_MODES`, `MAX_ATTEMPTS_BOUND`, `MAX_LOCKOUT_MINUTES`); `alerts.purge_history`'s
+**Established.** Q224 (AJ18: the three bounds and the parameterized window). Q225 (AK3, AK13, AK19: the readers). Q226 (AL5, AL8, AL9, AL11: ONE table, `jen/services/setting_bounds.py`, and ONE reader, `bounded_setting`; every form asks `in_bounds` of the same table; a page prints what the server applies; a retention of 0 on a history key is 1, never a table emptied).
+**Enforced at.** `jen/services/setting_bounds.py`: `SETTING_BOUNDS` (the table), `bounded_setting` (the one reader - `auth.get_rate_limit_settings`, `alerts.purge_history`'s `days()`, `alerts._int_setting`, `alerts.alert_log_retention_days`, `user.get_stale_device_days`, Health's three reads and the Subnets page's threshold all read through it) and `in_bounds` (the forms' test: the Security, System, Alerts, Reports and Devices forms); the Security and System pages PRINT what the reader applies, never the stored text. Held by `TestOneTableOfBounds::test_no_reader_under_jen_reads_a_bounded_key_raw`, a whole-`jen/` source test.
 `days()` (`alerts.MAX_RETENTION_DAYS`, which the System page's `MAX_AUDIT_RETENTION_DAYS` is); the three save routes' `is_whole` + bound checks.
 **Tests.**
 - `tests/test_the_mode_is_part_of_the_strictness.py::TestARateLimitThatCannotBeReadIsTheStrictest`
 - `tests/test_the_mode_is_part_of_the_strictness.py::TestARetentionPastTheBoundIsTheBound`
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestTheSecurityRatchetAndTheBounds`
 - `tests/test_a_scoped_admin_reads_no_log.py::TestTheSecurityPageBoundsItsNumbers`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestOneTableOfBounds`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestAZeroRetentionNeverEmptiesATable`
+- `tests/test_the_alerts_page_keeps_its_secrets.py::TestTheSecurityPagePrintsWhatTheServerApplies`
+
+### STORE-001 - A policy of several rows is saved whole or not at all, and the page says which
+**Rule.** A settings POLICY that is more than one row (login rate limiting: attempts, lockout minutes, mode; the session timeout: minutes, enabled; the global alert settings; the report settings) is written by `user.set_global_settings` in ONE transaction, and a route says "saved" and writes its SAVE audit row only when the writer answered True; a single-row policy tests `set_global_setting`'s answer the same way. A False is logged by the writer and shown by the route as an error, never as success, and the previous policy stays in force.
+**Established.** Q226 (the beta.11 review's P2 #5: three commits per policy, and "Rate limiting settings saved." with every write failed).
+**Enforced at.** `jen/models/user.py::set_global_settings` (one `executemany`, one commit); the six policy routes (`save_rate_limit`, `save_session_settings`, `save_alert_global`, `save_report_settings`, `save_device_settings`, `save_audit_retention`), held by an `ast` test that no bare `set_global_setting(...)` statement is in them. The other settings writers under `jen/routes/` (display preferences, infrastructure facts) are not policies and are not under this rule yet.
+**Tests.**
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestAPolicyIsSavedWholeOrNotAtAll`
+- `tests/test_auth.py::TestAPolicySaveThatFailsSaysSo`
 
 ### LEAK-001 - A route never shows what a broad `except` caught
 **Rule.** (Q190, second half:) an ADDRESS is shown by one helper, `auth.shown_url` - scheme, host and port, never user-info, a path or a query - in every flash, audit row, log line and incident, and text Jen did not write (a `requests` message) goes through `auth.scrub_urls`; `tests/test_invariant_sweeps.py` S14 refuses a route that formats a `*url` name into text without it (the reviewed list is empty). 
 In `jen/routes/`, the name bound by `except Exception as e` is used only to log or to name its class: the text of a driver, `requests` or SSH error carries URLs with their query strings, account and
 host names and paths. The reviewed list is empty.
-**Established.** Q171 (sweep S11; the older line scanner in `test_no_raw_exception_leaks.py` stays), Q172 (an alert channel's token, webhook URL or password is redacted from `alert_log.error`, the event detail, the log and the test button; a transport error is stored by class). Q224 (AJ12: a container under a secret-named key is masked whole in the bundle's one pass; AJ13: a spaced key is a secret name).
+**Established.** Q171 (sweep S11; the older line scanner in `test_no_raw_exception_leaks.py` stays), Q172 (an alert channel's token, webhook URL or password is redacted from `alert_log.error`, the event detail, the log and the test button; a transport error is stored by class). Q224 (AJ12: a container under a secret-named key is masked whole in the bundle's one pass; AJ13: a spaced key is a secret name). Q226 (AL2: the Alerts page carried every channel's DECRYPTED config into a `<script>` block for every admin; the page carries `_shown`'s copy, every write-only key blank, and the edit form says the secret is saved).
 **Enforced at.** The route that catches: `logger.exception(...)` and a fixed sentence; the two Health runners (`run_checks` and `readiness_checks`, Q204 AT2) log a check's exception through `_log_err` and the row carries `CHECK_ERRORED_DETAIL`; and what a masker hides is decided by ONE definition of a secret key, `jen/services/secret_keys.py::is_secret_key` (Q204 AT4: the config-history diff and download, the authoring preview and the support bundle all ask it).
 **Tests.**
 - `tests/test_health_center.py::TestARunnerNeverShowsWhatACheckRaised`
@@ -511,6 +543,8 @@ host names and paths. The reviewed list is empty.
 - `tests/test_alert_delivery.py::TestAChannelsSecretNeverLandsInText`
 - `tests/test_no_raw_exception_leaks.py::TestNoUnexplainedRawExceptionLeaksInRoutes`
 - `tests/test_a_rollback_is_refused_before_its_set.py::TestTheBundleMasksAContainerAndASpacedName`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestAChannelsSecretIsWriteOnly`
+- `tests/test_the_alerts_page_keeps_its_secrets.py::TestThePageCarriesNoSecret`
 
 ### STATE-001 - A new state on a stored object is a definition
 **Rule.** Adding a state, flag or field to a stored object changes what the object means: every reader handles it, pinned by a source test over every reader of the object.
@@ -581,8 +615,8 @@ a different host needs its password typed, "Inherit" included (`auth.same_host`,
 and the probe are the superadmin's deliberate tests of a typed address (an admin's probe is limited to the host Jen already reaches, over no weaker scheme - `auth.no_weaker_scheme`, RBAC-004). A form that offers "Inherit" AND a password box gets one
 answer: ticking both is refused (`infrastructure._one_answer_for_a_secret`), and the checks judge the EFFECTIVE secret.
 (DNS-CRED-001 is the provider-level half of the same rule; CRED-004 is the definition every form's check now agrees with.)
-**Established.** Q178 (the beta.8 review: Technitium at A to Technitium at B kept A's token, and six more forms kept a blank password across a new URL or host).
-**Enforced at.** `auth.same_endpoint`, through `infrastructure._secret_for_new_endpoint` (every connection route, before its write) and `save_infra_ddns`'s `_apply`.
+**Established.** Q178 (the beta.8 review: Technitium at A to Technitium at B kept A's token, and six more forms kept a blank password across a new URL or host). Q226 (AL3: the alert channel's write-only secrets - the SMTP password, a Telegram or ntfy token, a webhook header, a Slack or Discord webhook URL, the Pushover pair - are kept on a blank only while the channel names the same place; for e-mail the place is the server, its port AND whether STARTTLS is on, since a kept password sent in clear is a secret sent somewhere it was not typed for; a blank for a new place is REFUSED with the field named).
+**Enforced at.** `auth.same_endpoint`, through `infrastructure._secret_for_new_endpoint` (every connection route, before its write) and `save_infra_ddns`'s `_apply`; `_kept_secrets` / `_endpoint` in `jen/routes/settings/alerts.py` (Q226)
 **Tests.**
 - `tests/test_same_endpoint.py::TestSameEndpoint`
 - `tests/test_kea_connection_forms.py::TestTheKeaApiForm`
@@ -593,6 +627,8 @@ answer: ticking both is refused (`infrastructure._one_answer_for_a_secret`), and
 - `tests/test_kea_connection_forms.py::TestAPasswordTheFormInheritsStaysWithTheKeaHost`
 - `tests/test_kea_connection_forms.py::TestOneAnswerForASecret`
 - `tests/test_ddns.py::TestADifferentEndpointIsNotTheSameProvider`
+- `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestAChannelsSecretIsWriteOnly`
+- `tests/test_the_alerts_page_keeps_its_secrets.py::TestABlankSecretIsKeptOnlyForTheSamePlace`
 
 ### CRED-003 - An additional server takes the primary's password only on purpose, and an inherited secret is named
 **Rule.** (Q179; the note-only wording is SUPERSEDED by CRED-004 - an inherited secret on a different host is no longer used, it is refused and named.) The form COPIES the primary's password into a NEW

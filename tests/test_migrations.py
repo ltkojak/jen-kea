@@ -1488,3 +1488,67 @@ class TestMigration38RevisionsFileSha256:
             assert rid is not None and rev.pending(4236, "dhcp4")["file_sha256"] == "d" * 64
         finally:
             rev.discard_pending(4236, "dhcp4")
+
+
+class TestMigration39LoginLockouts:
+    """Q226 (v7.0.0-beta.12, the beta.11 review's P2 #3): `login_lockouts` - a permanent login lockout is a ROW, ended only by the Security page's clear-lockouts. One DDL statement
+    (CREATE TABLE IF NOT EXISTS), so a rerun changes nothing and a run over a database that lost the table rebuilds it; rows of every other table are untouched."""
+
+    @staticmethod
+    def _table(cur):
+        cur.execute(
+            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'login_lockouts' ORDER BY ORDINAL_POSITION"
+        )
+        return {r["COLUMN_NAME"]: (r["DATA_TYPE"], r["IS_NULLABLE"]) for r in cur.fetchall()}
+
+    def test_registered_and_applied(self):
+        from jen.models.migrations import MIGRATIONS
+
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[39] == "_m039_login_lockouts" and MIGRATIONS[-1][0] == 39
+        assert 39 in applied_versions()
+
+    def test_the_table_shape(self):
+        with jen_db() as db, db.cursor() as cur:
+            cols = self._table(cur)
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
+                "AND TABLE_NAME = 'login_lockouts' AND INDEX_NAME = 'uq_lockout' AND NON_UNIQUE = 0"
+            )
+            unique = cur.fetchone()["n"]
+        assert (
+            cols["kind"] == ("varchar", "NO")
+            and cols["subject"] == ("varchar", "NO")
+            and cols["locked_at"] == ("datetime", "NO")
+        )
+        assert unique == 2, "UNIQUE KEY uq_lockout (kind, subject)"
+
+    def test_a_rerun_changes_nothing_and_a_lost_table_is_rebuilt(self):
+        from jen.models.migrations import _m039_login_lockouts
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("INSERT IGNORE INTO login_lockouts (kind, subject) VALUES ('ip', '203.0.113.9')")
+            db.commit()
+            _m039_login_lockouts(db)  # a rerun over the final state
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS n FROM login_lockouts WHERE subject='203.0.113.9'")
+            assert cur.fetchone()["n"] == 1, "the rerun kept the row"
+            cur.execute("DELETE FROM login_lockouts WHERE subject='203.0.113.9'")
+            cur.execute("DROP TABLE login_lockouts")  # the state before 39
+            db.commit()
+            assert self._table(cur) == {}
+            _m039_login_lockouts(db)
+            db.commit()
+            assert set(self._table(cur)) == {"id", "kind", "subject", "locked_at"}
+
+    def test_the_same_subject_is_one_row(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("INSERT IGNORE INTO login_lockouts (kind, subject) VALUES ('username', '_m39_twice')")
+            cur.execute("INSERT IGNORE INTO login_lockouts (kind, subject) VALUES ('username', '_m39_twice')")
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS n FROM login_lockouts WHERE subject='_m39_twice'")
+            n = cur.fetchone()["n"]
+            cur.execute("DELETE FROM login_lockouts WHERE subject='_m39_twice'")
+            db.commit()
+        assert n == 1

@@ -518,12 +518,17 @@ class TestAnAlertAboutAClientWithNoSubnetFailsClosedForAScopedChannel:
         )
         assert alerts.channel_allows_subnet(scoped, 1, scoped=True) is True
         assert alerts.channel_allows_subnet(scoped, 3, scoped=True) is False
-        assert alerts.channel_allows_subnet({"subnet_scope": "[]"}, None, scoped=True) is True, (
-            "an empty scope is no scope"
+        assert alerts.channel_allows_subnet({"subnet_scope": "[]"}, None, scoped=True) is False, (
+            "(Q226) an empty scope is a damaged one, not every subnet: no form writes it"
         )
 
-    def test_a_malformed_scope_still_fails_open(self):
-        assert alerts.channel_allows_subnet({"subnet_scope": "{not json"}, None, scoped=True) is True
+    def test_a_malformed_scope_fails_closed_for_a_subnet_specific_alert(self):
+        # (Q226, the beta.11 review's P1 #2) it used to fail open; Q225's AK1 showed the alert's text is a subnet-scoped surface
+        assert alerts.channel_allows_subnet({"subnet_scope": "{not json"}, None, scoped=True) is False
+        assert alerts.channel_allows_subnet({"subnet_scope": "{not json"}, 2) is False
+        assert alerts.channel_allows_subnet({"subnet_scope": "{not json"}, None) is True, (
+            "a server-level alert still goes through"
+        )
 
     def test_client_problems_is_a_scoped_alert_type_by_itself(self):
         assert "client_problems" in alerts.SCOPED_ALERT_TYPES and "kea_down" not in alerts.SCOPED_ALERT_TYPES

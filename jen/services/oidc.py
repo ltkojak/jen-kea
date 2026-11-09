@@ -111,6 +111,22 @@ def map_role(claims: dict) -> str | None:
     return None if default == "none" else default
 
 
+def subnet_map_errors(raw: str) -> list[str]:
+    """(Q226, AL4) Every segment of `[oidc] subnet_map` the parser SKIPS - no colon, or an empty group name - named, so the form refuses the map and the login treats a map with such a
+    segment as naming no default: a dropped segment is a group the operator meant to scope, and under `subnet_map_default = all` its members came in unrestricted (the same end AK11 closed
+    for a mistyped id, by another spelling)."""
+    out = []
+    for segment in (raw or "").split(";"):
+        segment = segment.strip()
+        if not segment:
+            continue
+        if ":" not in segment:
+            out.append(f"'{segment[:60]}' has no colon")
+        elif not segment.partition(":")[0].strip():
+            out.append(f"'{segment[:60]}' has no group name")
+    return out
+
+
 def parse_subnet_map(raw: str) -> dict[str, set[int] | str]:
     """`"group1:1,2;group2:*"` -> `{"group1": {1, 2}, "group2": "*"}`.
     Same forgiving-on-typo behavior as parse_role_map(): a malformed
@@ -176,9 +192,22 @@ def map_subnet_access(claims: dict) -> str | None:
             union |= value
 
     if not matched:
-        return None if extensions.OIDC_SUBNET_MAP_DEFAULT == "all" else json.dumps([])
+        # (Q226, AL4) a map with a segment the parser skipped names no default: the skipped segment may be the group this login carries, and "all" would be the typo's gift
+        if extensions.OIDC_SUBNET_MAP_DEFAULT == "all" and not subnet_map_errors(raw):
+            return None
+        return json.dumps([])
 
     return json.dumps(sorted(union))
+
+
+def _scope_json(value):
+    """A stored or computed `subnet_access` as the VALUE it encodes (None, or a list), whatever text the engine returned it as."""
+    if value is None:
+        return None
+    try:
+        return json.loads(value) if isinstance(value, (str, bytes)) else value
+    except (ValueError, TypeError):
+        return value
 
 
 def external_id_for(user_id: int) -> str | None:
@@ -248,12 +277,19 @@ def find_or_create_user(claims: dict) -> tuple[dict | None, str]:
                 audit("oidc_denied", row["username"], "no role mapped for current groups")
                 return None, "no_role"
             if role != row["role"]:
-                cur.execute("UPDATE users SET role=%s WHERE id=%s", (role, row["id"]))
+                # (Q226, AL7) `token_version` moves in the SAME statement, as every other writer of `role` does (`jen/routes/users.py`): the account's other open sessions refresh their
+                # cached role on their next request instead of keeping the old one until they expire
+                cur.execute("UPDATE users SET role=%s, token_version=token_version+1 WHERE id=%s", (role, row["id"]))
                 audit("oidc_role_change", row["username"], f"{row['role']} -> {role}")
                 row["role"] = role
             subnet_access = map_subnet_access(claims)
-            if subnet_access != row.get("subnet_access"):
-                cur.execute("UPDATE users SET subnet_access=%s WHERE id=%s", (subnet_access, row["id"]))
+            if _scope_json(subnet_access) != _scope_json(row.get("subnet_access")):
+                # (Q226, AL21) compared as JSON values, not as text: a JSON column comes back normalized on one engine and as typed on another, and a text compare rewrote and audited
+                # the same scope on every login
+                cur.execute(
+                    "UPDATE users SET subnet_access=%s, token_version=token_version+1 WHERE id=%s",
+                    (subnet_access, row["id"]),
+                )
                 audit("OIDC_SUBNET_SCOPE", row["username"], f"{row.get('subnet_access')} -> {subnet_access}")
                 row["subnet_access"] = subnet_access
             return row, "ok"

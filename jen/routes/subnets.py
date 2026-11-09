@@ -193,10 +193,9 @@ def subnets():
                 }
     except Exception:
         pass
-    try:
-        threshold = int(__user.get_global_setting("alert_threshold_pct", "80"))
-    except (TypeError, ValueError):
-        threshold = 80
+    from jen.services.setting_bounds import bounded_setting
+
+    threshold = bounded_setting("alert_threshold_pct")  # (Q226, AL9)
     try:
         with __db.kea_db() as db:
             accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)

@@ -15,11 +15,11 @@ import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.fingerprint as __fp
 import jen.services.kea6 as __kea6
+import jen.services.setting_bounds as __bounds
 import jen.services.view_prefs as __view_prefs
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
-from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("devices", __name__)
@@ -89,7 +89,9 @@ def devices():
                 s = f"%{search}%"
                 params += [s, s, s, s, s]
             if show_stale:
-                where.append(f"d.last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)")
+                # (Q226, AL10) a parameter, never text in the statement (BOUND-001) - an `int` by construction, and still a parameter
+                where.append("d.last_seen < DATE_SUB(NOW(), INTERVAL %s DAY)")
+                params.append(stale_days)
             if type_filter:
                 where.append("d.device_type=%s")
                 params.append(type_filter)
@@ -500,13 +502,17 @@ def bulk_delete_devices():
 @_admin_required
 def save_device_settings():
     stale_days = request.form.get("stale_days", "30").strip()
-    if not is_whole(stale_days) or not (1 <= int(stale_days) <= 365):
+    if not __bounds.in_bounds(
+        "stale_device_days", stale_days
+    ):  # (Q226, AL9) the table's bound, which the reader applies too
         flash("Stale threshold must be between 1 and 365 days.", "error")
         return redirect(url_for("devices.devices"))
     stale_days = str(
         int(stale_days)
     )  # (Q225, AK23) the canonical text, as its neighbors store theirs: `007` is stored as 7
-    __user.set_global_setting("stale_device_days", stale_days)
+    if not __user.set_global_setting("stale_device_days", stale_days):  # (Q226) "saved" only when it is
+        flash("The stale device threshold could not be saved. Check server logs for details.", "error")
+        return redirect(url_for("devices.devices"))
     flash(f"Stale device threshold set to {stale_days} days.", "success")
     return redirect(url_for("devices.devices"))
 

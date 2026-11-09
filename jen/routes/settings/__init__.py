@@ -34,9 +34,11 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.alerts as __alerts
+import jen.services.auth as __auth
 import jen.services.capabilities as __caps
 import jen.services.mfa as __mfa
 import jen.services.session_timeout as __session_timeout
+import jen.services.setting_bounds as __alerts_bounds
 import jen.services.text as _text
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
@@ -173,7 +175,9 @@ def settings():
 def settings_system():
     from jen.services.plugins import discover_plugins, is_systemd_host
 
-    audit_retention_days = __user.get_global_setting("audit_retention_days", "90")
+    audit_retention_days = str(
+        __alerts_bounds.bounded_setting("audit_retention_days")
+    )  # (Q226, AL5) what the prune applies, never the stored text
     audit_log_count = _count("SELECT COUNT(*) AS cnt FROM audit_log")
     return render_template(
         "settings_system.html",
@@ -226,10 +230,13 @@ def settings_security():
         "timeout": str(__session_timeout.global_minutes()),
         "enabled": __user.get_global_setting("session_timeout_enabled", "true"),
     }
+    # (Q226, AL5) the same rule as the line above, for the three rate-limit rows: the page prints what `is_locked_out` APPLIES (`get_rate_limit_settings`, the one reader), never the
+    # stored text - a stored `00` said rate limiting was on while the server applied off, `5000` printed where 1000 applied
+    applied = __auth.get_rate_limit_settings()
     rl_settings = {
-        "max_attempts": __user.get_global_setting("rl_max_attempts", "10"),
-        "lockout_minutes": __user.get_global_setting("rl_lockout_minutes", "15"),
-        "mode": __user.get_global_setting("rl_mode", "both"),
+        "max_attempts": str(applied["max_attempts"]),
+        "lockout_minutes": str(applied["lockout_minutes"]),
+        "mode": applied["mode"],
     }
     rl_active_ips = _count(
         "SELECT COUNT(DISTINCT ip_address) AS cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
@@ -325,7 +332,9 @@ def save_audit_retention():
             "error",
         )
         return redirect(url_for("settings.settings_system"))
-    __user.set_global_setting("audit_retention_days", str(days))
+    if not __user.set_global_setting("audit_retention_days", str(days)):  # (Q226) "saved" only when it is
+        flash("The audit retention could not be saved. Check server logs for details.", "error")
+        return redirect(url_for("settings.settings_system"))
     # Run cleanup immediately if retention > 0
     if days > 0:
         try:

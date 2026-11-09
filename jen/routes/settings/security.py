@@ -79,8 +79,10 @@ def save_session_settings():
         flash("Only a superadmin can make the session timeout less strict.", "error")
         return redirect(url_for("settings.settings_security"))
 
-    __user.set_global_setting("session_timeout_minutes", timeout)
-    __user.set_global_setting("session_timeout_enabled", enabled)
+    # (Q226, the review's P2 #5) one transaction, and "saved" only when it is: two commits left half a policy applied under a success message
+    if not __user.set_global_settings({"session_timeout_minutes": timeout, "session_timeout_enabled": enabled}):
+        flash("The session timeout could not be saved. Check server logs for details.", "error")
+        return redirect(url_for("settings.settings_security"))
 
     if enabled == "false":
         flash("Session timeout disabled — sessions will not expire.", "success")
@@ -125,9 +127,11 @@ def save_rate_limit():
         flash("Only a superadmin can make login rate limiting less strict.", "error")
         return redirect(url_for("settings.settings_security"))
 
-    __user.set_global_setting("rl_max_attempts", max_attempts)
-    __user.set_global_setting("rl_lockout_minutes", lockout_minutes)
-    __user.set_global_setting("rl_mode", mode)
+    if not __user.set_global_settings(
+        {"rl_max_attempts": max_attempts, "rl_lockout_minutes": lockout_minutes, "rl_mode": mode}
+    ):  # (Q226, the review's P2 #5) one transaction, and "saved" only when it is
+        flash("Rate limiting settings could not be saved. Check server logs for details.", "error")
+        return redirect(url_for("settings.settings_security"))
     flash("Rate limiting settings saved.", "success")
     __user.audit("SAVE_SETTINGS", "rate_limit", f"max={max_attempts} lockout={lockout_minutes}min mode={mode}")
     return redirect(url_for("settings.settings_security"))
@@ -141,7 +145,12 @@ def clear_lockouts():
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM login_attempts")
+                cur.execute(
+                    "DELETE FROM login_lockouts"
+                )  # (Q226) the permanent lockouts: this button is the one way they end
             db.commit()
+        # (Q226, AL22 and the review's note) an ADMIN's act, kept so: it resets counters and ends lockouts (a locked-out colleague is the common case), changes no stored policy, and is
+        # audited; the ratchet (RBAC-003) is about policy
         flash("All login attempt records cleared.", "success")
         __user.audit("CLEAR_LOCKOUTS", "settings", "All login attempts cleared")
     except Exception as e:
@@ -191,14 +200,6 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
         except (OSError, ValueError) as e:
             return f"the certificate/key could not be loaded ({e})"
     return None
-
-
-def _write_atomically(path: str, data: str, mode: int) -> None:
-    """v5.29.0 (Q29) — the writer now lives in jen/services/certs.py
-    (shared with the Kea CA); this name stays for the call sites below."""
-    from jen.services.certs import write_atomically
-
-    write_atomically(path, data, mode)
 
 
 @bp.route("/settings/upload-cert", methods=["POST"])
@@ -253,8 +254,13 @@ def upload_cert():
 def remove_cert():
     # Q202 (AR6): see upload_cert - removing the certificate takes the site back to HTTP and restarts Jen
     for f in [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]:
-        if os.path.exists(f):
-            os.remove(f)
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except OSError as e:  # (Q226, AL26) a file that will not go is said, never a 500 after the first one went
+            logger.error("remove_cert: %s could not be removed: %s", f, type(e).__name__)
+            flash("The certificate files could not all be removed. Check server logs for details.", "error")
+            return redirect(url_for("settings.settings_security"))
     # v5.69.0-beta.2 (Q171): removing the certificate takes the site back to HTTP - an event the audit log carries like every other change of the serving setup
     __user.audit("REMOVE_CERT", "ssl", f"Certificate removed by {current_user.username}")
     if __runtime.restart_service() == "none":
@@ -316,6 +322,14 @@ def save_oidc():
         flash(
             "Subnet mapping could not be parsed — check the format (group:id,id;group:*).",
             "error",
+        )
+        return redirect(url_for("settings.settings_security"))
+    bad = __oidc.subnet_map_errors(subnet_map)
+    if bad:
+        # (Q226, AL4) a segment the parser would SKIP is refused here, with the segment named: a skipped segment is a group the operator meant to scope, and the login treats a map that
+        # carries one as naming no default until it is fixed
+        flash_field(
+            "subnet_map", "Subnet mapping: " + "; ".join(bad[:3]) + ". Every segment is group:id,id or group:*."
         )
         return redirect(url_for("settings.settings_security"))
 
