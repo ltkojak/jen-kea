@@ -443,17 +443,18 @@ class TestASettingThatIsNotANumberIsTheDefault:
     def test_stale_device_days(self, monkeypatch):
         from jen.models import user
 
-        for stored, expect in (("14", 14), ("abc", 30), ("", 30), ("-3", 30), ("0", 30)):
+        # Q226 (AL9): the reader is `setting_bounds.bounded_setting` - a row that is not a whole number ("abc", "", "-3") is the default 30; a whole number outside 1..365 is the NEARER bound ("0" -> 1, "9999" -> 365)
+        for stored, expect in (("14", 14), ("abc", 30), ("", 30), ("-3", 30), ("0", 1), ("9999", 365)):
             monkeypatch.setattr(user, "get_global_setting", lambda key, default=None, v=stored: v)
             assert user.get_stale_device_days() == expect, stored
 
     def test_the_alert_loops_integer_settings(self, monkeypatch):
         from jen.services import alerts
 
-        # one way only: monkeypatch undoes every setattr BEFORE every setitem, so a setattr and a setitem on the same name left the first stub in the module for the rest of the session
-        monkeypatch.setitem(alerts.__dict__, "__get_global_setting", lambda key, default=None: "oops")
+        # Q226 (AL9): `_int_setting` reads through `setting_bounds.bounded_setting`, which asks `jen.models.user.get_global_setting`; that is the name to stub, one way only
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default=None: "oops")
         assert alerts._int_setting("alert_threshold_pct", 80) == 80
-        monkeypatch.setitem(alerts.__dict__, "__get_global_setting", lambda key, default=None: "75")
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default=None: "75")
         assert alerts._int_setting("alert_threshold_pct", 80) == 75
 
 

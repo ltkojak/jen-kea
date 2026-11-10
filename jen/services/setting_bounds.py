@@ -10,8 +10,6 @@ release, by hand, or by a form that bounded less than this table says reaches no
 table too (`bounds(key)`), so the way in and the way out cannot disagree; `tests/test_a_bounded_number_is_read_as_it_is_written.py` holds every writer to it.
 """
 
-from jen.services.text import whole
-
 #: key -> (default, lowest, highest). 0 keeps its meanings where the table says it may be stored (rate limiting: unlimited / until cleared; the audit log: keep forever).
 SETTING_BOUNDS: dict[str, tuple[int, int, int]] = {
     "rl_max_attempts": (10, 0, 1000),
@@ -34,6 +32,9 @@ def bounds(key: str) -> tuple[int, int, int]:
 
 def clamp(key: str, raw) -> int:
     """The number the server APPLIES for a stored text: the default for a value that is not a whole number, the nearer bound for one outside them."""
+    # not at module level: `tools/config_merge.py` imports `jen.services.auth` -> this module with the host's bare `python3`, and `text` needs markupsafe
+    from jen.services.text import whole
+
     default, lo, hi = SETTING_BOUNDS[key]
     return min(max(whole(raw, default), lo), hi)
 
@@ -47,6 +48,9 @@ def bounded_setting(key: str) -> int:
 
 def in_bounds(key: str, raw) -> bool:
     """Is `raw` a whole number inside the table's bounds for `key`? The forms' test, so a form and the reader bound the same way."""
+    # lazily, as in `clamp`
+    from jen.services.text import whole
+
     _default, lo, hi = SETTING_BOUNDS[key]
     value = whole(raw)
     return value is not None and lo <= value <= hi

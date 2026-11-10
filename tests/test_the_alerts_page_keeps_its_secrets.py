@@ -19,6 +19,7 @@ SAVE = "/settings/alerts/save-channel"
 
 
 def _row(db, name):
+    db.commit()  # a fresh read view: the connection is REPEATABLE READ with autocommit off, and the routes commit on another connection (Q215's F2)
     with db.cursor() as cur:
         cur.execute("SELECT * FROM alert_channels WHERE channel_name=%s", (name,))
         return cur.fetchone()
@@ -185,7 +186,9 @@ class TestABlankSecretIsKeptOnlyForTheSamePlace:
         finally:
             _drop(db, name)
 
-    @pytest.mark.parametrize("port", ["", "abc", "0", "65536", "²", "25 "])
+    @pytest.mark.parametrize(
+        "port", ["", "abc", "0", "65536", "²"]
+    )  # a field is stripped before it is judged, as every form in Jen does: "25 " is 25
     def test_a_bad_port_is_refused(self, logged_in_client, db, port):
         name = "_bad_port"
         _drop(db, name)
@@ -250,7 +253,9 @@ class TestARestrictedAdminSeesOnlyTheirChannels:
                 data=_email(name, channel_id=str(cid), smtp_pass="", to_addr="x@example.test", subnet_ids=["1"]),
                 follow_redirects=True,
             )
-            assert b"Channel not found" not in r.data and _config(db, name)["to_addr"] == "x@example.test"
+            assert (
+                b"Channel not found." not in r.data and _config(db, name)["to_addr"] == "x@example.test"
+            )  # the flash has the period; the page's own script carries "Channel not found'" without it
         finally:
             _drop(db, name)
 

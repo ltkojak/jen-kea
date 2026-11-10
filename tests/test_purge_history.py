@@ -49,11 +49,11 @@ def _count(table):
 
 @pytest.fixture
 def old_and_new():
-    """Per table: one row 400 days old (past every default retention) and one 1 day old."""
+    """Per table: one row 300 days old (past every default retention, inside the longest history one the table allows: 365) and one 1 day old."""
     with jen_db() as db, db.cursor() as cur:
         for table, (sql, where) in TABLES.items():
             cur.execute(f"DELETE FROM {table} WHERE {where}")  # nosec B608 - test constants
-            cur.execute(sql, (400,))
+            cur.execute(sql, (300,))
             cur.execute(sql, (1,))
         db.commit()
     yield
@@ -69,13 +69,13 @@ class TestPurgeHistory:
         assert {t: _count(t) for t in TABLES} == dict.fromkeys(TABLES, 1)
 
     def test_the_settings_are_honored_per_table(self, old_and_new):
-        set_global_setting("history_retention_days", "500")
+        set_global_setting("history_retention_days", "365")  # the table's highest (setting_bounds, Q226 AL9)
         set_global_setting("events_retention_days", "500")
         set_global_setting("alert_log_retention_days", "500")
         set_global_setting("audit_retention_days", "500")
         alerts.purge_history()
         assert {t: _count(t) for t in TABLES} == dict.fromkeys(TABLES, 2), (
-            "400 days is inside a 500-day retention: nothing is removed"
+            "300 days is inside a 365-day (history) and a 500-day retention: nothing is removed"
         )
 
     def test_audit_retention_zero_keeps_the_audit_log_forever(self, old_and_new):

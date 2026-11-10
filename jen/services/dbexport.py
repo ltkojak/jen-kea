@@ -70,6 +70,7 @@ JEN_TABLES = {
     # bundle — this fixes the pre-existing regular Backups feature too.
     "webauthn_credentials": "Passkey credentials (public keys only — nothing here lets a passkey be replayed elsewhere)",
     "login_attempts": "Rate-limiting log of recent login attempts, by IP and username",
+    "login_lockouts": "Permanent login lockouts (an address or a username locked until an administrator clears it; a restore that forgot them would lift every one)",
     "mfa_attempts": "MFA brute-force throttling log",
     "plugins": "Installed plugin records (id, version, enabled state)",
     "plugin_schema_migrations": "Per-plugin schema migration tracking",
