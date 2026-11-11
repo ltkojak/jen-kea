@@ -582,21 +582,23 @@ Check the two version numbers. A box on `5.33.0-beta.2` that is told it's curren
 
 If you've locked yourself out and can't log in:
 
-**Option 1 — Wait for the lockout to expire** (default 15 minutes)
+**Option 1 — Wait for the lockout to expire** (default 15 minutes). This works only while Lockout Duration is above 0. A lockout of 0 minutes lasts until it is cleared: waiting does not end it and neither does a restart.
 
-**Option 2 — Clear lockouts via MySQL:**
+**Option 2 — Ask an administrator who can still log in** to press **Settings → Access & Security → Login Rate Limiting → Clear All Lockouts**. It deletes every failed attempt and ends every permanent lockout, and the page says how many of each. The same card shows how many permanent lockouts are in force.
+
+**Option 3 — Clear lockouts via MySQL.** Two tables: `login_attempts` is the rolling count, and `login_lockouts` (since 7.0.0) holds the permanent lockouts. Deleting the first alone does not end a lockout of 0.
 ```bash
-mysql -u jen -p -h YOUR-DB-SERVER jen -e "DELETE FROM login_attempts;"
+mysql -u jen -p -h YOUR-DB-SERVER jen -e "DELETE FROM login_attempts; DELETE FROM login_lockouts;"
 ```
 
-**Option 3 — Disable rate limiting temporarily:**
+**Option 4 — Disable rate limiting temporarily:**
 ```bash
 mysql -u jen -p -h YOUR-DB-SERVER jen -e \
   "INSERT INTO settings (setting_key, setting_value) VALUES ('rl_mode','off') \
    ON DUPLICATE KEY UPDATE setting_value='off';"
 ```
 
-Re-enable after logging in via Settings → Login Rate Limiting.
+Re-enable after logging in via **Settings → Access & Security → Login Rate Limiting**. Turning the check off does not delete a permanent lockout: its row counts again when the mode comes back, so press Clear All Lockouts before you re-enable.
 
 ---
 

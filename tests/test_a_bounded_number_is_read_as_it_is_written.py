@@ -186,13 +186,9 @@ class TestOneTableOfBounds:
         assert alerts.alert_log_retention_days() == 1
 
     def test_no_reader_under_jen_reads_a_bounded_key_raw(self):
-        """Every `get_global_setting("<key>"` of a table key under `jen/` is inside `setting_bounds` itself, or is the Alerts settings PAGE printing the stored text beside its form, or is
-        the Reports page doing the same - the two pages are listed; a new raw reader is a finding."""
-        allowed = {
-            "jen/services/setting_bounds.py",
-            "jen/routes/settings/alerts.py",  # the settings form's own value fields (`pool_exhaustion_free`, `alert_threshold_pct`): what the operator typed, beside the input
-            "jen/routes/reports.py",  # the same for the snapshot interval and the retention
-        }
+        """Every `get_global_setting("<key>"` of a table key under `jen/` is inside `setting_bounds` itself. (Q227, AM10) The Alerts and Reports pages were listed here as "the stored
+        text beside its form": they printed a stored 0 or 5000 that the server never applies, and they read the table's reader now. A new raw reader is a finding."""
+        allowed = {"jen/services/setting_bounds.py"}
         hits = []
         for path in (ROOT / "jen").rglob("*.py"):
             rel = path.relative_to(ROOT).as_posix()
@@ -474,21 +470,51 @@ class TestAChannelsSecretIsWriteOnly:
             assert tag and 'data-secret="1"' in tag.group(0) and 'type="password"' in tag.group(0), field
         assert len(route.WRITE_ONLY_FIELDS) == sum(len(v) for v in route.WRITE_ONLY_KEYS.values())
 
-    def test_shown_blanks_the_secret_and_keeps_the_rest(self):
+    def test_shown_carries_the_named_keys_and_nothing_else(self):
+        """(Q227, AM1, AM7) `_shown` is an allowlist. It used to blank the declared type's write-only keys and print every key it did not know."""
         from jen.routes.settings import alerts as route
 
-        assert route._shown("telegram", {"token": "111:abc", "chat_id": "9"}) == {"token": "", "chat_id": "9"}
+        assert route._shown("telegram", {"token": "111:abc", "chat_id": "9"}) == {"chat_id": "9"}
         assert route._shown("email", {"smtp_host": "m", "smtp_pass": "p", "use_tls": "false"}) == {
             "smtp_host": "m",
-            "smtp_pass": "",
             "use_tls": "false",
         }
-        assert route._shown("slack", {"webhook_url": "https://hooks.slack.com/x"}) == {"webhook_url": ""}
-        assert route._shown("webhook", {"webhook_url": "https://h/x", "header_value": "Bearer t"}) == {
-            "webhook_url": "https://h/x",
-            "header_value": "",
-        }
-        assert route._shown("pushover", {"user_key": "u", "api_token": "t"}) == {"user_key": "", "api_token": ""}
+        assert route._shown("slack", {"webhook_url": "https://hooks.slack.com/x"}) == {}
+        assert route._shown(
+            "webhook",
+            {
+                "webhook_url": "https://h/x?k=t",
+                "header_name": "Authorization",
+                "header_value": "Bearer t",
+                "payload_type": "json",
+            },
+        ) == {"header_name": "Authorization", "payload_type": "json"}
+        assert route._shown("pushover", {"user_key": "u", "api_token": "t"}) == {}
+
+    def test_a_row_whose_type_does_not_describe_its_config_shows_no_secret(self):
+        """(Q227, AM1) an edit before 5.69.0 wrote the form's config and left the row's type: a Telegram config under `webhook`, a Slack URL under `telegram`."""
+        from jen.routes.settings import alerts as route
+
+        assert route._shown("webhook", {"token": "111:abc", "chat_id": "9"}) == {}
+        assert route._shown("telegram", {"webhook_url": "https://hooks.slack.com/x"}) == {}
+        assert route._shown("email", {"user_key": "u", "api_token": "t", "token": "n"}) == {}
+
+    def test_an_extra_key_and_an_unknown_type_show_nothing(self):  # AM7
+        from jen.routes.settings import alerts as route
+
+        assert route._shown("telegram", {"chat_id": "9", "bot_secret": "s"}) == {"chat_id": "9"}
+        assert route._shown("matrix", {"homeserver": "https://m", "access_token": "t"}) == {}
+        assert route._shown("telegram", None) == {} and route._shown("", {"token": "t"}) == {}
+
+    def test_no_shown_key_is_write_only_under_any_type(self):
+        """(Q227, AM1) the two tables cannot disagree: a key the page may carry is a secret under NO type, so a config stored under the wrong type has nothing to show."""
+        from jen.routes.settings import alerts as route
+
+        assert set(route.SHOWN_KEYS) == set(route.CHANNEL_TYPES) == set(route.WRITE_ONLY_KEYS)
+        secret = {k for keys in route.WRITE_ONLY_KEYS.values() for k in keys}
+        shown = {k for keys in route.SHOWN_KEYS.values() for k in keys}
+        assert not secret & shown, sorted(secret & shown)
+        assert "webhook_url" in route.WRITE_ONLY_KEYS["webhook"], "AM1, AM23: a generic webhook's URL carries its token"
 
     def test_the_route_sends_the_page_only_what_shown_gives(self):
         src = (ROOT / "jen/routes/settings/alerts.py").read_text(encoding="utf-8")
@@ -532,7 +558,9 @@ class TestAChannelsSecretIsWriteOnly:
     def test_a_blank_password_for_a_changed_place_is_refused_and_names_the_field(self, monkeypatch, change):
         old = {"smtp_host": "mail.example.test", "smtp_port": "587", "smtp_pass": "s3cret", "use_tls": "true"}
         new = {**old, "smtp_pass": "", **change}
-        assert self._kept(monkeypatch, "email", new, old) == "smtp_pass"
+        from jen.routes.settings import alerts as route
+
+        assert self._kept(monkeypatch, "email", new, old) == ("smtp_pass", route.DESTINATION_CHANGED)
 
     def test_a_typed_password_is_taken_whatever_the_place(self, monkeypatch):
         old = {"smtp_host": "mail.example.test", "smtp_port": "587", "smtp_pass": "s3cret", "use_tls": "true"}
@@ -549,15 +577,14 @@ class TestAChannelsSecretIsWriteOnly:
             )["header_value"]
             == "B"
         ), "a path is not a place (CRED-002: scheme, host, port)"
-        assert (
-            self._kept(
-                monkeypatch,
-                "webhook",
-                {"webhook_url": "https://h2/x", "header_value": ""},
-                {"webhook_url": "https://h/x", "header_value": "B"},
-            )
-            == "header_value"
-        )
+        from jen.routes.settings import alerts as route
+
+        assert self._kept(
+            monkeypatch,
+            "webhook",
+            {"webhook_url": "https://h2/x", "header_value": ""},
+            {"webhook_url": "https://h/x", "header_value": "B"},
+        ) == ("header_value", route.DESTINATION_CHANGED)
         assert (
             self._kept(monkeypatch, "telegram", {"token": "", "chat_id": "9"}, {"token": "T", "chat_id": "1"})["token"]
             == "T"
@@ -567,16 +594,60 @@ class TestAChannelsSecretIsWriteOnly:
         ) == {"user_key": "U", "api_token": "A"}
 
     def test_a_channel_whose_type_changed_keeps_nothing(self, monkeypatch):
-        assert (
-            self._kept(
-                monkeypatch,
-                "ntfy",
-                {"url": "https://ntfy.sh", "topic": "t", "token": ""},
-                {"token": "T"},
-                old_type="telegram",
-            )
-            == "ntfy_token"
-        )
+        from jen.routes.settings import alerts as route
+
+        assert self._kept(
+            monkeypatch,
+            "ntfy",
+            {"url": "https://ntfy.sh", "topic": "t", "token": ""},
+            {"token": "T"},
+            old_type="telegram",
+        ) == ("ntfy_token", route.DESTINATION_CHANGED)
+
+    def test_a_stored_config_that_cannot_be_read_is_refused_and_says_why(self, monkeypatch):
+        """(Q227, AM6) `get_channel_config` answers {} for a row whose config cannot be decrypted. A provider's token was then "kept" as "" and the page said saved."""
+        from jen.routes.settings import alerts as route
+
+        for ctype, new, field in (
+            ("telegram", {"token": "", "chat_id": "9"}, "token"),
+            ("pushover", {"user_key": "", "api_token": ""}, "pushover_user_key"),
+            ("email", {"smtp_host": "m", "smtp_port": "587", "smtp_pass": "", "use_tls": "true"}, "smtp_pass"),
+        ):
+            assert self._kept(monkeypatch, ctype, new, {}) == (field, route.STORED_UNREADABLE), ctype
+        # a typed secret needs nothing of the stored row
+        assert self._kept(monkeypatch, "telegram", {"token": "T2", "chat_id": "9"}, {}) == {
+            "token": "T2",
+            "chat_id": "9",
+        }
+
+    def test_a_channel_with_no_stored_secret_may_change_its_place(self, monkeypatch):
+        """(Q227) only a key that HAS a stored value is kept, so only such a key is refused. A webhook with no authorization header could not change its URL: its always-blank
+        header was "a secret for a changed place". The same for SMTP with no password and ntfy with no token."""
+        assert self._kept(
+            monkeypatch,
+            "webhook",
+            {"webhook_url": "https://h2/x", "header_name": "", "header_value": ""},
+            {"webhook_url": "https://h/x", "header_name": "", "header_value": ""},
+        ) == {"webhook_url": "https://h2/x", "header_name": "", "header_value": ""}
+        old = {"smtp_host": "relay.example.test", "smtp_port": "25", "smtp_pass": "", "use_tls": "false"}
+        new = {**old, "smtp_host": "relay2.example.test"}
+        assert self._kept(monkeypatch, "email", new, old) == new
+        assert self._kept(
+            monkeypatch,
+            "ntfy",
+            {"url": "https://ntfy2.example.test", "topic": "t", "token": ""},
+            {"url": "https://ntfy.sh"},
+        ) == {"url": "https://ntfy2.example.test", "topic": "t", "token": ""}
+
+    def test_a_blank_webhook_url_is_the_stored_one_and_its_header_stays_with_it(self, monkeypatch):
+        """(Q227, AM1) the URL is write-only now: the edit form posts it blank, the stored one is taken BEFORE the place is compared, and the header beside it is kept."""
+        old = {"webhook_url": "https://h/x?k=t", "header_name": "Authorization", "header_value": "B"}
+        assert self._kept(
+            monkeypatch, "webhook", {"webhook_url": "", "header_name": "Authorization", "header_value": ""}, old
+        ) == {"webhook_url": "https://h/x?k=t", "header_name": "Authorization", "header_value": "B"}
+        assert self._kept(
+            monkeypatch, "webhook", {"webhook_url": "", "header_name": "Authorization", "header_value": "B2"}, old
+        ) == {"webhook_url": "https://h/x?k=t", "header_name": "Authorization", "header_value": "B2"}
 
     def test_a_new_channel_keeps_nothing(self):
         from jen.routes.settings import alerts as route

@@ -1,6 +1,6 @@
 """v7.0.0-beta.12 (Q226) - the DB-backed rows of the pass on 7.0.0-beta.11.
 
-AL2  the Alerts page carries no channel secret: the `<script>` data has every write-only key blank.
+AL2  the Alerts page carries no channel secret: (Q227, AM1, AM7) the `<script>` data carries only the keys `SHOWN_KEYS` names, so a write-only key is absent, not blank.
 AL3  a blank secret on an edit is kept only while the channel names the same place; a blank for a changed SMTP host is refused with the field named.
 AL24 a subnet-restricted admin sees only channels inside their scope and may not edit, test or delete one outside it ("Channel not found.").
 AL13 the unrestricted branch of the channel's scope refuses a value that is not a whole number, whole.
@@ -65,7 +65,7 @@ def _set_global(db, key, value):
 class TestThePageCarriesNoSecret:
     """AL2."""
 
-    def test_the_script_data_has_the_secret_blank_and_the_rest_present(self, logged_in_client, db):
+    def test_the_script_data_has_no_secret_key_and_the_rest_present(self, logged_in_client, db):
         name = "_secret_page"
         _drop(db, name)
         try:
@@ -74,7 +74,118 @@ class TestThePageCarriesNoSecret:
             assert _config(db, name)["smtp_pass"] == "s3cret-pass", "stored, encrypted at rest"
             html = logged_in_client.get("/settings/alerts").data.decode()
             assert "s3cret-pass" not in html
-            assert '"smtp_pass": ""' in html and '"smtp_host": "mail.example.test"' in html
+            # (Q227, AM1) the key is absent. `"smtp_pass":` is the script data's spelling; the form's own `name="smtp_pass"` input stays
+            assert '"smtp_pass":' not in html and '"smtp_host": "mail.example.test"' in html
+        finally:
+            _drop(db, name)
+
+    def test_a_generic_webhooks_url_is_not_in_the_page_and_a_blank_one_keeps_it(self, logged_in_client, db):
+        """(Q227, AM1, AM23) a webhook URL carries its token in the path or the query. It is write-only: absent from the page, and an edit that leaves it blank keeps it."""
+        name = "_secret_hook"
+        _drop(db, name)
+        data = {
+            "channel_type": "webhook",
+            "channel_name": name,
+            "enabled": "on",
+            "webhook_url": "https://hooks.example.test/in/QrStUvTok?key=WxYzTok",
+            "header_name": "X-Token",
+            "header_value": "HdrTok123",
+            "alert_types[]": ["kea_down"],
+        }
+        try:
+            logged_in_client.post(SAVE, data=data, follow_redirects=True)
+            row = _row(db, name)
+            assert row is not None
+            html = logged_in_client.get("/settings/alerts").data.decode()
+            assert "QrStUvTok" not in html and "WxYzTok" not in html and "HdrTok123" not in html
+            assert '"webhook_url":' not in html and '"header_name": "X-Token"' in html
+            r = logged_in_client.post(
+                SAVE,
+                data={**data, "channel_id": str(row["id"]), "webhook_url": "", "header_value": ""},
+                follow_redirects=True,
+            )
+            assert r.status_code == 200 and b"enter the secret again" not in r.data
+            cfg = _config(db, name)
+            assert cfg["webhook_url"] == data["webhook_url"] and cfg["header_value"] == "HdrTok123"
+        finally:
+            _drop(db, name)
+
+    def test_a_webhook_url_with_a_password_in_it_is_refused(self, logged_in_client, db):  # AM23, CRED-005
+        name = "_secret_userinfo"
+        _drop(db, name)
+        try:
+            logged_in_client.post(
+                SAVE,
+                data={
+                    "channel_type": "webhook",
+                    "channel_name": name,
+                    "enabled": "on",
+                    "webhook_url": "https://jen:PwInUrl@hooks.example.test/x",
+                    "alert_types[]": ["kea_down"],
+                },
+                follow_redirects=True,
+            )
+            assert _row(db, name) is None, "nothing was written"
+        finally:
+            _drop(db, name)
+
+
+class TestAScopedChannelIsNotSentTheDailySummary:
+    """(Q227, AM2) the daily summary names every subnet. A channel limited to some subnets cannot take it, and an alert type that is not on the list refuses the form."""
+
+    @staticmethod
+    def _hook(name, **over):
+        data = {
+            "channel_type": "webhook",
+            "channel_name": name,
+            "enabled": "on",
+            "webhook_url": "https://hooks.example.test/x",
+            "alert_types[]": ["kea_down", "daily_summary"],
+        }
+        data.update(over)
+        return data
+
+    def test_a_scoped_channel_with_the_daily_summary_is_refused(self, logged_in_client, db):
+        name = "_scoped_summary"
+        _drop(db, name)
+        try:
+            r = logged_in_client.post(SAVE, data=self._hook(name, subnet_ids=["1"]), follow_redirects=True)
+            assert r.status_code == 200 and b"only a channel for All Subnets can receive it" in r.data
+            assert _row(db, name) is None, "nothing was written"
+        finally:
+            _drop(db, name)
+
+    def test_a_channel_for_all_subnets_takes_it(self, logged_in_client, db):
+        name = "_all_summary"
+        _drop(db, name)
+        try:
+            logged_in_client.post(SAVE, data=self._hook(name, subnet_ids=["all"]), follow_redirects=True)
+            row = _row(db, name)
+            assert row is not None and row["subnet_scope"] is None
+            assert json.loads(row["alert_types"]) == ["kea_down", "daily_summary"]
+        finally:
+            _drop(db, name)
+
+    def test_a_restricted_admin_cannot_tick_it(self, client, db):
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_ch_summary")
+        name = "_restricted_summary"
+        _drop(db, name)
+        try:
+            r = c.post(SAVE, data=self._hook(name, subnet_ids=["1"]), follow_redirects=True)
+            assert r.status_code == 200 and b"only a channel for All Subnets can receive it" in r.data
+            assert _row(db, name) is None
+        finally:
+            _drop(db, name)
+
+    def test_an_alert_type_that_is_not_on_the_list_is_refused(self, logged_in_client, db):
+        name = "_bad_type"
+        _drop(db, name)
+        try:
+            r = logged_in_client.post(
+                SAVE, data=self._hook(name, **{"alert_types[]": ["kea_down", "not_a_type"]}), follow_redirects=True
+            )
+            assert r.status_code == 200 and b"Choose the alert types from the list." in r.data
+            assert _row(db, name) is None
         finally:
             _drop(db, name)
 

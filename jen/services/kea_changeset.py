@@ -211,6 +211,8 @@ def change_lock(wait: float | None = None):
 
 
 _DETAIL_TAIL = 300
+#: (Q227, AM14) the part of the ROLLBACK FAILED line for an api target whose rollback raised before it reported anything
+ROLLBACK_NOT_KNOWN = "the rollback over the API stopped before it reported what was sent, so what the daemon and the file hold is not known (the Write mode card shows it; a pending change there is settled with Settle it now)"
 
 
 def _safe(fn, *args, **kwargs) -> dict:
@@ -218,12 +220,16 @@ def _safe(fn, *args, **kwargs) -> dict:
     connection, a socket timeout ...) becomes a not-ok result instead of
     escaping — kea_host.apply_config / test_config / service_action catch only
     the helper's own errors, so a dead sshd used to raise straight through
-    Phase 3 with the first server already committed."""
+    Phase 3 with the first server already committed.
+
+    (Q227, AM14) The result says it was RAISED: a caller that sorts results by what they report (`needs_hands`, `sent`) must not read a result that reports nothing as
+    "nothing was sent". (Q227, AM15, decided) The exception's own text stays in `detail`: for a Kea-host call it is the diagnosis the operator needs (which host, which port,
+    refused or timed out), two tests have pinned it since Q26, and it is paramiko's, the socket's or urllib's message about an address Jen validated on save."""
     try:
         return fn(*args, **kwargs)
     except Exception as e:
         logger.warning(f"kea_changeset: {getattr(fn, '__name__', 'call')} raised {type(e).__name__}: {e}")
-        return {"ok": False, "code": "error", "detail": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "code": "error", "detail": f"{type(e).__name__}: {e}", "raised": True}
 
 
 def _tail(text) -> str:
@@ -625,13 +631,18 @@ def _run_change_unlocked(
 
         revert_failed: list[Target] = []  # the revert call itself failed: still on the NEW config
         api_refused: set = set()  # (Q224, AJ9) an api target whose rollback was refused before anything was sent: daemon AND file keep the new config, no row
+        api_unknown: set = set()  # (Q227, AM14) an api target whose rollback RAISED: it reported neither what was sent nor what stood, so neither is claimed
         restart_stuck: list[Target] = []  # the previous config is back but the daemon would not restart on it
         for done in reversed(committed):
             rres = _restore_target(done, service, summary, helper_only)
             if not rres.get("ok"):
                 revert_failed.append(done)
                 if done.transport == "api":
-                    if not rres.get("needs_hands") or rres.get("sent") is False:
+                    if rres.get("raised"):
+                        # (Q227, AM14) `_safe` turned a raise into a result with neither `needs_hands` nor `sent`, which satisfied the first disjunct below: a rollback that had
+                        # SUCCEEDED and then raised in its bookkeeping read "still have the NEW config ... restore"
+                        api_unknown.add(done.key)
+                    elif not rres.get("needs_hands") or rres.get("sent") is False:
                         # (Q226, AL27) and a refusal BEFORE the send that carries `needs_hands` (`pending_block`: an EARLIER change's row is unresolved) says `sent: False` - the daemon
                         # and the file keep the change, and the line must not call a rollback that never started "half done"
                         # (Q225, AK5) every rollback result WITHOUT `needs_hands` leaves the daemon in ONE state, the change still standing: a refusal before the set (`guard`, `noanswer`,
@@ -677,7 +688,12 @@ def _run_change_unlocked(
             if revert_failed:
                 failed_keys = {d.key for d in revert_failed}  # by id: two servers may share a name
                 still_new = [d.name for d in revert_failed if d.transport != "api" or d.key in api_refused]
-                api_half = [d.name for d in revert_failed if d.transport == "api" and d.key not in api_refused]
+                api_half = [
+                    d.name
+                    for d in revert_failed
+                    if d.transport == "api" and d.key not in api_refused and d.key not in api_unknown
+                ]
+                api_not_known = [d.name for d in revert_failed if d.key in api_unknown]
                 rolled_back = [d.name for d in committed if d.key not in failed_keys]
                 untouched = f"{t.name} was never changed" if not unproved else f"{t.name} may carry the change (below)"
                 parts = []
@@ -689,6 +705,8 @@ def _run_change_unlocked(
                     parts.append(
                         f"{', '.join(api_half)}: the rollback over the API did not complete (what the daemon and the file hold is in the line above; Settle it now on the Write mode card)"
                     )
+                if api_not_known:
+                    parts.append(f"{', '.join(api_not_known)}: {ROLLBACK_NOT_KNOWN}")
                 lines.append(
                     (
                         "error",

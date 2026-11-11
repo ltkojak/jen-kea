@@ -193,7 +193,7 @@
             <div class="form-group">
                 <label for="f-lockout_minutes">Lockout Duration (minutes)</label>
                 <input id="f-lockout_minutes" type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="10080" aria-describedby="f-lockout_minutes-hint">
-                <div class="form-hint" id="f-lockout_minutes-hint">0 = permanent until admin clears</div>
+                <div class="form-hint" id="f-lockout_minutes-hint">0 = until cleared: waiting does not end the lockout, only Clear All Lockouts below does. Only a superadmin can set 0.</div>
             </div>
             <div class="form-group">
                 <label for="f-mode">Lockout Mode</label>
@@ -208,12 +208,13 @@
         <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:12px;display:flex;gap:24px;">
             <div><span class="stat-label">Failed attempts (last hour)</span><br><strong class="u-52df2b">{{ rl_attempts_1h }}</strong></div>
             <div><span class="stat-label">Unique IPs affected</span><br><strong class="u-52df2b">{{ rl_active_ips }}</strong></div>
+            <div><span class="stat-label">Permanent lockouts in force</span><br><strong class="u-52df2b" id="rl-permanent-lockouts">{{ rl_lockouts_username }} account name(s), {{ rl_lockouts_ip }} address(es)</strong></div>
         </div>
         <div class="u-a76d59">
             <button type="submit" class="btn btn-primary">Save</button>
         </div>
     </form>
-    <form method="POST" action="/settings/clear-lockouts" style="display:inline;margin-top:8px;" data-confirm="Clear all login attempt records? This will unlock all locked accounts."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/clear-lockouts" style="display:inline;margin-top:8px;" data-confirm="Clear every failed login attempt and end every permanent lockout? Every locked account name and address can log in again."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">{{ icon("lock-open") }} Clear All Lockouts</button>
     </form>
 </div>

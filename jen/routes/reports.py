@@ -141,8 +141,9 @@ def reports():
         logger.error(f"Reports IPv6 history error: {e}")
     data_points6 = sum(len(h["data"]) for h in history6.values())
 
-    snapshot_interval = __user.get_global_setting("snapshot_interval_minutes", "30")
-    retention_days = __user.get_global_setting("history_retention_days", "90")
+    # (Q227, AM10; BOUND-001) the page prints the number the snapshot job and the prune apply, never the stored text: a stored 0 or 5000 was shown as it was typed
+    snapshot_interval = __bounds.bounded_setting("snapshot_interval_minutes")
+    retention_days = __bounds.bounded_setting("history_retention_days")
     data_points = sum(len(h["data"]) for h in history.values())
 
     return render_template(

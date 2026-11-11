@@ -379,6 +379,48 @@ class TestToFile:
         assert not r["ok"] and "still differs" in r["line"] and written == []
         assert "config-write" in daemon.commands
 
+    def test_a_refused_write_followed_by_a_proof_that_holds_names_no_discard(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        """(Q227, AM12) the consent was put in the audit row BEFORE the write. Kea refused the `config-write`, the daemon loaded the file meanwhile, the second proof held,
+        and the switch succeeded naming a discard nothing had made. The consent was called for, so it is not "ignored" either."""
+        host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
+        sent = []
+
+        def refused(server, service="dhcp4", **k):
+            sent.append(k)
+            return {"ok": False, "code": "write-failed", "detail": "config-write was refused"}
+
+        def proof(*a, **k):
+            return api._proof(True, "loaded", sha256="f" * 64) if sent else api._proof(False, "none", why="edited")
+
+        monkeypatch.setattr(api, "write_file", refused)
+        monkeypatch.setattr(api, "file_proof", proof)
+        r = sw.switch(srv(daemon, "api", ssh=True), "file", consents={"discard_file_edit"})
+        assert r["ok"], r
+        assert sent == [{"discard": True}]
+        assert r["consents"] == [] and r["ignored"] == [], r
+
+    def test_the_control_a_write_that_discarded_the_edit_names_the_consent(
+        self, daemon, store, probes, written, monkeypatch
+    ):
+        host(monkeypatch, daemon, file_cfg={"Dhcp4": {"valid-lifetime": 1}}, raw="f" * 64)
+        sent = []
+
+        def wrote(server, service="dhcp4", **k):
+            sent.append(k)
+            return api._result(True, "ok", discarded=True)
+
+        def proof(*a, **k):
+            return api._proof(True, "loaded", sha256="f" * 64) if sent else api._proof(False, "none", why="edited")
+
+        monkeypatch.setattr(api, "write_file", wrote)
+        monkeypatch.setattr(api, "file_proof", proof)
+        monkeypatch.setattr(api, "record_rendering_after_write", lambda *a, **k: True)
+        r = sw.switch(srv(daemon, "api", ssh=True), "file", consents={"discard_file_edit"})
+        assert r["ok"], r
+        assert r["consents"] == ["discard_file_edit"] and r["ignored"] == [], r
+
     def test_a_daemon_never_granted_the_write_can_still_leave_api_when_they_agree(
         self, daemon, store, probes, written, monkeypatch
     ):

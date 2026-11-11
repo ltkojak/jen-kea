@@ -38,6 +38,12 @@ def _session_looser(enabled: str, minutes: int) -> bool:
     return rank(enabled == "true", minutes) < rank(now_on, __session_timeout.global_minutes())
 
 
+#: (Q227, AM3) the three sentences of the lockout controls, named so a test and the page read the same words
+PERMANENT_IS_A_SUPERADMINS = "Only a superadmin can set a lockout that lasts until it is cleared (0 minutes)."
+CLEARED_SENTENCE = "Cleared {attempts} failed login attempt(s) and ended {lockouts} permanent lockout(s)."
+OIDC_ISSUER_CHANGED = "The issuer changed - enter the client secret again."
+
+
 def _rate_limit_looser(mode: str, max_attempts: int, lockout_minutes: int) -> bool:
     """Would storing these make login rate limiting LESS strict than it is now? `off` (or 0 attempts) is the least strict; more attempts allowed, or a shorter lockout (0 is until cleared, the
     longest), is looser. (Q225, AK2) The mode is part of the strictness: `both` counts the address's attempts AND the account's and locks on the larger (`is_locked_out`), so it is at least as
@@ -126,6 +132,15 @@ def save_rate_limit():
     if current_user.role != "superadmin" and _rate_limit_looser(mode, int(max_attempts), int(lockout_minutes)):
         flash("Only a superadmin can make login rate limiting less strict.", "error")
         return redirect(url_for("settings.settings_security"))
+    # (Q227, AM3) and only a superadmin makes a lockout permanent. 0 is the strictest value, so the ratchet above lets an admin move TO it and never away: an admin could set it, fail a
+    # superadmin's name at /login and leave that account locked until someone cleared it. An admin may keep a 0 a superadmin set
+    if (
+        current_user.role != "superadmin"
+        and int(lockout_minutes) == 0
+        and __auth.get_rate_limit_settings()["lockout_minutes"] != 0
+    ):
+        flash_field("lockout_minutes", PERMANENT_IS_A_SUPERADMINS)
+        return redirect(url_for("settings.settings_security"))
 
     if not __user.set_global_settings(
         {"rl_max_attempts": max_attempts, "rl_lockout_minutes": lockout_minutes, "rl_mode": mode}
@@ -145,14 +160,17 @@ def clear_lockouts():
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM login_attempts")
-                cur.execute(
-                    "DELETE FROM login_lockouts"
-                )  # (Q226) the permanent lockouts: this button is the one way they end
+                attempts = max(cur.rowcount, 0)
+                # (Q226) the permanent lockouts: this button is the one way they end
+                cur.execute("DELETE FROM login_lockouts")
+                lockouts = max(cur.rowcount, 0)
             db.commit()
         # (Q226, AL22 and the review's note) an ADMIN's act, kept so: it resets counters and ends lockouts (a locked-out colleague is the common case), changes no stored policy, and is
-        # audited; the ratchet (RBAC-003) is about policy
-        flash("All login attempt records cleared.", "success")
-        __user.audit("CLEAR_LOCKOUTS", "settings", "All login attempts cleared")
+        # audited; the ratchet (RBAC-003) is about policy. (Q227, AM3) The flash and the audit row say what it did: it said "All login attempt records cleared." and named no lockout
+        flash(CLEARED_SENTENCE.format(attempts=attempts, lockouts=lockouts), "success")
+        __user.audit(
+            "CLEAR_LOCKOUTS", "settings", f"login attempts cleared={attempts} permanent lockouts ended={lockouts}"
+        )
     except Exception as e:
         logger.error(f"Error clearing lockouts: {e}")
         flash("Error clearing lockouts. Check server logs for details.", "error")
@@ -331,6 +349,17 @@ def save_oidc():
         flash_field(
             "subnet_map", "Subnet mapping: " + "; ".join(bad[:3]) + ". Every segment is group:id,id or group:*."
         )
+        return redirect(url_for("settings.settings_security"))
+
+    # (Q227, AM5; CRED-002) a blank client secret keeps the stored one only while the issuer is the same place. The secret typed for one identity provider was registered against the next
+    # one's discovery document and sent to its token endpoint. A stored issuer that is blank is a different place too (two saves would walk the secret across); an emptied issuer sends the secret nowhere and keeps it
+    if (
+        not client_secret
+        and issuer
+        and extensions.OIDC_CLIENT_SECRET
+        and not __auth.same_endpoint(issuer, extensions.OIDC_ISSUER)
+    ):
+        flash_field("client_secret", OIDC_ISSUER_CHANGED)
         return redirect(url_for("settings.settings_security"))
 
     items = [

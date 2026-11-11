@@ -240,9 +240,12 @@ def login_oidc():
 @bp.route("/login/oidc/callback")
 def login_oidc_callback():
     """The IdP redirects back here with the authorization code. Locked
-    out by IP/the shared "oidc" bucket BEFORE the token exchange — an
-    attacker hammering the callback shouldn't get unlimited attempts
-    just because there's no password to check here."""
+    out by IP BEFORE the token exchange — an attacker hammering the
+    callback shouldn't get unlimited attempts just because there's no
+    password to check here. (Q227, AM4) The attempt names no account
+    (`NO_ACCOUNT`), so it has an address bucket and no username bucket:
+    the literal "oidc" it used to pass was one subject for every user,
+    and anyone's failed callbacks refused single sign-on for everyone."""
     from jen import extensions
 
     client = __oidc.oidc_client()
@@ -251,7 +254,7 @@ def login_oidc_callback():
         return redirect(url_for("auth.login"))
 
     ip = request.remote_addr
-    locked, remaining = __auth.is_locked_out(ip, "oidc")
+    locked, remaining = __auth.is_locked_out(ip, __auth.NO_ACCOUNT)
     if locked:
         if remaining == __auth.PERMANENT_LOCKOUT:
             flash("Sign-in is locked. Contact an administrator.", "error")
@@ -263,7 +266,7 @@ def login_oidc_callback():
         token = client.authorize_access_token()
     except Exception as e:
         logger.warning(f"OIDC token exchange failed: {e}")
-        __auth.record_login_attempt(ip, "oidc")
+        __auth.record_login_attempt(ip, __auth.NO_ACCOUNT)
         flash("Sign-in with SSO failed. Please try again.", "error")
         return redirect(url_for("auth.login"))
 
@@ -282,19 +285,19 @@ def login_oidc_callback():
         sub = str(claims.get("sub") or "")
         if sub and sub == __oidc.external_id_for(current_user.id):
             session["auth_at"] = _now_iso()
-            __auth.clear_login_attempts(ip, "oidc")
+            __auth.clear_login_attempts(ip, __auth.NO_ACCOUNT)
             __user.audit("REAUTH", "auth", f"{current_user.username} re-confirmed identity via SSO")
             next_url = session.pop("reauth_next", "") or url_for("mfa_routes.mfa_enroll")
             if not next_url.startswith("/") or next_url.startswith("//"):
                 next_url = url_for("mfa_routes.mfa_enroll")
             return redirect(next_url)
-        __auth.record_login_attempt(ip, "oidc")
+        __auth.record_login_attempt(ip, __auth.NO_ACCOUNT)
         flash("That sign-on doesn't match the account you're signed in as.", "error")
         return redirect(url_for("dashboard.dashboard"))
 
     row, reason = __oidc.find_or_create_user(claims)
     if row is None:
-        __auth.record_login_attempt(ip, "oidc")
+        __auth.record_login_attempt(ip, __auth.NO_ACCOUNT)
         messages = {
             "no_role": "Your account has no role mapped — contact an administrator.",
             "username_collision": "An account with that username already exists — ask an admin to rename it or link it.",
@@ -312,7 +315,7 @@ def login_oidc_callback():
     # `_next` value before it ever gets to that block.
     next_url = session.pop("oidc_next", "") or url_for("dashboard.dashboard")
 
-    __auth.clear_login_attempts(ip, "oidc")
+    __auth.clear_login_attempts(ip, __auth.NO_ACCOUNT)
     __oidc.establish_session(row, f"User {row['username']} logged in via SSO from {ip}")
     return redirect(next_url)
 

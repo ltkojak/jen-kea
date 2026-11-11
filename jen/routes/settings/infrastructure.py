@@ -4569,6 +4569,10 @@ def toggle_investigation_logging():
     return redirect(url_for("settings.settings_kea"))
 
 
+#: (Q227, AM21) the IPv6 switch's row was not written: what Jen still shows, and where the reason is
+IPV6_NOT_SAVED = "The IPv6 switch could not be saved, so IPv6 stays {state} in Jen. The reason is in the Jen log."
+
+
 @bp.route("/settings/infrastructure/toggle-ipv6", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -4614,15 +4618,18 @@ def toggle_ipv6():
     for r in results:
         flash(f"{r['name']}: {r['message']}", "success" if r["ok"] else "error")
 
+    # (Q227, AM21) the switch is a settings row and its writer answers: "enabled" and "disabled" are said when it is stored, never over a write that failed
     if enable:
-        if all_ok:
-            __user.set_global_setting("ipv6_enabled", "true")
+        if not all_ok:
+            flash("IPv6 was NOT enabled — at least one server failed. Fix the issue above and try again.", "error")
+        elif __user.set_global_setting("ipv6_enabled", "true"):
             flash("IPv6 support enabled.", "success")
         else:
-            flash("IPv6 was NOT enabled — at least one server failed. Fix the issue above and try again.", "error")
+            flash(IPV6_NOT_SAVED.format(state="off"), "error")
     else:
-        __user.set_global_setting("ipv6_enabled", "false")
-        if not all_ok:
+        if not __user.set_global_setting("ipv6_enabled", "false"):
+            flash(IPV6_NOT_SAVED.format(state="on"), "error")
+        elif not all_ok:
             flash(
                 "IPv6 display turned off, but at least one server may still be "
                 "running kea-dhcp6-server — see errors above.",

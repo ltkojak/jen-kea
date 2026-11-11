@@ -73,6 +73,19 @@ def _count(sql, params=()):
         return None
 
 
+def _enabled_channels():
+    """(Q227, AM22) How many enabled channels the Alerts page lists for THIS account: the same `_may_act_on` the list, the edit, the test and the delete ask. The landing page counted
+    every enabled channel, so a subnet-restricted admin read a number that told them channels existed which the Alerts page does not show them."""
+    from jen.routes.settings.alerts import _may_act_on
+
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT subnet_scope FROM alert_channels WHERE enabled=1")
+            return sum(1 for ch in cur.fetchall() if _may_act_on(ch))
+    except Exception:
+        return None
+
+
 # ── Landing page ─────────────────────────────────────────────────────────────
 
 
@@ -128,7 +141,7 @@ def settings():
     if mfa_mode == "off":
         hints["security"].append(("MFA off", "warn"))
 
-    channels = _count("SELECT COUNT(*) AS cnt FROM alert_channels WHERE enabled=1")
+    channels = _enabled_channels()
     hints["alerts"] = [(f"{channels} channel{'s' if channels != 1 else ''} enabled", "ok" if channels else "warn")]
     failed = _count(
         "SELECT COUNT(*) AS cnt FROM alert_log WHERE status NOT IN ('ok','sent') AND sent_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)"
@@ -244,6 +257,9 @@ def settings_security():
     rl_attempts_1h = _count(
         "SELECT COUNT(*) AS cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
     )
+    # (Q227, AM3) the permanent lockouts in force, by kind: a count and no name. A lockout of 0 is a row since Q226 and nothing on the page said one existed
+    rl_lockouts_username = _count("SELECT COUNT(*) AS cnt FROM login_lockouts WHERE kind=%s", ("username",))
+    rl_lockouts_ip = _count("SELECT COUNT(*) AS cnt FROM login_lockouts WHERE kind=%s", ("ip",))
     oidc_settings = {
         "enabled": extensions.OIDC_ENABLED,
         "issuer": extensions.OIDC_ISSUER,
@@ -268,6 +284,8 @@ def settings_security():
         rl=rl_settings,
         rl_active_ips=rl_active_ips or 0,
         rl_attempts_1h=rl_attempts_1h or 0,
+        rl_lockouts_username=rl_lockouts_username or 0,
+        rl_lockouts_ip=rl_lockouts_ip or 0,
         ssl_configured=__config.ssl_configured(),
         cert_info=_cert_info(),
         http_port=extensions.HTTP_PORT,

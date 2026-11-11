@@ -8,6 +8,8 @@ fails when
   * an entry has no id, no rule sentence, no Q, or no test reference (an entry without an automated test must say `(no automated test: <reason>)`, and is listed in this test's output);
   * a reference `path::Class`, `path::function` or `path::Class::method` does not resolve - the file is walked with `ast`, nothing is grepped - or names a function that is not a test;
   * an id is used twice, or an id in the Retired section is used again;
+  * (Q227, AM16) a test-reference bullet sits outside every entry's Tests list - under a section heading, or above an entry's `**Tests.**` line - where it reads as a guard and
+    is counted for no entry;
   * the registry is not pointed at from CLAUDE.md and the release-audit procedure.
 
 Pure - no database, no Flask: `py -m pytest --noconftest tests/test_safety_invariants.py`.
@@ -22,7 +24,11 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "docs" / "SAFETY_INVARIANTS.md"
 
-_HEADER = re.compile(r"^### ([A-Z][A-Z0-9]*-\d{3}) - (.+?)\s*$", re.M)
+# (Q227, AM16) the family may have two parts (`DNS-CRED-001`, `LOG-IDENTITY-001`, `PROBLEMS-IDENTITY-002`): the one-part pattern did not see six entries as entries, so none of
+# their fields was checked and their tests were counted for the entry above them
+_ID = r"[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-\d{3}"
+_HEADER = re.compile(rf"^### ({_ID}) - (.+?)\s*$", re.M)
+_BULLET = re.compile(r"^\s*- `(tests/[^`]+)`")
 _SECTION = re.compile(r"^## (.+?)\s*$", re.M)
 _NO_TEST = re.compile(r"^\(no automated test:\s*(.+)\)\s*$")
 _REF = re.compile(r"^`([^`]+)`")
@@ -71,8 +77,24 @@ def parse_registry(text: str) -> tuple[list[dict], list[str]]:
     retired = []
     m = re.search(r"^## Retired ids\s*$(.*)", text, re.M | re.S)
     if m:
-        retired = re.findall(r"^- `([A-Z][A-Z0-9]*-\d{3})`", m.group(1), re.M)
+        retired = re.findall(rf"^- `({_ID})`", m.group(1), re.M)
     return entries, retired
+
+
+def strays(text: str) -> list[str]:
+    """Every test-reference bullet that no entry's Tests list holds (Q227, AM16). `parse_registry` ends an entry at the next `##` heading and starts its tests at `**Tests.**`,
+    so a bullet under a section heading, or between an entry's heading and its `**Tests.**` line, is a guard the registry shows and the checker counts for nobody."""
+    out, inside = [], False
+    for n, line in enumerate(text.splitlines(), 1):
+        if line.startswith("## ") or _HEADER.match(line):
+            inside = False
+        elif "**Tests.**" in line:
+            inside = True
+        elif not inside and _BULLET.match(line):
+            out.append(
+                f"docs/SAFETY_INVARIANTS.md:{n}: `{_BULLET.match(line).group(1)}` is outside every entry's Tests list"
+            )
+    return out
 
 
 def _tests_in(rel: str):
@@ -158,6 +180,19 @@ class TestTheRegistryIsTrue:
         entries, retired = parsed
         assert not problems(entries, retired), "\n" + "\n".join(problems(entries, retired))
 
+    def test_no_test_reference_sits_outside_an_entry(self):  # Q227, AM16
+        found = strays(REGISTRY.read_text(encoding="utf-8"))
+        assert not found, "\n" + "\n".join(found)
+
+    def test_an_id_with_a_two_part_family_is_an_entry(self, parsed):  # Q227, AM16
+        entries, _retired = parsed
+        ids = {e["id"] for e in entries}
+        assert {"DNS-CRED-001", "LOG-IDENTITY-001", "PROBLEMS-IDENTITY-001", "DDNS-STATUS-001", "LOG-CACHE-002"} <= ids
+        text = REGISTRY.read_text(encoding="utf-8")
+        assert len(entries) == sum(1 for line in text.splitlines() if line.startswith("### ")), (
+            "a `###` heading that is not an entry"
+        )
+
     def test_the_entries_without_an_automated_test_are_listed(self, parsed, capsys):
         entries, _retired = parsed
         bare = [(e["id"], e["no_test_reason"]) for e in entries if not e["tests"]]
@@ -233,6 +268,22 @@ class TestTheCheckerCatchesWhatItIsFor:
     def test_a_retired_id_cannot_come_back(self):
         back = self.GOOD.replace("TST-001", "OLD-001")
         assert any("Retired section" in p for p in self._problems(back))
+
+    def test_a_bullet_under_a_section_heading_is_a_stray(self):  # Q227, AM16
+        ref = "- `tests/test_safety_invariants.py::TestTheCheckerCatchesWhatItIsFor`\n"
+        assert strays(self.GOOD) == []
+        moved = self.GOOD.replace(ref, "").replace("## Retired ids\n", "## Retired ids\n" + ref)
+        found = strays(moved)
+        assert len(found) == 1 and "is outside every entry's Tests list" in found[0], found
+        above = self.GOOD.replace(ref, "").replace("**Rule.**", ref + "**Rule.**")
+        assert len(strays(above)) == 1
+
+    def test_a_two_part_family_is_parsed_and_checked(self):  # Q227, AM16
+        two = self.GOOD.replace("TST-001", "TST-PART-001")
+        entries, _r = parse_registry(two)
+        assert [e["id"] for e in entries] == ["TST-PART-001"] and self._problems(two) == []
+        thin = two.replace("Q166", "later")
+        assert any("TST-PART-001" in p and "names no Q" in p for p in self._problems(thin))
 
     def test_an_entry_without_a_q_or_a_rule_is_reported(self):
         thin = self.GOOD.replace("Q166", "later").replace("Nothing may ever write this without asking first.", "x")

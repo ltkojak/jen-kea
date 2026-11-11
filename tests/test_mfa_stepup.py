@@ -204,8 +204,11 @@ class TestOidcStepUp:
         assert "/auth/reauth" in client.get("/mfa/trusted-devices", follow_redirects=False).headers["Location"]
 
         with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS c FROM login_attempts WHERE username='oidc'")
+            # (Q227, AM4) the callback names no account: its attempts are recorded under `auth.NO_ACCOUNT`, never under one name every user shares
+            cur.execute("SELECT COUNT(*) AS c FROM login_attempts WHERE username=''")
             assert cur.fetchone()["c"] >= 1
+            cur.execute("SELECT COUNT(*) AS c FROM login_attempts WHERE username='oidc'")
+            assert cur.fetchone()["c"] == 0
 
 
 class TestForcedEnrollmentUnaffected:

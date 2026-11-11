@@ -582,6 +582,9 @@ RATE_LIMIT_MODES = ("ip", "username", "both", "off")
 #: (Q226, AL12) what `is_locked_out` answers as the minutes of a lockout that ends only when an administrator clears it. It was 999, and a configured lockout of 999 minutes or more read as
 #: permanent at `/login` ("Contact an administrator") - inside the form's own range. A caller tests `remaining == PERMANENT_LOCKOUT`, never a magnitude
 PERMANENT_LOCKOUT = -1
+#: (Q227, AM4) the account name of an attempt that names no account (the OIDC callback, before the identity provider has answered). `is_locked_out` builds no username bucket for it. The
+#: callback used to pass the literal "oidc": one subject shared by every user, so enough failed callbacks from anyone refused single sign-on for everyone, until cleared under a lockout of 0
+NO_ACCOUNT = ""
 
 
 def get_rate_limit_settings():
@@ -598,7 +601,8 @@ def get_rate_limit_settings():
 
 
 def _maybe_prune_login_attempts(cur, now=None):
-    """Run the 24h login_attempts cleanup DELETE at most once per
+    """Run the login_attempts cleanup DELETE (rows older than the longest
+    lockout the page accepts: a week since Q226, it was 24 hours) at most once per
     process-hour, using the open cursor `cur`. Returns True if it ran the
     DELETE. Pure enough to unit-test with a fake cursor and an injected
     `now` — the only side effect besides the DELETE is updating the
@@ -622,7 +626,7 @@ def record_login_attempt(ip, username):
     could each run its `is_locked_out()` check before any of their
     failures had actually reached the DB, so the lockout never engaged.
 
-    v5.10.4 — the 24h cleanup DELETE that used to ride along on every
+    v5.10.4 — the cleanup DELETE that used to ride along on every
     single call is now rate-limited to once per process-hour
     (_maybe_prune_login_attempts). The INSERT — the part the lockout
     correctness depends on — stays synchronous."""
@@ -653,6 +657,14 @@ def clear_login_attempts(ip, username):
 
 
 def is_locked_out(ip, username):
+    """(locked, minutes): is this attempt refused, and for how long. `PERMANENT_LOCKOUT` is "until an administrator clears it".
+
+    What a permanent row is and is not (Q227, AM4 and AM17 to AM20):
+    - an attempt that names no account (`NO_ACCOUNT`: the OIDC callback) has no username bucket. It is counted by its address under `ip` and `both`, and not at all under `username`
+    - a row is written for the name that was typed, account or not. Every caller clips the name to the 100 characters `login_attempts.username` holds, so the row's 255 never binds
+    - `off` and `max_attempts = 0` answer before the table is read, and a `username` row is not read under mode `ip`: the policy decides which rows count. The rows stay and count again when
+      the policy asks for them. Only `clear_lockouts` deletes one, and the Security page shows how many are in force
+    - the row is written in the transaction that counted. A failure after it rolls the row back, the answer is the fail-closed `(True, 1)`, and the next attempt writes it again"""
     rl = get_rate_limit_settings()
     mode = rl["mode"]
     max_attempts = rl["max_attempts"]
@@ -665,7 +677,7 @@ def is_locked_out(ip, username):
     buckets = []  # (column, value, kind): the buckets the mode counts
     if mode in ("ip", "both"):
         buckets.append(("ip_address", ip, "ip"))
-    if mode in ("username", "both"):
+    if mode in ("username", "both") and username != NO_ACCOUNT:
         buckets.append(("username", username, "username"))
     try:
         with __jen_db_ctx() as db, db.cursor() as cur:

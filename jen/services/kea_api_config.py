@@ -127,7 +127,10 @@ def _digest(reply: dict) -> str | None:
 
 
 def _section(cfg: dict | None, service: str) -> dict:
-    return (cfg or {}).get(SERVICE_KEY.get(service, ""), {}) or {}
+    # (Q227, AM13) a configuration whose top level is not an object (a hand-written file that is a JSON array) has no section: this raised AttributeError out of the rollback gate
+    if not isinstance(cfg, dict):
+        return {}
+    return cfg.get(SERVICE_KEY.get(service, ""), {}) or {}
 
 
 # Kea renders some singular keys of a file as lists in `config-get` (docs/ARCHITECTURE.md 3.17: `hosts-database` comes back as `hosts-databases`, `control-socket` as `control-sockets`). The table's SOURCE is a
@@ -1354,8 +1357,11 @@ def apply(
                 why_not = f"the running configuration of {_name(server)} could not be read ({why_now})"
             elif mirrors(file_now, live_now, service):
                 planned_sha = row_sha
-            elif not isinstance(_section(live_now, service), dict) or not _section(live_now, service):
-                # (Q226, AL31) one sentence per cause: a daemon that answers an empty or shapeless section is the daemon's doing, not the file's, and the operator was pointed at a
+            elif not isinstance(_section(live_now, service), dict):
+                # (Q227, AM28) and one sentence per cause here too: a section that is not an object is not "empty"
+                why_not = f"the running configuration of {_name(server)} is not one Jen can read (its {SERVICE_KEY.get(service, service)} section is not an object); the file was not judged"
+            elif not _section(live_now, service):
+                # (Q226, AL31) one sentence per cause: a daemon that answers an empty section is the daemon's doing, not the file's, and the operator was pointed at a
                 # Config-history row holding an unedited file
                 why_not = f"the running configuration of {_name(server)} came back empty; the file was not judged"
             else:

@@ -192,7 +192,8 @@ class TestS2NoLiveFileIsMovedAwayBeforeItsReplacementExists:
 
 # ── S3: every DDL statement has its own guard ────────────────────────────────
 
-_DDL = re.compile(r"\b(ALTER\s+TABLE|CREATE\s+(UNIQUE\s+)?INDEX|ADD\s+CONSTRAINT)\b", re.I)
+# (Q227, AM8) `CREATE TABLE` is DDL too: migration 39's is guarded and the sweep that says so never matched it. `CREATE TABLE IF NOT EXISTS` carries its own guard and is skipped below
+_DDL = re.compile(r"\b(ALTER\s+TABLE|CREATE\s+TABLE|CREATE\s+(UNIQUE\s+)?INDEX|ADD\s+CONSTRAINT)\b", re.I)
 _GUARD_NAMES = (
     "_column_missing",
     "_column_exists",

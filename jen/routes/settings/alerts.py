@@ -25,16 +25,29 @@ from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
 
-#: (Q226, AL2) the config keys that are WRITE-ONLY, by channel type: the page never prints them (the edit form's data carries "" for them and its inputs say "saved - leave blank to keep"),
-#: and a blank on an edit keeps the stored value - only while the channel still names the same place (`_kept_secrets`, CRED-002). A Slack or Discord webhook URL is the secret itself.
+#: (Q226, AL2) the config keys that are WRITE-ONLY, by channel type: the page never prints them (its inputs say "saved - leave blank to keep"), and a blank on an edit keeps the stored
+#: value - only while the channel still names the same place (`_kept_secrets`, CRED-002). A Slack or Discord webhook URL is the secret itself; (Q227, AM1, AM23) a generic webhook's
+#: URL is write-only too - services put a token in its path or query, and one key name (`webhook_url`) is then a secret under every type that has it.
 WRITE_ONLY_KEYS = {
     "telegram": ("token",),
     "email": ("smtp_pass",),
     "slack": ("webhook_url",),
     "discord": ("webhook_url",),
-    "webhook": ("header_value",),
+    "webhook": ("webhook_url", "header_value"),
     "ntfy": ("token",),
     "pushover": ("user_key", "api_token"),
+}
+#: (Q227, AM1, AM7) what the page MAY carry of a stored config, by channel type: an ALLOWLIST. `_shown` used to blank the declared type's write-only keys and print every key it did
+#: not know - so a row whose type does not describe its config (an edit before 5.69.0 wrote the form's config and left the row's type), a type this table does not name, or one extra
+#: key printed a stored secret into the page. A key reaches the page only by being named here, and no key named here is write-only under ANY type (the test holds the two tables to it).
+SHOWN_KEYS = {
+    "telegram": ("chat_id",),
+    "email": ("smtp_host", "smtp_port", "smtp_user", "from_addr", "to_addr", "use_tls"),
+    "slack": (),
+    "discord": (),
+    "webhook": ("payload_type", "header_name"),
+    "ntfy": ("url", "topic", "priority"),
+    "pushover": (),
 }
 #: the form field that carries each write-only key, for the refusal that names it
 WRITE_ONLY_FIELDS = {
@@ -42,6 +55,7 @@ WRITE_ONLY_FIELDS = {
     ("email", "smtp_pass"): "smtp_pass",
     ("slack", "webhook_url"): "slack_webhook",
     ("discord", "webhook_url"): "discord_webhook",
+    ("webhook", "webhook_url"): "webhook_url",
     ("webhook", "header_value"): "header_value",
     ("ntfy", "token"): "ntfy_token",
     ("pushover", "user_key"): "pushover_user_key",
@@ -69,49 +83,58 @@ def _stored_channel(channel_id):
         return cur.fetchone()
 
 
-def _scope_list(raw) -> list | None:
-    """The stored `subnet_scope` as a list of ids, None for every subnet (NULL or unreadable, the service's own reading)."""
-    if raw is None:
-        return None
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except (json.JSONDecodeError, ValueError, TypeError):
-        return None
-    return parsed if isinstance(parsed, list) and parsed else None
-
-
 def _may_act_on(channel: dict) -> bool:
     """(Q226, AL24, AL2) A subnet-restricted admin reads, edits, tests and deletes only a channel whose scope lies inside their own; a channel scoped wider, or to every subnet, is not theirs to see
     (RBAC-001: its config is a secret and its alerts name what they cannot see), and a denial and a not-found are one message (RBAC-002). An unrestricted account acts on every channel."""
     if current_user.all_subnets:
         return True
-    scope = _scope_list(channel.get("subnet_scope"))
+    # (Q227, AM25) the service's own reading, `alerts.channel_scope`: None is every subnet and an empty tuple is a damaged scope - neither is inside anyone's restriction
+    scope = __alerts.channel_scope(channel)
     if not scope:
         return False
     allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-    return all(isinstance(s, int) and not isinstance(s, bool) and s in allowed for s in scope)
+    return all(s in allowed for s in scope)
+
+
+#: the two refusals of `_kept_secrets`, each said under the field it names
+DESTINATION_CHANGED = "The channel's destination changed - enter the secret again."
+STORED_UNREADABLE = "This channel's stored settings cannot be read, so its secret cannot be kept - enter it again."
 
 
 def _kept_secrets(channel_id, channel_type: str, config: dict, stored: dict | None):
     """(Q226, AL3) A write-only key left blank on an EDIT keeps the stored value - only while the channel names the same place (CRED-002, `auth.same_endpoint`); a blank secret for a server, a
-    port, a wire or a URL the admin typed anew is REFUSED with the field named, never carried and never silently emptied. Returns the config to store, or the name of the form field to refuse on."""
+    port, a wire or a URL the admin typed anew is REFUSED with the field named, never carried and never silently emptied. Returns the config to store, or `(field, sentence)` to refuse on.
+
+    (Q227) Three things the first version got wrong. A stored config that cannot be read (`get_channel_config` answers `{}` for a row that has one - a database restored without its key)
+    kept "" for a provider's token and said "saved" (AM6): it is refused, and the sentence says why. Only a key that HAS a stored value is kept, so only such a key can be refused: a webhook
+    with no authorization header could not change its URL, because its always-blank header was "a secret for a changed place". And a webhook's URL is write-only now (AM1): a blank URL
+    is the stored one, taken BEFORE the place is compared, so the header beside it is judged against the place it was typed for."""
     blanks = [k for k in WRITE_ONLY_KEYS.get(channel_type, ()) if not config.get(k)]
     if not blanks or stored is None:
         return config
     old = __alerts.get_channel_config(stored)
-    if stored.get("channel_type") != channel_type or not __auth.same_endpoint(
-        _endpoint(channel_type, config), _endpoint(channel_type, old)
-    ):
-        return WRITE_ONLY_FIELDS[(channel_type, blanks[0])]
-    for k in blanks:
-        config[k] = old.get(k, "")
+    if not old and stored.get("config"):
+        return WRITE_ONLY_FIELDS[(channel_type, blanks[0])], STORED_UNREADABLE
+    if stored.get("channel_type") != channel_type:
+        # another kind of channel is another place
+        return WRITE_ONLY_FIELDS[(channel_type, blanks[0])], DESTINATION_CHANGED
+    if channel_type == "webhook" and "webhook_url" in blanks and old.get("webhook_url"):
+        config["webhook_url"] = old["webhook_url"]
+        blanks.remove("webhook_url")
+    kept = [k for k in blanks if old.get(k)]
+    if not kept:
+        return config
+    if not __auth.same_endpoint(_endpoint(channel_type, config), _endpoint(channel_type, old)):
+        return WRITE_ONLY_FIELDS[(channel_type, kept[0])], DESTINATION_CHANGED
+    for k in kept:
+        config[k] = old[k]
     return config
 
 
 def _shown(channel_type: str, config: dict) -> dict:
-    """The config as the page carries it: every write-only key blank (AL2)."""
-    hidden = WRITE_ONLY_KEYS.get(channel_type, ())
-    return {k: ("" if k in hidden else v) for k, v in (config or {}).items()}
+    """The config as the page carries it (Q227, AM1, AM7): the keys `SHOWN_KEYS` names for this type and nothing else. A type the table does not name shows nothing."""
+    shown = SHOWN_KEYS.get(channel_type, ())
+    return {k: v for k, v in (config or {}).items() if k in shown}
 
 
 @bp.route("/settings/alerts")
@@ -139,12 +162,17 @@ def settings_alerts():
                         ch["alert_types"] = json.loads(ch["alert_types"])
                     except (json.JSONDecodeError, ValueError):
                         ch["alert_types"] = []
-                # v5.1.16 — per-channel subnet scope for notifications
-                if isinstance(ch.get("subnet_scope"), str):
-                    try:
-                        ch["subnet_scope"] = json.loads(ch["subnet_scope"])
-                    except (json.JSONDecodeError, ValueError):
-                        ch["subnet_scope"] = None
+                # v5.1.16 — per-channel subnet scope for notifications. (Q227, AM24) read by the service's one reader: a damaged scope used to become None here, and the card then
+                # said "all subnets" for a channel that receives no subnet-specific alert at all
+                scope = __alerts.channel_scope(ch)
+                ch["scope_damaged"] = scope == ()
+                ch["subnet_scope"] = list(scope) if scope else None
+                # (Q227, AM2) the types this channel lists and is not sent, so the card says so
+                ch["unsent_types"] = [
+                    t
+                    for t in (ch.get("alert_types") or [])
+                    if scope is not None and t in __alerts.WHOLE_NETWORK_ALERT_TYPES
+                ]
             cur.execute("SELECT alert_type, template_text FROM alert_templates")
             for row in cur.fetchall():
                 templates[row["alert_type"]] = row["template_text"]
@@ -165,8 +193,9 @@ def settings_alerts():
     plugin_alert_types = {type_id: loaded.get(pid, {}).get("name", pid) for type_id, pid in PLUGIN_ALERT_TYPES.items()}
 
     summary_time = __user.get_global_setting("daily_summary_time", "07:00")
-    pool_exhaustion_free = __user.get_global_setting("pool_exhaustion_free", "5")
-    threshold_pct = __user.get_global_setting("alert_threshold_pct", "80")
+    # (Q227, AM10) what the server APPLIES, through the table's one reader - never the stored text
+    pool_exhaustion_free = __bounds.bounded_setting("pool_exhaustion_free")
+    threshold_pct = __bounds.bounded_setting("alert_threshold_pct")
     reserved_lease_mode = __user.get_global_setting("reserved_lease_mode", "always")
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     return render_template(
@@ -183,6 +212,7 @@ def settings_alerts():
         reserved_lease_mode=reserved_lease_mode,
         subnet_map=accessible_subnet_map,
         can_grant_all_subnets=current_user.all_subnets,
+        whole_network_alert_types=__alerts.WHOLE_NETWORK_ALERT_TYPES,
         # Q204 (RBAC-005): the token is read off this page only by an account that may see every subnet (the template renders the form on the same condition)
         metrics_token=cfg.get("server", "metrics_token", fallback="") if cfg and current_user.all_subnets else "",
         metrics_open=cfg.getboolean("server", "metrics_open", fallback=False) if cfg else False,
@@ -205,6 +235,10 @@ def save_alert_channel():
     if channel_type not in CHANNEL_TYPES:
         # the type is written now (it used to be stored only on INSERT, so an edit that changed it saved a config for one type under another) - and it is one of ours
         flash("Choose a channel type from the list.", "error")
+        return redirect(url_for("settings.settings_alerts"))
+    if any(t not in ALERT_TYPE_LABELS for t in alert_types):
+        # (Q227, AM2) the list was stored as posted, with no question asked of it: an id that is no alert type refuses the form whole (DEF-003)
+        flash("Choose the alert types from the list.", "error")
         return redirect(url_for("settings.settings_alerts"))
     stored = None
     if channel_id:
@@ -241,6 +275,15 @@ def save_alert_channel():
             flash_field("subnet_ids", "Select at least one subnet this channel should cover.")
             return redirect(url_for("settings.settings_alerts"))
         subnet_scope = json.dumps(ids)
+
+    if subnet_scope is not None and any(t in __alerts.WHOLE_NETWORK_ALERT_TYPES for t in alert_types):
+        # (Q227, AM2) the daily summary lists every subnet in the subnet map and counts every device. A channel limited to some subnets - the only kind a subnet-restricted admin can
+        # make - is not sent it (`alerts.channel_handles_alert`), and the form says so here instead of storing a tick that will never deliver
+        flash(
+            "The daily summary names every subnet, so only a channel for All Subnets can receive it. Untick Daily summary for this channel.",
+            "error",
+        )
+        return redirect(url_for("settings.settings_alerts"))
 
     if not channel_name:
         flash("Channel name is required.", "error")
@@ -294,11 +337,18 @@ def save_alert_channel():
             "webhook_url": request.form.get("discord_webhook", "").strip(),
         }
 
+    # (Q227, AM23) CRED-005 at the one save path that did not ask it: a URL never carries a password. A webhook's and ntfy's address is dialed as typed, so user-info in it is refused
+    # here with the sentence every connection form uses; the secret has its own field (the header value, the ntfy token)
+    for key, field in (("webhook_url", "webhook_url"), ("url", "ntfy_url")):
+        if channel_type in ("webhook", "ntfy") and __auth.userinfo_sentence(config.get(key, "")):
+            flash_field(field, __auth.USERINFO_SENTENCE)
+            return redirect(url_for("settings.settings_alerts"))
+
     # (Q226, AL2, AL3) every write-only key left blank on an edit keeps the stored value - while the channel names the same place; the two keys that used to be kept (`smtp_pass`, `api_token`)
     # were kept across a changed SMTP host, which CRED-002 forbids by name
     kept = _kept_secrets(channel_id, channel_type, config, stored)
-    if isinstance(kept, str):
-        flash_field(kept, "The channel's destination changed - enter the secret again.")
+    if not isinstance(kept, dict):
+        flash_field(*kept)  # (field, sentence): the place changed, or the stored settings cannot be read (Q227, AM6)
         return redirect(url_for("settings.settings_alerts"))
     config = kept
 

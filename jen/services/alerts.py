@@ -72,7 +72,8 @@ def __classify_device(*a, **kw):
 def _int_setting(key, default):
     """A setting read as an integer; a value that is not one (a table edit is the only way to store it) is `default`, never an exception that stops the rest of the cycle
     (v5.69.0-beta.5, Q174: the threshold reads raised out of `check_utilization_alerts` and the outer handler skipped every later check of every pass). (Q226, AL9) read through the one
-    bounded reader: the value is also held inside the bound its form has; `default` is the table's and is kept as an argument for the three callers' readability."""
+    bounded reader: the value is also held inside the bound its form has. (Q227, AM27) `default` is NOT read: the answer for a missing or damaged row is the table's default, and the
+    argument stays for the three callers' readability. A test holds each caller's number equal to the table's, so the two cannot drift."""
     from jen.services.setting_bounds import bounded_setting
 
     return bounded_setting(key)
@@ -387,7 +388,11 @@ def get_active_channels():
 
 
 def channel_handles_alert(channel, alert_type):
-    """Check if channel is configured to send this alert type."""
+    """Check if channel is configured to send this alert type.
+
+    (Q227, AM2) An alert about the WHOLE network (`WHOLE_NETWORK_ALERT_TYPES`: the daily summary, whose text names every subnet and counts every device) is handled only by
+    a channel for every subnet. A channel limited to some subnets - which is the only kind a subnet-restricted admin can make - does not receive it, whatever its stored
+    list of alert types says; a damaged scope does not either."""
     try:
         alert_types = channel.get("alert_types")
         if not alert_types:
@@ -396,7 +401,9 @@ def channel_handles_alert(channel, alert_type):
             import json
 
             alert_types = json.loads(alert_types)
-        return alert_type in alert_types
+        if alert_type not in alert_types:
+            return False
+        return alert_type not in WHOLE_NETWORK_ALERT_TYPES or channel_scope(channel) is None
     except Exception:
         return False
 
@@ -406,15 +413,44 @@ def channel_handles_alert(channel, alert_type):
 # must not receive it. The channel scope is the operator's statement of which clients they want to hear about.
 SCOPED_ALERT_TYPES = frozenset({"client_problems"})
 
+# (Q227, AM2) alert types whose text is about the WHOLE network, with no one subnet to ask a channel's scope about. The daily summary lists every subnet in the subnet map with
+# its utilization and counts every known device, so it goes only to a channel for every subnet (`channel_handles_alert`). A summary per scope is not built: see the Q.
+WHOLE_NETWORK_ALERT_TYPES = frozenset({"daily_summary"})
+
+
+def channel_scope(channel):
+    """The ONE reading of a channel's stored subnet scope (Q227, AM24/AM25). None: the channel is for every subnet (a NULL column - what an unrestricted account's form stores
+    for "All Subnets"). A tuple of subnet ids: the channel is limited to those. An EMPTY tuple: a scope that is present and damaged (empty, not a list of whole numbers, or
+    unreadable) - no form writes one, it delivers no subnet-specific alert and no whole-network one, and a subnet-restricted admin may not act on the channel. Delivery
+    (`channel_allows_subnet`, `channel_handles_alert`), the route's `_may_act_on` and the page's card all ask this, so they cannot disagree about one stored value."""
+    scope = channel.get("subnet_scope")
+    if scope is None:
+        return None
+    try:
+        import json
+
+        allowed = json.loads(scope) if isinstance(scope, str) else scope
+    except Exception:
+        return ()
+    if (
+        not isinstance(allowed, (list, tuple))
+        or not allowed
+        or not all(isinstance(s, int) and not isinstance(s, bool) for s in allowed)
+    ):
+        return ()
+    return tuple(allowed)
+
 
 def channel_allows_subnet(channel, subnet_id, scoped=False):
     """v5.1.16 — per-channel subnet scoping for notifications. A NULL
     scope means unrestricted (what an unrestricted account's form stores
     for "All Subnets", and what every channel had before this existed).
     subnet_id=None means the alert isn't tied to one specific subnet
-    (kea_down, ha_failover, daily_summary, etc.) — those always go through
+    (kea_down, ha_failover, etc.) — those always go through
     regardless of scope, since "which subnets do you want lease/device
-    alerts for" doesn't apply to them.
+    alerts for" doesn't apply to them. (Q227, AM2) The daily summary is
+    not one of them: it names every subnet, and `channel_handles_alert`
+    sends it only to a channel for every subnet.
 
     (Q226, the beta.11 review's P1 #2) A scope that is present but empty,
     not a list of ids, or unreadable fails CLOSED for a subnet-specific
@@ -424,28 +460,15 @@ def channel_allows_subnet(channel, subnet_id, scoped=False):
 
     `scoped=True` (v5.68.0-beta.9, Q144) is for an alert about one client: with no subnet_id it FAILS CLOSED for a channel that has a
     scope (a channel with no scope still receives it). (Q226) A malformed or empty scope fails CLOSED for a subnet-specific alert: see the body."""
-    scope = channel.get("subnet_scope")
     if subnet_id is None and not scoped:
         return True
-    if scope is None:
-        return True  # NULL is the one deliberate "every subnet": what an unrestricted account's form stores for "All Subnets"
     # (Q226, the beta.11 review's P1 #2) a scope that is PRESENT but empty, not a list, or unreadable was read as every subnet. No form writes one (Q225: a restricted admin's branch never
     # stores `[]` or NULL; the unrestricted branch stores NULL for "all"), so such a row is damaged, and a damaged scope delivers NO subnet-specific alert: the alert's text names clients
-    # and subnets the channel's creator may not see. A server-level alert (no subnet) still goes to it. The old sentence said a malformed scope "fails open - a notification preference,
-    # not an access-control boundary"; Q225's AK1 showed it is one
-    try:
-        import json
-
-        allowed = json.loads(scope) if isinstance(scope, str) else scope
-    except Exception:
-        return False
-    if (
-        not isinstance(allowed, list)
-        or not allowed
-        or not all(isinstance(s, int) and not isinstance(s, bool) for s in allowed)
-    ):
-        return False
-    if subnet_id is None:
+    # and subnets the channel's creator may not see. A server-level alert (no subnet) still goes to it. (Q227) the reading is `channel_scope`, the one the page and the route use too
+    allowed = channel_scope(channel)
+    if allowed is None:
+        return True  # NULL is the one deliberate "every subnet": what an unrestricted account's form stores for "All Subnets"
+    if not allowed or subnet_id is None:
         return False
     return int(subnet_id) in allowed
 

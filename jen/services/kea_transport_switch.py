@@ -165,12 +165,16 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     _api.store_probe(sid, stored)
     if current == "api":  # (Q218 BH1 d) a consent recorded in place says so, and says what it discarded
         line = f"{name}: consent recorded for Live API"
-        if wrote_a_file:
+        if discarded_an_edit:
             line += (
                 f", and the file's edit was discarded (Config history #{discarded_at})"
                 if discarded_at
                 else ", and the file's edit was discarded"
             )
+        elif wrote_a_file:
+            # (Q227, AM11) the sentence asks the write, as the result and the audit row do (AL28). The first proof found an edit and the write's own proof did not (the daemon loaded
+            # the file between the two reads): the flash said "discarded" while the audit row's consents said none was
+            line += NOTHING_LEFT_TO_DISCARD
         if not discarded_an_edit:
             used = [
                 c for c in used if c != "discard_file_edit"
@@ -193,6 +197,9 @@ def _to_api(server: dict, current: str, consents: set, actor: str) -> dict:
     )
 
 
+#: (Q227, AM11) the write was sent for a discard and its own proof found no edit left
+NOTHING_LEFT_TO_DISCARD = "; nothing was discarded - the file no longer carried an edit when the write was sent"
+
 # (Q224, AJ6) what the file turned out to be when a discard found nothing to discard, by `file_proof`'s `how`
 NOTHING_TO_DISCARD = {
     "loaded": "one the daemon has loaded",
@@ -213,6 +220,8 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
     acted: list[
         str
     ] = []  # the consents this act USED (Q218 BH3 e): the audit row prints what was done, not what was submitted
+    # (Q227, AM12) the consents the facts called for: one that was called for and discarded nothing is not named and is not "ignored" either
+    called_for: set[str] = set()
     file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
     if file_cfg is None:
         return _refuse(
@@ -244,10 +253,14 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         blocked = _write_guard(server, name, live)
         if blocked:
             return _refuse(blocked)
-        acted.append("discard_file_edit")
+        called_for.add("discard_file_edit")
         wrote = _api.write_file(
             server, SERVICE, discard=True
         )  # (Q218 BH1 b) `discard_file_edit` is in THIS act's consents (the refusal above); the sender's capturing read puts the edit in Config history first
+        if wrote.get("discarded"):
+            # (Q227, AM12; AL28 in THIS direction) the consent is named when the write discarded an edit. It was appended before the write, so a `config-write` Kea refused, followed by
+            # a second proof that passed, succeeded with the consent in the audit row and nothing discarded
+            acted.append("discard_file_edit")
         if wrote.get("ok"):
             _api.record_rendering_after_write(server, SERVICE, f"transport switched {current} -> file by {actor}")
         file_cfg, raw = _host.read_config_versioned(server, SERVICE, capture=False)
@@ -279,7 +292,7 @@ def _to_file(server: dict, current: str, consents: set, actor: str) -> dict:
         else f"{name}: switched to File over SSH",
         revision=revision,
         consents=acted,
-        ignored=sorted(set(consents) - set(acted)),
+        ignored=sorted(set(consents) - called_for),
     )
 
 
