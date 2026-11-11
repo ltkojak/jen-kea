@@ -178,8 +178,11 @@ def build_ctx(user, is_superadmin: bool) -> dict:
     channels = 0
     try:
         with jen_db() as db, db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS cnt FROM alert_channels WHERE enabled=1")
-            channels = cur.fetchone()["cnt"]
+            # (Q228, AN3) the channels THIS account may act on, as `/settings` counts them since Q227: a bare COUNT(*) told a subnet-restricted admin how many channels exist
+            from jen.services import alerts as __alerts
+
+            cur.execute("SELECT subnet_scope FROM alert_channels WHERE enabled=1")
+            channels = __alerts.enabled_channels_for(user, cur.fetchall())
     except Exception:
         channels = 0
 

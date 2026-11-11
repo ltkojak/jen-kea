@@ -385,7 +385,9 @@ class TestTransportErrorsAreRecordedNotRaised:
         assert result.status == "rollback_failed"
         assert result.needs_hands == ["kea-a"]
         (line,) = [text for _t, text in result.lines if "ROLLBACK FAILED" in text]
-        assert "kea-a still have the NEW config" in line
+        # (Q228, AN21) the revert RAISED, so it reported nothing: the helper's replace may have put the old file back before the connection went. The line said "still have the
+        # NEW config" since Q26; a revert that was REFUSED still says it (test_revert_that_also_fails_is_rollback_failed)
+        assert f"kea-a: {cs.RESTORE_NOT_KNOWN}" in line and "still have the NEW config" not in line
 
     def test_a_preflight_that_raises_aborts_before_any_write(self, fake):
         def test_resp(server, op, payload):

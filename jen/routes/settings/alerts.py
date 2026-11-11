@@ -49,6 +49,12 @@ SHOWN_KEYS = {
     "ntfy": ("url", "topic", "priority"),
     "pushover": (),
 }
+#: (Q228, the beta.13 review's #3) the write-only keys a channel works WITHOUT: a webhook with no authorization header, an ntfy topic that takes no token, an SMTP relay that asks
+#: for no password. A blank one with nothing stored to keep is "none", never "a secret to carry"; every write-only key not named here is one the channel cannot deliver without
+OPTIONAL_SECRETS = {"webhook": ("header_value",), "ntfy": ("token",), "email": ("smtp_pass",)}
+#: (Q228, AN1) the key that holds the ADDRESS the form names, for the two types that have one. A blank address on an edit is the stored one (a webhook's is write-only; an ntfy
+#: server's is withheld from the page when it is not a plain address), and it is the address a kept secret is judged against
+ADDRESS_KEY = {"webhook": "webhook_url", "ntfy": "url"}
 #: the form field that carries each write-only key, for the refusal that names it
 WRITE_ONLY_FIELDS = {
     ("telegram", "token"): "token",
@@ -86,19 +92,27 @@ def _stored_channel(channel_id):
 def _may_act_on(channel: dict) -> bool:
     """(Q226, AL24, AL2) A subnet-restricted admin reads, edits, tests and deletes only a channel whose scope lies inside their own; a channel scoped wider, or to every subnet, is not theirs to see
     (RBAC-001: its config is a secret and its alerts name what they cannot see), and a denial and a not-found are one message (RBAC-002). An unrestricted account acts on every channel."""
-    if current_user.all_subnets:
-        return True
-    # (Q227, AM25) the service's own reading, `alerts.channel_scope`: None is every subnet and an empty tuple is a damaged scope - neither is inside anyone's restriction
-    scope = __alerts.channel_scope(channel)
-    if not scope:
-        return False
-    allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-    return all(s in allowed for s in scope)
+    # (Q227, AM25; Q228, AN3) the service's own answer, `alerts.channel_inside`, over the service's own reading of the scope (`alerts.channel_scope`): every count of channels a
+    # page prints asks the same function, so a list and a number cannot disagree
+    return __alerts.channel_inside(channel, current_user)
 
 
 #: the two refusals of `_kept_secrets`, each said under the field it names
 DESTINATION_CHANGED = "The channel's destination changed - enter the secret again."
 STORED_UNREADABLE = "This channel's stored settings cannot be read, so its secret cannot be kept - enter it again."
+#: (Q228) said after a save that kept nothing because nothing could be read: the fields that are empty now are named, so "saved" never hides a secret that is gone
+NOTHING_KEPT = "This channel's stored settings could not be read, so nothing was kept from them. Empty now: {fields}."
+#: (Q228, AN6) the two refusals of a typed address
+ADDRESS_NEEDS_SCHEME = "The address must start with http:// or https:// and name a host."
+NTFY_ADDRESS_SHAPE = (
+    "The ntfy server address is https://host[:port][/path] with nothing after it. The access token has its own field."
+)
+#: the words the Alerts page uses for each write-only key in `NOTHING_KEPT`
+SECRET_LABELS = {
+    "header_value": "the authorization header value",
+    "token": "the access token",
+    "smtp_pass": "the SMTP password",
+}
 
 
 def _kept_secrets(channel_id, channel_type: str, config: dict, stored: dict | None):
@@ -109,32 +123,82 @@ def _kept_secrets(channel_id, channel_type: str, config: dict, stored: dict | No
     kept "" for a provider's token and said "saved" (AM6): it is refused, and the sentence says why. Only a key that HAS a stored value is kept, so only such a key can be refused: a webhook
     with no authorization header could not change its URL, because its always-blank header was "a secret for a changed place". And a webhook's URL is write-only now (AM1): a blank URL
     is the stored one, taken BEFORE the place is compared, so the header beside it is judged against the place it was typed for."""
-    blanks = [k for k in WRITE_ONLY_KEYS.get(channel_type, ()) if not config.get(k)]
-    if not blanks or stored is None:
+    if stored is None:
         return config
+    keys = WRITE_ONLY_KEYS.get(channel_type, ())
     old = __alerts.get_channel_config(stored)
-    if not old and stored.get("config"):
-        return WRITE_ONLY_FIELDS[(channel_type, blanks[0])], STORED_UNREADABLE
-    if stored.get("channel_type") != channel_type:
-        # another kind of channel is another place
-        return WRITE_ONLY_FIELDS[(channel_type, blanks[0])], DESTINATION_CHANGED
-    if channel_type == "webhook" and "webhook_url" in blanks and old.get("webhook_url"):
-        config["webhook_url"] = old["webhook_url"]
-        blanks.remove("webhook_url")
-    kept = [k for k in blanks if old.get(k)]
+    # (Q228, the beta.13 review's #3) nothing can be KEPT from a config that cannot be read or from another type of channel, so the only question left is whether the channel can
+    # deliver without what is blank. A blank secret the channel needs is refused, as before; a blank OPTIONAL one is "none" - a Telegram channel could not become a webhook with no
+    # authorization header, and a channel whose stored settings were unreadable could not be re-entered without inventing a header
+    nothing_to_keep = _unreadable(stored, old) or stored.get("channel_type") != channel_type
+    if nothing_to_keep:
+        needed = [k for k in keys if not config.get(k) and k not in OPTIONAL_SECRETS.get(channel_type, ())]
+        if needed:
+            sentence = STORED_UNREADABLE if _unreadable(stored, old) else DESTINATION_CHANGED
+            return WRITE_ONLY_FIELDS[(channel_type, needed[0])], sentence
+        return config
+    # a blank ADDRESS is the stored one, taken BEFORE the destination is compared, so the secret beside it is judged against the address it was typed for (Q227 for a webhook's
+    # write-only URL; Q228, AN1, for an ntfy server address the page withheld)
+    address = ADDRESS_KEY.get(channel_type)
+    if address and not config.get(address) and old.get(address):
+        config[address] = old[address]
+    kept = [k for k in keys if not config.get(k) and old.get(k)]
     if not kept:
         return config
-    if not __auth.same_endpoint(_endpoint(channel_type, config), _endpoint(channel_type, old)):
+    # (Q228, the beta.13 review's #2) the DESTINATION, path and query included: `same_endpoint` stops at the port, so the header value typed for https://hooks.example/team-a was
+    # carried to https://hooks.example/team-b - another receiver on one host
+    if not __auth.same_destination(_endpoint(channel_type, config), _endpoint(channel_type, old)):
         return WRITE_ONLY_FIELDS[(channel_type, kept[0])], DESTINATION_CHANGED
     for k in kept:
         config[k] = old[k]
     return config
 
 
+def _unreadable(stored: dict | None, old: dict | None = None) -> bool:
+    """A row that HAS a stored config which `get_channel_config` reads as nothing (a database restored without its key)."""
+    if stored is None:
+        return False
+    old = __alerts.get_channel_config(stored) if old is None else old
+    return not old and bool(stored.get("config"))
+
+
+def _emptied(channel_type: str, config: dict, stored: dict | None) -> list:
+    """(Q228) The optional secrets that are EMPTY in what is about to be stored over a config that could not be read, in the page's words: the save says so (`NOTHING_KEPT`)."""
+    if not _unreadable(stored):
+        return []
+    return [SECRET_LABELS[k] for k in OPTIONAL_SECRETS.get(channel_type, ()) if not config.get(k)]
+
+
+def _address_refusal(channel_type: str, config: dict):
+    """(Q227, AM23; Q228, AN6) What a TYPED webhook or ntfy address is refused for, as `(field, sentence)`, or None. CRED-005: a URL never carries a password, said with the
+    sentence every connection form uses. `userinfo_sentence` reads the authority, and `u:p@host/path` has none (its `u` parses as a scheme), so that value was stored with its
+    password: an address is an http(s) URL with a host first. An ntfy server address carries no query either - ntfy reads `?auth=` as a credential. A blank address is not typed
+    and is not judged here: on an edit it is the stored one (`_kept_secrets`)."""
+    address = ADDRESS_KEY.get(channel_type)
+    value = config.get(address, "") if address else ""
+    if not value:
+        return None
+    field = {"webhook_url": "webhook_url", "url": "ntfy_url"}[address]
+    if __auth.userinfo_sentence(value):
+        return field, __auth.USERINFO_SENTENCE
+    if not __auth.http_address(value):
+        return field, ADDRESS_NEEDS_SCHEME
+    if channel_type == "ntfy" and not __auth.plain_address(value):
+        return field, NTFY_ADDRESS_SHAPE
+    return None
+
+
 def _shown(channel_type: str, config: dict) -> dict:
     """The config as the page carries it (Q227, AM1, AM7): the keys `SHOWN_KEYS` names for this type and nothing else. A type the table does not name shows nothing."""
     shown = SHOWN_KEYS.get(channel_type, ())
-    return {k: v for k, v in (config or {}).items() if k in shown}
+    out = {k: v for k, v in (config or {}).items() if k in shown}
+    # (Q228, AN1; CRED-005 at the display) an address is shown only when it is a plain one. A row an earlier release stored may carry a password before the `@` or a token in the
+    # query: Q227 refused such a value on the SAVE and still printed the stored one here. It is withheld, and `url_withheld` tells the card and the edit form to say so
+    address = ADDRESS_KEY.get(channel_type)
+    if address in out and out[address] and not __auth.plain_address(out[address]):
+        del out[address]
+        out["url_withheld"] = True
+    return out
 
 
 @bp.route("/settings/alerts")
@@ -231,7 +295,8 @@ def save_alert_channel():
     channel_type = request.form.get("channel_type", "").strip()
     channel_name = request.form.get("channel_name", "").strip()[:100]
     enabled = 1 if request.form.get("enabled") else 0
-    alert_types = request.form.getlist("alert_types[]")
+    # (Q228, AN13) each type once, in the order posted: a duplicate was stored and its badge printed twice
+    alert_types = list(dict.fromkeys(request.form.getlist("alert_types[]")))
     if channel_type not in CHANNEL_TYPES:
         # the type is written now (it used to be stored only on INSERT, so an edit that changed it saved a config for one type under another) - and it is one of ours
         flash("Choose a channel type from the list.", "error")
@@ -339,10 +404,11 @@ def save_alert_channel():
 
     # (Q227, AM23) CRED-005 at the one save path that did not ask it: a URL never carries a password. A webhook's and ntfy's address is dialed as typed, so user-info in it is refused
     # here with the sentence every connection form uses; the secret has its own field (the header value, the ntfy token)
-    for key, field in (("webhook_url", "webhook_url"), ("url", "ntfy_url")):
-        if channel_type in ("webhook", "ntfy") and __auth.userinfo_sentence(config.get(key, "")):
-            flash_field(field, __auth.USERINFO_SENTENCE)
-            return redirect(url_for("settings.settings_alerts"))
+    # (Q228, AN6) and an address is an http(s) URL with a host; an ntfy server address carries no query
+    refused = _address_refusal(channel_type, config)
+    if refused:
+        flash_field(*refused)
+        return redirect(url_for("settings.settings_alerts"))
 
     # (Q226, AL2, AL3) every write-only key left blank on an edit keeps the stored value - while the channel names the same place; the two keys that used to be kept (`smtp_pass`, `api_token`)
     # were kept across a changed SMTP host, which CRED-002 forbids by name
@@ -351,6 +417,8 @@ def save_alert_channel():
         flash_field(*kept)  # (field, sentence): the place changed, or the stored settings cannot be read (Q227, AM6)
         return redirect(url_for("settings.settings_alerts"))
     config = kept
+    # (Q228) what a save over an unreadable row stores empty, said after the save
+    emptied = _emptied(channel_type, config, stored)
 
     try:
         # config carries the channel's notification tokens — encrypt at rest (v5.7.0)
@@ -390,6 +458,8 @@ def save_alert_channel():
                     )
             db.commit()
         flash(f"Alert channel '{channel_name}' saved.", "success")
+        if emptied:
+            flash(NOTHING_KEPT.format(fields=", ".join(emptied)), "warning")
         __user.audit("SAVE_ALERT_CHANNEL", channel_name, f"type={channel_type} enabled={enabled}")
     except Exception as e:
         logger.error(f"Error saving alert channel '{channel_name}': {e}")

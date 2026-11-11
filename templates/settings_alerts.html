@@ -118,6 +118,9 @@ var JEN_CHANNELS = {
             {% else %}
             {{ icon("map-pin") }} Subnet-specific alerts for all subnets
             {% endif %}
+            {% if ch.config.get('url_withheld') %}
+            <div>{{ icon("lock") }} This channel's server address was saved by an earlier release with a password or a token in it, so it is not shown. It is still used as saved. To replace it, edit the channel, enter the address without them and put the access token in its own field.</div>
+            {% endif %}
             {% if ch.unsent_types %}
             <div>Not sent to this channel: {% for atype in ch.unsent_types %}{{ alert_type_labels.get(atype, atype) }}{% if not loop.last %}, {% endif %}{% endfor %}. It names every subnet, so it goes only to a channel for all subnets.</div>
             {% endif %}
@@ -513,6 +516,7 @@ function showAddChannel() {
     ['tgToken','tgChatId'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
     // (Q226, AL2) a new channel's secret fields say what they are for; an edit's say the secret is saved (setWriteOnlyPlaceholders)
     setWriteOnlyPlaceholders(false);
+    const ntfyUrlEl = document.querySelector('[name=ntfy_url]'); if (ntfyUrlEl) { ntfyUrlEl.value = ''; ntfyUrlEl.placeholder = 'https://ntfy.sh'; }
     const tlsEl = document.getElementById('f-use_tls'); if (tlsEl) tlsEl.checked = true;
     const subnetEl = document.getElementById('channelSubnetIds');
     if (subnetEl) {
@@ -564,7 +568,12 @@ function editChannel(id, ctype, cname, enabled, config, alertTypes, subnetScope)
         const pEl = document.querySelector('[name=payload_type]'); if (pEl && cfg.payload_type) pEl.value = cfg.payload_type;
         const hEl = document.querySelector('[name=header_name]'); if (hEl) hEl.value = cfg.header_name || '';
     } else if (ctype === 'ntfy') {
-        const u = document.querySelector('[name=ntfy_url]'); if(u) u.value = cfg.url || 'https://ntfy.sh';
+        // (Q228, AN1) an address the page withheld is not refilled with the default: a blank keeps the stored one, and the box says so
+        const u = document.querySelector('[name=ntfy_url]');
+        if (u) {
+            u.value = cfg.url_withheld ? '' : (cfg.url || 'https://ntfy.sh');
+            u.placeholder = cfg.url_withheld ? 'Saved - leave blank to keep' : 'https://ntfy.sh';
+        }
         const t = document.querySelector('[name=ntfy_topic]'); if(t) t.value = cfg.topic || '';
         const p = document.querySelector('[name=ntfy_priority]'); if(p) p.value = cfg.priority || 'default';
     } else if (ctype === 'email') {

@@ -441,6 +441,25 @@ def channel_scope(channel):
     return tuple(allowed)
 
 
+def channel_inside(channel, user) -> bool:
+    """May `user` see and act on this channel (RBAC-001; Q226 AL24, moved here in Q228, AN3): an unrestricted account acts on every channel; a subnet-restricted one only on a
+    channel whose scope lies inside its own subnets. A channel for every subnet (None) and a damaged scope (the empty tuple) are inside nobody's restriction. The Alerts page's
+    list, edit, test and delete ask this through the route's `_may_act_on`, and so does EVERY count of channels a page prints (`/settings`, `/getting-started`): Q227 fixed the
+    first count and left the second on a bare `COUNT(*)`."""
+    if user.all_subnets:
+        return True
+    scope = channel_scope(channel)
+    if not scope:
+        return False
+    allowed = set(user.accessible_subnet_ids(extensions.SUBNET_MAP))
+    return all(s in allowed for s in scope)
+
+
+def enabled_channels_for(user, rows) -> int:
+    """How many of these enabled channels `user` may act on: the number a page prints beside the word "channels" (Q228, AN3)."""
+    return sum(1 for ch in rows if channel_inside(ch, user))
+
+
 def channel_allows_subnet(channel, subnet_id, scoped=False):
     """v5.1.16 — per-channel subnet scoping for notifications. A NULL
     scope means unrestricted (what an unrestricted account's form stores

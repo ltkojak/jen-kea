@@ -355,6 +355,47 @@ def same_endpoint(a: str, b: str) -> bool:
     return pa is not None and pa == pb
 
 
+def same_destination(a: str, b: str) -> bool:
+    """Do two URLs name the same DESTINATION for a secret that is spent on the path as well as the place (Q228; CRED-002): `same_endpoint` (scheme, host and port) AND the same path
+    and query. A Kea endpoint is dialed at its root, so its comparison stops at the port and `same_endpoint` stays as it is. An OIDC issuer, a webhook and an ntfy server are not:
+    the issuer's path selects the realm or the tenant whose token endpoint receives the client secret (`init_oidc` builds the discovery URL from it), and two paths on one webhook
+    host are two receivers. One trailing-slash spelling is one path (`init_oidc` strips it the same way); user-info is not part of a destination and is never compared; a blank or
+    unreadable side is a different destination."""
+    from urllib.parse import urlsplit
+
+    if not same_endpoint(a, b):
+        return False
+    try:
+        pa, pb = urlsplit(str(a).strip(_PADDING)), urlsplit(str(b).strip(_PADDING))
+        return (pa.path.rstrip("/"), pa.query) == (pb.path.rstrip("/"), pb.query)
+    except ValueError:
+        return False
+
+
+def http_address(url) -> bool:
+    """Is `url` an http:// or https:// URL with a host (Q228, AN6). `userinfo_sentence` reads the authority, and a value with no `//` has none: `u:p@host/path` parses with `u`
+    as its scheme, so its password was stored. A webhook's and an ntfy server's address is asked this first."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or "").strip(_PADDING))
+        return parts.scheme in ("http", "https") and bool(parts.hostname)
+    except ValueError:
+        return False
+
+
+def plain_address(url) -> bool:
+    """May a page PRINT this address (Q228, AN1; CRED-005 at the display): an http(s) URL with a host and no user-info, no query and no fragment. A stored address an earlier
+    release accepted may carry a password before the `@` or a token in its query; a page shows an address only when this is True, and withholds it otherwise."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or "").strip(_PADDING))
+        return http_address(url) and "@" not in parts.netloc and not parts.query and not parts.fragment
+    except ValueError:
+        return False
+
+
 def same_host(a: str, b: str) -> bool:
     """Do two addresses name the same HOST - scheme and port ignored. Used for a password a daemon's form INHERITS from the Kea API's: Kea6 and D2 are other daemons of the
     same Kea host on their own ports, so inheriting across a port is the design; inheriting onto a different host is a secret sent somewhere it was not typed for (CRED-002)."""
@@ -782,18 +823,16 @@ def is_mfa_locked_out(user_id):
             )
             count = cur.fetchone()["cnt"]
             if count >= MFA_MAX_ATTEMPTS:
-                # Seconds until the OLDEST attempt in the window ages out,
-                # converted to minutes in Python — same shape as the
-                # password-side calc above. The old query divided elapsed
-                # time by 60 *inside* the subtraction (900 - mins), so it
-                # reported ~900 "minutes remaining" right after lockout.
+                # (Q228, the beta.13 review's #4) the lock ends when the count falls BELOW the threshold: when the Nth most recent attempt (N = MFA_MAX_ATTEMPTS) ages out, not when
+                # the oldest does. Q226 corrected `is_locked_out` this way and left this twin on MIN(): with eleven failures aged 1 to 10 and 14 minutes it promised one minute and
+                # the second factor stayed locked for five. The lock itself was always right; the number was not
                 cur.execute(
-                    "SELECT (%s * 60) - TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW()) as remaining_secs "
-                    "FROM mfa_attempts WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
-                    (MFA_LOCKOUT_MINUTES, user_id, MFA_LOCKOUT_MINUTES),
+                    "SELECT TIMESTAMPDIFF(SECOND, attempted_at, NOW()) AS age FROM mfa_attempts "
+                    "WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE) ORDER BY attempted_at DESC LIMIT 1 OFFSET %s",
+                    (user_id, MFA_LOCKOUT_MINUTES, MFA_MAX_ATTEMPTS - 1),
                 )
                 row = cur.fetchone()
-                remaining_secs = max(0, int(row["remaining_secs"] or 0)) if row else 0
+                remaining_secs = max(0, MFA_LOCKOUT_MINUTES * 60 - int(row["age"] or 0)) if row else 0
                 return True, max(1, (remaining_secs + 59) // 60)
         return False, 0
     except Exception as e:

@@ -926,6 +926,7 @@ def config_history(server_id):
         server=server,
         service=service,
         revisions=revisions,
+        hash_words=__rev.HASH_KIND_WORDS,  # (Q228, F4) which kind of hash a row shows
         ipv6_enabled=__kea6.is_ipv6_enabled(),
     )
 
@@ -966,6 +967,7 @@ def config_history_detail(server_id, rev_id):
         "config_history_detail.html",
         server=server,
         rev=rev,
+        hash_words=__rev.HASH_KIND_WORDS,  # (Q228, F4) the second page that prints a revision's hash
         rows=rows,
         is_latest=is_latest,
         can_restore=current_user.is_superadmin and __changeset._transport(server, rev["service"]) != "off",

@@ -1267,6 +1267,58 @@ def test_14_the_file_kea_wrote_mirrors_config_get(facts):
     assert _hash(), "the daemon does not answer after row 14"
 
 
+#: (Q228, F1) the keys of `interfaces-config` an operator can write at their documented default, beside the two `kea_config.build` already carries. Row 15 records what each
+#: version's `config-get` reports for every one of them; only the keys in `kea_api_config.OMITTED_AT_DEFAULT` are asserted
+INTERFACES_AT_DEFAULT = {
+    "dhcp-socket-type": "raw",
+    "outbound-interface": "same-as-inbound",
+    "re-detect": True,
+    "service-sockets-retry-wait-time": 5000,
+}
+
+
+def test_15_what_config_get_omits_at_its_default(facts):
+    """Q228, F1: the source of `kea_api_config.OMITTED_AT_DEFAULT`'s third entry, and the measurement for the next. The job's own file says `dhcp-socket-type: udp`, so the suite
+    never loaded a file that says `raw` - and the first real server to walk the Write mode card had one: `config-get` reported nothing for the key and the card called a loaded file
+    "an edit the daemon never loaded". This row starts a second daemon (row 11's recipe) on the job's file with every key of `INTERFACES_AT_DEFAULT` written at its default, and
+    records per key whether `config-get` reports it and as what. Asserted, when the daemon starts: a file that says `raw` is carried by the daemon that loaded it, by the module's
+    own rule (true whether this version reports the key or omits it). A daemon that will not start on raw sockets here is a recorded fact and a skip. A key this row shows omitted
+    that is not in the table is a FACT for the next Q, never a red run."""
+    from jen.services import kea_api_config as api
+
+    assert ORIGINAL is not None, "test_01 did not record the original configuration"
+    authored = json.loads(_STATE["bytes"])["Dhcp4"]
+    candidate = copy.deepcopy(authored)
+    candidate["interfaces-config"] = {**candidate["interfaces-config"], **INTERFACES_AT_DEFAULT}
+    facts["omits_sent"] = dict(INTERFACES_AT_DEFAULT)
+    facts["omits_table_in_the_product"] = dict(api.OMITTED_AT_DEFAULT)
+    try:
+        started, arguments, tail = _scratch_daemon_on(json.dumps({"Dhcp4": candidate}))
+    except (
+        Exception
+    ) as exc:  # recorded, never asserted: a runner that cannot start the second daemon proves nothing about Kea
+        facts["omits_error"] = f"{type(exc).__name__}: {exc}"[:400]
+        started, arguments, tail = False, None, ""
+    facts["omits_daemon_started_on_raw"] = bool(started and arguments)
+    assert _hash(), "the daemon does not answer after row 15"
+    if not (started and arguments):
+        facts["omits_refusal_tail"] = (tail or "")[-600:]
+        pytest.skip(
+            "a daemon did not start on a file that says dhcp-socket-type raw on this runner: recorded, and row 15 proves nothing here"
+        )
+    reported = arguments["Dhcp4"].get("interfaces-config") or {}
+    facts["omits_config_get_reports"] = {k: reported.get(k, "(absent)") for k in INTERFACES_AT_DEFAULT}
+    facts["omits_absent_from_config_get"] = sorted(k for k in INTERFACES_AT_DEFAULT if k not in reported)
+    facts["omits_absent_and_not_in_the_table"] = sorted(
+        k for k in INTERFACES_AT_DEFAULT if k not in reported and k not in api.OMITTED_AT_DEFAULT
+    )
+    said = {
+        "interfaces-config": {"interfaces": candidate["interfaces-config"]["interfaces"], "dhcp-socket-type": "raw"}
+    }
+    facts["omits_raw_first_difference"] = api.first_difference(arguments["Dhcp4"], said)
+    assert api._carries(arguments["Dhcp4"], said), facts["omits_raw_first_difference"]
+
+
 def test_90_restore_puts_the_original_back(facts):
     """The configuration the job started with goes back into the daemon, into the file, and then the original file's own bytes replace it."""
     assert ORIGINAL is not None, "test_01 did not record the original configuration"

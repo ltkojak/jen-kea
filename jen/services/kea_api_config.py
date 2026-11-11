@@ -151,7 +151,11 @@ def _space_insensitive(path: str) -> bool:
 
 # Keys of `interfaces-config` that `config-get` OMITS when they hold their default (compat row 11, Kea 3.0.5, 3.2.1 and 3.3.3: a file carrying `service-sockets-require-all: false` and
 # `service-sockets-max-retries: 0` comes back without them). A file that carries one at its default is carried by a daemon that does not report it; any other value is a difference.
-OMITTED_AT_DEFAULT = {"service-sockets-require-all": False, "service-sockets-max-retries": 0}
+# (Q228, F1) `dhcp-socket-type: "raw"` is the third: the first real walk of the Write mode card (the maintainer's kea-dhcp4, 2026-11-11) answered "the file says "raw", the daemon nothing"
+# for a file the daemon had loaded a month after it was written, and asked for a consent to discard an edit that did not exist. Kea reports the key only when it is `udp`. The compat
+# job never met it because its own file says `udp` (a runner's NICs); row 15 now starts a daemon on a file that says `raw` and records what each version reports for this key and for
+# the three other keys of `interfaces-config` an operator can write at their default. An entry is added here on that row's evidence or a daemon's own answer, never on the manual's.
+OMITTED_AT_DEFAULT = {"service-sockets-require-all": False, "service-sockets-max-retries": 0, "dhcp-socket-type": "raw"}
 
 
 _MISSING = object()
@@ -1357,6 +1361,9 @@ def apply(
                 why_not = f"the running configuration of {_name(server)} could not be read ({why_now})"
             elif mirrors(file_now, live_now, service):
                 planned_sha = row_sha
+            elif not isinstance(live_now, dict):
+                # (Q228, AN20) the top level first: `_section` answers {} for a configuration that is not an object, so the sentence below was never reached for the shape it names
+                why_not = f"the running configuration of {_name(server)} is not one Jen can read (it is not an object); the file was not judged"
             elif not isinstance(_section(live_now, service), dict):
                 # (Q227, AM28) and one sentence per cause here too: a section that is not an object is not "empty"
                 why_not = f"the running configuration of {_name(server)} is not one Jen can read (its {SERVICE_KEY.get(service, service)} section is not an object); the file was not judged"

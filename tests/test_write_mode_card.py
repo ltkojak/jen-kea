@@ -372,6 +372,39 @@ class TestOneEnabledInputPerConsentNamePerForm:
     def test_the_script_toggles_the_boxes_with_the_radio(self):
         template = (ROOT / "templates" / "settings_kea.html").read_text(encoding="utf-8")
         assert "box.disabled = hidden" in template and "[data-mode-panel]" in template
+        assert (
+            "box.disabled = hidden || !!box.closest('[data-wm-accepted]');" in template
+        )  # (Q228, F3) a box shown ticked and locked stays locked
+
+    def test_the_card_comes_back_on_the_panel_an_action_was_pressed_in(self):
+        """Q228, F2 (the maintainer on a real server, 2026-11-11): the page is rendered with the CURRENT mode's radio checked, so Run check - pressed under Live API on a server that
+        is on File over SSH - reloaded with its own result hidden. The card keeps a ONE-SHOT note of the panel and opens it again; it selects a radio and submits nothing."""
+        template = (ROOT / "templates" / "settings_kea.html").read_text(encoding="utf-8")
+        start = template.index("var REOPEN = 'jen-wm-reopen';")
+        script = template[
+            start : template.index("document.addEventListener('change'", start)
+        ]  # the note's own code: remember, reopen and the capture listener
+        # written when the action is sent: the check's own success, and every form inside a mode's panel (capture phase - base.html's confirm sends the form itself afterward)
+        assert "remember(btn.closest('[data-wm-card]'));" in template
+        assert template.index("remember(btn.closest('[data-wm-card]'));") < template.index("window.location.reload();")
+        assert "ev.target.closest('[data-mode-panel]')" in script and "}, true);" in script
+        # one shot: read and removed in the same breath, and only a note of this card's own shape is believed
+        assert "window.sessionStorage.getItem(REOPEN); window.sessionStorage.removeItem(REOPEN);" in script
+        assert "/^\\d+:(api|file|off)$/.test(kept)" in script
+        # it only selects: no submit, no click, and a radio the account may not use stays as rendered
+        assert "radio.checked = true;" in script and "if (!radio || radio.disabled) return;" in script
+        assert ".submit(" not in script and ".click(" not in script
+        # the panels are shown from the radio AFTER the note is read
+        assert template.index("reopen();\n    refreshAll();") > template.index("function reopen()")
+
+    def test_every_form_inside_a_panel_is_covered_by_the_one_listener(self):
+        # the actions a panel carries: each is a form inside [data-mode-panel], so the capture listener sees it; the switch form is the card's own and is not
+        template = (ROOT / "templates" / "settings_kea.html").read_text(encoding="utf-8")
+        card = template[template.index('data-wm-card="{{ c.id }}"') : template.index('data-wm-target="off"')]
+        panels = card[card.index("data-mode-panel=") :]
+        for action in ("install-kea-helper", "allow-config-write", "deny-config-write"):
+            assert f"/settings/infrastructure/{action}/" in panels, action
+        assert 'action="/settings/infrastructure/kea-transport/' not in panels
 
 
 def _panel(html, mode):
@@ -566,3 +599,139 @@ class TestTheProofSentencesAreOneTable:
         _cards, html = wm.render(monkeypatch, [wm.S_API], {2: _facts(probe)})
         row = html.split("Config file matches running config")[1].split("</tr>")[0]
         assert needle in row, row
+
+
+class TestStepThreeSaysWhatWasAccepted:
+    """Q228, F3 (the maintainer, minutes after switching a real server to Live API): step 3 was drawn the same way before and after the switch - a gray circle, the box unticked, a
+    blue Record consent button that does nothing - so a consent that had just been given read as not given. On the current mode with its gate open, a consent on record that covers
+    every box the facts call for is SHOWN: the step green with when it was given, the boxes ticked and locked, the button hidden."""
+
+    def _api_panel(self, monkeypatch, facts, **kw):
+        cards, html = wm.render(monkeypatch, [wm.S_API], {2: facts}, **kw)
+        return cards[0], _panel(html, "api")
+
+    def test_a_consent_on_record_is_shown(self, monkeypatch):
+        card, panel = self._api_panel(monkeypatch, _facts(consents=["discard_file_edit", "consent_rendering"]))
+        assert card["accepted_at"] == wm.NOW and card["accepted_all"] is True
+        assert 'data-state="ok" data-wm-row="3" data-wm-accepted="2"' in panel
+        assert f"<strong>3.</strong> Accepted {wm.NOW}</span>" in panel and "Accept what changes" not in panel
+        boxes = re.findall(r'<input type="checkbox"[^>]*>', panel)
+        assert boxes and all(" checked disabled" in b for b in boxes), boxes
+        assert wm.consent_names(panel) == ["consent_rendering"], "the boxes are the ones the facts call for NOW"
+        button = re.search(r'<button[^>]*data-wm-target="api"[^>]*>[^<]*</button>', panel).group(0)
+        assert "wm-hidden" in button and " disabled" in button and 'data-current="1"' in button
+        assert "This is the current mode." in panel
+
+    def test_a_consent_recorded_before_the_boxes_were_kept_covers_the_rendering(self, monkeypatch):
+        facts = _facts()
+        del facts["consents"]  # 7.0.0-beta.1 and beta.2 recorded when, not which: it counts as the file rewrite only
+        card, panel = self._api_panel(monkeypatch, facts)
+        assert card["accepted_all"] is True and 'data-wm-accepted="2"' in panel
+
+    def test_a_box_the_record_does_not_cover_is_still_asked(self, monkeypatch):
+        # the control: the facts call for a box that is NOT on record (`_facts` records an empty list) - step 3 is not done, the box is unticked and can be ticked
+        card, panel = self._api_panel(monkeypatch, _facts())
+        assert card["accepted_all"] is False
+        assert (
+            'data-state="idle" data-wm-row="3"' in panel
+            and "data-wm-accepted" not in panel
+            and "Accept what changes" in panel
+        )
+        assert not any(" checked" in b for b in re.findall(r'<input type="checkbox"[^>]*>', panel))
+
+    def test_a_blocked_gate_keeps_the_boxes_and_the_button(self, monkeypatch):
+        # the control: the gate is closed on a fact the operator can accept. Whatever is on record, the step is asked and Record consent is offered
+        card, panel = self._api_panel(
+            monkeypatch,
+            _facts(auth="none", consents=["consent_rendering"]),
+            gate="this endpoint has no authentication",
+        )
+        assert "data-wm-accepted" not in panel and 'data-state="idle" data-wm-row="3"' in panel
+        button = re.search(r'<button[^>]*data-wm-target="api"[^>]*>[^<]*</button>', panel).group(0)
+        assert "wm-hidden" not in button and "disabled" not in button and "Record consent" in button
+        assert not any(" checked" in b for b in re.findall(r'<input type="checkbox"[^>]*>', panel))
+
+    def test_a_server_on_another_mode_is_asked_as_before(self, monkeypatch):
+        # the control: File over SSH with a consent on record from an earlier switch is still asked for the switch it has not made
+        cards, html = wm.render(monkeypatch, [wm.S_FILE], {1: _facts(consents=["consent_rendering"])})
+        panel = _panel(html, "api")
+        assert cards[0]["accepted_all"] is True, "the record covers it; the MODE is what is not current"
+        assert "data-wm-accepted" not in panel and "Accept what changes" in panel
+        assert not any(" checked" in b for b in re.findall(r'<input type="checkbox"[^>]*>', panel))
+        assert "wm-hidden" not in re.search(r'<button[^>]*data-wm-target="api"[^>]*>', panel).group(0)
+
+    def test_no_stored_result_accepts_nothing(self, monkeypatch):
+        cards, _html = wm.render(monkeypatch, [wm.S_API], {})
+        assert cards[0]["accepted_all"] is False and cards[0]["accepted_at"] == ""
+
+    def test_the_hidden_button_has_a_rule(self):
+        css = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+        assert ".wm-switch .btn.wm-hidden { display: none; }" in css
+
+
+class TestConfigHistorySaysWhichHash:
+    """Q228, F4 (the same walk): Config history's column was headed SHA and carried two kinds of value with nothing to tell them apart - a file's sha256 in lower case and, for a
+    change over the API, Kea's own digest in upper case. They are never compared with each other, so the page says which one a row shows."""
+
+    def test_the_words(self):
+        from jen.services import config_revisions as rev
+
+        assert rev.HASH_KIND_WORDS == {"raw": "file", "kea": "Kea digest", "canonical": "content", "legacy": ""}
+
+    def test_the_list_carries_the_kind_and_the_route_hands_the_words_over(self):
+        service = (ROOT / "jen" / "services" / "config_revisions.py").read_text(encoding="utf-8")
+        assert '"SELECT id, server_id, service, sha256, hash_kind, summary, username, source, created_at "' in service
+        route = (ROOT / "jen" / "routes" / "servers.py").read_text(encoding="utf-8")
+        assert "hash_words=__rev.HASH_KIND_WORDS," in route
+
+    @pytest.mark.parametrize(
+        "row, want",
+        [
+            ({"sha256": "bc997c57cf3d0000", "hash_kind": "raw"}, 'bc997c57cf3d <span class="muted">file</span>'),
+            ({"sha256": "A3158AAD578E0000", "hash_kind": "kea"}, 'A3158AAD578E <span class="muted">Kea digest</span>'),
+            (
+                {"sha256": "0123456789ab0000", "hash_kind": "canonical"},
+                '0123456789ab <span class="muted">content</span>',
+            ),
+            ({"sha256": "0123456789ab0000", "hash_kind": "legacy"}, "0123456789ab"),
+            ({"sha256": "0123456789ab0000", "hash_kind": "something-new"}, "0123456789ab"),
+            ({"sha256": "", "hash_kind": "kea"}, "\u2014"),
+            ({"sha256": None, "hash_kind": "raw"}, "\u2014"),
+        ],
+    )
+    def test_the_cell(self, row, want):
+        import jinja2
+
+        from jen.services import config_revisions as rev
+
+        page = (ROOT / "templates" / "config_history.html").read_text(encoding="utf-8")
+        assert '<th class="u-e2c960">Hash</th>' in page and ">SHA</th>" not in page
+        cell = re.search(r'<td data-m="hide"  class="mono u-e2c960">(.*?)</td>', page, re.S).group(1)
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=True)
+        assert env.from_string(cell).render(r=row, hash_words=rev.HASH_KIND_WORDS) == want
+
+    def test_every_page_that_prints_a_revisions_hash_says_its_kind(self):
+        # the whole templates directory: a revision's hash is printed in two places, and each carries the word. A third page that prints one without it fails here
+        import jinja2
+
+        from jen.services import config_revisions as rev
+
+        printing = sorted(
+            p.name
+            for p in (ROOT / "templates").glob("*.html")
+            if re.search(r"\b(r|rev)\.sha256\[", p.read_text(encoding="utf-8"))
+        )
+        assert printing == ["config_history.html", "config_history_detail.html"]
+        for name in printing:
+            assert "hash_words.get(" in (ROOT / "templates" / name).read_text(encoding="utf-8"), name
+        route = (ROOT / "jen" / "routes" / "servers.py").read_text(encoding="utf-8")
+        assert route.count("hash_words=__rev.HASH_KIND_WORDS,") == 2
+        detail = (ROOT / "templates" / "config_history_detail.html").read_text(encoding="utf-8")
+        line = re.search(r'· (<span class="mono">\{\{ rev\.sha256.*?)</p>', detail, re.S).group(1)
+        render = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=True).from_string(line).render
+        assert render(rev={"sha256": "A3158AAD578E0123ffff", "hash_kind": "kea"}, hash_words=rev.HASH_KIND_WORDS) == (
+            '<span class="mono">A3158AAD578E0123</span> <span class="muted">Kea digest</span>'
+        )
+        assert render(
+            rev={"sha256": "0123456789abcdef0000", "hash_kind": "legacy"}, hash_words=rev.HASH_KIND_WORDS
+        ) == ('<span class="mono">0123456789abcdef</span>')

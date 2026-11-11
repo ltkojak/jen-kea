@@ -238,6 +238,9 @@ class TestTheLandingPageCountsWhatTheAlertsPageLists:
         cur = self._Cur(self.ROWS)
         monkeypatch.setattr("jen.routes.settings.__db", types.SimpleNamespace(jen_db=_ctx(cur)))
         monkeypatch.setattr(route, "current_user", principal)
+        monkeypatch.setattr(
+            settings, "current_user", principal
+        )  # (Q228, AN3) the count asks `alerts.enabled_channels_for` with its own module's principal
         return settings._enabled_channels(), cur
 
     def test_a_restricted_admin_counts_the_channels_inside_their_scope(self, monkeypatch):
@@ -263,9 +266,12 @@ class TestAChannelUrlNeverCarriesAPassword:
 
     def test_the_refusal_comes_before_a_secret_is_kept(self):
         src = _function("jen/routes/settings/alerts.py", "save_alert_channel")
-        refusal, kept = src.index("__auth.USERINFO_SENTENCE"), src.index("_kept_secrets(")
+        refusal, kept = src.index("_address_refusal(channel_type, config)"), src.index("_kept_secrets(")
         assert 0 < refusal < kept
-        assert '("webhook_url", "webhook_url")' in src and '("url", "ntfy_url")' in src
+        judge = _function(
+            "jen/routes/settings/alerts.py", "_address_refusal"
+        )  # (Q228, AN6) the refusals of a typed address are one function
+        assert "__auth.USERINFO_SENTENCE" in judge and '{"webhook_url": "webhook_url", "url": "ntfy_url"}' in judge
 
     def test_a_blank_url_is_not_refused_for_user_info(self):
         assert not auth.userinfo_sentence(""), "an edit posts a write-only URL blank; the stored one is taken next"
@@ -382,7 +388,9 @@ class TestTheOidcSecretStaysWithItsIssuer:
 
     def test_the_route_compares_the_issuer_before_it_keeps_the_secret(self):
         src = _function("jen/routes/settings/security.py", "save_oidc")
-        assert "not __auth.same_endpoint(issuer, extensions.OIDC_ISSUER)" in src
+        assert (
+            "not __auth.same_destination(issuer, extensions.OIDC_ISSUER)" in src
+        )  # (Q228, AN2) with its path: `same_endpoint` stops at the port
         assert 'flash_field("client_secret", OIDC_ISSUER_CHANGED)' in src
         assert "not client_secret" in src and "extensions.OIDC_CLIENT_SECRET" in src
 
@@ -399,10 +407,15 @@ class TestTheOidcSecretStaysWithItsIssuer:
             ("https://idp2.example.test/realms/a", "https://idp.example.test/realms/a", False),
             ("http://idp.example.test/realms/a", "https://idp.example.test/realms/a", False),
             ("https://idp.example.test/realms/a", "", False),
+            (
+                "https://idp.example.test/realms/a",
+                "https://idp.example.test/realms/b",
+                False,
+            ),  # (Q228, AN2) another realm
         ],
     )
     def test_what_the_same_issuer_is(self, new, old, same):
-        assert auth.same_endpoint(new, old) is same
+        assert auth.same_destination(new, old) is same
 
 
 # ── the write path's sentences ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -455,8 +468,9 @@ class TestAConfigurationThatIsNotAnObjectHasNoSection:
 
     def test_a_file_that_is_an_array_mirrors_nothing_and_raises_nothing(self):
         live = {"Dhcp4": copy.deepcopy(TWO_SUBNET_DHCP4)}
-        assert api.mirrors([], live, "dhcp4") is False and api.mirrors(live, [], "dhcp4") is False
-        assert api.file_in_daemon([], live, "dhcp4") is False
+        array = [{"Dhcp4": {}}]  # (Q228, AN23) `[]` passed on the tag before the fix too
+        assert api.mirrors(array, live, "dhcp4") is False and api.mirrors(live, array, "dhcp4") is False
+        assert api.file_in_daemon(array, live, "dhcp4") is False
 
     def test_the_gate_has_one_sentence_per_cause(self):
         src = _function("jen/services/kea_api_config.py", "apply")
@@ -526,7 +540,9 @@ class TestTheIpv6SwitchSaysSavedOnlyWhenItIs:
     def test_both_directions_read_the_writers_answer(self):
         src = _function("jen/routes/settings/infrastructure.py", "toggle_ipv6")
         assert 'elif __user.set_global_setting("ipv6_enabled", "true"):' in src
-        assert 'if not __user.set_global_setting("ipv6_enabled", "false"):' in src
+        assert (
+            'stored = "yes" if __user.set_global_setting("ipv6_enabled", "false") else "no"' in src
+        )  # (Q228, AN11) and the audit row carries it
         assert src.count("IPV6_NOT_SAVED.format(") == 2
 
     def test_the_sentence_says_what_jen_still_shows(self):

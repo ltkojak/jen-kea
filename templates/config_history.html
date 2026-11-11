@@ -29,7 +29,7 @@
                 <th class="u-e2c960">Who</th>
                 <th class="u-e2c960">Source</th>
                 <th class="u-e2c960">Summary</th>
-                <th class="u-e2c960">SHA</th>
+                <th class="u-e2c960">Hash</th>
                 <th class="u-e2c960"></th>
             </tr>
         </thead>
@@ -60,7 +60,7 @@
                     {% endif %}
                 </td>
                 <td data-m="primary" class="u-e2c960">{{ r.summary or '—' }}</td>
-                <td data-m="hide"  class="mono u-e2c960">{{ r.sha256[:12] if r.sha256 else '—' }}</td>
+                <td data-m="hide"  class="mono u-e2c960">{{ r.sha256[:12] if r.sha256 else '—' }}{% if r.sha256 and hash_words.get(r.hash_kind) %} <span class="muted">{{ hash_words[r.hash_kind] }}</span>{% endif %}</td>
                 <td data-m="trailing" class="u-18b307">
                     <a href="{{ url_for('servers.config_history_detail', server_id=server.id, rev_id=r.id) }}">View diff →</a>
                 </td>

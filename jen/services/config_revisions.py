@@ -325,11 +325,17 @@ def discard(rev_id: int) -> bool:
         return False
 
 
+#: (Q228, F4) the word Config history prints beside a row's hash. The column was headed SHA and carried two kinds with nothing to tell them apart: the sha256 of the config
+#: file's bytes, in lower case, and - for a change sent over the API - the digest Kea's own `config-hash-get` returns, in upper case. They are not interchangeable (a `kea`
+#: digest is compared only with a `kea` digest), so the page says which one it is showing. A `legacy` row's kind was never recorded and gets no word
+HASH_KIND_WORDS = {"raw": "file", "kea": "Kea digest", "canonical": "content", "legacy": ""}
+
+
 def list_revisions(server_id: int, service: str, limit: int = 100) -> list[dict]:
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT id, server_id, service, sha256, summary, username, source, created_at "
+                "SELECT id, server_id, service, sha256, hash_kind, summary, username, source, created_at "
                 "FROM kea_config_revisions WHERE server_id=%s AND service=%s ORDER BY id DESC LIMIT %s",
                 (server_id, service, max(1, min(int(limit), 500))),
             )

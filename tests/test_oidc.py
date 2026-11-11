@@ -785,6 +785,39 @@ class TestOidcSettingsRoute:
         on_disk = _on_disk(isolated_oidc_settings_config)
         assert on_disk.get("oidc", "client_secret") == "s3cret"
 
+    def test_q228_a_blank_secret_is_refused_for_another_tenant_on_the_same_host(
+        self, logged_in_client, isolated_oidc_settings_config
+    ):
+        # AN2 and the beta.13 review's #1 (CRED-002): the issuer's path selects the tenant whose token endpoint is sent the secret
+        self._post(
+            logged_in_client, enabled="1", issuer="https://login.example.com/tenant-a/v2.0", client_secret="s3cret"
+        )
+        before = isolated_oidc_settings_config.read_bytes()
+        r = self._post(
+            logged_in_client, enabled="1", issuer="https://login.example.com/tenant-b/v2.0", client_secret=""
+        )
+        assert b"The issuer changed - enter the client secret again." in r.data
+        assert isolated_oidc_settings_config.read_bytes() == before
+        r = self._post(
+            logged_in_client, enabled="1", issuer="https://login.example.com/tenant-a/v2.0/", client_secret=""
+        )
+        assert b"Single sign-on settings saved." in r.data and b"takes effect when Jen restarts" in r.data
+        assert _on_disk(isolated_oidc_settings_config).get("oidc", "client_secret") == "s3cret"
+
+    def test_q228_a_blank_secret_is_refused_for_another_client_id(
+        self, logged_in_client, isolated_oidc_settings_config
+    ):
+        self._post(logged_in_client, enabled="1", client_secret="s3cret")
+        before = isolated_oidc_settings_config.read_bytes()
+        r = self._post(logged_in_client, enabled="1", client_id="second-client", client_secret="")
+        assert b"The client ID changed - enter the client secret again." in r.data
+        assert isolated_oidc_settings_config.read_bytes() == before
+        self._post(logged_in_client, enabled="1", client_id="second-client", client_secret="n3w-secret")
+        on_disk = _on_disk(isolated_oidc_settings_config)
+        assert (
+            on_disk.get("oidc", "client_id") == "second-client" and on_disk.get("oidc", "client_secret") == "n3w-secret"
+        )
+
     def test_client_secret_never_appears_in_a_get_response(self, logged_in_client, isolated_oidc_settings_config):
         self._post(logged_in_client, enabled="1", client_secret="s3cretvalue12345")
         r = logged_in_client.get("/settings/security")

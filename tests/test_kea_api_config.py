@@ -1314,6 +1314,37 @@ class TestKeaWritesItsDefaultsOut:
             {"x": {}}, {"x": {"service-sockets-require-all": False}}
         )  # only under interfaces-config
 
+    def test_a_file_that_says_raw_is_carried_by_a_daemon_that_reports_no_socket_type(self):
+        """Q228, F1 (the maintainer's daemon, 2026-11-11): `config-get` reports `dhcp-socket-type` only when it is `udp`, so a file that says `raw` - the default - read as "an edit the
+        daemon never loaded" and the switch asked for a consent to discard it."""
+        running = {"interfaces-config": {"interfaces": ["eth0"], "re-detect": True}}
+        said = {"interfaces-config": {"interfaces": ["eth0"], "dhcp-socket-type": "raw"}}
+        assert api._carries(running, said)
+        assert api.first_difference(running, said) == ""
+        assert api.file_in_daemon({"Dhcp4": said}, {"Dhcp4": running}, "dhcp4")
+        # the value that is NOT the default is a difference, named at its own path: a file that says udp over a daemon that reports nothing is an edit the daemon did not load
+        udp = {"interfaces-config": {"interfaces": ["eth0"], "dhcp-socket-type": "udp"}}
+        assert not api._carries(running, udp)
+        assert api.first_difference(running, udp) == "interfaces-config.dhcp-socket-type"
+        # a daemon that DOES report it is compared as any value is
+        assert api._carries(
+            {"interfaces-config": {"dhcp-socket-type": "udp"}}, {"interfaces-config": {"dhcp-socket-type": "udp"}}
+        )
+        assert not api._carries(
+            {"interfaces-config": {"dhcp-socket-type": "udp"}}, {"interfaces-config": {"dhcp-socket-type": "raw"}}
+        )
+        assert not api._carries({"x": {}}, {"x": {"dhcp-socket-type": "raw"}})  # only under interfaces-config
+        assert not api._carries(
+            running, {"interfaces-config": {"dhcp-socket-type": "RAW"}}
+        )  # the value as Kea spells it
+
+    def test_the_table_is_the_three_keys_a_daemon_was_seen_to_omit(self):
+        assert api.OMITTED_AT_DEFAULT == {
+            "service-sockets-require-all": False,
+            "service-sockets-max-retries": 0,
+            "dhcp-socket-type": "raw",
+        }
+
     def test_only_a_pool_is_compared_without_its_spaces(self):
         """Q216 BF5, as a PATH (Q217 AB15): Kea re-renders a pool "a - b" as "a-b" and nothing else row 09 saw; a `user-context.pool` and a top-level `pool` compare exactly."""
         pool_a = {"subnet4": [{"pools": [{"pool": "10.0.0.10-10.0.0.20"}]}]}

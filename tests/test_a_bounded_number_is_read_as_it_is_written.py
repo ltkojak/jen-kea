@@ -568,17 +568,25 @@ class TestAChannelsSecretIsWriteOnly:
         assert self._kept(monkeypatch, "email", new, old)["smtp_pass"] == "new"
 
     def test_a_webhooks_header_is_bound_to_its_url_and_a_providers_token_to_nothing(self, monkeypatch):
+        from jen.routes.settings import alerts as route
+
+        # (Q228, the beta.13 review's #2) this cell kept the value across a changed PATH and said "a path is not a place". For a webhook it is: two paths of one host are two
+        # receivers (`auth.same_destination`). The same address still keeps it
+        assert self._kept(
+            monkeypatch,
+            "webhook",
+            {"webhook_url": "https://h/x", "header_value": ""},
+            {"webhook_url": "https://h/y", "header_value": "B"},
+        ) == ("header_value", route.DESTINATION_CHANGED)
         assert (
             self._kept(
                 monkeypatch,
                 "webhook",
-                {"webhook_url": "https://h/x", "header_value": ""},
+                {"webhook_url": "https://h/y/", "header_value": ""},
                 {"webhook_url": "https://h/y", "header_value": "B"},
             )["header_value"]
             == "B"
-        ), "a path is not a place (CRED-002: scheme, host, port)"
-        from jen.routes.settings import alerts as route
-
+        )
         assert self._kept(
             monkeypatch,
             "webhook",
@@ -596,13 +604,18 @@ class TestAChannelsSecretIsWriteOnly:
     def test_a_channel_whose_type_changed_keeps_nothing(self, monkeypatch):
         from jen.routes.settings import alerts as route
 
+        # (Q228, the beta.13 review's #3) nothing is kept: Telegram's `token` is not ntfy's. An ntfy token is one the channel works without, so the blank is "none" and the
+        # channel is saved; a blank secret the new type NEEDS is still refused
         assert self._kept(
             monkeypatch,
             "ntfy",
             {"url": "https://ntfy.sh", "topic": "t", "token": ""},
             {"token": "T"},
             old_type="telegram",
-        ) == ("ntfy_token", route.DESTINATION_CHANGED)
+        ) == {"url": "https://ntfy.sh", "topic": "t", "token": ""}
+        assert self._kept(
+            monkeypatch, "slack", {"webhook_url": ""}, {"token": "T", "chat_id": "9"}, old_type="telegram"
+        ) == ("slack_webhook", route.DESTINATION_CHANGED)
 
     def test_a_stored_config_that_cannot_be_read_is_refused_and_says_why(self, monkeypatch):
         """(Q227, AM6) `get_channel_config` answers {} for a row whose config cannot be decrypted. A provider's token was then "kept" as "" and the page said saved."""
@@ -611,9 +624,13 @@ class TestAChannelsSecretIsWriteOnly:
         for ctype, new, field in (
             ("telegram", {"token": "", "chat_id": "9"}, "token"),
             ("pushover", {"user_key": "", "api_token": ""}, "pushover_user_key"),
-            ("email", {"smtp_host": "m", "smtp_port": "587", "smtp_pass": "", "use_tls": "true"}, "smtp_pass"),
+            ("webhook", {"webhook_url": "", "header_value": ""}, "webhook_url"),
         ):
             assert self._kept(monkeypatch, ctype, new, {}) == (field, route.STORED_UNREADABLE), ctype
+        # (Q228, the beta.13 review's #3) an SMTP password is a secret the channel works without: over a row that cannot be read it is stored as none, and the save names it
+        mail = {"smtp_host": "m", "smtp_port": "587", "smtp_pass": "", "use_tls": "true"}
+        assert self._kept(monkeypatch, "email", mail, {}) == mail
+        assert route._emptied("email", mail, {"id": 4, "channel_type": "email", "config": "x"}) == ["the SMTP password"]
         # a typed secret needs nothing of the stored row
         assert self._kept(monkeypatch, "telegram", {"token": "T2", "chat_id": "9"}, {}) == {
             "token": "T2",

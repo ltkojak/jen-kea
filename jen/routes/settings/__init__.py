@@ -76,12 +76,11 @@ def _count(sql, params=()):
 def _enabled_channels():
     """(Q227, AM22) How many enabled channels the Alerts page lists for THIS account: the same `_may_act_on` the list, the edit, the test and the delete ask. The landing page counted
     every enabled channel, so a subnet-restricted admin read a number that told them channels existed which the Alerts page does not show them."""
-    from jen.routes.settings.alerts import _may_act_on
-
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute("SELECT subnet_scope FROM alert_channels WHERE enabled=1")
-            return sum(1 for ch in cur.fetchall() if _may_act_on(ch))
+            # (Q228, AN3) the service's one answer; `/getting-started` asks it too
+            return __alerts.enabled_channels_for(current_user, cur.fetchall())
     except Exception:
         return None
 
@@ -142,7 +141,12 @@ def settings():
         hints["security"].append(("MFA off", "warn"))
 
     channels = _enabled_channels()
-    hints["alerts"] = [(f"{channels} channel{'s' if channels != 1 else ''} enabled", "ok" if channels else "warn")]
+    # (Q228, AN4) a count that could not be read is not a number: this printed "None channels enabled"
+    hints["alerts"] = (
+        [("channels could not be counted", "warn")]
+        if channels is None
+        else [(f"{channels} channel{'s' if channels != 1 else ''} enabled", "ok" if channels else "warn")]
+    )
     failed = _count(
         "SELECT COUNT(*) AS cnt FROM alert_log WHERE status NOT IN ('ok','sent') AND sent_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)"
     )
@@ -282,10 +286,13 @@ def settings_security():
         mfa_mode=__mfa.get_mfa_mode(),
         session=session_settings,
         rl=rl_settings,
-        rl_active_ips=rl_active_ips or 0,
-        rl_attempts_1h=rl_attempts_1h or 0,
-        rl_lockouts_username=rl_lockouts_username or 0,
-        rl_lockouts_ip=rl_lockouts_ip or 0,
+        # (Q228, AN4) the four counts of this card are handed over as read: None is "could not be read" on the page, never 0
+        rl_active_ips=rl_active_ips,
+        rl_attempts_1h=rl_attempts_1h,
+        # (Q228, AN4) None when the table could not be read: the card says so. `or 0` printed "0 account name(s), 0 address(es)" at the moment `is_locked_out` was failing closed
+        # and refusing every login
+        rl_lockouts_username=rl_lockouts_username,
+        rl_lockouts_ip=rl_lockouts_ip,
         ssl_configured=__config.ssl_configured(),
         cert_info=_cert_info(),
         http_port=extensions.HTTP_PORT,

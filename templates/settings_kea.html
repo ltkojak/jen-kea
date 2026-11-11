@@ -351,18 +351,20 @@
                             </details>
                             {% endif %}
                         </li>
-                        <li class="wm-step" data-state="idle" data-wm-row="3">
-                            <span class="wm-icon wm-icon-idle">{{ icon("circle") }}</span>
-                            <span class="wm-text"><strong>3.</strong> Accept what changes</span>
+                        {# (Q228, F3) the current mode with its gate open and every box the facts call for on record: step 3 is done and says when, and each box is shown ticked and locked. Anything else is asked as before #}
+                        {% set done = m.value == c.transport and not c.blocked and c.accepted_all %}
+                        <li class="wm-step" data-state="{{ 'ok' if done else 'idle' }}" data-wm-row="3"{% if done %} data-wm-accepted="{{ c.id }}"{% endif %}>
+                            <span class="wm-icon wm-icon-{{ 'ok' if done else 'idle' }}">{{ icon("circle-check" if done else "circle") }}</span>
+                            <span class="wm-text"><strong>3.</strong> {% if done %}Accepted {{ c.accepted_at }}{% else %}Accept what changes{% endif %}</span>
                             <div class="wm-consents">
                                 {% for n in c.consents %}
-                                <label><input type="checkbox" name="{{ n.name }}" value="{{ c.consent_value }}" form="wm-form-{{ c.id }}" data-wm-consent="{{ c.id }}" {% if m.value != c.transport %}disabled{% endif %}> {{ n.text }}</label>
+                                <label><input type="checkbox" name="{{ n.name }}" value="{{ c.consent_value }}" form="wm-form-{{ c.id }}" data-wm-consent="{{ c.id }}" {% if done %}checked disabled{% elif m.value != c.transport %}disabled{% endif %}> {{ n.text }}</label>
                                 {% endfor %}
                             </div>
                         </li>
                     </ol>
                     <div class="wm-switch">
-                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-primary" data-wm-switch="{{ c.id }}" data-wm-target="api" data-holds="{{ '1' if c.holding else '' }}" {% if m.value == c.transport and not c.blocked %}data-current="1"{% endif %} {% if (m.value == c.transport and not c.blocked) or c.holding %}disabled{% endif %}>{% if m.value == c.transport %}Record consent{% else %}Switch to live API{% endif %}</button>
+                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-primary{% if m.value == c.transport and not c.blocked %} wm-hidden{% endif %}" data-wm-switch="{{ c.id }}" data-wm-target="api" data-holds="{{ '1' if c.holding else '' }}" {% if m.value == c.transport and not c.blocked %}data-current="1"{% endif %} {% if (m.value == c.transport and not c.blocked) or c.holding %}disabled{% endif %}>{% if m.value == c.transport %}Record consent{% else %}Switch to live API{% endif %}</button>
                         <span class="form-hint" data-wm-holding="{{ c.id }}">{% if m.value == c.transport and not c.blocked %}This is the current mode.{% elif m.value == c.transport %}{{ c.holding or c.why }}{% else %}{{ c.holding or 'Accept what changes in step 3, then switch.' }}{% endif %}</span>
                     </div>
                     <div class="form-hint">Audited. Reversible from this card.</div>
@@ -1152,7 +1154,7 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
             var hidden = p.getAttribute('data-mode-panel') !== mode;
             p.classList.toggle('wm-hidden', hidden);
             // Q218 (BH3 b, AC4): the three panels share one form, and a hidden box is still a box that submits. Only the SELECTED mode's boxes are enabled, so a consent the facts never called for cannot ride along.
-            p.querySelectorAll('input[type="checkbox"]').forEach(function (box) { box.disabled = hidden; });
+            p.querySelectorAll('input[type="checkbox"]').forEach(function (box) { box.disabled = hidden || !!box.closest('[data-wm-accepted]'); });  // (Q228, F3) a consent on record is shown, not asked
         });
         var form = card.querySelector('[data-wm-form]');
         var radio = card.querySelector('[data-wm-radio]:checked');
@@ -1173,6 +1175,31 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
     function refreshAll() {
         document.querySelectorAll('[data-wm-card]').forEach(refresh);
     }
+    // (Q228, F2) the page is rendered with the CURRENT mode's radio checked, so every action inside another mode's panel (Run check, Allow the daemon to write its file, Take the
+    // write right back, Update helper) came back with that panel closed and its result hidden. The card remembers, once, which panel the action was pressed in and opens it again:
+    // a one-shot note in sessionStorage, written when the action is sent and removed when it is read. It selects a radio and nothing else - the switch is still the button's.
+    var REOPEN = 'jen-wm-reopen';
+    function remember(card) {
+        var mode = card && selected(card);
+        if (!mode) return;
+        try { window.sessionStorage.setItem(REOPEN, card.getAttribute('data-wm-card') + ':' + mode); } catch (e) { /* storage blocked: the page comes back on the current mode */ }
+    }
+    function reopen() {
+        var kept = null;
+        try { kept = window.sessionStorage.getItem(REOPEN); window.sessionStorage.removeItem(REOPEN); } catch (e) { return; }
+        if (!kept || !/^\d+:(api|file|off)$/.test(kept)) return;
+        var parts = kept.split(':');
+        var card = document.querySelector('[data-wm-card="' + parts[0] + '"]');
+        var radio = card && card.querySelector('[data-wm-radio][value="' + parts[1] + '"]');
+        if (!radio || radio.disabled) return;
+        radio.checked = true;
+        if (card.scrollIntoView) card.scrollIntoView();
+    }
+    document.addEventListener('submit', function (ev) {
+        // capture: base.html's confirm for form[data-confirm] stops the first submit and sends the form itself afterward, which fires no second event
+        var panel = ev.target.closest && ev.target.closest('[data-mode-panel]');
+        if (panel) remember(panel.closest('[data-wm-card]'));
+    }, true);
     document.addEventListener('change', function (ev) {
         var card = ev.target.closest('[data-wm-card]');
         if (card) refresh(card);
@@ -1201,6 +1228,7 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
             });
             var data = await resp.json();
             if (data.ok) {
+                remember(btn.closest('[data-wm-card]'));  // (Q228, F2) the check's result is in THIS panel
                 window.location.hash = 'config-card-' + id;
                 window.location.reload();
                 return;
@@ -1211,6 +1239,7 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
         }
         btn.disabled = false;
     });
+    reopen();
     refreshAll();
 })();
 

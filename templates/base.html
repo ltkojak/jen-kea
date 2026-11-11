@@ -448,6 +448,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .wm-mode-label .form-hint { flex-basis: 100%; margin: 0 0 0 24px; }
         .wm-panel { margin: 10px 0 2px 24px; }
         .wm-panel.wm-hidden { display: none; }
+        .wm-switch .btn.wm-hidden { display: none; }  /* (Q228, F3) Record consent has nothing to record while the current mode's gate is open */
         .wm-steps { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
         .wm-step { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
         .wm-step .wm-text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }

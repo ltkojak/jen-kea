@@ -503,6 +503,15 @@ S10_MODULES = (
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
+    ("jen/services/auth.py", "same_destination", "ValueError", "return False"): (
+        "two addresses of which one cannot be parsed are NOT the same destination: the form then refuses the blank secret, so nothing is kept for an address nobody can read - fail closed (CRED-002, Q228)"
+    ),
+    ("jen/services/auth.py", "http_address", "ValueError", "return False"): (
+        "an address `urlsplit` cannot parse is NOT an http(s) address: the channel form refuses it and nothing is stored - fail closed (CRED-005, Q228, AN6)"
+    ),
+    ("jen/services/auth.py", "plain_address", "ValueError", "return False"): (
+        "an address `urlsplit` cannot parse is NOT a plain one: the page WITHHOLDS it, and the ntfy form refuses it - fail closed (CRED-005 at the display, Q228, AN1)"
+    ),
     ("jen/services/auth.py", "_endpoint_parts", "ValueError", "return None"): (
         "an address that cannot be parsed (a bad port) names no place, so it is NEVER the same endpoint as anything: a kept secret is then removed or the form refuses - fail closed (CRED-002, Q178)"
     ),

@@ -213,6 +213,8 @@ def change_lock(wait: float | None = None):
 _DETAIL_TAIL = 300
 #: (Q227, AM14) the part of the ROLLBACK FAILED line for an api target whose rollback raised before it reported anything
 ROLLBACK_NOT_KNOWN = "the rollback over the API stopped before it reported what was sent, so what the daemon and the file hold is not known (the Write mode card shows it; a pending change there is settled with Settle it now)"
+#: (Q228, AN21) and the same for a File over SSH target: `_restore_target` wraps the file restore in `_safe` too, and the helper's replace may have put the old file back before the raise
+RESTORE_NOT_KNOWN = "the restore of the file stopped before it reported what was written, so which config the file holds is not known (Servers → Config history shows the file as it is now)"
 
 
 def _safe(fn, *args, **kwargs) -> dict:
@@ -632,11 +634,14 @@ def _run_change_unlocked(
         revert_failed: list[Target] = []  # the revert call itself failed: still on the NEW config
         api_refused: set = set()  # (Q224, AJ9) an api target whose rollback was refused before anything was sent: daemon AND file keep the new config, no row
         api_unknown: set = set()  # (Q227, AM14) an api target whose rollback RAISED: it reported neither what was sent nor what stood, so neither is claimed
+        file_unknown: set = set()  # (Q228, AN21) a file target whose restore RAISED: "still have the NEW config" is a claim about a file nothing read back
         restart_stuck: list[Target] = []  # the previous config is back but the daemon would not restart on it
         for done in reversed(committed):
             rres = _restore_target(done, service, summary, helper_only)
             if not rres.get("ok"):
                 revert_failed.append(done)
+                if done.transport != "api" and rres.get("raised"):
+                    file_unknown.add(done.key)
                 if done.transport == "api":
                     if rres.get("raised"):
                         # (Q227, AM14) `_safe` turned a raise into a result with neither `needs_hands` nor `sent`, which satisfied the first disjunct below: a rollback that had
@@ -687,7 +692,12 @@ def _run_change_unlocked(
             # opposite of reality.
             if revert_failed:
                 failed_keys = {d.key for d in revert_failed}  # by id: two servers may share a name
-                still_new = [d.name for d in revert_failed if d.transport != "api" or d.key in api_refused]
+                still_new = [
+                    d.name
+                    for d in revert_failed
+                    if (d.transport != "api" and d.key not in file_unknown) or d.key in api_refused
+                ]
+                file_not_known = [d.name for d in revert_failed if d.key in file_unknown]
                 api_half = [
                     d.name
                     for d in revert_failed
@@ -707,6 +717,8 @@ def _run_change_unlocked(
                     )
                 if api_not_known:
                     parts.append(f"{', '.join(api_not_known)}: {ROLLBACK_NOT_KNOWN}")
+                if file_not_known:
+                    parts.append(f"{', '.join(file_not_known)}: {RESTORE_NOT_KNOWN}")
                 lines.append(
                     (
                         "error",

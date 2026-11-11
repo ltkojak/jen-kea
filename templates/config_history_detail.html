@@ -5,7 +5,7 @@
     <h1>{{ icon("file-clock", "ico-lg") }} Revision #{{ rev.id }}</h1>
     <p>{{ server.name }} · <code>{{ rev.service }}</code> · {{ rev.created_at|utcfmt }}
        {% if rev.username %}· by {{ rev.username }}{% endif %}
-       · <span class="mono">{{ rev.sha256[:16] if rev.sha256 else '—' }}</span></p>
+       · <span class="mono">{{ rev.sha256[:16] if rev.sha256 else '—' }}</span>{% if rev.sha256 and hash_words.get(rev.hash_kind) %} <span class="muted">{{ hash_words[rev.hash_kind] }}</span>{% endif %}</p>
 </div>
 
 <div class="u-87c136">

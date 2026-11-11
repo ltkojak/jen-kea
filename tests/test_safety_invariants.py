@@ -193,6 +193,29 @@ class TestTheRegistryIsTrue:
             "a `###` heading that is not an entry"
         )
 
+    def test_no_heading_is_indented(self):  # Q228, AN7
+        """An INDENTED `### ID - title` is not a heading to the parser or to the count above: the entry vanished with the two numbers still equal, and its tests were credited to the
+        entry before it. No line of the registry is an indented heading."""
+        text = REGISTRY.read_text(encoding="utf-8")
+        indented = [
+            f"{n}: {line.strip()[:60]}"
+            for n, line in enumerate(text.splitlines(), 1)
+            if re.match(r"^[ \t]+#{1,6} ", line)
+        ]
+        assert not indented, "\n" + "\n".join(indented)
+        assert not parse_registry("### AAA-001 - one\n**Tests.**\n- `tests/a.py`\n   ### BBB-001 - two\n")[0][1:], (
+            "the parser's own reading, for the record"
+        )
+
+    def test_every_test_path_named_anywhere_in_the_registry_exists(self):  # Q228, AN8
+        """`strays` sees one shape (a bullet that is a backticked `tests/...` reference). A path named in prose, in a bullet with a leading word, or under `plugins/` is outside it.
+        Every backticked test path anywhere in the document names a file that exists, whatever sentence it sits in."""
+        text = REGISTRY.read_text(encoding="utf-8")
+        named = set(re.findall(r"`((?:tests|plugins/[\w\-]+/tests)/[\w/]+\.py)", text))
+        assert len(named) > 50
+        missing = sorted(p for p in named if not (ROOT / p).is_file())
+        assert not missing, missing
+
     def test_the_entries_without_an_automated_test_are_listed(self, parsed, capsys):
         entries, _retired = parsed
         bare = [(e["id"], e["no_test_reason"]) for e in entries if not e["tests"]]

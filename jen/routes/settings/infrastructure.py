@@ -331,6 +331,14 @@ def _config_cards() -> list:
                 "row1": row1,
                 "row2": row2,
                 "consents": [{"name": n, "text": __words.CONSENT_TEXTS[n]} for n in needs],
+                # (Q228, F3) the consent ON RECORD, for step 3 of the current mode: when it was given, and whether it covers every box the facts call for now. The card drew
+                # step 3 the same way before and after the switch - a gray circle, the boxes unticked - so an operator who had just accepted read that nothing was accepted
+                "accepted_at": (probe or {}).get("consented_at") or "",
+                "accepted_all": bool(
+                    probe is not None
+                    and probe.get("consented_at")
+                    and set(needs) <= set(probe.get("consents", __api.LEGACY_CONSENTS))
+                ),
                 "holding": holding,
                 # the grant buttons live on row 2: only when the write fact says what they would change
                 "can_allow": helper_ok and isinstance(write_fact, dict) and write_fact.get("may_write") is False,
@@ -4619,26 +4627,34 @@ def toggle_ipv6():
         flash(f"{r['name']}: {r['message']}", "success" if r["ok"] else "error")
 
     # (Q227, AM21) the switch is a settings row and its writer answers: "enabled" and "disabled" are said when it is stored, never over a write that failed
+    # (Q228, AN11) `stored` is the writer's answer and it goes into the audit row: "not attempted" when a server failed on the way to enabling, so no write was made
+    stored = "not attempted"
     if enable:
         if not all_ok:
             flash("IPv6 was NOT enabled — at least one server failed. Fix the issue above and try again.", "error")
         elif __user.set_global_setting("ipv6_enabled", "true"):
+            stored = "yes"
             flash("IPv6 support enabled.", "success")
         else:
+            stored = "no"
             flash(IPV6_NOT_SAVED.format(state="off"), "error")
     else:
-        if not __user.set_global_setting("ipv6_enabled", "false"):
+        stored = "yes" if __user.set_global_setting("ipv6_enabled", "false") else "no"
+        if stored == "no":
             flash(IPV6_NOT_SAVED.format(state="on"), "error")
-        elif not all_ok:
+        if not all_ok:
+            # (Q228, AN11) said whether or not the row was written: a failed write used to hide it behind an `elif`
             flash(
-                "IPv6 display turned off, but at least one server may still be "
-                "running kea-dhcp6-server — see errors above.",
+                ("IPv6 display turned off, but at least one server" if stored == "yes" else "At least one server")
+                + " may still be running kea-dhcp6-server — see errors above.",
                 "error",
             )
-        else:
+        elif stored == "yes":
             flash("IPv6 support disabled.", "success")
 
-    __user.audit("TOGGLE_IPV6", "ipv6_enabled", f"enable={enable} all_ok={all_ok} servers={len(results)}")
+    __user.audit(
+        "TOGGLE_IPV6", "ipv6_enabled", f"enable={enable} all_ok={all_ok} servers={len(results)} stored={stored}"
+    )
     return redirect(url_for("settings.settings_kea"))
 
 

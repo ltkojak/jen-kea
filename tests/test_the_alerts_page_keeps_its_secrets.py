@@ -129,6 +129,85 @@ class TestThePageCarriesNoSecret:
         finally:
             _drop(db, name)
 
+    def test_q228_a_header_value_is_not_carried_to_another_path(
+        self, logged_in_client, db
+    ):  # the beta.13 review's #2, CRED-002
+        name = "_secret_path"
+        _drop(db, name)
+        data = {
+            "channel_type": "webhook",
+            "channel_name": name,
+            "enabled": "on",
+            "webhook_url": "https://hooks.example.test/team-a",
+            "header_name": "Authorization",
+            "header_value": "TeamASecret77",
+            "alert_types[]": ["kea_down"],
+        }
+        try:
+            logged_in_client.post(SAVE, data=data, follow_redirects=True)
+            row = _row(db, name)
+            assert row is not None
+            r = logged_in_client.post(
+                SAVE,
+                data={
+                    **data,
+                    "channel_id": str(row["id"]),
+                    "webhook_url": "https://hooks.example.test/team-b",
+                    "header_value": "",
+                },
+                follow_redirects=True,
+            )
+            assert b"enter the secret again" in r.data
+            cfg = _config(db, name)
+            assert cfg["webhook_url"] == data["webhook_url"] and cfg["header_value"] == "TeamASecret77"
+        finally:
+            _drop(db, name)
+
+    def test_q228_a_stored_ntfy_address_with_a_password_is_withheld_and_kept(
+        self, logged_in_client, db
+    ):  # AN1, CRED-005
+        from jen.services import alerts
+
+        name = "_secret_ntfy_legacy"
+        _drop(db, name)
+        legacy = {
+            "url": "https://qzuser:LegacyPw9@ntfy.example.test",
+            "topic": "jen",
+            "token": "tk_LegacyTok5",
+            "priority": "default",
+        }
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types, subnet_scope) VALUES (%s, %s, %s, %s, %s, %s)",
+                    ("ntfy", name, 1, alerts.encode_channel_config(legacy), json.dumps(["kea_down"]), None),
+                )
+            db.commit()
+            html = logged_in_client.get("/settings/alerts").data.decode()
+            assert "LegacyPw9" not in html and "tk_LegacyTok5" not in html and "qzuser" not in html
+            assert "url_withheld" in html and "so it is not shown. It is still used as saved." in html
+            row = _row(db, name)
+            r = logged_in_client.post(
+                SAVE,
+                data={
+                    "channel_type": "ntfy",
+                    "channel_name": name,
+                    "enabled": "on",
+                    "channel_id": str(row["id"]),
+                    "ntfy_url": "",
+                    "ntfy_topic": "jen-renamed",
+                    "ntfy_token": "",
+                    "ntfy_priority": "default",
+                    "alert_types[]": ["kea_down"],
+                },
+                follow_redirects=True,
+            )
+            assert r.status_code == 200 and b"enter the secret again" not in r.data
+            cfg = _config(db, name)
+            assert cfg["url"] == legacy["url"] and cfg["token"] == "tk_LegacyTok5" and cfg["topic"] == "jen-renamed"
+        finally:
+            _drop(db, name)
+
 
 class TestAScopedChannelIsNotSentTheDailySummary:
     """(Q227, AM2) the daily summary names every subnet. A channel limited to some subnets cannot take it, and an alert type that is not on the list refuses the form."""

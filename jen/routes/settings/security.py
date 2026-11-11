@@ -42,6 +42,8 @@ def _session_looser(enabled: str, minutes: int) -> bool:
 PERMANENT_IS_A_SUPERADMINS = "Only a superadmin can set a lockout that lasts until it is cleared (0 minutes)."
 CLEARED_SENTENCE = "Cleared {attempts} failed login attempt(s) and ended {lockouts} permanent lockout(s)."
 OIDC_ISSUER_CHANGED = "The issuer changed - enter the client secret again."
+OIDC_CLIENT_CHANGED = "The client ID changed - enter the client secret again."
+OIDC_SAVED = "Single sign-on settings saved. A change to the issuer, the client ID or the client secret takes effect when Jen restarts."
 
 
 def _rate_limit_looser(mode: str, max_attempts: int, lockout_minutes: int) -> bool:
@@ -353,14 +355,16 @@ def save_oidc():
 
     # (Q227, AM5; CRED-002) a blank client secret keeps the stored one only while the issuer is the same place. The secret typed for one identity provider was registered against the next
     # one's discovery document and sent to its token endpoint. A stored issuer that is blank is a different place too (two saves would walk the secret across); an emptied issuer sends the secret nowhere and keeps it
-    if (
-        not client_secret
-        and issuer
-        and extensions.OIDC_CLIENT_SECRET
-        and not __auth.same_endpoint(issuer, extensions.OIDC_ISSUER)
-    ):
-        flash_field("client_secret", OIDC_ISSUER_CHANGED)
-        return redirect(url_for("settings.settings_security"))
+    # (Q228, AN2 and the beta.13 review's #1) the issuer is compared WITH its path (`auth.same_destination`): `init_oidc` builds the discovery URL from the path, so the path selects
+    # the realm or the tenant whose token endpoint is sent the secret, and `same_endpoint` (scheme, host, port) called two realms of one Keycloak, or two tenants of one cloud
+    # login host, the same place. A client secret also belongs to ONE client registration: a changed client ID with a blank secret is refused the same way
+    if not client_secret and issuer and extensions.OIDC_CLIENT_SECRET:
+        if not __auth.same_destination(issuer, extensions.OIDC_ISSUER):
+            flash_field("client_secret", OIDC_ISSUER_CHANGED)
+            return redirect(url_for("settings.settings_security"))
+        if client_id != extensions.OIDC_CLIENT_ID:
+            flash_field("client_secret", OIDC_CLIENT_CHANGED)
+            return redirect(url_for("settings.settings_security"))
 
     items = [
         ("oidc", "enabled", "true" if enabled else "false"),
@@ -382,6 +386,7 @@ def save_oidc():
         items.append(("oidc", "client_secret", client_secret))
 
     __config.app_config.write_values(items)
-    flash("Single sign-on settings saved.", "success")
+    # (Q228, AN2) the client is registered once, when Jen starts (`init_oidc`): the page said "saved" and the running process kept the old issuer, client and secret until a restart
+    flash(OIDC_SAVED, "success")
     __user.audit("SAVE_SETTINGS", "oidc", f"enabled={enabled} issuer={issuer}")
     return redirect(url_for("settings.settings_security"))
