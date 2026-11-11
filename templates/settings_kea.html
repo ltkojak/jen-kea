@@ -1176,7 +1176,7 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
         document.querySelectorAll('[data-wm-card]').forEach(refresh);
     }
     // (Q228, F2) the page is rendered with the CURRENT mode's radio checked, so every action inside another mode's panel (Run check, Allow the daemon to write its file, Take the
-    // write right back, Update helper) came back with that panel closed and its result hidden. The card remembers, once, which panel the action was pressed in and opens it again:
+    // write right back, the helper's own update) came back with that panel closed and its result hidden. The card remembers, once, which panel the action was pressed in and opens it again:
     // a one-shot note in sessionStorage, written when the action is sent and removed when it is read. It selects a radio and nothing else - the switch is still the button's.
     var REOPEN = 'jen-wm-reopen';
     function remember(card) {
