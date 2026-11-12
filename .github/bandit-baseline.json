@@ -2079,6 +2079,26 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b704_markupsafe_markup_xss.html",
       "test_id": "B704",
       "test_name": "markupsafe_markup_xss"
+    },
+    {
+      "code": "584     in this module posts through here (a source test holds the module to it).\"\"\"\n585     resp = requests.post(url, allow_redirects=False, **kwargs)\n586     if 300 <= resp.status_code < 400:\n",
+      "col_offset": 11,
+      "end_col_offset": 62,
+      "filename": "jen/services/alerts.py",
+      "issue_confidence": "LOW",
+      "issue_cwe": {
+        "id": 400,
+        "link": "https://cwe.mitre.org/data/definitions/400.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Call to requests without timeout",
+      "line_number": 585,
+      "line_range": [
+        585
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b113_request_without_timeout.html",
+      "test_id": "B113",
+      "test_name": "request_without_timeout"
     }
   ]
 }
