@@ -49,6 +49,11 @@ def _env() -> Environment:
     env.globals["icon"] = lambda n, *a, **k: f"<svg data-icon='{n}'></svg>"
     env.globals["csrf_token"] = lambda: "T"
     env.filters["utcfmt"] = lambda v: str(v)
+    from jen.services import timefmt
+
+    env.filters["isofmt"] = (
+        timefmt.iso_filter
+    )  # (Q230, AP11) the real filter: a stand-in that printed `str(v)` is why the card's times were never seen as text
     return env
 
 

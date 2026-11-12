@@ -120,6 +120,9 @@ class ChangeSetResult:
     covered_ids: list = field(default_factory=list)
     # the ids of the targets whose revert failed - they still carry the NEW config (`rollback_failed` also covers "the previous config is back but the daemon would not restart on it", which is NOT this)
     still_new_ids: list = field(default_factory=list)
+    # (Q230, AP3) the ids of the FILE targets whose restore raised: nothing read the file back, so whether it carries the new or the previous config is not known. Q229 took them out
+    # of `still_new_ids` (they are not known to be new) and a reader that DECIDES on that list then read them as "the previous config is back". A decision asks both lists
+    not_known_ids: list = field(default_factory=list)
 
 
 # The statuses after which the change did NOT happen (or is half-applied): callers must not write
@@ -739,6 +742,7 @@ def _run_change_unlocked(
                 needs_hands_ids=[d.key for d in needs],
                 # (Q229, AO26) the definition Q228 gave the line above: a file target whose restore RAISED is not known, so it is not named as still carrying the new config
                 still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown],
+                not_known_ids=[d.key for d in revert_failed if d.key in file_unknown],
             )
 
         if committed:

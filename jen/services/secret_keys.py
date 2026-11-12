@@ -46,6 +46,33 @@ _PADDING = " \t\r\n"
 _USERINFO_RE = re.compile(r"(?i)\b(https?://)[^\s/?#]*@")
 
 
+def without_credentials(value) -> str:
+    """A string VALUE of a configuration as a page may show it (Q230, AP9 and the beta.15 review's #2; CRED-005 at the display). Two places a secret sits inside an address that
+    `without_userinfo` does not reach: the user-info of an address whose scheme is not http(s) (`ldap://u:pw@h`, `postgresql://`, `redis://`, `wss://` - the authority of ANY
+    scheme `urlsplit` reads a host from is split at its LAST `@`), and a query parameter whose NAME is a secret's (`?token=...`, `&api_key=...`, by `is_secret_key`), which keeps
+    its name and loses its value. Everything else of the value is returned as written; what is left goes through `scrub_urls`. Idempotent. A value with no `://` is not read as
+    an address: `user:pw@host` is also how a SIP or a mail address is written, and a rule that cannot tell them apart is not applied."""
+    from urllib.parse import unquote, urlsplit, urlunsplit
+
+    text = str(value if value is not None else "")
+    if "://" not in text:
+        return scrub_urls(text)
+    try:
+        parts = urlsplit(text.strip(_PADDING))
+    except ValueError:
+        return scrub_urls(text)
+    netloc = parts.netloc.rsplit("@", 1)[1] if "@" in parts.netloc else parts.netloc
+
+    def masked(pair: str) -> str:
+        name, eq, held = pair.partition("=")
+        return f"{name}=********" if eq and held and is_secret_key(unquote(name)) else pair
+
+    query = "&".join(masked(pair) for pair in parts.query.split("&")) if parts.query else parts.query
+    if not parts.scheme or (netloc == parts.netloc and query == parts.query):
+        return scrub_urls(text)
+    return scrub_urls(urlunsplit(parts._replace(netloc=netloc, query=query)))
+
+
 def scrub_urls(text) -> str:
     """`text` with the user-info of every http(s) address in it removed (`https://u:p@h:8004/x` -> `https://h:8004/x`): for TEXT that may carry an address as it was typed - an exception's message, a
     log line, a sentence. Idempotent; a text with no address comes back unchanged. THE definition (Q221, AE7); `auth.scrub_urls` is this."""

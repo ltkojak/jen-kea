@@ -614,7 +614,12 @@ class TestStepThreeSaysWhatWasAccepted:
         card, panel = self._api_panel(monkeypatch, _facts(consents=["discard_file_edit", "consent_rendering"]))
         assert card["accepted_at"] == wm.NOW and card["accepted_all"] is True
         assert 'data-state="ok" data-wm-row="3" data-wm-accepted="2"' in panel
-        assert f"<strong>3.</strong> Accepted {wm.NOW}</span>" in panel and "Accept what changes" not in panel
+        # (Q230, AP11) the stored ISO text is printed as a time: the UTC wording inside a `<time>` element
+        assert (
+            '<strong>3.</strong> Accepted <time datetime="2026-11-04T10:00:00Z" data-jen-time="fmt" data-jen-fmt="%Y-%m-%d %H:%M">2026-11-04 10:00 UTC</time></span>'
+            in panel
+        )
+        assert wm.NOW not in panel and "Accept what changes" not in panel
         boxes = re.findall(r'<input type="checkbox"[^>]*>', panel)
         assert boxes and all(" checked disabled" in b for b in boxes), boxes
         assert wm.consent_names(panel) == ["consent_rendering"], "the boxes are the ones the facts call for NOW"

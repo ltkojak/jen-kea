@@ -199,8 +199,9 @@ class TestAKeptSecretIsJudgedByTheWholeAddress:
     def test_an_ntfy_token_stays_with_its_server_and_path(self, monkeypatch):
         out, _ = _kept(monkeypatch, "ntfy", {**NTFY, "token": ""}, NTFY)
         assert out["token"] == "tk_SECRET"
+        # (Q230, AP2) the topic is the last part of the address the token is sent to: another topic is another destination
         out, _ = _kept(monkeypatch, "ntfy", {**NTFY, "topic": "second", "token": ""}, NTFY)
-        assert out["token"] == "tk_SECRET", "the topic is not the server: the token is the server's"
+        assert out == ("ntfy_token", _route().DESTINATION_CHANGED)
         for url in (
             "https://ntfy.example.test/elsewhere",
             "https://ntfy2.example.test/base",
@@ -222,7 +223,8 @@ class TestAKeptSecretIsJudgedByTheWholeAddress:
 
     def test_the_route_asks_the_destination(self):
         src = _function("jen/routes/settings/alerts.py", "_kept_secrets")
-        assert "__auth.same_destination(_endpoint(channel_type, config), _endpoint(channel_type, old))" in src
+        # (Q230, AP18) `typed` is the posted config, with the stored wire when the posted one is stronger
+        assert "__auth.same_destination(_endpoint(channel_type, typed), _endpoint(channel_type, old))" in src
         assert "same_endpoint(" not in src
 
 

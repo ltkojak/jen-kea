@@ -119,7 +119,7 @@ var JEN_CHANNELS = {
             {{ icon("map-pin") }} Subnet-specific alerts for all subnets
             {% endif %}
             {% if ch.config.get('url_withheld') %}
-            <div>{{ icon("lock") }} This channel's server address was saved by an earlier release in a form Jen does not print (a password or a token in it, or characters that are not part of an address), so it is not shown. It is still used as saved. To replace it, edit the channel, enter the address without them and put the access token in its own field.</div>
+            <div>{{ icon("lock") }} This channel's server address was saved by an earlier release in a form Jen does not print (a password or a token in it, or characters that are not part of an address), so it is not shown. It is still used as saved. To replace it, edit the channel{% if ch.channel_type == 'email' %} and enter the host name or IP address alone: the port and the user name have their own fields{% else %}, enter the address without them and put the access token in its own field{% endif %}.</div>
             {% endif %}
             {% if ch.unsent_types %}
             <div>Not sent to this channel: {% for atype in ch.unsent_types %}{{ alert_type_labels.get(atype, atype) }}{% if not loop.last %}, {% endif %}{% endfor %}. It names every subnet, so it goes only to a channel for all subnets.</div>
@@ -295,7 +295,7 @@ var JEN_CHANNELS = {
                 </div>
                 <div class="form-group">
                     <label class="u-015a5e">
-                        <input type="checkbox" name="tls_verify" id="f-tls_verify" checked aria-describedby="f-tls_verify-hint"> Verify the server's certificate
+                        <input type="hidden" name="tls_verify_shown" value="1"><input type="checkbox" name="tls_verify" id="f-tls_verify" checked aria-describedby="f-tls_verify-hint"> Verify the server's certificate
                     </label>
                     <div class="form-hint" id="f-tls_verify-hint">With STARTTLS on, Jen checks the SMTP server's certificate and name before it sends the password. Untick this only for a server whose certificate cannot be verified, such as a self-signed one. Without STARTTLS the user name and password travel in clear text.</div>
                 </div>

@@ -509,6 +509,9 @@ S10_ALLOWED = {
     ("jen/services/auth.py", "http_address", "ValueError", "return False"): (
         "an address `urlsplit` cannot parse is NOT an http(s) address: the channel form refuses it and nothing is stored - fail closed (CRED-005, Q228, AN6)"
     ),
+    ("jen/services/auth.py", "host_name", "ValueError", "return False"): (
+        "a value with a colon that `ipaddress` cannot parse is NOT an SMTP host: the channel form refuses it and the page withholds it - fail closed (Q230, AP6, AP17)"
+    ),
     ("jen/services/auth.py", "plain_address", "ValueError", "return False"): (
         "an address `urlsplit` cannot parse is NOT a plain one: the page WITHHOLDS it, and the ntfy form refuses it - fail closed (CRED-005 at the display, Q228, AN1)"
     ),

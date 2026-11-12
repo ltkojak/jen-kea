@@ -81,12 +81,17 @@ def _endpoint(channel_type: str, config: dict) -> str:
         scheme = "smtp"
         if config.get("use_tls") == "true":
             scheme = "smtps" if config.get("tls_verify", "true") != "false" else "smtps-unverified"
-        return f"{scheme}://{config.get('smtp_host', '')}:{config.get('smtp_port', '')}"
+        # (Q230, AP6) an IPv6 address is bracketed, as every URL writes one: `smtps://::1:587` named no place `same_destination` could read, so an edit that changed nothing
+        # was refused with "the destination changed"
+        host = str(config.get("smtp_host", ""))
+        host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        return f"{scheme}://{host}:{config.get('smtp_port', '')}"
     if channel_type == "webhook":
         return config.get("webhook_url", "")
     if channel_type == "ntfy":
-        # (Q229) as the sender dials it: `_send_ntfy_channel` drops the trailing slash before it appends the topic, so `https://ntfy.example/base/` and `.../base` are one address
-        return str(config.get("url", "")).rstrip("/")
+        # (Q230, AP2) the ONE string the sender builds, topic included (`alerts.ntfy_target`): the token was judged against the server's address alone, which is half of what
+        # it is sent to. A blank address is no destination, as before
+        return __alerts.ntfy_target(config) if config.get("url") else ""
     return "provider.invalid"
 
 
@@ -114,6 +119,8 @@ ADDRESS_NEEDS_SCHEME = "The address must start with http:// or https:// and name
 NTFY_ADDRESS_SHAPE = (
     "The ntfy server address is https://host[:port][/path] with nothing after it. The access token has its own field."
 )
+#: (Q230, AP2) the refusal of a typed ntfy topic: ntfy's own rule for a topic name
+NTFY_TOPIC_SHAPE = "The ntfy topic is letters, digits, hyphens and underscores, 64 characters at most."
 #: (Q229, AO3) the refusal of a typed SMTP host
 SMTP_HOST_SHAPE = "The SMTP host is a host name or an IP address alone: no scheme, no user name, no port and no path. The port and the user name have their own fields."
 #: (Q229, the beta.14 review's #4) a password belongs to ONE account: a blank password is not kept for another user name on the same server
@@ -158,7 +165,13 @@ def _kept_secrets(channel_id, channel_type: str, config: dict, stored: dict | No
         return config
     # (Q228, the beta.13 review's #2) the DESTINATION, path and query included: `same_endpoint` stops at the port, so the header value typed for https://hooks.example/team-a was
     # carried to https://hooks.example/team-b - another receiver on one host
-    if not __auth.same_destination(_endpoint(channel_type, config), _endpoint(channel_type, old)):
+    typed = config
+    if channel_type == "email" and _wire_rank(config) > _wire_rank(old):
+        # (Q230, AP18) a wire that proves strictly MORE than the stored one is not a new place for the password: turning STARTTLS or its verification ON cost a retyped
+        # password, the one change that only reduces what is exposed. The host and the port are still compared; a weaker wire is still refused
+        typed = {k: v for k, v in config.items() if k not in ("use_tls", "tls_verify")}
+        typed.update({k: old[k] for k in ("use_tls", "tls_verify") if k in old})
+    if not __auth.same_destination(_endpoint(channel_type, typed), _endpoint(channel_type, old)):
         return WRITE_ONLY_FIELDS[(channel_type, kept[0])], DESTINATION_CHANGED
     # (Q229, the beta.14 review's #4) the SMTP password is the password OF the stored user name: the same server with another user name is another account, and the stored password
     # was sent to it as that account's. The rule the OIDC save has for a changed client ID
@@ -204,6 +217,24 @@ def _address_refusal(channel_type: str, config: dict):
     if channel_type == "ntfy" and not __auth.plain_address(value):
         return field, NTFY_ADDRESS_SHAPE
     return None
+
+
+def _topic_refusal(channel_type: str, config: dict):
+    """(Q230, AP2) What a TYPED ntfy topic is refused for, as `(field, sentence)`, or None. The topic is the last segment of the address the token is sent to and nothing asked it
+    a question: `../admin` moved the path and `jen?auth=x` carried what the address field refuses. A blank topic is not typed and is not judged here."""
+    import re
+
+    topic = config.get("topic", "") if channel_type == "ntfy" else ""
+    if topic and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
+        return "ntfy_topic", NTFY_TOPIC_SHAPE
+    return None
+
+
+def _wire_rank(config: dict) -> int:
+    """How much an SMTP channel's wire proves, as `_endpoint` spells it: 0 clear text, 1 STARTTLS not verified, 2 STARTTLS verified."""
+    if config.get("use_tls") != "true":
+        return 0
+    return 2 if config.get("tls_verify", "true") != "false" else 1
 
 
 def _shown(channel_type: str, config: dict) -> dict:
@@ -399,7 +430,11 @@ def save_alert_channel():
             "to_addr": request.form.get("to_addr", "").strip(),
             "use_tls": "true" if request.form.get("use_tls") else "false",
             # (Q229) STARTTLS verifies the server's certificate unless the operator unticked it for this channel
-            "tls_verify": "true" if request.form.get("tls_verify") else "false",
+            # (Q230, the beta.15 review's #5) "unticked" is said only by a form that CARRIES the box (`tls_verify_shown`). A request without it - a script, a page cached from an
+            # earlier release - used to store the opt-out; it now keeps what the channel has, and a new channel verifies
+            "tls_verify": ("true" if request.form.get("tls_verify") else "false")
+            if request.form.get("tls_verify_shown")
+            else (__alerts.get_channel_config(stored).get("tls_verify", "true") if stored else "true"),
         }
     elif channel_type == "slack":
         config = {"webhook_url": request.form.get("slack_webhook", "").strip()}
@@ -430,7 +465,7 @@ def save_alert_channel():
     # (Q227, AM23) CRED-005 at the one save path that did not ask it: a URL never carries a password. A webhook's and ntfy's address is dialed as typed, so user-info in it is refused
     # here with the sentence every connection form uses; the secret has its own field (the header value, the ntfy token)
     # (Q228, AN6) and an address is an http(s) URL with a host; an ntfy server address carries no query
-    refused = _address_refusal(channel_type, config)
+    refused = _address_refusal(channel_type, config) or _topic_refusal(channel_type, config)
     if refused:
         flash_field(*refused)
         return redirect(url_for("settings.settings_alerts"))

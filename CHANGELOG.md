@@ -2,6 +2,61 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.0.1] - 2026-11-12
+
+*A PATCH to 7.0.0 on the **stable** channel (both channels are offered it). It carries the smaller findings of the two reviews of 7.0.0-beta.15 - Opus's executing pass (AP1 to AP28) and the independent review (five findings) - which were registered when 7.0.0 was promoted with no P1 open. It adds no migration, changes no helper build and no sudoers line, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **An ntfy channel: editing its topic asks for the access token again.** The token is kept only for the whole address it is sent to, and the topic is part of that address. A topic is letters, digits, hyphens and underscores, 64 characters at most; a topic that is saved already and has something else in it is still used, as one path segment.
+2. **The certificate upload on Settings → Security refuses a certificate no browser would accept**: one that has expired, one that is not valid yet, a CA's own certificate in the server's place, and one issued for a client only. A self-signed certificate is accepted as before.
+3. **An SMTP host is a host name or an IP address alone.** `mail.example:25` is refused where it is typed (the port has its own field); an IPv6 address is written without brackets and now works on every edit.
+4. **Turning STARTTLS, or its verification, ON for an email channel keeps the stored password.** Turning either off still asks for it.
+5. **The single sign-on Redirect URI is checked like the issuer**: an http(s) address with no user name, password, query or fragment in it.
+
+### An address is asked of what dials it
+
+The pass's finding was one sentence: a rule was asked of a second reading of a value. Three of them were addresses.
+
+- **AP1 (P2): a port.** `https://host:+443/` and a port written in Unicode digits passed every address form, because Python reads both as 443, and then failed on every send, because the library that dials refuses them. The address forms now ask that library (`urllib3`) directly.
+- **AP7 (P3): a bare `?` or `#` at the end.** An issuer ending in `#` passed, and the discovery path Jen appends then landed in the fragment. A plain address is now asked of its text: it has no `?` and no `#` at all. A webhook's address keeps its query, as before.
+- **AP2, AP21 (P2, P3): the ntfy topic.** The token was compared against the server's address while the sender posts to the address plus the topic, and a topic of `../admin` moved the path. There is now one function that builds the target (`alerts.ntfy_target`), from the parts, with the topic as a single encoded path segment; the sender and the comparison both call it, and a typed topic is validated.
+- **AP6, AP17 and the independent review's #1 and #3 (P2/P3): the SMTP host.** The check allowed a colon anywhere, so a host with a port was accepted against its own refusal sentence, and an IPv6 host built an address the comparison could not read, so an edit that changed nothing was refused. A value with a colon is now a host only when the whole of it is an IPv6 address.
+- **AP8 (P3): `[oidc] redirect_uri`** was stored as typed and printed back. It is validated on the save, named by the startup note and Health when a stored one carries a password, and printed without it.
+
+### A definition's second reader
+
+- **AP3 (P2), a regression of 7.0.0-beta.15's own fix.** When a failed control-socket change is rolled back and the rollback itself raises, the file was never read back. Beta.15 stopped calling such a server "still on the new config", and the certificate step that reads the same list then acted as if the previous config were back: it could reinstall the previous certificate on the host or drop Jen's copy of the new one. The result now carries a second list (`not_known_ids`), and for a server on it the certificate step changes nothing, says STATE NOT KNOWN and records a `remote-unknown` incident.
+- **AP11 (P3): the Write mode card's times.** The fix of beta.15 could not change what was printed, because the stored value is ISO text and the time filter prints text unchanged. A new filter (`isofmt`) parses it first, so the three times on the card read `2026-11-12 14:05 UTC` and follow the reader's time-zone pick.
+
+### The certificate upload asks what a verifying client asks
+
+**AP5 (P2, present since 5.9.1).** The upload checked that the certificate and key load together, which an expired certificate also does, and then restarted Jen into an HTTPS no browser accepts. `cert_refusal` now reads the first certificate of the file and refuses it outside its validity window, and - only when the certificate states them - when its extended key usage does not name a server or its key usage allows neither a signature nor a key exchange.
+
+### Masking, by where a secret sits
+
+**AP9 and the independent review's #2 (P3, P2).** In the Config history diff and the masked download, the password inside an address was masked for `http` and `https` only, and a token in a query string was not masked at all. `secret_keys.without_credentials` now drops the user-info of an address of any scheme and masks the value of a query parameter that is named like a secret (`token`, `api_key`, `password` and the rest of the one list). A value with no `://` is not read as an address; that limit is stated in the function.
+
+### The smaller things
+
+- **The independent review's #5.** A save of an email channel that did not carry the "Verify the server's certificate" box at all stored the opt-out. The form now carries a marker beside the box; without it the channel keeps what it has, and a new channel verifies.
+- **The independent review's #4.** The note on a channel whose address is withheld spoke of an access token for an email channel; it now speaks of the host.
+- **AP18.** A stronger wire is not a new place for a kept SMTP password.
+- **AP10, AP20.** A backups folder that cannot be listed made Getting started fail; it is now "the backups folder could not be read" there and "Backups could not be counted" on Settings.
+- **AP15.** When the drift record could not be stored, `drift.detected` was emitted again on every pass; the record is now read back from the process until a write lands.
+- **AP16.** The certificate alert said "expires in -400 day(s)"; it says "expired 400 day(s) ago", as Health does.
+- **AP19.** A viewer or an admin with two Kea servers had one radio group across both Write mode cards.
+- **AP4, AP12, AP13.** The write guard's documentation now says that it can write, that a pending change with a silent daemon is refused, and that its restore exception has no caller today.
+- **AP24.** The one outbound POST of an alert names its timeout, and the reviewed exception the gate carried for that line is removed.
+
+### Registered, not in this release
+
+AP14 (`ha_failover` is an event with no delivery record: it needs a design, on the 7.1.0 line), the MFA and recovery-bundle rows of AP20, AP22, AP23, the observations AP25 to AP28, and the earlier rows AO7, AO33 and AO37.
+
+### What this release proves and does not
+
+Run before it was filed: the 137 cells of `tests/test_a_second_reading_is_not_the_value.py`, with a real local HTTP server for the ntfy target and certificates minted for the upload check, and every test of the suite that runs without a database. The database-backed suite, the browser journeys, the real Kea versions and the System suite are CI's.
+
 ## [7.0.0] - 2026-11-12
 
 *Stable. Everything below shipped beta-first between 2026-11-03 and 2026-11-12.*

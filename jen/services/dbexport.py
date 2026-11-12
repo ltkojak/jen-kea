@@ -2296,11 +2296,16 @@ def _prune_backups(keep_count, kind):
             os.remove(_sidecar_path(old))
 
 
-def backup_count() -> int:
-    """Number of backup files — a directory listing, nothing more."""
+def backup_count() -> int | None:
+    """Number of backup files — a directory listing, nothing more. None when the folder is there and cannot be listed (Q230, AP10): `/getting-started` raised on it, and a
+    count that was not read is not zero - both readers say "could not be counted"."""
     if not os.path.isdir(BACKUP_DIR):
         return 0
-    return sum(1 for f in os.listdir(BACKUP_DIR) if f.endswith(".json.gz"))
+    try:
+        return sum(1 for f in os.listdir(BACKUP_DIR) if f.endswith(".json.gz"))
+    except OSError as e:
+        logger.warning("the backups folder could not be listed: %s", type(e).__name__)
+        return None
 
 
 def list_backups():

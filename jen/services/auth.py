@@ -396,6 +396,12 @@ def http_address(url) -> bool:
         parts = urlsplit(value)
         if parts.port == 0:  # (`.port` raises ValueError for a port that is not a number or is above 65535)
             return False
+        # (Q230, AP1) the port is asked of the parser the TRANSPORT uses. `urlsplit().port` is `int(text, 10)`, which reads `+443` and any Unicode decimal digit as a number, while
+        # urllib3 - what `requests` dials with - refuses both: such an address was saved, printed back and failed on every send. A second reading of a value is not the value
+        # (`LocationParseError` is a `ValueError`)
+        from urllib3.util import parse_url
+
+        parse_url(value)
         return parts.scheme in ("http", "https") and bool(parts.hostname) and _plain_host(parts.hostname)
     except ValueError:
         return False
@@ -403,8 +409,20 @@ def http_address(url) -> bool:
 
 def host_name(value) -> bool:
     """Is `value` a bare host a form may take and a page may print (Q229, AO3): a name or an address `_plain_host` accepts - no scheme, no user-info, no path, no query. An SMTP
-    server's host is the third address the Alerts page shows; the two URL addresses are asked `plain_address`, and this is the same question for a field that holds a host alone."""
-    return _plain_host(str(value or "").strip(_PADDING))
+    server's host is the third address the Alerts page shows; the two URL addresses are asked `plain_address`, and this is the same question for a field that holds a host alone.
+
+    (Q230, AP6, AP17) `_plain_host` allows a colon for the IPv6 literal inside a URL's brackets, so `mail.example:25`, `a:b:c`, `.` and `-` were accepted here while the refusal
+    said "no port". A value with a colon is a host only when the WHOLE of it is an IPv6 address, written the way `smtplib` takes it (no brackets); a name has no colon, has a
+    letter or a digit, and no empty label before its last dot."""
+    host = str(value or "").strip(_PADDING)
+    if ":" in host:
+        try:
+            return ipaddress.ip_address(host).version == 6
+        except ValueError:
+            return False
+    if not _plain_host(host) or host.startswith(".") or ".." in host:
+        return False
+    return any(ch.isalnum() for ch in host)
 
 
 def plain_address(url) -> bool:
@@ -413,8 +431,11 @@ def plain_address(url) -> bool:
     from urllib.parse import urlsplit
 
     try:
-        parts = urlsplit(str(url or "").strip(_PADDING))
-        return http_address(url) and "@" not in parts.netloc and not parts.query and not parts.fragment
+        value = str(url or "").strip(_PADDING)
+        parts = urlsplit(value)
+        # (Q230, AP7) asked of the TEXT: `urlsplit` answers '' for the query of a bare trailing `?` and for the fragment of a bare trailing `#`, and either one still swallows
+        # whatever is appended to the address (the discovery path of an issuer, the topic of an ntfy server)
+        return http_address(url) and "@" not in parts.netloc and "?" not in value and "#" not in value
     except ValueError:
         return False
 
@@ -607,7 +628,7 @@ def userinfo_legacy_note(section: str, key: str) -> str:
     """The sentence for ONE legacy address that carries user-info, naming the section and key - never the value (Q191, AG3 b). A DNS provider's address has its own sentence: its user name and
     token are the provider's own fields."""
     if section == "oidc":
-        return f"jen.config [{section}] {key} carries a user name or password inside the URL - an issuer has none: save the single sign-on settings again without it (a URL never carries a password); Jen still dials it as written"
+        return f"jen.config [{section}] {key} carries a user name or password inside the URL - {'an issuer' if key == 'issuer' else 'a redirect URI'} has none: save the single sign-on settings again without it (a URL never carries a password); Jen still dials it as written"
     if section == "ddns":
         return f"jen.config [{section}] {key} carries a user name or password inside the DNS provider's URL - move them to the provider's user and token fields (a URL never carries a password); Jen still dials it as written"
     return f"jen.config [{section}] {key} carries a user name or password inside the URL - move them to the user and password fields (a URL never carries a password); Jen still dials it as written"
@@ -623,7 +644,8 @@ def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
         for key, value in cfg.items(section, raw=True):
             # Kea's four address keys, and the DNS provider's address (Q191, AG3 b: its user and token have their own fields too); (Q229, AO2) and the OIDC issuer, the one address
             # whose key is not called a URL - an address is an address whatever the option is called
-            if (section, key) != ("oidc", "issuer"):
+            # (Q230, AP8) and the redirect URI, which Jen puts into the authorize URL it sends the browser to the identity provider with
+            if (section, key) not in (("oidc", "issuer"), ("oidc", "redirect_uri")):
                 if key not in ("api_url", "api6_url", "api_d2_url", "direct_prev_api_url"):
                     continue
                 if section not in ("ddns", "kea", "kea6", "d2") and not section.startswith("kea_server_"):

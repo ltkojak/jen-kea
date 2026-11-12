@@ -7,6 +7,7 @@ in base.html shows it in the browser's zone when the reader's per-browser pick (
 `relfmt`) are thin callers of `time_element`. A value that is not a moment (a string, None) is printed as it always was; a naive datetime is read as UTC (Kea's and Jen's own clock).
 """
 
+import contextlib
 from datetime import datetime, timezone
 
 from markupsafe import Markup, escape
@@ -44,6 +45,18 @@ def fmt_filter(value, fmt="%Y-%m-%d %H:%M"):
     return time_element(value, "fmt", text, fmt)
 
 
+def iso_filter(value, fmt="%Y-%m-%d %H:%M"):
+    """`utcfmt` for a moment that was STORED as ISO-8601 text (Q230, AP11): a settings record keeps `2026-11-12T14:05:24+00:00`, `as_utc` answers None for a string, and `utcfmt`
+    printed the text back unchanged - no UTC wording and no `<time>` element for the reader's zone. The text is parsed first (an offset or a `Z`; none is read as UTC); text
+    that is not a moment is printed as it is."""
+    if isinstance(value, str):
+        text = value.strip()
+        # text that is not a moment stays text: `fmt_filter` prints it as it always did (the text itself, or a dash for nothing)
+        with contextlib.suppress(ValueError):
+            value = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text)
+    return fmt_filter(value, fmt)
+
+
 def date_filter(value):
     if not value:
         return "—"
@@ -75,4 +88,4 @@ def rel_filter(value):
     return time_element(value, "rel", text)
 
 
-__all__ = ["as_utc", "iso_utc", "time_element", "fmt_filter", "date_filter", "time_filter", "rel_filter"]
+__all__ = ["as_utc", "iso_utc", "time_element", "fmt_filter", "iso_filter", "date_filter", "time_filter", "rel_filter"]

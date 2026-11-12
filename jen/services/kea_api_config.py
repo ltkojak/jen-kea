@@ -1149,7 +1149,10 @@ def _stale_pending(server: dict, service: str) -> str:
 
 def pending_block(server: dict, service: str) -> str:
     """A sentence when a pending change is on record and the daemon is in neither of its states (read, reconcile, and nothing settled it); else "". `apply` refuses on it (a restore, which is
-    the operator's way out, passes `source="restore"` and is not stopped). A DAMAGED row blocks with the same sentence the read gives; only `settle_pending` removes it."""
+    the operator's way out, passes `source="restore"` and is not stopped). A DAMAGED row blocks with the same sentence the read gives; only `settle_pending` removes it.
+
+    (Q230, AP4) A WRITER, like `_reconcile_pending` which it runs: a pending change the daemon has settled is written to the host's file and its revision finished here. The caller
+    holds the change lock."""
     sid = server.get("id")
     if sid is None:
         return ""
@@ -1582,13 +1585,22 @@ def record_daemon_after_file_change(server: dict, service: str, summary: str, so
 def api_daemon_differs(server: dict, service: str, restore: bool = False) -> str:
     """The choke point's question for a FILE-path write onto a server whose transport is `api` (Q212, BB2 e): does the file the writer is about to replace carry what the daemon runs? A sentence
     naming both digests when BOTH answered and differ - the next logging toggle would otherwise erase an `unverified` apply or a hand `config-set` - else "". A file or a daemon that cannot be read
-    is not a difference (the write's own guards decide), so a host whose daemon is down can still be put back.
+    is not a difference (the write's own guards decide), so a host whose daemon is down can still be put back - UNLESS a change is pending for it (below): a pending change needs
+    the daemon's answer to settle, so with one on record and the daemon silent the write is refused (Q230, AP13).
+
+    (Q230, AP4) THIS QUESTION CAN WRITE. `pending_block` runs `_reconcile_pending`, which is a writer: when the daemon is in one of the pending change's two states it sends
+    `config-write`, rewrites the host's Kea file and finishes or discards the pending revision. So this function is called only by a caller that holds the change lock
+    (`kea_changeset.change_lock`; `kea_host.apply_config` is reached through `apply_change`), never from a page read.
 
     (Q229, AO24) A change that is PENDING is asked first, with the question the API writer asks (`pending_block`): an `unverified` apply is exactly what leaves a pending row, and the
     digest test below used to be skipped while one existed - so the state this guard exists for was the one state it did not ask in, and a file write (a control-socket change,
     which always takes the file path) replaced the file and restarted the daemon over a change nobody had settled. A pending change that settles here lets the write go on; one
     that does not, or a record that cannot be read, refuses it with `pending_block`'s own sentence. A restore is the operator's way out and is not stopped by a pending change,
-    as on the API path (`restore=True`)."""
+    as on the API path (`restore=True`).
+
+    (Q230, AP12) No caller passes `restore=True` for a server this function asks anything of: the restore route sends a server whose transport is `api` to `_restore_over_api`
+    before its file branch, and that branch's server answers "" on the first line here. The parameter is kept for a caller that restores a file under an `api` server; the
+    operator's way out of a refusal today is Settle it now, or a restore over the API."""
     if declared_transport(server) != "api" or service not in SERVICE_KEY:
         return ""
     if not restore:

@@ -27,7 +27,7 @@ from jen.services.runtime import deployment
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "7.0.0"
+JEN_VERSION = "7.0.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -204,6 +204,7 @@ def create_app() -> Flask:
     from jen.services import timefmt as _timefmt
 
     app.add_template_filter(_timefmt.fmt_filter, "utcfmt")
+    app.add_template_filter(_timefmt.iso_filter, "isofmt")  # (Q230, AP11) a moment stored as ISO text
     app.add_template_filter(_timefmt.rel_filter, "relfmt")
     app.add_template_filter(_timefmt.date_filter, "utcdate")
     app.add_template_filter(_timefmt.time_filter, "utctime")

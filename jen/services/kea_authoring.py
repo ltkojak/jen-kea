@@ -42,7 +42,7 @@ import posixpath
 import shlex
 
 from jen import extensions
-from jen.services.secret_keys import is_secret_key, without_userinfo
+from jen.services.secret_keys import is_secret_key, without_credentials
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -254,8 +254,10 @@ def redact_secrets(cfg: dict) -> dict:
         return {k: ("********" if is_secret_key(k) else redact_secrets(v)) for k, v in cfg.items()}
     if isinstance(cfg, list):
         return [redact_secrets(v) for v in cfg]
-    if isinstance(cfg, str) and "@" in cfg and "://" in cfg:
-        return without_userinfo(cfg)
+    if isinstance(cfg, str) and "://" in cfg:
+        # (Q230, AP9 and the beta.15 review's #2) the user-info of an address of ANY scheme, and the value of a query parameter that is named like a secret: `without_userinfo`
+        # reads http(s) only, so `ldap://u:pw@h` and `https://h/hook?token=...` reached the diff
+        return without_credentials(cfg)
     return cfg
 
 

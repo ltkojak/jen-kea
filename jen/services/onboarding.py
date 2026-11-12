@@ -125,12 +125,18 @@ def checklist(ctx: dict) -> dict:
         }
     )
 
-    has_backup = ctx.get("backup_count", 0) > 0 or bool(ctx.get("backup_schedule_enabled"))
+    # (Q230, AP10, AP20) None is a folder that could not be listed, and it is said as that: "no backups yet" was a fact this page did not have
+    backups = ctx.get("backup_count", 0)
+    has_backup = bool(backups) or bool(ctx.get("backup_schedule_enabled"))
     rows.append(
         {
             "title": "A backup exists or is scheduled",
             "done": has_backup,
-            "detail": "present" if has_backup else "no backups yet",
+            "detail": "present"
+            if has_backup
+            else "the backups folder could not be read"
+            if backups is None
+            else "no backups yet",
             "link": _link("recovery", "/settings/databases?tab=backups"),
         }
     )

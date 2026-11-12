@@ -166,7 +166,10 @@ def settings():
         from jen.services import dbexport
 
         n = dbexport.backup_count()
-        if n:
+        if n is None:
+            # (Q230, AP10) not read is not "none yet"
+            hints["databases"].append(("Backups could not be counted", "warn"))
+        elif n:
             hints["databases"].append((f"{n} backup{'s' if n != 1 else ''}", "ok"))
         else:
             hints["databases"].append(("No backups yet", "warn"))

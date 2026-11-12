@@ -195,16 +195,18 @@ class TestThePageCarriesNoSecret:
                     "enabled": "on",
                     "channel_id": str(row["id"]),
                     "ntfy_url": "",
-                    "ntfy_topic": "jen-renamed",
+                    # (Q230, AP2) the topic stays: it is the last part of the address the token is sent to, so renaming it with a blank token is refused (the pure cell
+                    # is tests/test_a_second_reading_is_not_the_value.py::TestTheNtfyTargetIsOneString::test_a_blank_token_is_not_kept_for_another_topic)
+                    "ntfy_topic": "jen",
+                    "ntfy_priority": "high",
                     "ntfy_token": "",
-                    "ntfy_priority": "default",
                     "alert_types[]": ["kea_down"],
                 },
                 follow_redirects=True,
             )
             assert r.status_code == 200 and b"enter the secret again" not in r.data
             cfg = _config(db, name)
-            assert cfg["url"] == legacy["url"] and cfg["token"] == "tk_LegacyTok5" and cfg["topic"] == "jen-renamed"
+            assert cfg["url"] == legacy["url"] and cfg["token"] == "tk_LegacyTok5" and cfg["priority"] == "high"
         finally:
             _drop(db, name)
 

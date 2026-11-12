@@ -49,7 +49,7 @@ _CHANGELOG = _ROOT / "CHANGELOG.md"
 _ADMIN_GUIDE = _ROOT / "docs" / "admin-guide.md"
 _SECURITY = _ROOT / "SECURITY.md"
 
-_FLOOR = "7.0.0-beta.1"  # the oldest heading upgrading.md must cover — 5.70.0 itself is the baseline
+_FLOOR = "7.0.1"  # the oldest heading upgrading.md must cover — 7.0.0 itself is the baseline
 
 
 def _beta_history_versions() -> list[str]:

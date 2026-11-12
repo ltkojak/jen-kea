@@ -2550,6 +2550,31 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result, pr
     known = snapshot if snapshot is not None else pre_read
     operation = f"the failed {daemon} socket change"
     new_entry_still_there = result.status == "rollback_failed" and server.get("id") in (result.still_new_ids or [])
+    # (Q230, AP3) the revert RAISED (a dead sshd, a timeout): nothing read the file back, so the new https entry may or may not still be in it. Neither branch below may act on
+    # "the entry is gone": Jen's copy of the new material is not dropped and the previous certificate is not reinstalled under an entry nobody read
+    entry_not_known = result.status == "rollback_failed" and server.get("id") in (
+        getattr(result, "not_known_ids", None) or []
+    )
+    if entry_not_known:
+        flash(
+            f"STATE NOT KNOWN on {name}: the revert of {daemon}'s socket change did not finish and its config could not be read back, so it is not known whether the NEW socket entry "
+            "is still in it. The previous certificate was NOT put back and Jen kept its copy of the new one. Once the host answers, restore the last good config from Config "
+            "history, then set the direct socket up again.",
+            "error",
+        )
+        __user.audit(
+            "DIRECT_SOCKET_PARTIAL",
+            "kea_api",
+            f"server={name} service={service} revert raised; config not read back; certificate left as installed",
+        )
+        _record_incident(
+            server,
+            service,
+            operation,
+            "remote-unknown",
+            "The change's revert did not finish and the daemon's config could not be read back, so which socket entry and which certificate the host holds is not known.",
+        )
+        return
     if known is not None and not _uses_jen_tls(known, service) and not new_entry_still_there:
         # nothing references the files the failed attempt installed: the host's unreferenced files are said, not an incident, and Jen keeps no record of an endpoint that does not exist (AE6c).
         # (Second pass, finding 4: NOT when the revert failed - the NEW https entry is then still in the config and DOES reference them.)

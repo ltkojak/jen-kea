@@ -44,6 +44,8 @@ CLEARED_SENTENCE = "Cleared {attempts} failed login attempt(s) and ended {lockou
 OIDC_ISSUER_CHANGED = "The issuer changed - enter the client secret again."
 OIDC_CLIENT_CHANGED = "The client ID changed - enter the client secret again."
 #: (Q229) the refusal of an issuer that is not a plain address
+#: (Q230, AP8) the refusal of a typed redirect URI
+OIDC_REDIRECT_SHAPE = "The redirect URI must be an http:// or https:// URL with a host and nothing after its path: no query and no fragment."
 OIDC_ISSUER_SHAPE = (
     "The issuer must be an https:// URL with a host and nothing after its path: no query and no fragment "
     "(http:// is only allowed for a local 127.0.0.1/localhost test IdP)."
@@ -224,6 +226,49 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
             return f"the certificate/key could not be loaded ({e.strerror or e})"
         except (OSError, ValueError) as e:
             return f"the certificate/key could not be loaded ({e})"
+    return cert_refusal(cert_data)
+
+
+def cert_refusal(cert_data: str, now=None) -> str | None:
+    """(Q230, AP5) What a verifying client refuses the server certificate for, or None. `load_cert_chain` is a LOADER: an expired certificate, one that is not valid yet and a CA's
+    own certificate in the server's place all load, were written to the config directory and followed by a restart into an HTTPS every browser refuses - on the page that holds
+    the way back. Asked of the FIRST certificate of the file, which is the one the server presents: its validity window, and - only when the certificate states them - that its
+    extended key usage names a server and its key usage allows a signature or a key exchange. A self-signed certificate with neither extension is accepted, as it always was."""
+    from datetime import datetime, timezone
+
+    from cryptography import x509
+    from cryptography.x509.oid import ExtendedKeyUsageOID
+
+    try:
+        leaf = x509.load_pem_x509_certificate(cert_data.encode("utf-8"))
+    except ValueError:
+        return "the certificate file's first certificate could not be read"
+    now = now or datetime.now(timezone.utc)
+    if now < leaf.not_valid_before_utc:
+        return f"the certificate is not valid until {leaf.not_valid_before_utc:%Y-%m-%d %H:%M} UTC"
+    if now > leaf.not_valid_after_utc:
+        return f"the certificate expired on {leaf.not_valid_after_utc:%Y-%m-%d %H:%M} UTC"
+    try:
+        usage = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    except x509.ExtensionNotFound:
+        usage = None
+    if usage is not None and not {ExtendedKeyUsageOID.SERVER_AUTH, ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE} & set(
+        usage
+    ):
+        return (
+            "the certificate was not issued for a server (its extended key usage does not name server authentication)"
+        )
+    try:
+        key_usage = leaf.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        key_usage = None
+    if key_usage is not None and not (
+        key_usage.digital_signature or key_usage.key_encipherment or key_usage.key_agreement
+    ):
+        return (
+            "the certificate's key usage allows neither a signature nor a key exchange, so no client accepts it for HTTPS "
+            "(a CA's own certificate goes in the CA bundle field)"
+        )
     return None
 
 
@@ -327,6 +372,11 @@ def save_oidc():
     # (Q229, AO1, AO2, AO6) asked of every issuer that is saved, not only of an enabled one: a disabled save stored and audited whatever was typed
     if (enabled or issuer) and not __auth.valid_oidc_issuer(issuer):
         flash_field("issuer", __auth.userinfo_sentence(issuer) or OIDC_ISSUER_SHAPE)
+        return redirect(url_for("settings.settings_security"))
+    # (Q230, AP8) the redirect URI is the second address of this form and is asked what the first is: it goes into the authorize URL Jen sends the browser to the identity
+    # provider with, so a password or a token inside it would leave the box. Blank is "auto-detected" and is not an address
+    if redirect_uri and not __auth.plain_address(redirect_uri):
+        flash_field("redirect_uri", __auth.userinfo_sentence(redirect_uri) or OIDC_REDIRECT_SHAPE)
         return redirect(url_for("settings.settings_security"))
     if enabled and not client_id:
         flash_field("client_id", "A client ID is required to enable single sign-on.")

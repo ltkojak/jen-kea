@@ -168,7 +168,7 @@ DEFAULT_TEMPLATES = {
     "config_drift_detected": "⚠️ <b>Config Drift Detected</b>\n{message}",
     "config_drift_resolved": "✅ <b>Config Drift Resolved</b>\n{message}",
     "client_problems": "⚠️ <b>Client had DHCP trouble</b>\nClient: {mac} {ip}\nWhat: {kind}, {count} in the last hour (as of {at} UTC)\nServer: {server}\nInvestigate: {investigate}",
-    "cert_expiring": "⚠️ <b>TLS Certificate Expiring</b>\nJen's HTTPS certificate expires in <b>{days_left}</b> day(s).",
+    "cert_expiring": "⚠️ <b>TLS Certificate Expiring</b>\nJen's HTTPS certificate {when}.",
     "daily_summary": "ℹ️ <b>Daily Summary</b>\n{summary}",
     "rogue_device": "🚨 <b>{subject}</b>\n{body}",
 }
@@ -582,7 +582,9 @@ def _post(url, **kwargs):
     along except `Authorization` - so a webhook's own header (`X-API-Key`) and, on a 307 or a 308, the alert's body were sent to whatever address the configured one named, a place
     nobody typed. A channel's secret goes to the address that was saved and nowhere else: no redirect is followed, and one is a failed send with its own sentence. Every sender
     in this module posts through here (a source test holds the module to it)."""
-    resp = requests.post(url, allow_redirects=False, **kwargs)
+    # (Q230, AP24) the timeout is named HERE, so no caller can post without one and the gate needs no reviewed exception for this line
+    timeout = kwargs.pop("timeout", 10)
+    resp = requests.post(url, allow_redirects=False, timeout=timeout, **kwargs)
     if 300 <= resp.status_code < 400:
         raise Exception(REDIRECT_REFUSED.format(code=resp.status_code))
     return resp
@@ -801,11 +803,25 @@ def _send_webhook_channel(message, alert_type, config):
     return True
 
 
+def ntfy_target(config) -> str:
+    """THE address an ntfy channel posts to (Q230, AP2, AP21): the server's scheme, host and path, then the topic as ONE path segment. The sender built it as `url + "/" + topic`
+    while the save compared a kept token against the `url` alone, so a topic of `../admin` sent the token to another path of the server, and a stored address with a query or a
+    fragment swallowed the topic. Built from the parts: a query and a fragment of the address are dropped, and every character of the topic that is not a letter, a digit or one
+    of `-._~` is percent-encoded. The sender and the save's comparison (`_endpoint`) both ask this function. An address that cannot be read is "", which is no destination."""
+    from urllib.parse import quote, urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(str(config.get("url", "https://ntfy.sh")).strip())
+    except ValueError:
+        return ""
+    topic = quote(str(config.get("topic", "")), safe="")
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") + "/" + topic, "", ""))
+
+
 def _send_ntfy_channel(message, config):
     """Send alert via ntfy.sh or self-hosted ntfy."""
     import html
 
-    url = config.get("url", "https://ntfy.sh").rstrip("/")
     topic = config.get("topic", "")
     token = config.get("token", "")
     priority = config.get("priority", "default")
@@ -818,7 +834,7 @@ def _send_ntfy_channel(message, config):
     headers = {"Title": "Jen Alert", "Priority": priority, "Tags": "bell"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    resp = _post(f"{url}/{topic}", data=plain.encode("utf-8"), headers=headers, timeout=10)
+    resp = _post(ntfy_target(config), data=plain.encode("utf-8"), headers=headers, timeout=10)
     if resp.status_code not in (200, 201, 204):
         raise Exception(f"ntfy error: HTTP {resp.status_code} — {resp.text[:200]}")
     return True
@@ -1683,7 +1699,10 @@ def check_cert_expiry_alert(now=None, use_cache=False) -> None:
         elif b > bucket:
             mark_notified("cert_expiring", b, now=now)
         else:
-            notify_condition("cert_expiring", b, True, kwargs={"days_left": days}, now=now)
+            # (Q230, AP16) `days` is negative for a certificate that has expired, and the sentence said "expires in -400 day(s)" while Health said "expired 400 day(s) ago" of
+            # the same number. `days_left` stays for a template an operator wrote with it
+            when = f"expires in <b>{days}</b> day(s)" if days >= 0 else f"expired <b>{-days}</b> day(s) ago"
+            notify_condition("cert_expiring", b, True, kwargs={"days_left": days, "when": when}, now=now)
     if legacy:
         __set_global_setting("cert_expiry_alerted", "0")
 
@@ -2050,12 +2069,17 @@ def check_drift_alerts(issues=None) -> None:
     from jen.services.config_drift import check_config_drift, issue_key
 
     current = {issue_key(i): i for i in (check_config_drift() if issues is None else issues)}
-    try:
-        known = json.loads(__get_global_setting(_DRIFT_KNOWN, "") or "{}")
-        if not isinstance(known, dict):
+    if _DRIFT_KNOWN in _unsaved_states:
+        # (Q230, AP15) the record a write could not store: read back from this process, as `_load_state` does for a condition's state. Without it every pass saw the issue as new
+        # and emitted `drift.detected` again, and `drift.resolved` was never emitted for an issue whose record never landed
+        known = dict(_unsaved_states[_DRIFT_KNOWN])
+    else:
+        try:
+            known = json.loads(__get_global_setting(_DRIFT_KNOWN, "") or "{}")
+            if not isinstance(known, dict):
+                known = {}
+        except (TypeError, ValueError):
             known = {}
-    except (TypeError, ValueError):
-        known = {}
     kept = {}
     for key, issue in current.items():
         if key not in known or known[key].get("gone"):
@@ -2077,8 +2101,12 @@ def check_drift_alerts(issues=None) -> None:
         state = _load_state("config_drift_detected", key)
         if state["a"] or state["r"]:  # a resolution still owed: keep the message until it lands
             kept[key] = {**old, "gone": True}
-    if kept != known:
-        __set_global_setting(_DRIFT_KNOWN, json.dumps(kept, separators=(",", ":")))
+    if kept != known or _DRIFT_KNOWN in _unsaved_states:
+        if __set_global_setting(_DRIFT_KNOWN, json.dumps(kept, separators=(",", ":"))):
+            _unsaved_states.pop(_DRIFT_KNOWN, None)
+        else:
+            _unsaved_states[_DRIFT_KNOWN] = dict(kept)
+            logger.warning("the drift record could not be stored: a restart may repeat a drift notification")
 
 
 def check_alerts():

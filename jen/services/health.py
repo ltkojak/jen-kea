@@ -768,7 +768,8 @@ def _endpoint_credentials(ctx) -> Check:
         if section == "oidc":
             # (Q229, AO2) the issuer is an address too, and it has no user or password field to move anything to
             legacy.append(
-                f"the single sign-on issuer ({section} {key}) carries a user name or password; save the single sign-on settings again without it"
+                f"the single sign-on {'issuer' if key == 'issuer' else 'redirect URI'} ({section} {key}) carries a user name or password; "
+                "save the single sign-on settings again without it"
             )
             continue
         if section.startswith("kea_server_") and is_whole(section[len("kea_server_") :]):

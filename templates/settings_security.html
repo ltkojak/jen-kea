@@ -116,7 +116,7 @@
             </div>
             <div class="form-group">
                 <label for="f-redirect_uri">Redirect URI</label>
-                <input id="f-redirect_uri" type="text" name="redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="(auto-detected)" class="u-046678" aria-describedby="f-redirect_uri-hint">
+                <input id="f-redirect_uri" type="text" name="redirect_uri" value="{{ oidc.redirect_uri|no_userinfo }}" placeholder="(auto-detected)" class="u-046678" aria-describedby="f-redirect_uri-hint">
                 <div class="form-hint" id="f-redirect_uri-hint">Leave blank unless Jen is behind a proxy that changes the external URL.</div>
             </div>
         </div>

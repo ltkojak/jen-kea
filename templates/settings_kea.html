@@ -273,7 +273,7 @@
         <div class="wm-head">
             <strong>{{ c.name }}</strong>
             <span class="badge {{ 'badge-tone-blue' if c.transport == 'api' else ('badge-reserved' if c.transport == 'file' else 'badge-dynamic') }}" data-transport="{{ c.transport }}" data-wm-chip>Current: {{ c.mode_word }}{% if c.blocked %}, blocked{% endif %}</span>
-            {% if c.full %}<span class="form-hint">{% if c.probe %}Last checked {{ c.probe.at|utcfmt }}{% else %}Not checked yet{% endif %}</span>{% endif %}
+            {% if c.full %}<span class="form-hint">{% if c.probe %}Last checked {{ c.probe.at|isofmt }}{% else %}Not checked yet{% endif %}</span>{% endif %}
         </div>
         <p class="form-hint">{{ c.why }}</p>
         {% if c.full %}
@@ -298,7 +298,7 @@
             {% for m in c.modes %}
             <div class="wm-mode">
                 <label class="wm-mode-label">
-                    <input type="radio" name="transport" value="{{ m.value }}" {% if c.full %}form="wm-form-{{ c.id }}"{% else %}disabled{% endif %} {% if m.value == c.transport %}checked{% endif %} data-wm-radio="{{ c.id }}" data-wm-word="{{ m.word }}">
+                    <input type="radio" name="{{ 'transport' if c.full else 'transport-' ~ c.id }}" value="{{ m.value }}" {% if c.full %}form="wm-form-{{ c.id }}"{% else %}disabled{% endif %} {% if m.value == c.transport %}checked{% endif %} data-wm-radio="{{ c.id }}" data-wm-word="{{ m.word }}">
                     <strong>{{ m.word }}{% if m.value == c.transport %} (current){% endif %}</strong>
                     <span class="form-hint">{{ m.sentence }}</span>
                 </label>
@@ -317,7 +317,7 @@
                         </li>
                         <li class="wm-step" data-state="{{ c.row2.state }}" data-wm-row="2">
                             <span class="wm-icon wm-icon-{{ c.row2.state }}">{{ icon({'ok': 'circle-check', 'warn': 'triangle-alert', 'bad': 'circle-x', 'idle': 'circle'}[c.row2.state]) }}</span>
-                            <span class="wm-text"><strong>2.</strong> {{ c.check_row }}: {{ c.row2.text }}{% if c.probe and c.row2.state == 'ok' %} {{ c.probe.at|utcfmt }}{% endif %}</span>
+                            <span class="wm-text"><strong>2.</strong> {{ c.check_row }}: {{ c.row2.text }}{% if c.probe and c.row2.state == 'ok' %} {{ c.probe.at|isofmt }}{% endif %}</span>
                             <button type="button" class="btn btn-sm btn-secondary" data-wm-check="{{ c.id }}">{{ c.row2.button }}</button>
                             <span class="form-hint" data-wm-check-result="{{ c.id }}"></span>
                             {% if c.can_allow %}
@@ -355,7 +355,7 @@
                         {% set done = m.value == c.transport and not c.blocked and c.accepted_all %}
                         <li class="wm-step" data-state="{{ 'ok' if done else 'idle' }}" data-wm-row="3"{% if done %} data-wm-accepted="{{ c.id }}"{% endif %}>
                             <span class="wm-icon wm-icon-{{ 'ok' if done else 'idle' }}">{{ icon("circle-check" if done else "circle") }}</span>
-                            <span class="wm-text"><strong>3.</strong> {% if done %}Accepted {{ c.accepted_at|utcfmt }}{% else %}Accept what changes{% endif %}</span>
+                            <span class="wm-text"><strong>3.</strong> {% if done %}Accepted {{ c.accepted_at|isofmt }}{% else %}Accept what changes{% endif %}</span>
                             <div class="wm-consents">
                                 {% for n in c.consents %}
                                 <label><input type="checkbox" name="{{ n.name }}" value="{{ c.consent_value }}" form="wm-form-{{ c.id }}" data-wm-consent="{{ c.id }}" {% if done %}checked disabled{% elif m.value != c.transport %}disabled{% endif %}> {{ n.text }}</label>

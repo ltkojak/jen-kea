@@ -156,7 +156,9 @@ class TestARedirectIsNotFollowed:
         src = (ROOT / "jen/services/alerts.py").read_text(encoding="utf-8")
         calls = re.findall(r"\brequests\.(?:post|get|put|patch|delete|request|Session)\(", src)
         assert calls == ["requests.post("], calls
-        assert "requests.post(url, allow_redirects=False, **kwargs)" in _function("jen/services/alerts.py", "_post")
+        assert "resp = requests.post(url, allow_redirects=False, timeout=timeout, **kwargs)" in _function(
+            "jen/services/alerts.py", "_post"
+        )  # (Q230, AP24) the timeout is named in the one call
         assert src.count("_post(") == 7  # the definition and the six senders
 
 
@@ -303,7 +305,7 @@ class TestStartTlsVerifiesBeforeThePasswordIsSent:
         html = (ROOT / "templates/settings_alerts.html").read_text(encoding="utf-8")
         assert '<input type="checkbox" name="tls_verify" id="f-tls_verify" checked' in html
         assert "verifyEl.checked = cfg.tls_verify !== 'false'" in html and "verifyEl.checked = true" in html
-        assert '"tls_verify": "true" if request.form.get("tls_verify") else "false"' in _function(
+        assert '"tls_verify": ("true" if request.form.get("tls_verify") else "false")' in _function(
             "jen/routes/settings/alerts.py", "save_alert_channel"
         )
 
@@ -355,12 +357,12 @@ class TestAKeptSecretStaysWithWhatItWasTypedFor:
 
     def test_an_ntfy_address_is_compared_as_its_sender_dials_it(self, monkeypatch):
         # the sender drops the trailing slash before it appends the topic, so the two spellings are one address and the token is kept
+        # (Q230, AP2) the dropping is in `alerts.ntfy_target`, the one function the sender and the comparison both ask
         old = {"url": "https://ntfy.example.test/base", "topic": "jen", "token": "SYNTHETIC-TOKEN"}
         new = {"url": "https://ntfy.example.test/base/", "topic": "jen", "token": ""}
         assert _kept(monkeypatch, "ntfy", new, old)["token"] == "SYNTHETIC-TOKEN"
-        assert 'config.get("url", "https://ntfy.sh").rstrip("/")' in _function(
-            "jen/services/alerts.py", "_send_ntfy_channel"
-        )
+        assert "_post(ntfy_target(config)," in _function("jen/services/alerts.py", "_send_ntfy_channel")
+        assert 'parts.path.rstrip("/") + "/" + topic' in _function("jen/services/alerts.py", "ntfy_target")
         other = {"url": "https://ntfy.example.test/second", "topic": "jen", "token": ""}
         assert _kept(monkeypatch, "ntfy", other, old) == ("ntfy_token", _route().DESTINATION_CHANGED)
 
@@ -538,12 +540,15 @@ class TestTheIssuerIsAskedWhatEveryAddressIs:
                 "kea": {"api_url": "http://kea.example.test:8000"},
             }
         )
-        assert auth.urls_with_userinfo(cfg) == [("oidc", "issuer")]
+        # (Q230, AP8) and the redirect URI, the second address of the section
+        assert auth.urls_with_userinfo(cfg) == [("oidc", "issuer"), ("oidc", "redirect_uri")]
         note = auth.userinfo_legacy_note("oidc", "issuer")
         assert "[oidc] issuer" in note and "SYNTHETIC" not in note and "user and password fields" not in note
         health = (ROOT / "jen/services/health.py").read_text(encoding="utf-8")
         assert 'if section == "oidc":' in health and "save the single sign-on settings again without it" in health
         cfg["oidc"]["issuer"] = "https://idp.example.test/realms/jen"
+        assert auth.urls_with_userinfo(cfg) == [("oidc", "redirect_uri")]
+        cfg["oidc"]["redirect_uri"] = "https://jen.example.test/cb"
         assert auth.urls_with_userinfo(cfg) == []
 
 
@@ -783,7 +788,8 @@ class TestTheSmallerThings:
 
     def test_the_cards_time_is_formatted_and_its_note_names_the_panel(self):
         html = (ROOT / "templates/settings_kea.html").read_text(encoding="utf-8")
-        assert "Accepted {{ c.accepted_at|utcfmt }}" in html and "Accepted {{ c.accepted_at }}" not in html
+        # (Q230, AP11) `isofmt`: the stored value is ISO text, which `utcfmt` printed back unchanged
+        assert "Accepted {{ c.accepted_at|isofmt }}" in html and "Accepted {{ c.accepted_at }}" not in html
         assert "(panel && panel.getAttribute('data-mode-panel')) || selected(card)" in html
         assert "remember(panel.closest('[data-wm-card]'), panel);" in html
 
