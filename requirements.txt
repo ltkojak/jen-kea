@@ -17,7 +17,7 @@
 # CVE-2025-27516) doesn't depend on flask happening to require it.
 
 apscheduler>=3.11.3,<4
-authlib>=1.8.0
+authlib>=1.9.5
 cryptography>=50.0.1
 dbutils>=3.2.0
 defusedxml>=0.7.1
