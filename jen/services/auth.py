@@ -227,21 +227,20 @@ def valid_oidc_issuer(value: str) -> bool:
     exchange without TLS leaks the authorization code and access token
     on the wire. The one exception is a local test IdP on
     127.0.0.1/localhost, where http:// is allowed (this codebase's own
-    test suite runs one)."""
-    from urllib.parse import urlparse
+    test suite runs one).
 
-    value = (value or "").strip()
-    if not value:
+    (Q229, AO1, AO2, AO6) An issuer is an ADDRESS and is asked what every address a form takes is asked (`plain_address`): a host `requests` dials as written, a port that is a
+    number, no user-info, no query and no fragment. This function used to ask `urlparse` for a hostname and nothing else, so an address with a backslash before the `@` passed as the local test
+    IdP while `requests` dials `remote`, a password before the `@` was stored and sent, and a fragment swallowed the discovery path `init_oidc` appends."""
+    from urllib.parse import urlsplit
+
+    value = (value or "").strip(_PADDING)
+    if not value or not plain_address(value):
         return False
-    try:
-        p = urlparse(value)
-    except ValueError:
-        return False
-    if not p.hostname:
-        return False
+    p = urlsplit(value)
     if p.scheme == "https":
         return True
-    return p.scheme == "http" and p.hostname in ("127.0.0.1", "localhost")
+    return p.hostname in ("127.0.0.1", "localhost")
 
 
 def usable_file(path) -> bool:
@@ -359,29 +358,53 @@ def same_destination(a: str, b: str) -> bool:
     """Do two URLs name the same DESTINATION for a secret that is spent on the path as well as the place (Q228; CRED-002): `same_endpoint` (scheme, host and port) AND the same path
     and query. A Kea endpoint is dialed at its root, so its comparison stops at the port and `same_endpoint` stays as it is. An OIDC issuer, a webhook and an ntfy server are not:
     the issuer's path selects the realm or the tenant whose token endpoint receives the client secret (`init_oidc` builds the discovery URL from it), and two paths on one webhook
-    host are two receivers. One trailing-slash spelling is one path (`init_oidc` strips it the same way); user-info is not part of a destination and is never compared; a blank or
-    unreadable side is a different destination."""
+    host are two receivers. User-info is not part of a destination and is never compared; a blank or unreadable side is a different destination.
+
+    (Q229, the beta.14 review's #3) The path is compared AS WRITTEN: a webhook is posted to the address exactly as saved, and `/team-a` and `/team-a/` are two paths a receiver may
+    route to two places, so the header value typed for one is not carried to the other. Only an empty path and `/` are one (every HTTP client sends `/` for both). A transport that
+    drops a trailing slash before it dials says so at its own call: the OIDC save and the ntfy channel pass the address as `init_oidc` and the ntfy sender will use it."""
     from urllib.parse import urlsplit
 
     if not same_endpoint(a, b):
         return False
     try:
         pa, pb = urlsplit(str(a).strip(_PADDING)), urlsplit(str(b).strip(_PADDING))
-        return (pa.path.rstrip("/"), pa.query) == (pb.path.rstrip("/"), pb.query)
+        return (pa.path or "/", pa.query) == (pb.path or "/", pb.query)
     except ValueError:
         return False
+
+
+def same_issuer(a, b) -> bool:
+    """Do two OIDC issuers name one identity provider (Q229): `same_destination` of the two AS `init_oidc` DIALS THEM. It drops the trailing slash before it appends the discovery
+    path, so `/realms/jen/` and `/realms/jen` are one issuer here, while a webhook's two spellings stay two (`same_destination` compares a path as written)."""
+    return same_destination(str(a or "").rstrip("/"), str(b or "").rstrip("/"))
 
 
 def http_address(url) -> bool:
     """Is `url` an http:// or https:// URL with a host (Q228, AN6). `userinfo_sentence` reads the authority, and a value with no `//` has none: `u:p@host/path` parses with `u`
-    as its scheme, so its password was stored. A webhook's and an ntfy server's address is asked this first."""
+    as its scheme, so its password was stored. A webhook's and an ntfy server's address is asked this first.
+
+    (Q229, AO5, AO9, the beta.14 review's #5) "Can Jen dial this" is also the port and the host's characters, which `valid_api_url` already asked next door: a port that is not a
+    number from 1 to 65535, a backslash or a control, zero-width or no-break space character anywhere, and a host `requests` would not send as written (`_plain_host`) are all
+    refused. Each of them was saved, judged printable and then failed on every send with `InvalidURL`."""
     from urllib.parse import urlsplit
 
     try:
-        parts = urlsplit(str(url or "").strip(_PADDING))
-        return parts.scheme in ("http", "https") and bool(parts.hostname)
+        value = str(url or "").strip(_PADDING)
+        if _odd_characters(value):
+            return False
+        parts = urlsplit(value)
+        if parts.port == 0:  # (`.port` raises ValueError for a port that is not a number or is above 65535)
+            return False
+        return parts.scheme in ("http", "https") and bool(parts.hostname) and _plain_host(parts.hostname)
     except ValueError:
         return False
+
+
+def host_name(value) -> bool:
+    """Is `value` a bare host a form may take and a page may print (Q229, AO3): a name or an address `_plain_host` accepts - no scheme, no user-info, no path, no query. An SMTP
+    server's host is the third address the Alerts page shows; the two URL addresses are asked `plain_address`, and this is the same question for a field that holds a host alone."""
+    return _plain_host(str(value or "").strip(_PADDING))
 
 
 def plain_address(url) -> bool:
@@ -583,6 +606,8 @@ def register_url_filters(jinja_env) -> None:
 def userinfo_legacy_note(section: str, key: str) -> str:
     """The sentence for ONE legacy address that carries user-info, naming the section and key - never the value (Q191, AG3 b). A DNS provider's address has its own sentence: its user name and
     token are the provider's own fields."""
+    if section == "oidc":
+        return f"jen.config [{section}] {key} carries a user name or password inside the URL - an issuer has none: save the single sign-on settings again without it (a URL never carries a password); Jen still dials it as written"
     if section == "ddns":
         return f"jen.config [{section}] {key} carries a user name or password inside the DNS provider's URL - move them to the provider's user and token fields (a URL never carries a password); Jen still dials it as written"
     return f"jen.config [{section}] {key} carries a user name or password inside the URL - move them to the user and password fields (a URL never carries a password); Jen still dials it as written"
@@ -596,11 +621,13 @@ def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
     found = []
     for section in cfg.sections():
         for key, value in cfg.items(section, raw=True):
-            # Kea's four address keys, and the DNS provider's address (Q191, AG3 b: its user and token have their own fields too); no other option is a Kea or DNS endpoint
-            if key not in ("api_url", "api6_url", "api_d2_url", "direct_prev_api_url"):
-                continue
-            if section not in ("ddns", "kea", "kea6", "d2") and not section.startswith("kea_server_"):
-                continue
+            # Kea's four address keys, and the DNS provider's address (Q191, AG3 b: its user and token have their own fields too); (Q229, AO2) and the OIDC issuer, the one address
+            # whose key is not called a URL - an address is an address whatever the option is called
+            if (section, key) != ("oidc", "issuer"):
+                if key not in ("api_url", "api6_url", "api_d2_url", "direct_prev_api_url"):
+                    continue
+                if section not in ("ddns", "kea", "kea6", "d2") and not section.startswith("kea_server_"):
+                    continue
             try:
                 netloc = urlsplit((value or "").strip(_PADDING)).netloc
             except ValueError:

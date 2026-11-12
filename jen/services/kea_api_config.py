@@ -155,7 +155,14 @@ def _space_insensitive(path: str) -> bool:
 # for a file the daemon had loaded a month after it was written, and asked for a consent to discard an edit that did not exist. Kea reports the key only when it is `udp`. The compat
 # job never met it because its own file says `udp` (a runner's NICs); row 15 now starts a daemon on a file that says `raw` and records what each version reports for this key and for
 # the three other keys of `interfaces-config` an operator can write at their default. An entry is added here on that row's evidence or a daemon's own answer, never on the manual's.
-OMITTED_AT_DEFAULT = {"service-sockets-require-all": False, "service-sockets-max-retries": 0, "dhcp-socket-type": "raw"}
+OMITTED_AT_DEFAULT = {
+    "service-sockets-require-all": False,
+    "service-sockets-max-retries": 0,
+    "dhcp-socket-type": "raw",
+    # (Q229) measured by kea-compat row 15 on Kea 3.0.5, 3.2.1 and 3.3.3 (run 43110001320): `config-get` omits both at these values, as it omits `dhcp-socket-type: raw`
+    "outbound-interface": "same-as-inbound",
+    "service-sockets-retry-wait-time": 5000,
+}
 
 
 _MISSING = object()
@@ -1572,19 +1579,29 @@ def record_daemon_after_file_change(server: dict, service: str, summary: str, so
     )
 
 
-def api_daemon_differs(server: dict, service: str) -> str:
+def api_daemon_differs(server: dict, service: str, restore: bool = False) -> str:
     """The choke point's question for a FILE-path write onto a server whose transport is `api` (Q212, BB2 e): does the file the writer is about to replace carry what the daemon runs? A sentence
     naming both digests when BOTH answered and differ - the next logging toggle would otherwise erase an `unverified` apply or a hand `config-set` - else "". A file or a daemon that cannot be read
-    is not a difference (the write's own guards decide), so a host whose daemon is down can still be put back."""
+    is not a difference (the write's own guards decide), so a host whose daemon is down can still be put back.
+
+    (Q229, AO24) A change that is PENDING is asked first, with the question the API writer asks (`pending_block`): an `unverified` apply is exactly what leaves a pending row, and the
+    digest test below used to be skipped while one existed - so the state this guard exists for was the one state it did not ask in, and a file write (a control-socket change,
+    which always takes the file path) replaced the file and restarted the daemon over a change nobody had settled. A pending change that settles here lets the write go on; one
+    that does not, or a record that cannot be read, refuses it with `pending_block`'s own sentence. A restore is the operator's way out and is not stopped by a pending change,
+    as on the API path (`restore=True`)."""
     if declared_transport(server) != "api" or service not in SERVICE_KEY:
         return ""
+    if not restore:
+        unresolved = pending_block(server, service)
+        if unresolved:
+            return unresolved
     live, digest, _why = _get(server, service)
     if live is None:
         return ""
     sid = server.get("id")
     try:
         last = _rev.latest_of_kind(sid, service, "kea") if sid is not None else None
-        in_flight = sid is not None and _rev.pending(sid, service) is not None
+        in_flight = restore and sid is not None and _rev.pending(sid, service) is not None
     except Exception as e:  # a history read never decides this question: containment below is the fallback
         logger.warning("kea_api_config: api_daemon_differs could not read the history of %s: %s", sid, type(e).__name__)
         last, in_flight = None, False

@@ -1339,11 +1339,26 @@ class TestKeaWritesItsDefaultsOut:
         )  # the value as Kea spells it
 
     def test_the_table_is_the_three_keys_a_daemon_was_seen_to_omit(self):
+        # (Q229) five now: kea-compat row 15 measured two more on Kea 3.0.5, 3.2.1 and 3.3.3 (run 43110001320). The name is kept: the registry and Q228's entry cite it
         assert api.OMITTED_AT_DEFAULT == {
             "service-sockets-require-all": False,
             "service-sockets-max-retries": 0,
             "dhcp-socket-type": "raw",
+            "outbound-interface": "same-as-inbound",
+            "service-sockets-retry-wait-time": 5000,
         }
+
+    @pytest.mark.parametrize(
+        "key, at_default, not_default",
+        [("outbound-interface", "same-as-inbound", "use-routing"), ("service-sockets-retry-wait-time", 5000, 6000)],
+    )
+    def test_the_two_keys_row_fifteen_measured_are_carried_at_their_default_and_only_there(
+        self, key, at_default, not_default
+    ):
+        running = {"interfaces-config": {"interfaces": ["eth0"], "re-detect": True}}
+        assert api._carries(running, {"interfaces-config": {"interfaces": ["eth0"], key: at_default}})
+        assert not api._carries(running, {"interfaces-config": {"interfaces": ["eth0"], key: not_default}})
+        assert not api._carries({"x": {}}, {"x": {key: at_default}})  # only under interfaces-config
 
     def test_only_a_pool_is_compared_without_its_spaces(self):
         """Q216 BF5, as a PATH (Q217 AB15): Kea re-renders a pool "a - b" as "a-b" and nothing else row 09 saw; a `user-context.pool` and a top-level `pool` compare exactly."""

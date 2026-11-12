@@ -271,7 +271,7 @@ class TestAChannelUrlNeverCarriesAPassword:
         judge = _function(
             "jen/routes/settings/alerts.py", "_address_refusal"
         )  # (Q228, AN6) the refusals of a typed address are one function
-        assert "__auth.USERINFO_SENTENCE" in judge and '{"webhook_url": "webhook_url", "url": "ntfy_url"}' in judge
+        assert "__auth.USERINFO_SENTENCE" in judge and "ADDRESS_FIELDS[address]" in judge
 
     def test_a_blank_url_is_not_refused_for_user_info(self):
         assert not auth.userinfo_sentence(""), "an edit posts a write-only URL blank; the stored one is taken next"
@@ -389,8 +389,8 @@ class TestTheOidcSecretStaysWithItsIssuer:
     def test_the_route_compares_the_issuer_before_it_keeps_the_secret(self):
         src = _function("jen/routes/settings/security.py", "save_oidc")
         assert (
-            "not __auth.same_destination(issuer, extensions.OIDC_ISSUER)" in src
-        )  # (Q228, AN2) with its path: `same_endpoint` stops at the port
+            "not __auth.same_issuer(issuer, extensions.OIDC_ISSUER)" in src
+        )  # (Q228, AN2) with its path: `same_endpoint` stops at the port; (Q229) `same_issuer` is `same_destination` of the two as `init_oidc` dials them
         assert 'flash_field("client_secret", OIDC_ISSUER_CHANGED)' in src
         assert "not client_secret" in src and "extensions.OIDC_CLIENT_SECRET" in src
 
@@ -415,7 +415,7 @@ class TestTheOidcSecretStaysWithItsIssuer:
         ],
     )
     def test_what_the_same_issuer_is(self, new, old, same):
-        assert auth.same_destination(new, old) is same
+        assert auth.same_issuer(new, old) is same
 
 
 # ── the write path's sentences ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

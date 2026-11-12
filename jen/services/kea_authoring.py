@@ -42,7 +42,7 @@ import posixpath
 import shlex
 
 from jen import extensions
-from jen.services.secret_keys import is_secret_key
+from jen.services.secret_keys import is_secret_key, without_userinfo
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -245,11 +245,17 @@ def redact_secrets(cfg: dict) -> dict:
     passwords to run `kea-dhcpX -t` or apply the config, the human
     reviewing it does not. Generic so it covers hosts-database(s),
     control-sockets auth clients, HA peers, and whatever comes next —
-    never a key like `password-file`, which names a path, not a value."""
+    never a key like `password-file`, which names a path, not a value.
+
+    (Q229, AO25) A secret is also masked by where it SITS: a string value that carries an http(s) address with user-info (`"url": "http://ha:secret@10.0.0.9:8000/"`) comes back
+    without it (`secret_keys.without_userinfo`, the definition the support bundle uses). The key `url` is no credential's name, so the password inside it reached the Config
+    history diff an admin reads while the `lease-database` password beside it was masked."""
     if isinstance(cfg, dict):
         return {k: ("********" if is_secret_key(k) else redact_secrets(v)) for k, v in cfg.items()}
     if isinstance(cfg, list):
         return [redact_secrets(v) for v in cfg]
+    if isinstance(cfg, str) and "@" in cfg and "://" in cfg:
+        return without_userinfo(cfg)
     return cfg
 
 

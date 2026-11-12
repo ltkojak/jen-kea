@@ -337,6 +337,8 @@ def _config_cards() -> list:
                 "accepted_all": bool(
                     probe is not None
                     and probe.get("consented_at")
+                    # (Q229, AO10) a list is the only shape every writer stores; anything else is "nothing on record", never a 500
+                    and isinstance(probe.get("consents", __api.LEGACY_CONSENTS), (list, tuple))
                     and set(needs) <= set(probe.get("consents", __api.LEGACY_CONSENTS))
                 ),
                 "holding": holding,
@@ -1427,7 +1429,7 @@ def probe_kea():
             ), 400
         # RBAC-004 / CRED-002 (Q179): the probe sends the saved Kea credentials to the address it is given. An admin may test another daemon of the host Jen already
         # reaches; sending them to a different host is a superadmin's deliberate test of an address they typed.
-        # Q203 AS1: and over no weaker a scheme - `auth.no_weaker_scheme` is the one definition (a probe is a credential send; CRED-002 compares scheme, host and port).
+        # Q203 AS1: and over no weaker a scheme - `auth.no_weaker_scheme` is the one definition (a probe is a credential send; the host is `same_host`'s question, which ignores the port by design, and the scheme is this one's).
         if current_user.role != "superadmin" and not (
             __auth.same_host(configured_url, candidate) and __auth.no_weaker_scheme(configured_url, candidate)
         ):

@@ -595,12 +595,6 @@ S10_ALLOWED = {
     ): "input validation: a value that does not parse is rejected",
     (
         "jen/services/auth.py",
-        "valid_oidc_issuer",
-        "ValueError",
-        "return False",
-    ): "input validation: a value that does not parse is rejected",
-    (
-        "jen/services/auth.py",
         "valid_api_url",
         "ValueError",
         "return False",

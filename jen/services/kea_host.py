@@ -1077,7 +1077,7 @@ def apply_config(
         # `config-set`) would be erased by the next write of the file; both digests are named. Asked only when BOTH answer and differ. NOT asked of investigation logging's own writes (the condition
         # above): the toggle must always be able to take the marker out and the host's deadline must never wait on a compare - and `investigation_logging._change` says so in the operator's line
         # (Q216 AA25), because a toggle can still erase what a hand `config-set` left the file without.
-        differs = _api.api_daemon_differs(server, service)
+        differs = _api.api_daemon_differs(server, service, restore=source == "restore")
         if differs:
             return {"ok": False, "code": "error", "detail": differs, "via": "guard"}
     if expect_sha256 is not None and expect_sha256.startswith(_CANONICAL_SENTINEL_PREFIX):

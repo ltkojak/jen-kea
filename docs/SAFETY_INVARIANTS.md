@@ -626,7 +626,7 @@ id in one transaction before the next read and starts the server afresh; histori
 - `tests/test_ddns.py::TestTheModeSaysWhatItKnows`
 
 ### CRED-002 - A kept secret is kept only for the endpoint it was typed for
-**Rule.** A form that keeps a blank secret keeps it only while the endpoint it names is the same place (`auth.same_endpoint`: scheme, host and port - never the path or the query; a bare host has no default port). A secret that is SPENT on a path is compared with the path and the query too (`auth.same_destination`, Q228): an OIDC client secret (the issuer's path selects the realm or the tenant whose token endpoint receives it, and a changed client ID is another registration), a webhook's header value and an ntfy token. A blank OPTIONAL secret with nothing stored to keep - another type of channel, or a stored config that cannot be read - is none, never a secret to carry, and a save that kept nothing says which fields are empty.
+**Rule.** A form that keeps a blank secret keeps it only while the endpoint it names is the same place (`auth.same_endpoint`: scheme, host and port - never the path or the query; a bare host has no default port). A secret that is SPENT on a path is compared with the path and the query too (`auth.same_destination`, Q228): an OIDC client secret (the issuer's path selects the realm or the tenant whose token endpoint receives it, and a changed client ID is another registration), a webhook's header value and an ntfy token. (Q229) The path is compared as the transport dials it: a webhook's as written (`/team-a` and `/team-a/` are two paths), an issuer's and an ntfy server's without the trailing slash their senders drop (`auth.same_issuer`, `_endpoint`). An SMTP password is kept only for the same user name, and only while STARTTLS still verifies if it did. And the rule holds at the SEND: an alert is posted to the saved address with no redirect followed (`alerts._post`), and an SMTP channel's STARTTLS verifies the server's certificate and name before `login` (`alerts._smtp_tls_context`; a channel may opt out by its own tick box). A blank OPTIONAL secret with nothing stored to keep - another type of channel, or a stored config that cannot be read - is none, never a secret to carry, and a save that kept nothing says which fields are empty.
 Two behaviors, by consequence. A LOOKUP credential (the DDNS token) is REMOVED when the provider or its address changes, with a warning, and never sent to the new place. A CONNECTION credential (the Kea API,
 Kea6, D2, an additional server's, Kea's database, Jen's database) is REQUIRED for a new endpoint: the form refuses a blank password with one sentence and writes nothing; "Inherit", where a form has one, is the way out.
 A password a form INHERITS (Kea6 and D2 use the Kea API's when they have none of their own, and "Inherit" removes theirs) stays with the Kea API's HOST: another port of the same host is the same Kea,
@@ -648,6 +648,9 @@ answer: ticking both is refused (`infrastructure._one_answer_for_a_secret`), and
 - `tests/test_ddns.py::TestADifferentEndpointIsNotTheSameProvider`
 - `tests/test_a_bounded_number_is_read_as_it_is_written.py::TestAChannelsSecretIsWriteOnly`
 - `tests/test_the_alerts_page_keeps_its_secrets.py::TestABlankSecretIsKeptOnlyForTheSamePlace`
+- `tests/test_a_secret_goes_only_where_it_was_typed.py::TestAKeptSecretStaysWithWhatItWasTypedFor`
+- `tests/test_a_secret_goes_only_where_it_was_typed.py::TestARedirectIsNotFollowed`
+- `tests/test_a_secret_goes_only_where_it_was_typed.py::TestStartTlsVerifiesBeforeThePasswordIsSent`
 - `tests/test_a_page_carries_only_what_it_names.py::TestTheOidcSecretStaysWithItsIssuer`
 - `tests/test_a_secret_stays_with_its_destination.py::TestTheDestinationIsThePlaceAndThePath`
 - `tests/test_a_secret_stays_with_its_destination.py::TestTheOidcSecretStaysWithItsIssuerAndItsClient`
@@ -761,6 +764,10 @@ it to the user and password fields, and Jen keeps dialing it as written (the cre
 - `tests/test_a_page_carries_only_what_it_names.py::TestAChannelUrlNeverCarriesAPassword`
 - `tests/test_a_secret_stays_with_its_destination.py::TestThePageWithholdsAnAddressThatIsNotPlain`
 - `tests/test_a_secret_stays_with_its_destination.py::TestATypedAddressIsAnHttpUrl`
+- `tests/test_a_secret_goes_only_where_it_was_typed.py::TestAnAddressJenCanDial`
+- `tests/test_a_secret_goes_only_where_it_was_typed.py::TestTheIssuerIsAskedWhatEveryAddressIs`
+- `tests/test_a_secret_goes_only_where_it_was_typed.py::TestTheSmtpHostIsAnAddressToo`
+- `tests/test_a_secret_goes_only_where_it_was_typed.py::TestASecretIsMaskedWhereverItSits`
 
 ### REMOTE-001 - A TLS or socket operation is one transaction: local state first, every step proved, the restored endpoint answers, every unproved state durable, every target from the configuration, every record the host's own
 **Rule.** (Final form, Q188; the target set and the record added by Q189.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:

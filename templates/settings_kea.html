@@ -355,7 +355,7 @@
                         {% set done = m.value == c.transport and not c.blocked and c.accepted_all %}
                         <li class="wm-step" data-state="{{ 'ok' if done else 'idle' }}" data-wm-row="3"{% if done %} data-wm-accepted="{{ c.id }}"{% endif %}>
                             <span class="wm-icon wm-icon-{{ 'ok' if done else 'idle' }}">{{ icon("circle-check" if done else "circle") }}</span>
-                            <span class="wm-text"><strong>3.</strong> {% if done %}Accepted {{ c.accepted_at }}{% else %}Accept what changes{% endif %}</span>
+                            <span class="wm-text"><strong>3.</strong> {% if done %}Accepted {{ c.accepted_at|utcfmt }}{% else %}Accept what changes{% endif %}</span>
                             <div class="wm-consents">
                                 {% for n in c.consents %}
                                 <label><input type="checkbox" name="{{ n.name }}" value="{{ c.consent_value }}" form="wm-form-{{ c.id }}" data-wm-consent="{{ c.id }}" {% if done %}checked disabled{% elif m.value != c.transport %}disabled{% endif %}> {{ n.text }}</label>
@@ -1179,8 +1179,9 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
     // write right back, the helper's own update) came back with that panel closed and its result hidden. The card remembers, once, which panel the action was pressed in and opens it again:
     // a one-shot note in sessionStorage, written when the action is sent and removed when it is read. It selects a radio and nothing else - the switch is still the button's.
     var REOPEN = 'jen-wm-reopen';
-    function remember(card) {
-        var mode = card && selected(card);
+    function remember(card, panel) {
+        // (Q229, AO13) the panel the action was pressed in, which is what the note is about; the selected radio is the fallback
+        var mode = card && ((panel && panel.getAttribute('data-mode-panel')) || selected(card));
         if (!mode) return;
         try { window.sessionStorage.setItem(REOPEN, card.getAttribute('data-wm-card') + ':' + mode); } catch (e) { /* storage blocked: the page comes back on the current mode */ }
     }
@@ -1198,7 +1199,7 @@ if (extraServersList) extraServersList.addEventListener('click', function(e) {
     document.addEventListener('submit', function (ev) {
         // capture: base.html's confirm for form[data-confirm] stops the first submit and sends the form itself afterward, which fires no second event
         var panel = ev.target.closest && ev.target.closest('[data-mode-panel]');
-        if (panel) remember(panel.closest('[data-wm-card]'));
+        if (panel) remember(panel.closest('[data-wm-card]'), panel);
     }, true);
     document.addEventListener('change', function (ev) {
         var card = ev.target.closest('[data-wm-card]');

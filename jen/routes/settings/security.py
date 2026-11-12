@@ -43,6 +43,11 @@ PERMANENT_IS_A_SUPERADMINS = "Only a superadmin can set a lockout that lasts unt
 CLEARED_SENTENCE = "Cleared {attempts} failed login attempt(s) and ended {lockouts} permanent lockout(s)."
 OIDC_ISSUER_CHANGED = "The issuer changed - enter the client secret again."
 OIDC_CLIENT_CHANGED = "The client ID changed - enter the client secret again."
+#: (Q229) the refusal of an issuer that is not a plain address
+OIDC_ISSUER_SHAPE = (
+    "The issuer must be an https:// URL with a host and nothing after its path: no query and no fragment "
+    "(http:// is only allowed for a local 127.0.0.1/localhost test IdP)."
+)
 OIDC_SAVED = "Single sign-on settings saved. A change to the issuer, the client ID or the client secret takes effect when Jen restarts."
 
 
@@ -319,16 +324,13 @@ def save_oidc():
     subnet_map = request.form.get("subnet_map", "").strip()
     subnet_map_default = request.form.get("subnet_map_default", "none").strip().lower()
 
-    if enabled:
-        if not __auth.valid_oidc_issuer(issuer):
-            flash_field(
-                "issuer",
-                "The issuer must be an https:// URL (http:// is only allowed for a local 127.0.0.1/localhost test IdP).",
-            )
-            return redirect(url_for("settings.settings_security"))
-        if not client_id:
-            flash_field("client_id", "A client ID is required to enable single sign-on.")
-            return redirect(url_for("settings.settings_security"))
+    # (Q229, AO1, AO2, AO6) asked of every issuer that is saved, not only of an enabled one: a disabled save stored and audited whatever was typed
+    if (enabled or issuer) and not __auth.valid_oidc_issuer(issuer):
+        flash_field("issuer", __auth.userinfo_sentence(issuer) or OIDC_ISSUER_SHAPE)
+        return redirect(url_for("settings.settings_security"))
+    if enabled and not client_id:
+        flash_field("client_id", "A client ID is required to enable single sign-on.")
+        return redirect(url_for("settings.settings_security"))
     if default_role not in ("superadmin", "admin", "viewer", "none"):
         flash_field("default_role", "Default role must be superadmin, admin, viewer, or none.")
         return redirect(url_for("settings.settings_security"))
@@ -359,7 +361,8 @@ def save_oidc():
     # the realm or the tenant whose token endpoint is sent the secret, and `same_endpoint` (scheme, host, port) called two realms of one Keycloak, or two tenants of one cloud
     # login host, the same place. A client secret also belongs to ONE client registration: a changed client ID with a blank secret is refused the same way
     if not client_secret and issuer and extensions.OIDC_CLIENT_SECRET:
-        if not __auth.same_destination(issuer, extensions.OIDC_ISSUER):
+        # (Q229) `same_issuer` is `same_destination` of the two as `init_oidc` dials them
+        if not __auth.same_issuer(issuer, extensions.OIDC_ISSUER):
             flash_field("client_secret", OIDC_ISSUER_CHANGED)
             return redirect(url_for("settings.settings_security"))
         if client_id != extensions.OIDC_CLIENT_ID:

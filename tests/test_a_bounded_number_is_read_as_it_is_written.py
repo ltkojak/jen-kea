@@ -582,11 +582,18 @@ class TestAChannelsSecretIsWriteOnly:
             self._kept(
                 monkeypatch,
                 "webhook",
-                {"webhook_url": "https://h/y/", "header_value": ""},
+                {"webhook_url": "https://h/y", "header_value": ""},
                 {"webhook_url": "https://h/y", "header_value": "B"},
             )["header_value"]
             == "B"
         )
+        # (Q229, the beta.14 review's #3) the address is posted to as written, so the trailing slash is another path: this cell kept the value across it
+        assert self._kept(
+            monkeypatch,
+            "webhook",
+            {"webhook_url": "https://h/y/", "header_value": ""},
+            {"webhook_url": "https://h/y", "header_value": "B"},
+        ) == ("header_value", route.DESTINATION_CHANGED)
         assert self._kept(
             monkeypatch,
             "webhook",

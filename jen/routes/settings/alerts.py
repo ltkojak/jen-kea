@@ -42,7 +42,7 @@ WRITE_ONLY_KEYS = {
 #: key printed a stored secret into the page. A key reaches the page only by being named here, and no key named here is write-only under ANY type (the test holds the two tables to it).
 SHOWN_KEYS = {
     "telegram": ("chat_id",),
-    "email": ("smtp_host", "smtp_port", "smtp_user", "from_addr", "to_addr", "use_tls"),
+    "email": ("smtp_host", "smtp_port", "smtp_user", "from_addr", "to_addr", "use_tls", "tls_verify"),
     "slack": (),
     "discord": (),
     "webhook": ("payload_type", "header_name"),
@@ -52,9 +52,12 @@ SHOWN_KEYS = {
 #: (Q228, the beta.13 review's #3) the write-only keys a channel works WITHOUT: a webhook with no authorization header, an ntfy topic that takes no token, an SMTP relay that asks
 #: for no password. A blank one with nothing stored to keep is "none", never "a secret to carry"; every write-only key not named here is one the channel cannot deliver without
 OPTIONAL_SECRETS = {"webhook": ("header_value",), "ntfy": ("token",), "email": ("smtp_pass",)}
-#: (Q228, AN1) the key that holds the ADDRESS the form names, for the two types that have one. A blank address on an edit is the stored one (a webhook's is write-only; an ntfy
-#: server's is withheld from the page when it is not a plain address), and it is the address a kept secret is judged against
-ADDRESS_KEY = {"webhook": "webhook_url", "ntfy": "url"}
+#: (Q228, AN1) the key that holds the ADDRESS the form names, for the types that have one. A blank address on an edit is the stored one (a webhook's is write-only; an ntfy
+#: server's and an SMTP host are withheld from the page when they are not plain), and it is the address a kept secret is judged against.
+#: (Q229, AO3) an SMTP server's host is the third address: the display gate was asked of this table, and `smtp_host` was shown without being in it
+ADDRESS_KEY = {"webhook": "webhook_url", "ntfy": "url", "email": "smtp_host"}
+#: the form field that carries each address, for the refusal that names it
+ADDRESS_FIELDS = {"webhook_url": "webhook_url", "url": "ntfy_url", "smtp_host": "smtp_host"}
 #: the form field that carries each write-only key, for the refusal that names it
 WRITE_ONLY_FIELDS = {
     ("telegram", "token"): "token",
@@ -74,12 +77,16 @@ def _endpoint(channel_type: str, config: dict) -> str:
     TLS turned off goes over the wire in clear, so the wire is part of the place), a webhook's URL, the ntfy server. Telegram, Pushover, Slack and Discord deliver to their provider's own
     address, which the form does not name: one fixed place."""
     if channel_type == "email":
-        scheme = "smtps" if config.get("use_tls") == "true" else "smtp"
+        # (Q229) the wire has three states: STARTTLS verified, STARTTLS not verified, and none. A password kept while verification is turned off goes to a server nobody proved
+        scheme = "smtp"
+        if config.get("use_tls") == "true":
+            scheme = "smtps" if config.get("tls_verify", "true") != "false" else "smtps-unverified"
         return f"{scheme}://{config.get('smtp_host', '')}:{config.get('smtp_port', '')}"
     if channel_type == "webhook":
         return config.get("webhook_url", "")
     if channel_type == "ntfy":
-        return config.get("url", "")
+        # (Q229) as the sender dials it: `_send_ntfy_channel` drops the trailing slash before it appends the topic, so `https://ntfy.example/base/` and `.../base` are one address
+        return str(config.get("url", "")).rstrip("/")
     return "provider.invalid"
 
 
@@ -107,6 +114,10 @@ ADDRESS_NEEDS_SCHEME = "The address must start with http:// or https:// and name
 NTFY_ADDRESS_SHAPE = (
     "The ntfy server address is https://host[:port][/path] with nothing after it. The access token has its own field."
 )
+#: (Q229, AO3) the refusal of a typed SMTP host
+SMTP_HOST_SHAPE = "The SMTP host is a host name or an IP address alone: no scheme, no user name, no port and no path. The port and the user name have their own fields."
+#: (Q229, the beta.14 review's #4) a password belongs to ONE account: a blank password is not kept for another user name on the same server
+SMTP_USER_CHANGED = "The SMTP user name changed - enter its password again."
 #: the words the Alerts page uses for each write-only key in `NOTHING_KEPT`
 SECRET_LABELS = {
     "header_value": "the authorization header value",
@@ -149,6 +160,10 @@ def _kept_secrets(channel_id, channel_type: str, config: dict, stored: dict | No
     # carried to https://hooks.example/team-b - another receiver on one host
     if not __auth.same_destination(_endpoint(channel_type, config), _endpoint(channel_type, old)):
         return WRITE_ONLY_FIELDS[(channel_type, kept[0])], DESTINATION_CHANGED
+    # (Q229, the beta.14 review's #4) the SMTP password is the password OF the stored user name: the same server with another user name is another account, and the stored password
+    # was sent to it as that account's. The rule the OIDC save has for a changed client ID
+    if channel_type == "email" and config.get("smtp_user", "") != old.get("smtp_user", ""):
+        return WRITE_ONLY_FIELDS[("email", "smtp_pass")], SMTP_USER_CHANGED
     for k in kept:
         config[k] = old[k]
     return config
@@ -178,7 +193,10 @@ def _address_refusal(channel_type: str, config: dict):
     value = config.get(address, "") if address else ""
     if not value:
         return None
-    field = {"webhook_url": "webhook_url", "url": "ntfy_url"}[address]
+    field = ADDRESS_FIELDS[address]
+    if channel_type == "email":
+        # (Q229, AO3) a host alone: the save stored whatever was typed here, user-info and a query among it, and the page printed it back
+        return None if __auth.host_name(value) else (field, SMTP_HOST_SHAPE)
     if __auth.userinfo_sentence(value):
         return field, __auth.USERINFO_SENTENCE
     if not __auth.http_address(value):
@@ -195,10 +213,15 @@ def _shown(channel_type: str, config: dict) -> dict:
     # (Q228, AN1; CRED-005 at the display) an address is shown only when it is a plain one. A row an earlier release stored may carry a password before the `@` or a token in the
     # query: Q227 refused such a value on the SAVE and still printed the stored one here. It is withheld, and `url_withheld` tells the card and the edit form to say so
     address = ADDRESS_KEY.get(channel_type)
-    if address in out and out[address] and not __auth.plain_address(out[address]):
+    if address in out and out[address] and not _printable(channel_type, out[address]):
         del out[address]
         out["url_withheld"] = True
     return out
+
+
+def _printable(channel_type: str, value) -> bool:
+    """May the page print this channel's address (CRED-005 at the display; Q229, AO3): a plain URL for a webhook or an ntfy server, a host alone for an SMTP server."""
+    return __auth.host_name(value) if channel_type == "email" else __auth.plain_address(value)
 
 
 @bp.route("/settings/alerts")
@@ -375,6 +398,8 @@ def save_alert_channel():
             "from_addr": request.form.get("from_addr", "").strip(),
             "to_addr": request.form.get("to_addr", "").strip(),
             "use_tls": "true" if request.form.get("use_tls") else "false",
+            # (Q229) STARTTLS verifies the server's certificate unless the operator unticked it for this channel
+            "tls_verify": "true" if request.form.get("tls_verify") else "false",
         }
     elif channel_type == "slack":
         config = {"webhook_url": request.form.get("slack_webhook", "").strip()}

@@ -1347,8 +1347,8 @@ class TestAnEmailGoesToEveryRecipient:
             def __exit__(self, *a):
                 return False
 
-            def starttls(self):
-                pass
+            def starttls(self, context=None):
+                sent["context"] = context  # (Q229) the sender passes a context that verifies
 
             def login(self, *a):
                 pass

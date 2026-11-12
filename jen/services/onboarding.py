@@ -114,8 +114,13 @@ def checklist(ctx: dict) -> dict:
     rows.append(
         {
             "title": "At least one alert channel is enabled",
-            "done": channels > 0,
-            "detail": f"{channels} enabled" if channels else "none configured",
+            "done": bool(channels),
+            # (Q229, AO4) None is a count that could not be read, and it is said as that: "none configured" was a fact this page did not have
+            "detail": "the channels could not be counted"
+            if channels is None
+            else f"{channels} enabled"
+            if channels
+            else "none configured",
             "link": "/settings/alerts",
         }
     )
@@ -184,7 +189,7 @@ def build_ctx(user, is_superadmin: bool) -> dict:
             cur.execute("SELECT subnet_scope FROM alert_channels WHERE enabled=1")
             channels = __alerts.enabled_channels_for(user, cur.fetchall())
     except Exception:
-        channels = 0
+        channels = None  # (Q229, AO4) not read: `/settings` says so for the same count, and this page printed "none configured"
 
     schedule = dbexport.get_schedule()
 

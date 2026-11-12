@@ -737,7 +737,8 @@ def _run_change_unlocked(
                 lines,
                 needs_hands=[d.name for d in needs],
                 needs_hands_ids=[d.key for d in needs],
-                still_new_ids=[d.key for d in revert_failed],
+                # (Q229, AO26) the definition Q228 gave the line above: a file target whose restore RAISED is not known, so it is not named as still carrying the new config
+                still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown],
             )
 
         if committed:

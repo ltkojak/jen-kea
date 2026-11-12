@@ -570,6 +570,38 @@ def _transport_error_text(error, config=None) -> str:
     return redact(str(error), config)
 
 
+#: (Q229, the beta.14 review's #1) said for a channel whose address answers with a redirect. It names no address: this text is stored in alert_log and shown on the page
+REDIRECT_REFUSED = (
+    "the address answered with a redirect (HTTP {code}). Jen does not follow one, because the alert and the channel's secret would go with it: "
+    "save the address it redirects to"
+)
+
+
+def _post(url, **kwargs):
+    """THE one outbound POST of an alert (Q229, the beta.14 review's #1; CRED-002 at the send). `requests` follows a redirect by default and takes every header it was given
+    along except `Authorization` - so a webhook's own header (`X-API-Key`) and, on a 307 or a 308, the alert's body were sent to whatever address the configured one named, a place
+    nobody typed. A channel's secret goes to the address that was saved and nowhere else: no redirect is followed, and one is a failed send with its own sentence. Every sender
+    in this module posts through here (a source test holds the module to it)."""
+    resp = requests.post(url, allow_redirects=False, **kwargs)
+    if 300 <= resp.status_code < 400:
+        raise Exception(REDIRECT_REFUSED.format(code=resp.status_code))
+    return resp
+
+
+def _smtp_tls_context(config):
+    """The TLS context of an SMTP channel's STARTTLS (Q229, the beta.14 review's #2). `smtplib.SMTP.starttls()` with no context does not verify the server's certificate or its
+    name, so the SMTP password was sent to whatever answered on that address. The default context verifies both against the system's trust store (an internal CA is added there,
+    or named with `SSL_CERT_FILE`); a channel saved with "Verify the server's certificate" unticked (`tls_verify` = "false") is encrypted and not verified, by the operator's own
+    choice. A row an earlier release stored has no `tls_verify` and is verified."""
+    import ssl
+
+    context = ssl.create_default_context()
+    if config.get("tls_verify", "true") == "false":
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def send_alert(alert_type, log_result=True, subnet_id=None, scoped=False, **kwargs):
     """Send alert to all enabled channels that handle this alert type.
 
@@ -667,7 +699,7 @@ def _send_telegram_channel(message, config):
         return False
     last_data = {}
     for attempt in range(2):
-        resp = requests.post(
+        resp = _post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
             timeout=10,
@@ -716,7 +748,7 @@ def _send_email_channel(message, alert_type, config):
     use_tls = config.get("use_tls", "true") == "true"
     with smtplib.SMTP(host, port, timeout=15) as server:
         if use_tls:
-            server.starttls()
+            server.starttls(context=_smtp_tls_context(config))  # (Q229) verified before `login` sends the password
         if user and password:
             server.login(user, password)
         server.sendmail(from_addr, recipients, msg.as_string())
@@ -737,7 +769,7 @@ def _send_slack_channel(message, config):
     # otherwise show the raw escaped entity instead of the actual
     # character. Slack doesn't parse HTML at all, so unescape for display.
     slack_text = html.unescape(slack_text)
-    resp = requests.post(webhook_url, json={"text": slack_text}, timeout=10)
+    resp = _post(webhook_url, json={"text": slack_text}, timeout=10)
     if resp.status_code != 200:
         raise Exception(f"Slack error {resp.status_code}: {resp.text[:200]}")
     return True
@@ -763,7 +795,7 @@ def _send_webhook_channel(message, alert_type, config):
         payload = {"alert_type": alert_type, "message": plain, "html": message}
     else:
         payload = {"text": plain}
-    resp = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+    resp = _post(webhook_url, json=payload, headers=headers, timeout=10)
     if resp.status_code not in (200, 201, 202, 204):
         raise Exception(f"Webhook error {resp.status_code}: {resp.text[:200]}")
     return True
@@ -786,7 +818,7 @@ def _send_ntfy_channel(message, config):
     headers = {"Title": "Jen Alert", "Priority": priority, "Tags": "bell"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    resp = requests.post(f"{url}/{topic}", data=plain.encode("utf-8"), headers=headers, timeout=10)
+    resp = _post(f"{url}/{topic}", data=plain.encode("utf-8"), headers=headers, timeout=10)
     if resp.status_code not in (200, 201, 204):
         raise Exception(f"ntfy error: HTTP {resp.status_code} — {resp.text[:200]}")
     return True
@@ -803,7 +835,7 @@ def _send_pushover_channel(message, config):
     lines = plain.split("\n", 1)
     title = lines[0].strip() if lines else "Jen Alert"
     body = lines[1].strip() if len(lines) > 1 else plain
-    resp = requests.post(
+    resp = _post(
         "https://api.pushover.net/1/messages.json",
         data={
             "token": api_token,
@@ -831,7 +863,7 @@ def _send_discord_channel(message, config):
     text = re.sub(r"<[^>]+>", "", text).strip()
     # v5.1.15 — same unescape-for-plain-text reasoning as Slack/ntfy.
     text = html.unescape(text)
-    resp = requests.post(webhook_url, json={"content": text, "username": "Jen DHCP"}, timeout=10)
+    resp = _post(webhook_url, json={"content": text, "username": "Jen DHCP"}, timeout=10)
     if resp.status_code not in (200, 204):
         raise Exception(f"Discord error: HTTP {resp.status_code} — {resp.text[:200]}")
     return True

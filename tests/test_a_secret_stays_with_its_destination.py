@@ -64,7 +64,8 @@ class TestTheDestinationIsThePlaceAndThePath:
         "a, b, same",
         [
             ("https://login.example.test/tenant-a/v2.0", "https://login.example.test/tenant-a/v2.0", True),
-            ("https://login.example.test/tenant-a/v2.0", "https://login.example.test/tenant-a/v2.0/", True),
+            # (Q229, the beta.14 review's #3) a path is compared as written: the trailing slash is another path to a webhook's receiver
+            ("https://login.example.test/tenant-a/v2.0", "https://login.example.test/tenant-a/v2.0/", False),
             ("https://LOGIN.example.test:443/tenant-a/v2.0", "https://login.example.test/tenant-a/v2.0", True),
             ("https://login.example.test/tenant-a/v2.0", "https://login.example.test/tenant-b/v2.0", False),
             ("https://idp.example.test/realms/jen", "https://idp.example.test/realms/second", False),
@@ -91,7 +92,11 @@ class TestTheDestinationIsThePlaceAndThePath:
     def test_the_discovery_url_is_built_from_the_path_the_comparison_reads(self):
         src = _function("jen/services/oidc.py", "init_oidc")
         assert 'extensions.OIDC_ISSUER.rstrip("/") + "/.well-known/openid-configuration"' in src
-        assert '.path.rstrip("/")' in _function("jen/services/auth.py", "same_destination")
+        # (Q229) the slash `init_oidc` drops is dropped by the ISSUER's comparison, which is its own function; a destination's path is compared as written
+        assert '.rstrip("/")' in _function("jen/services/auth.py", "same_issuer")
+        assert "rstrip" not in _function("jen/services/auth.py", "same_destination").split('"""')[2]
+        assert auth.same_issuer("https://idp.example.test/realms/jen/", "https://idp.example.test/realms/jen")
+        assert not auth.same_issuer("https://idp.example.test/realms/jen", "https://idp.example.test/realms/second")
 
 
 class TestTheOidcSecretStaysWithItsIssuerAndItsClient:
@@ -100,7 +105,7 @@ class TestTheOidcSecretStaysWithItsIssuerAndItsClient:
 
     def test_the_route_compares_the_destination_and_the_client(self):
         src = _function("jen/routes/settings/security.py", "save_oidc")
-        assert "not __auth.same_destination(issuer, extensions.OIDC_ISSUER)" in src
+        assert "not __auth.same_issuer(issuer, extensions.OIDC_ISSUER)" in src
         assert "client_id != extensions.OIDC_CLIENT_ID" in src
         assert "same_endpoint(" not in src
         assert src.index('flash_field("client_secret", OIDC_ISSUER_CHANGED)') < src.index(
@@ -355,12 +360,20 @@ class TestThePageWithholdsAnAddressThatIsNotPlain:
         assert route._shown("ntfy", {"url": "", "topic": "jen"}) == {"url": "", "topic": "jen"}
 
     def test_every_address_a_page_may_show_goes_through_the_question(self):
-        # the address keys, and which of them SHOWN_KEYS names: a new shown address is withheld by the same line
+        # (Q229, AO3) counted from what the page SHOWS, not from the table the gate reads: every shown key that names an address (a URL, a host) is that type's ADDRESS_KEY, so
+        # a shown address the gate does not know about fails here. This cell used to derive its set from ADDRESS_KEY and could not see `smtp_host`
         route = _route()
-        assert route.ADDRESS_KEY == {"webhook": "webhook_url", "ntfy": "url"}
-        shown_addresses = {t: k for t, k in route.ADDRESS_KEY.items() if k in route.SHOWN_KEYS[t]}
-        assert shown_addresses == {"ntfy": "url"}
-        assert "not __auth.plain_address(out[address])" in _function("jen/routes/settings/alerts.py", "_shown")
+        shown_addresses = {
+            (t, k)
+            for t, keys in route.SHOWN_KEYS.items()
+            for k in keys
+            if k == "url" or k.endswith(("_url", "_host", "_server"))
+        }
+        assert shown_addresses == {("ntfy", "url"), ("email", "smtp_host")}
+        assert all(route.ADDRESS_KEY.get(t) == k for t, k in shown_addresses)
+        assert route.ADDRESS_KEY == {"webhook": "webhook_url", "ntfy": "url", "email": "smtp_host"}
+        assert set(route.ADDRESS_FIELDS) == set(route.ADDRESS_KEY.values())
+        assert "not _printable(channel_type, out[address])" in _function("jen/routes/settings/alerts.py", "_shown")
 
     def test_the_card_and_the_form_say_it_is_kept(self):
         html = (ROOT / "templates/settings_alerts.html").read_text(encoding="utf-8")
