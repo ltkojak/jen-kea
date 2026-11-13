@@ -1481,8 +1481,9 @@ jobs:
           systemctl is-active --quiet jen
           expect_eq "$(jen_version)" "$JEN_STABLE_VERSION" "the running version before the upgrade"
           sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
-          # Q212: the stable install carries no `config_transport` (it is API-only); the upgrade must not write one - no existing server gains a write path
-          expect_eq "$(sudo grep -c config_transport /etc/jen/jen.config)" "0" "config_transport lines before the upgrade"
+          # Q212: the upgrade must not write a `config_transport` - no existing server gains a write path. Q230: the baseline is 7.0.0 now, whose installer gives the
+          # config it CREATES exactly one line, `config_transport = api`; the two assertions after the upgrade hold the file to that same line and the card to that word
+          expect_eq "$(sudo grep config_transport /etc/jen/jen.config)" "config_transport = api" "the config_transport line before the upgrade"
           # the updater on disk is the stable release's own, byte for byte
           tar xzf "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz" -C "$RUNNER_TEMP" jen/jen-update-root.py
           expect_eq "$(sha_of /usr/local/sbin/jen-update-root.py)" "$(sha_of "$RUNNER_TEMP/jen/jen-update-root.py")" "the installed updater"
@@ -1510,10 +1511,10 @@ jobs:
           system_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/system")
           require 'Update Now' "$system_page" "Settings -> System lost its Update control after the upgrade"
           refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after the upgrade"
-          # Q212: the upgrade wrote no transport, and the primary (API-only, no SSH) reads as `off` on its card - the major jump is executed, not assumed
-          expect_eq "$(sudo grep -c config_transport /etc/jen/jen.config)" "0" "config_transport lines after the installer upgrade"
+          # Q212, Q230: the upgrade wrote no transport and changed none - the one line the stable install had is the one line there is, and the primary's card reads it
+          expect_eq "$(sudo grep config_transport /etc/jen/jen.config)" "config_transport = api" "the config_transport line after the installer upgrade"
           kea_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/kea")
-          require 'data-transport="off"' "$kea_page" "Settings -> Kea does not show the primary as off after the upgrade"
+          require 'data-transport="api"' "$kea_page" "Settings -> Kea does not show the primary on the transport it had before the upgrade"
           refuse 'data-transport="api"' "$kea_page" "an upgrade gave a server the API transport"
           echo "upgraded v${JEN_STABLE_VERSION} -> v${HEAD_VERSION}: running version, config and the admin account all survived"
 
@@ -1547,9 +1548,9 @@ jobs:
           # hop 2 below proves HEAD's own updater renders it too
           require 'Update Now' "$system_page" "Settings -> System has no Update control after hop 1"
           refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after hop 1"
-          expect_eq "$(sudo grep -c config_transport /etc/jen/jen.config)" "0" "config_transport lines after hop 1"
+          expect_eq "$(sudo grep config_transport /etc/jen/jen.config)" "config_transport = api" "the config_transport line after hop 1"
           kea_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/kea")
-          require 'data-transport="off"' "$kea_page" "Settings -> Kea does not show the primary as off after hop 1"
+          require 'data-transport="api"' "$kea_page" "Settings -> Kea does not show the primary on the transport it had before hop 1"
           echo "hop 1: v${JEN_STABLE_VERSION} -> v${HEAD_VERSION} by the stable release's own updater"
 
       - name: Hop 2 — HEAD's updater onto a newer release
