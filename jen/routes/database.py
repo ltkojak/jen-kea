@@ -97,7 +97,8 @@ def _render_database_page(tab: str):
         jen_tables=dbexport.JEN_TABLES,
         plugin_table_groups=plugin_table_groups,
         show_plugin_backup_notice=show_plugin_backup_notice,
-        kea_groups=dbexport.KEA_EXPORT_GROUPS,
+        kea_tables=dbexport.KEA_EXPORT_TABLES,
+        kea_default_tables=dbexport.KEA_EXPORT_DEFAULT_TABLES,
         jen_db_host=extensions.JEN_DB_HOST,
         jen_db_name=extensions.JEN_DB_NAME,
         kea_db_host=extensions.KEA_DB_HOST,
@@ -180,10 +181,23 @@ def export_jen():
 @login_required
 @_superadmin_required
 def export_kea():
-    group = request.form.get("group", dbexport.KEA_BACKUP_GROUP)
-    if group not in dbexport.KEA_EXPORT_GROUPS:
-        flash("Invalid export group.", "error")
-        return redirect(url_for("database.database", tab="export"))
+    # v7.1.0-beta.1 (Q233) — the page posts `tables` (one per ticked box), the way the Jen card does. A
+    # request that names a `group` (a script, an older page) is answered as it always was.
+    if "group" in request.form:
+        group, tables = request.form["group"], None
+        if group not in dbexport.KEA_EXPORT_GROUPS:
+            flash("Invalid export group.", "error")
+            return redirect(url_for("database.database", tab="export"))
+    else:
+        picked = request.form.getlist("tables")
+        if not picked:
+            flash("Tick at least one Kea table to export.", "error")
+            return redirect(url_for("database.database", tab="export"))
+        try:
+            tables, group = dbexport.kea_export_selection(picked)
+        except ValueError:
+            flash("Invalid export table.", "error")
+            return redirect(url_for("database.database", tab="export"))
     tmp_path = None
     try:
         # v5.67.0-beta.11 (Q123) — streamed from a tempfile through dbexport.write_kea_export(), the way the
@@ -191,9 +205,13 @@ def export_kea():
         os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".kea-export.json.gz")
         os.close(fd)
-        dbexport.write_kea_export(tmp_path, group)
+        dbexport.write_kea_export(tmp_path, group, tables)
         filename = f"kea-{group}-export-{datetime.utcnow().strftime('%Y-%m-%d-%H%M%S')}.json.gz"
-        __user.audit("DB_EXPORT", "kea", f"Exported group: {group}")
+        __user.audit(
+            "DB_EXPORT",
+            "kea",
+            f"Exported group: {group}" if tables is None else f"Exported tables: {', '.join(tables)}",
+        )
 
         def _stream():
             try:

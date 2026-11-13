@@ -10,6 +10,14 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.1: the Kea export picks tables; the bundled IPAM Lite draws an address map
+
+One step (7.1.0-beta.1). It adds no migration, no helper build and no sudoers line, and there is nothing for you to do. What you may notice:
+
+**Settings → Databases → Export, the Kea card, has tick boxes.** An All box and one box per table, like the Jen card. The four reservation tables are ticked when the page opens; tick `lease4` as well to put a lease snapshot in the same file. A file with any set of tables imports as before. Backups and migrations still save reservations only.
+
+**IPAM Lite 1.8.2 is bundled.** A subnet's page shows an address map above its table: one cell per address with its last octet, a heading at each /24, the DHCP pool tinted. Click a cell to find its row.
+
 ## 7.0.1: an ntfy token stays with its topic, the certificate upload refuses what a browser refuses, an SMTP host is a host alone
 
 One step (7.0.1). It adds no migration, no helper build and no sudoers line, and there is nothing for you to do. What you may notice:

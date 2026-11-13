@@ -13,6 +13,7 @@
 .u-054de4.u-054de4{font-size:12px;color:var(--text-muted);margin-bottom:8px}
 .u-08a316.u-08a316{background:color-mix(in srgb, var(--danger) 18%, transparent);color:var(--danger)}
 .u-08e866.u-08e866{padding:8px;margin:0}
+.u-0ebced.u-0ebced{font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
 .u-0fd874.u-0fd874{max-width:420px}
 .u-10a65a.u-10a65a{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
 .u-116966.u-116966{margin:0}
@@ -54,6 +55,7 @@
 .u-3bceda.u-3bceda{border-color:var(--danger);background:rgba(200,50,50,0.08)}
 .u-3c9b03.u-3c9b03{text-decoration:line-through;opacity:.5}
 .u-3de8f9.u-3de8f9{display:flex;gap:8px;flex-wrap:wrap}
+.u-3ed0d2.u-3ed0d2{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap}
 .u-3efc98.u-3efc98{display:flex;gap:10px}
 .u-3f3a6c.u-3f3a6c{white-space:pre-wrap;word-break:break-all}
 .u-400bbf.u-400bbf{font-size:9px;color:var(--text-muted)}

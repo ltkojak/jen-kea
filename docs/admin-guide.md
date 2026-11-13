@@ -1777,7 +1777,9 @@ sudo systemctl restart jen
 
 ## Kea data: exports, backups and migration (v5.67.0-beta.11)
 
-**Settings → Databases** offers three Kea groups, and they are not the same thing:
+**Settings → Databases → Export** lets you tick the Kea tables to export (v7.1.0-beta.1): an All box and one box per table, the same shape as the Jen card. The four reservation tables are ticked when the page opens; `lease4` is not. Tick it to put a lease snapshot in the same file as the reservations. Export `hosts` together with the option and IPv6 tables: on import a row of those is attached only to a reservation that came in the same file. A file with any set of tables imports the same way, in the order described below.
+
+Backups, the migration page and a request that posts `group=` use three fixed Kea groups, and they are not the same thing:
 
 | Group | Tables | What it is for |
 |---|---|---|

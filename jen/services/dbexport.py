@@ -121,6 +121,39 @@ KEA_ALL_TABLES = {t for grp in KEA_EXPORT_GROUPS.values() for t in grp["tables"]
 # the order an import restores in: parents before the rows that reference them
 KEA_RESTORE_ORDER = ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations", "lease4"]
 
+# v7.1.0-beta.1 (Q233) — the export page picks TABLES, the way the Jen card always has: an All box and one tick
+# box per table, so every Kea table can go in one file (the three radio groups could not put a lease snapshot
+# beside the reservations). The groups stay: a backup, a migration and `group=` posted by a script still name
+# one. Listed in restore order; `lease4` is the one table that is not ticked when the page opens.
+KEA_EXPORT_TABLES = {
+    "hosts": "Host reservations, IPv4 and IPv6: one row per reservation",
+    "dhcp4_options": "DHCPv4 options set on a reservation (not global, subnet or class options)",
+    "dhcp6_options": "DHCPv6 options set on a reservation (not global, subnet or class options)",
+    "ipv6_reservations": "The IPv6 addresses and prefixes of a reservation",
+    "lease4": "Active IPv4 leases: a point-in-time snapshot, never part of a backup",
+}
+KEA_EXPORT_DEFAULT_TABLES = tuple(KEA_EXPORT_GROUPS[KEA_BACKUP_GROUP]["tables"])
+KEA_CUSTOM_GROUP = "custom"
+
+
+def kea_export_selection(tables):
+    """Pure: the tables a Kea export was asked for, as `(tables in restore order, group)`. `group` is the id
+    of the KEA_EXPORT_GROUPS entry that holds exactly these tables, so a file of the four reservation tables
+    is still a `reservations_all` file whoever picked them, and KEA_CUSTOM_GROUP for any other set. Raises
+    ValueError for an empty selection or a name that is not an exportable Kea table."""
+    picked = list(dict.fromkeys(tables or []))
+    if not picked:
+        raise ValueError("No Kea table was chosen.")
+    for name in picked:
+        if name not in KEA_EXPORT_TABLES:
+            raise ValueError("Not an exportable Kea table.")
+    wanted = [t for t in KEA_RESTORE_ORDER if t in picked]
+    for group_id, grp in KEA_EXPORT_GROUPS.items():
+        if grp["tables"] == wanted:
+            return wanted, group_id
+    return wanted, KEA_CUSTOM_GROUP
+
+
 # v5.67.0-beta.13 (Q127, item e) — Kea's dhcp_option_scope numbers a HOST's options 3 (0 global, 1 subnet,
 # 2 client-class, 3 host, 4 shared-network, 5 pool, 6 pd-pool). Read from the real table AND from the scope_id
 # Kea's own reservation-add writes, on 3.0.3, 3.2.0 and 3.3.1 (tests/kea_compat/test_db_moves.py).
@@ -680,17 +713,24 @@ def export_jen(tables=None):
     return content, filename
 
 
-def write_kea_export(path, group=KEA_BACKUP_GROUP):
+def write_kea_export(path, group=KEA_BACKUP_GROUP, tables=None):
     """The Kea twin of write_jen_export (v5.67.0-beta.11, Q123, item c): the group's tables straight to `path`
     as gzip text, one row at a time from a server-side cursor, `_meta` last — through `publish_backup()` for
     a backup (so a failure leaves no file) or to a temp file for a download. Tables that do not exist on
     this Kea are left out of both `data` and `_meta.tables`. `_meta` carries `format: 3` and
     `binary_columns` (see EXPORT_FORMAT). Returns the `_meta` dict plus `uncompressed_bytes` (known only
     once writing is done; the backup sidecar reads it, the file itself does not carry it). Written 0600
-    when `path` is an actual path."""
-    if group not in KEA_EXPORT_GROUPS:
+    when `path` is an actual path.
+
+    v7.1.0-beta.1 (Q233): `tables`, when given, is the selection instead of a group's list - any set of
+    KEA_EXPORT_TABLES, written in restore order; `_meta.group` is then what `kea_export_selection` names it
+    and `group` is not read."""
+    if tables is not None:
+        wanted, group = kea_export_selection(tables)
+    elif group not in KEA_EXPORT_GROUPS:
         raise ValueError(f"Unknown export group: {group}")
-    wanted = KEA_EXPORT_GROUPS[group]["tables"]
+    else:
+        wanted = KEA_EXPORT_GROUPS[group]["tables"]
     conn = _direct_kea_conn()
     row_counts = {}
     try:

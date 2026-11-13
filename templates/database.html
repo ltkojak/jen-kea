@@ -97,8 +97,8 @@
         </p>
         <form method="POST" action="/database/export/jen" data-download><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="u-da12f2">
-                <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Select Tables</label>
-                <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+                <label class="u-0ebced">Select Tables</label>
+                <div class="u-3ed0d2">
                     <label class="u-dbfa94"><input type="checkbox" class="toggle-all-cb" data-toggle-group="jen-tables" checked> <strong>All</strong></label>
                 </div>
                 <div id="jen-tables" class="u-fdc279">
@@ -129,24 +129,23 @@
             <h3>Export <span style="color:var(--warning);font-weight:800;">Kea Data</span></h3>
         </div>
         <p class="u-c0a2eb">
-            Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong>. Choose what to export — reservations and leases are different things.
+            Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong> to a compressed JSON file. The reservation tables are ticked: they are what a backup saves. Leases are a point-in-time snapshot; tick <code class="u-11a508">lease4</code> to put one in the same file. An option or IPv6 row is restored only with the <code class="u-11a508">hosts</code> row it belongs to, so export <code class="u-11a508">hosts</code> with them.
         </p>
         <form method="POST" action="/database/export/kea" data-download><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            {% for grp_id, grp in kea_groups.items() %}
-            <div class="card kea-group-card" style="margin-bottom:12px;background:var(--surface2);cursor:pointer;" data-kea-group="{{ grp_id }}" id="kea-card-{{ grp_id }}">
-                <label style="cursor:pointer;display:flex;align-items:flex-start;gap:10px;">
-                    <input type="radio" name="group" value="{{ grp_id }}" id="kea-grp-{{ grp_id }}"
-                           {% if loop.first %}checked{% endif %} class="u-c00d39">
-                    <div>
-                        <div class="u-160b06">{{ grp.label }}</div>
-                        <div class="u-f3ca1e">{{ grp.description }}</div>
-                        <div style="margin-top:5px;">
-                            {% for t in grp.tables %}<code style="font-size:11px;background:var(--surface);padding:1px 5px;border-radius:3px;margin-right:4px;">{{ t }}</code>{% endfor %}
-                        </div>
-                    </div>
-                </label>
+            <div class="u-da12f2">
+                <label class="u-0ebced">Select Tables</label>
+                <div class="u-3ed0d2">
+                    <label class="u-dbfa94"><input type="checkbox" class="toggle-all-cb" data-toggle-group="kea-tables"> <strong>All</strong></label>
+                </div>
+                <div id="kea-tables" class="u-fdc279">
+                    {% for tbl, desc in kea_tables.items() %}
+                    <label class="u-825981" title="{{ desc }}">
+                        <input type="checkbox" name="tables" value="{{ tbl }}"{% if tbl in kea_default_tables %} checked{% endif %} class="u-7a21c6">
+                        <span><code class="u-11a508">{{ tbl }}</code><br><span class="form-hint">{{ desc }}</span></span>
+                    </label>
+                    {% endfor %}
+                </div>
             </div>
-            {% endfor %}
             <div class="alert alert-warning" style="font-size:12px;margin-bottom:12px;">
                 Kea exports may contain MAC addresses, IP assignments, and hostnames for your entire network. Store securely.
             </div>
@@ -370,19 +369,15 @@
 function toggleAll(groupId, cb) {
     document.querySelectorAll('#'+groupId+' input[type=checkbox]').forEach(function(c) { c.checked = cb.checked; });
 }
-function highlightKea(grp) {
-    document.querySelectorAll('[id^="kea-card-"]').forEach(function(c) {
-        c.style.borderColor = c.id === 'kea-card-'+grp ? 'var(--primary)' : '';
-    });
-}
 document.querySelectorAll('.toggle-all-cb').forEach(function(cb) {
     cb.addEventListener('change', function() { toggleAll(cb.getAttribute('data-toggle-group'), cb); });
 });
-document.querySelectorAll('.kea-group-card').forEach(function(card) {
-    card.addEventListener('click', function() {
-        var grp = card.getAttribute('data-kea-group');
-        document.getElementById('kea-grp-' + grp).checked = true;
-        highlightKea(grp);
+// v7.1.0-beta.1 (Q233): an All box follows its boxes - ticked only while every one of them is
+document.querySelectorAll('.toggle-all-cb').forEach(function(cb) {
+    var group = document.getElementById(cb.getAttribute('data-toggle-group'));
+    if (!group) return;
+    group.addEventListener('change', function() {
+        cb.checked = !group.querySelector('input[type=checkbox]:not(:checked)');
     });
 });
 </script>

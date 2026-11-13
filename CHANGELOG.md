@@ -2,6 +2,27 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.1.0-beta.1] - 2026-11-13
+
+*The first beta of 7.1.0, on the **beta** channel (a stable box is not offered it). It adds no migration, changes no helper build and no sudoers line, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **Settings → Databases → Export: the Kea card picks tables.** It has the Jen card's shape now: an All box and one tick box per table (`hosts`, `dhcp4_options`, `dhcp6_options`, `ipv6_reservations`, `lease4`), each with a line saying what it holds. The four reservation tables are ticked when the page opens, which is what a backup saves; `lease4` is not, because a lease is a snapshot. Tick it and the reservations and a lease snapshot go in ONE file. Before this the card was three radio buttons (reservations, the IPv4 half, leases) and the two kinds of data could only be exported as two files.
+2. **The bundled IPAM Lite is 1.8.2.** The subnet page has an address map (1.8.0): one cell per address with its last octet in it, 32 to a row, a heading at the start of each /24, the free addresses of a DHCP pool tinted, and a click on a cell finds that address's row. It was already offered to a 7.0.x box through Settings → Plugins.
+
+**Why the card changed.** The Jen and Kea sides of Settings → Databases grew apart: the Jen card has always let an operator tick any set of its tables, and the Kea card offered three fixed groups. The maintainer's request is to make the two sides look and behave alike across the whole menu (Connections, Export, Import, Backups, Schedule, Migrate, Recovery); Export is the first item.
+
+**What did not change.** The import side needed nothing: it has always restored by the tables a file contains, in foreign-key order (`hosts` before the option and IPv6 rows that point at it, `lease4` last), whatever the file's `_meta.group` says. A scheduled backup, Back Up Now, the Recovery step and a Kea migration still save the `reservations_all` group, never leases. A request that posts `group=` (a script written against an earlier release) is answered exactly as before.
+
+**The parts.**
+
+- `jen/services/dbexport.py`: `KEA_EXPORT_TABLES` (the five tables in restore order, each with its description), `KEA_EXPORT_DEFAULT_TABLES` (the backup group's four) and `kea_export_selection(tables)`, a pure function that de-duplicates a selection, refuses an empty one and a name that is not an exportable Kea table (without echoing it), puts it in restore order and names it: the id of the group that holds exactly those tables, or `custom`. So the four reservation tables ticked by hand are still a `reservations_all` file. `write_kea_export(path, group, tables=None)` writes a selection when it is given one; a table this Kea does not have is left out, as before.
+- `jen/routes/database.py`: `export_kea` reads the ticked `tables`. Nothing ticked is an error on the page ("Tick at least one Kea table to export."), never a silent export of a default. The audit line names the tables; the file is `kea-<group>-export-<time>.json.gz`, `kea-custom-export-...` for a set that is no group.
+- `templates/database.html`: the card, and one listener that keeps an All box ticked only while every box under it is (it serves the Jen card too, whose All box used to stay ticked after a table was unticked). The Select Tables heading and its row are two shared classes on both cards (`tools/extract_inline_styles.py`), so the page has 21 inline styles where it had 27; `MAX_INLINE_STYLES` stays 483 (476 across the templates).
+
+**Tests.** `tests/test_kea_export_tables.py` (35, no database): the selection, the writer against named stand-ins for its connection, the route's text and the card rendered from the template. `tests/test_kea_binary_roundtrip.py::TestTheKeaExportPicksTables` (7, against the Kea schema): all five tables in one file, wiped and restored through the importer to the same rows; the audit line; the refusals; `group=` as before; the tab.
+
 ## [7.0.1] - 2026-11-12
 
 *A PATCH to 7.0.0 on the **stable** channel (both channels are offered it). It carries the smaller findings of the two reviews of 7.0.0-beta.15 - Opus's executing pass (AP1 to AP28) and the independent review (five findings) - which were registered when 7.0.0 was promoted with no P1 open. It adds no migration, changes no helper build and no sudoers line, and nothing needs a manual step.*

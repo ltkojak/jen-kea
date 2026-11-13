@@ -788,3 +788,73 @@ class TestRepairPage:
     def test_a_clean_database_says_there_is_nothing_to_repair(self, logged_in_client, kea_tables):
         _seed(kea_tables)
         assert b"Nothing to repair" in logged_in_client.get("/database/kea-identifiers").data
+
+
+class TestTheKeaExportPicksTables:
+    """Q233 (v7.1.0-beta.1): the export card posts the ticked tables. The pure half - the selection, the writer
+    against stand-ins, the card - is tests/test_kea_export_tables.py; this is the route and the file against the
+    Kea schema."""
+
+    def test_every_table_goes_in_one_file_and_comes_back_through_the_importer(self, logged_in_client, kea_tables):
+        _seed(kea_tables)
+        before = _snapshot(kea_tables, ids=False)
+        r = logged_in_client.post("/database/export/kea", data={"tables": list(reversed(dbexport.KEA_RESTORE_ORDER))})
+        assert r.status_code == 200 and r.headers["Cache-Control"] == "no-store"
+        assert "kea-custom-export-" in r.headers["Content-Disposition"]
+        doc = json.loads(gzip.decompress(r.data))
+        assert doc["_meta"]["tables"] == dbexport.KEA_RESTORE_ORDER and doc["_meta"]["group"] == "custom"
+        assert list(doc["data"]) == dbexport.KEA_RESTORE_ORDER
+        kea_tables.commit()
+        with kea_tables.cursor() as cur:
+            for t in ("ipv6_reservations", "dhcp6_options", "dhcp4_options", "lease4", "hosts"):
+                cur.execute(f"DELETE FROM `{t}`")
+        kea_tables.commit()
+
+        results = dbexport.import_kea(r.data, "skip")
+
+        assert not any(x.startswith("❌") for x in results), results
+        assert _snapshot(kea_tables, ids=False) == before
+
+    def test_reservations_beside_a_lease_snapshot(self, logged_in_client, kea_tables, db):
+        _seed(kea_tables)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM audit_log WHERE action='DB_EXPORT'")
+        db.commit()
+        r = logged_in_client.post("/database/export/kea", data={"tables": ["lease4", "hosts"]})
+        assert r.status_code == 200
+        doc = json.loads(gzip.decompress(r.data))
+        assert doc["_meta"]["tables"] == ["hosts", "lease4"] and doc["_meta"]["group"] == "custom"
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT details FROM audit_log WHERE action='DB_EXPORT'")
+            assert [row["details"] for row in cur.fetchall()] == ["Exported tables: hosts, lease4"]
+
+    def test_the_four_reservation_tables_ticked_are_a_reservations_all_file(self, logged_in_client, kea_tables):
+        _seed(kea_tables)
+        r = logged_in_client.post("/database/export/kea", data={"tables": list(dbexport.KEA_EXPORT_DEFAULT_TABLES)})
+        assert r.status_code == 200 and "kea-reservations_all-export-" in r.headers["Content-Disposition"]
+        assert json.loads(gzip.decompress(r.data))["_meta"]["group"] == "reservations_all"
+
+    def test_nothing_ticked_is_refused_and_exports_nothing(self, logged_in_client, kea_tables):
+        r = logged_in_client.post("/database/export/kea", data={}, follow_redirects=True)
+        assert r.status_code == 200 and r.mimetype == "text/html"
+        assert b"Tick at least one Kea table to export." in r.data
+
+    def test_a_name_that_is_not_a_kea_table_is_refused(self, logged_in_client, kea_tables):
+        r = logged_in_client.post("/database/export/kea", data={"tables": ["hosts", "users"]}, follow_redirects=True)
+        assert r.mimetype == "text/html" and b"Invalid export table." in r.data
+
+    def test_a_request_that_names_a_group_is_answered_as_before(self, logged_in_client, kea_tables):
+        _seed(kea_tables)
+        r = logged_in_client.post("/database/export/kea", data={"group": "leases", "tables": ["hosts"]})
+        assert r.status_code == 200
+        assert json.loads(gzip.decompress(r.data))["_meta"]["tables"] == ["lease4"]
+        r = logged_in_client.post("/database/export/kea", data={"group": "nope"}, follow_redirects=True)
+        assert b"Invalid export group." in r.data
+
+    def test_the_export_tab_draws_the_tick_boxes(self, logged_in_client, kea_tables):
+        body = logged_in_client.get("/settings/databases?tab=export").data.decode()
+        for tbl in dbexport.KEA_RESTORE_ORDER:
+            assert f'name="tables" value="{tbl}"' in body
+        assert 'name="tables" value="lease4" class=' in body, "lease4 is not ticked when the page opens"
+        assert 'data-toggle-group="kea-tables"' in body and 'name="group"' not in body
