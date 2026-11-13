@@ -129,6 +129,18 @@ class TestAnSmtpHostIsANameOrAnAddressAlone:
         if host:
             assert route._address_refusal("email", {"smtp_host": host}) == ("smtp_host", route.SMTP_HOST_SHAPE)
 
+    @pytest.mark.parametrize("host", ["someone:pw@mail.example.test", "mail.example.test:25", "a:b:c", "[::1]"])
+    def test_only_an_ipv6_address_is_bracketed(self, host):
+        """(fixup 2) A stored host with a colon that is not an IPv6 address is left as written: bracketed, `urlsplit` on a current Python raises for it and on an older one does
+        not, so the endpoint would depend on the interpreter."""
+        place = _route()._endpoint("email", {"smtp_host": host, "smtp_port": "587", "use_tls": "true"})
+        assert place == f"smtps://{host}:587"
+
+    def test_a_stored_host_with_user_info_still_keeps_its_password_on_a_blank_host(self, monkeypatch):
+        row = {"smtp_host": "someone:pw@mail.example.test", "smtp_port": "587", "smtp_user": "u", "use_tls": "true"}
+        kept = _keep(monkeypatch, "email", {**row, "smtp_pass": "stored"}, {**row, "smtp_host": "", "smtp_pass": ""})
+        assert isinstance(kept, dict) and kept["smtp_pass"] == "stored" and kept["smtp_host"] == row["smtp_host"]
+
     def test_an_edit_that_changes_nothing_keeps_the_password_of_an_ipv6_server(self, monkeypatch):
         row = {"smtp_host": "::1", "smtp_port": "587", "smtp_user": "u", "use_tls": "true", "smtp_pass": "stored"}
         kept = _keep(monkeypatch, "email", row, {**row, "smtp_pass": ""})

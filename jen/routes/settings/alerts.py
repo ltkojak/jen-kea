@@ -83,8 +83,10 @@ def _endpoint(channel_type: str, config: dict) -> str:
             scheme = "smtps" if config.get("tls_verify", "true") != "false" else "smtps-unverified"
         # (Q230, AP6) an IPv6 address is bracketed, as every URL writes one: `smtps://::1:587` named no place `same_destination` could read, so an edit that changed nothing
         # was refused with "the destination changed"
+        # (fixup 2) ONLY an IPv6 address: a host an earlier release stored with a colon in it for another reason (`user:pw@mail.example`) is left as written, as it was before
+        # this Q. Bracketed, a current Python refuses to parse it, and a blank host on an edit - which keeps the stored one - was then "another destination"
         host = str(config.get("smtp_host", ""))
-        host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        host = f"[{host}]" if ":" in host and __auth.host_name(host) else host
         return f"{scheme}://{host}:{config.get('smtp_port', '')}"
     if channel_type == "webhook":
         return config.get("webhook_url", "")

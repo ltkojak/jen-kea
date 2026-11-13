@@ -1515,7 +1515,6 @@ jobs:
           expect_eq "$(sudo grep config_transport /etc/jen/jen.config)" "config_transport = api" "the config_transport line after the installer upgrade"
           kea_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/kea")
           require 'data-transport="api"' "$kea_page" "Settings -> Kea does not show the primary on the transport it had before the upgrade"
-          refuse 'data-transport="api"' "$kea_page" "an upgrade gave a server the API transport"
           echo "upgraded v${JEN_STABLE_VERSION} -> v${HEAD_VERSION}: running version, config and the admin account all survived"
 
       # ── via updater ──────────────────────────────────────────────────────
