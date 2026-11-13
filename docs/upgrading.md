@@ -10,11 +10,25 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.2: the certificate upload judges the whole chain; a Kea host without the helper takes a config again
+
+One step (7.1.0-beta.2). It adds no migration, no helper build and no sudoers line, and there is nothing for you to do. What you may notice:
+
+**Settings → Security refuses a certificate chain a browser would refuse.** The upload now runs a TLS handshake against the material before it installs it. A `fullchain.pem` whose intermediate has expired is refused with "certificate has expired" and nothing is changed. A self-signed certificate and a certificate uploaded without its chain are accepted as before.
+
+**A Kea server without `jen-kea-helper` can be configured again.** Config tests and config pushes over the legacy path failed for every real config since 5.1.0. They work now. Installing the helper is still the recommended setup.
+
+**An e-mail alert channel may ask for its password once.** Only a channel stored before 2.6.7 that has no STARTTLS setting, and only when you untick STARTTLS on it.
+
+**Settings → Databases → Export: untick everything and both cards refuse.** The Jen card used to export every table in that case.
+
+**A direct-socket setup that failed and could not be undone says STATE NOT KNOWN** for a single server too, as it did for several.
+
 ## 7.1.0-beta.1: the Kea export picks tables; the bundled IPAM Lite draws an address map
 
 One step (7.1.0-beta.1). It adds no migration, no helper build and no sudoers line, and there is nothing for you to do. What you may notice:
 
-**Settings → Databases → Export, the Kea card, has tick boxes.** An All box and one box per table, like the Jen card. The four reservation tables are ticked when the page opens; tick `lease4` as well to put a lease snapshot in the same file. A file with any set of tables imports as before. Backups and migrations still save reservations only.
+**Settings → Databases → Export, the Kea card, has tick boxes.** An All box and one box per table, like the Jen card. The four reservation tables are ticked when the page opens; tick `lease4` as well to put a lease snapshot in the same file. A file with any set of tables imports as before. Backups still save reservations only, and the migration page still offers its three groups.
 
 **IPAM Lite 1.8.2 is bundled.** A subnet's page shows an address map above its table: one cell per address with its last octet, a heading at each /24, the DHCP pool tinted. Click a cell to find its row.
 

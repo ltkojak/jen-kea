@@ -599,7 +599,7 @@ for _p, _kind in {list(tls_paths)!r}:
 import json, sys, shutil, subprocess, os, tempfile
 
 path = {repr(kea_conf_path)}
-cfg = {config_json}
+cfg = json.loads({config_json!r})
 
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.jen_legacy_', suffix='.tmp')
 with os.fdopen(fd, 'w') as f:

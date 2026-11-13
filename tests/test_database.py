@@ -680,3 +680,29 @@ class TestBackupDownloadIsNoStore:
         assert total == 50 * 1024 * 1024
         print(f"MEASURED backup-download peak for a 50 MB file: {peak} bytes ({peak / (1024 * 1024):.1f} MB)")
         assert peak < 20 * 1024 * 1024, f"download of a 50 MB backup peaked at {peak} bytes — no longer streamed"
+
+
+class TestNothingTickedOnTheJenCardIsRefused:
+    """v7.1.0-beta.2 (Q234, AR1): the Jen card's form carries `picker`; with it, no box ticked is refused the way the Kea card refuses it. Without it (a script) no `tables`
+    is still every table."""
+
+    def test_the_pickers_empty_form_is_refused_and_writes_no_audit_row(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='DB_EXPORT'")
+            before = cur.fetchone()["n"]
+        r = logged_in_client.post("/database/export/jen", data={"picker": "1"})
+        assert r.status_code == 302 and "tab=export" in r.headers["Location"]
+        page = logged_in_client.get(r.headers["Location"])
+        assert b"Tick at least one Jen table to export." in page.data
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='DB_EXPORT'")
+            assert cur.fetchone()["n"] == before
+
+    def test_the_picker_with_a_box_ticked_exports_it(self, logged_in_client, db):
+        r = logged_in_client.post("/database/export/jen", data={"picker": "1", "tables": ["settings"]})
+        assert r.status_code == 200 and r.mimetype == "application/gzip"
+
+    def test_a_request_without_the_marker_is_every_table_as_before(self, logged_in_client, db):
+        r = logged_in_client.post("/database/export/jen", data={})
+        assert r.status_code == 200 and r.mimetype == "application/gzip"

@@ -226,7 +226,55 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
             return f"the certificate/key could not be loaded ({e.strerror or e})"
         except (OSError, ValueError) as e:
             return f"the certificate/key could not be loaded ({e})"
-    return cert_refusal(cert_data)
+    return cert_refusal(cert_data) or chain_refusal(ctx, cert_data, ca_data)
+
+
+# OpenSSL's answers that mean "the issuer is not among the certificates I was given": Jen does not hold a client's trust store, so they are not Jen's to judge
+_ISSUER_NOT_HELD = frozenset({2, 18, 19, 20, 21})
+
+
+def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None:
+    """(Q234, AQ11, AQ18) What a verifying client refuses the PRESENTED CHAIN for, or None. `cert_refusal` reads one certificate and a `fullchain.pem` holds several: a valid
+    leaf under an expired intermediate was accepted, installed and followed by a restart into an HTTPS every client refuses. This asks the verifier clients use: a TLS
+    handshake in memory between the server context that just loaded the material and a client that trusts the certificates presented AFTER the first (the first itself when it
+    is the only one). So an expired or not-yet-valid certificate anywhere in the chain, a critical extension no client handles, a CA that may not sign and a broken signature
+    are each refused in OpenSSL's own words. "Issuer not found" is not a refusal: the root is the client's, not the upload's."""
+    import re
+    import ssl
+
+    pems = re.findall(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", cert_data + "\n" + (ca_data or ""), re.S
+    )
+    client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client.check_hostname = False
+    client.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    try:
+        client.load_verify_locations(cadata="\n".join(pems[1:] or pems[:1]))
+    except (ssl.SSLError, ValueError) as e:
+        return f"a certificate of the chain could not be read ({getattr(e, 'strerror', None) or e})"
+    c_in, c_out, s_in, s_out = ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO()
+    sides = (
+        (client.wrap_bio(c_in, c_out), c_out, s_in),
+        (server_ctx.wrap_bio(s_in, s_out, server_side=True), s_out, c_in),
+    )
+    for _ in range(20):
+        done = 0
+        for side, out, peer_in in sides:
+            try:
+                side.do_handshake()
+                done += 1
+            except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                pass
+            except ssl.SSLCertVerificationError as e:
+                if e.verify_code in _ISSUER_NOT_HELD:
+                    return None
+                return f"a client that verifies the chain refuses it ({e.verify_message})"
+            except ssl.SSLError as e:
+                return f"a TLS handshake with this certificate and key fails ({e.strerror or e})"
+            peer_in.write(out.read())
+        if done == 2:
+            return None
+    return "a TLS handshake with this certificate and key did not complete"
 
 
 def cert_refusal(cert_data: str, now=None) -> str | None:

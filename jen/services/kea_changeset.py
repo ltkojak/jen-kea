@@ -89,6 +89,8 @@ class Target:
     # v5.69.0-beta.19 (Q188, AD9): the revert of this target FAILED, so its file still carries the NEW config. A route that put certificate material on the host before the change must not
     # reinstall the OLD material under the new entry.
     revert_failed: bool = False
+    # (Q234, AQ10) ... and that revert RAISED: it reported nothing, so which config the target holds is not known. `not_known_ids`, never `still_new_ids`
+    restore_raised: bool = False
     # Q212: how THIS target is read, tested, written and put back - "file" (the host's config file, then a restart) or "api" (the daemon's own API, live at once, no restart)
     transport: str = "file"
     # Q219: the sha256 of the FILE the Plan proved on this server before any `config-set` (an api target with an SSH host): the pending row carries it and step (6) of `apply` checks the file is still that one
@@ -741,8 +743,9 @@ def _run_change_unlocked(
                 needs_hands=[d.name for d in needs],
                 needs_hands_ids=[d.key for d in needs],
                 # (Q229, AO26) the definition Q228 gave the line above: a file target whose restore RAISED is not known, so it is not named as still carrying the new config
-                still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown],
-                not_known_ids=[d.key for d in revert_failed if d.key in file_unknown],
+                # (Q234, AQ16) an api target whose rollback raised is not known either: the line above says so, and the list said "still new"
+                still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown and d.key not in api_unknown],
+                not_known_ids=[d.key for d in revert_failed if d.key in file_unknown or d.key in api_unknown],
             )
 
         if committed:
@@ -789,7 +792,9 @@ def _run_change_unlocked(
                     names,
                     [s.name for s in stuck],
                     needs_hands_ids=[s.key for s in stuck],
-                    still_new_ids=[s.key for s in stuck if s.revert_failed],
+                    # (Q234, AQ10) the two lists, as the multi-target block fills them: this is the return a ONE-server change set reaches
+                    still_new_ids=[s.key for s in stuck if s.revert_failed and not s.restore_raised],
+                    not_known_ids=[s.key for s in stuck if s.revert_failed and s.restore_raised],
                 )
             lines.append(
                 (
@@ -835,7 +840,9 @@ def _run_change_unlocked(
                     [],
                     [s.name for s in stuck],
                     needs_hands_ids=[s.key for s in stuck],
-                    still_new_ids=[s.key for s in stuck if s.revert_failed],
+                    # (Q234, AQ10) the two lists, as the multi-target block fills them: this is the return a ONE-server change set reaches
+                    still_new_ids=[s.key for s in stuck if s.revert_failed and not s.restore_raised],
+                    not_known_ids=[s.key for s in stuck if s.revert_failed and s.restore_raised],
                 )
             lines.append(
                 (
@@ -868,9 +875,16 @@ def _put_everything_back(targets, service, summary, daemon_label, lines, *, rest
         rres = _restore_target(t, service, summary, helper_only)
         if not rres.get("ok"):
             t.revert_failed = True
+            t.restore_raised = bool(rres.get("raised"))
             stuck.append(t)
+            not_known = ""
+            if t.restore_raised:
+                not_known = "; " + (ROLLBACK_NOT_KNOWN if t.transport == "api" else RESTORE_NOT_KNOWN)
             lines.append(
-                ("error", f"❌ {t.name}: could not put the previous config back ({_tail(rres.get('detail'))})")
+                (
+                    "error",
+                    f"❌ {t.name}: could not put the previous config back ({_tail(rres.get('detail'))}){not_known}",
+                )
             )
             continue
         if not restart or t.transport != "file":

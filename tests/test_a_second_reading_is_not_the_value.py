@@ -200,7 +200,13 @@ class TestAStrongerWireKeepsThePassword:
 
     def test_the_rank_reads_the_wire_as_the_endpoint_spells_it(self):
         route = _route()
-        assert [route._wire_rank(w) for w in (CLEAR, UNVERIFIED, VERIFIED, LEGACY_TLS, {})] == [0, 1, 2, 2, 0]
+        assert [route._wire_rank(w) for w in (CLEAR, UNVERIFIED, VERIFIED, LEGACY_TLS, {})] == [
+            0,
+            1,
+            2,
+            2,
+            2,
+        ]  # (Q234, AQ1) no key is the sender's default
 
 
 class TestUntickedIsSaidOnlyByAFormThatCarriesTheBox:
@@ -262,7 +268,10 @@ class TestTheNtfyTargetIsOneString:
         assert alerts.ntfy_target({"url": url, "topic": topic}) == target
 
     def test_the_sender_and_the_comparison_ask_the_one_function(self):
-        assert "_post(ntfy_target(config)," in _function("jen/services/alerts.py", "_send_ntfy_channel")
+        sender = _function("jen/services/alerts.py", "_send_ntfy_channel")
+        assert (
+            "target = ntfy_target(config)" in sender and "_post(target," in sender
+        )  # (Q234, AQ2) and "" is not posted to
         assert "{url}/{topic}" not in (ROOT / "jen/services/alerts.py").read_text(encoding="utf-8")
         assert '__alerts.ntfy_target(config) if config.get("url") else ""' in _function(
             "jen/routes/settings/alerts.py", "_endpoint"
@@ -312,8 +321,11 @@ class TestARestoreThatRaisedIsNotKnown:
 
         assert kea_changeset.ChangeSetResult("ok", "", []).not_known_ids == []
         src = (ROOT / "jen/services/kea_changeset.py").read_text(encoding="utf-8")
-        assert "still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown]," in src
-        assert "not_known_ids=[d.key for d in revert_failed if d.key in file_unknown]," in src
+        assert (
+            "still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown and d.key not in api_unknown],"
+            in src
+        )
+        assert "not_known_ids=[d.key for d in revert_failed if d.key in file_unknown or d.key in api_unknown]," in src
 
     def _consume(self, monkeypatch, **lists):
         from jen.routes.settings import infrastructure as infra

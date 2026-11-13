@@ -815,7 +815,12 @@ def ntfy_target(config) -> str:
     except ValueError:
         return ""
     topic = quote(str(config.get("topic", "")), safe="")
-    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") + "/" + topic, "", ""))
+    # (Q234, AQ2) `quote` leaves a dot as it is and a client removes a `.` or `..` segment from the path it dials: a stored topic of `..` posted the token one level up.
+    # No encoding survives the client, so such a topic is no destination. (AQ5) user-info in a stored address made the client send basic auth IN PLACE of the channel's
+    # token: the authority is the host and the port alone
+    if topic in (".", ".."):
+        return ""
+    return urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path.rstrip("/") + "/" + topic, "", ""))
 
 
 def _send_ntfy_channel(message, config):
@@ -834,7 +839,10 @@ def _send_ntfy_channel(message, config):
     headers = {"Title": "Jen Alert", "Priority": priority, "Tags": "bell"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    resp = _post(ntfy_target(config), data=plain.encode("utf-8"), headers=headers, timeout=10)
+    target = ntfy_target(config)
+    if not target:
+        raise Exception("ntfy address or topic cannot be used as a destination")
+    resp = _post(target, data=plain.encode("utf-8"), headers=headers, timeout=10)
     if resp.status_code not in (200, 201, 204):
         raise Exception(f"ntfy error: HTTP {resp.status_code} — {resp.text[:200]}")
     return True

@@ -145,6 +145,11 @@ def export_jen():
     instead of building the whole document (and then a whole second gzip.compress() copy
     of it) in memory first — the same reason the recovery bundle moved onto it."""
     tables = request.form.getlist("tables") or None
+    # (Q234, AR1) the page's form carries `picker`: with it, no box ticked is nothing to export, the Kea card's rule. It used to mean EVERY table, the users and the
+    # sessions among them, for the gesture the card beside it refuses. A request without the marker (a script) is answered as before: no `tables` is all of them
+    if tables is None and "picker" in request.form:
+        flash("Tick at least one Jen table to export.", "error")
+        return redirect(url_for("database.database", tab="export"))
     tmp_path = None
     try:
         os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)

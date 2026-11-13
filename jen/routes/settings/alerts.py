@@ -79,7 +79,9 @@ def _endpoint(channel_type: str, config: dict) -> str:
     if channel_type == "email":
         # (Q229) the wire has three states: STARTTLS verified, STARTTLS not verified, and none. A password kept while verification is turned off goes to a server nobody proved
         scheme = "smtp"
-        if config.get("use_tls") == "true":
+        if (
+            config.get("use_tls", "true") == "true"
+        ):  # (Q234, AQ1) the sender's own default: a row with no such key is sent over STARTTLS
             scheme = "smtps" if config.get("tls_verify", "true") != "false" else "smtps-unverified"
         # (Q230, AP6) an IPv6 address is bracketed, as every URL writes one: `smtps://::1:587` named no place `same_destination` could read, so an edit that changed nothing
         # was refused with "the destination changed"
@@ -233,8 +235,10 @@ def _topic_refusal(channel_type: str, config: dict):
 
 
 def _wire_rank(config: dict) -> int:
-    """How much an SMTP channel's wire proves, as `_endpoint` spells it: 0 clear text, 1 STARTTLS not verified, 2 STARTTLS verified."""
-    if config.get("use_tls") != "true":
+    """How much an SMTP channel's wire proves, as `_endpoint` spells it: 0 clear text, 1 STARTTLS not verified, 2 STARTTLS verified.
+    (Q234, AQ1) A row with no `use_tls` key is read as the SENDER reads it (`alerts._send_email_channel`: absent means STARTTLS): read as clear text here, unticking STARTTLS
+    on such a row was "the same place" and the kept password went out in clear."""
+    if config.get("use_tls", "true") != "true":
         return 0
     return 2 if config.get("tls_verify", "true") != "false" else 1
 

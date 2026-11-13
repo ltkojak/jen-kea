@@ -95,7 +95,7 @@
         <p class="u-c0a2eb">
             Exports data from <strong>{{ jen_db_host }} / {{ jen_db_name }}</strong> to a compressed JSON file you can download, restore, or archive.
         </p>
-        <form method="POST" action="/database/export/jen" data-download><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form method="POST" action="/database/export/jen" data-download><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="picker" value="1">
             <div class="u-da12f2">
                 <label class="u-0ebced">Select Tables</label>
                 <div class="u-3ed0d2">

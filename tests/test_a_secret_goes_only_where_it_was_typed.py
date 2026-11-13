@@ -361,7 +361,10 @@ class TestAKeptSecretStaysWithWhatItWasTypedFor:
         old = {"url": "https://ntfy.example.test/base", "topic": "jen", "token": "SYNTHETIC-TOKEN"}
         new = {"url": "https://ntfy.example.test/base/", "topic": "jen", "token": ""}
         assert _kept(monkeypatch, "ntfy", new, old)["token"] == "SYNTHETIC-TOKEN"
-        assert "_post(ntfy_target(config)," in _function("jen/services/alerts.py", "_send_ntfy_channel")
+        sender = _function("jen/services/alerts.py", "_send_ntfy_channel")
+        assert (
+            "target = ntfy_target(config)" in sender and "_post(target," in sender
+        )  # (Q234, AQ2) and "" is not posted to
         assert 'parts.path.rstrip("/") + "/" + topic' in _function("jen/services/alerts.py", "ntfy_target")
         other = {"url": "https://ntfy.example.test/second", "topic": "jen", "token": ""}
         assert _kept(monkeypatch, "ntfy", other, old) == ("ntfy_token", _route().DESTINATION_CHANGED)
@@ -755,7 +758,10 @@ class TestASecretIsMaskedWhereverItSits:
 class TestTheSmallerThings:
     def test_a_restore_that_raised_is_not_named_as_still_new(self):
         src = (ROOT / "jen/services/kea_changeset.py").read_text(encoding="utf-8")
-        assert "still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown]," in src
+        assert (
+            "still_new_ids=[d.key for d in revert_failed if d.key not in file_unknown and d.key not in api_unknown],"
+            in src
+        )
 
     @pytest.mark.parametrize(
         "count, detail, done",

@@ -2,6 +2,35 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.1.0-beta.2] - 2026-11-13
+
+*The second beta of 7.1.0, on the **beta** channel. It is the ONE fix release of the two executing passes on v7.0.1 and v7.1.0-beta.1 (no P1 in either; four P2 rows in the first). It adds no migration, changes no helper build and no sudoers line, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **A Kea server without the helper can take a config push again.** On a host with no `jen-kea-helper` (the fallback Jen warns about), every config test and every config push failed before it wrote anything: the script Jen sends carried the config as Python source, and JSON's `true`, `false` and `null` are not Python. It has been so since 5.1.0. The script now reads the config as JSON. Nothing was ever written by the failing script.
+2. **The certificate upload judges the whole chain.** Settings → Security accepted a valid certificate under an EXPIRED intermediate, the usual shape of a pasted `fullchain.pem`, and restarted Jen into an HTTPS every browser refuses. The upload now does what a browser does: a TLS handshake, in memory, between the uploaded material and a verifying client. An expired or not-yet-valid certificate anywhere in the chain, a critical extension no client handles and an issuer that is not a CA are refused in OpenSSL's own words, and nothing is changed. A self-signed certificate, a certificate uploaded alone and a CA bundle that does not hold the issuer are accepted as before: the root is the browser's to judge.
+3. **An e-mail channel stored by a very old release no longer keeps its password across a weaker wire.** A channel row with no STARTTLS setting at all (stored before 2.6.7, or restored from such a backup) is sent over verified STARTTLS, and the edit form read the same row as clear text. Unticking STARTTLS was then "the same place", the stored password was kept, and the next alert sent it in clear. The form reads the row as the sender does, so that edit asks for the password again.
+4. **A direct-socket setup that could not be undone says what is known.** With one Kea server, when the restart on the new https socket failed and the restore of the old config did not answer, the page said the NEW socket entry was still in the config. Nothing had read the file. It now says STATE NOT KNOWN, as 7.0.1's notes promised and as a change over several servers already did.
+5. **Settings → Databases → Export: nothing ticked is nothing to export, on both cards.** Unticking every box on the Jen card and pressing Download exported EVERY Jen table, the users and sessions among them, while the same gesture on the Kea card beside it was refused. Both cards now answer "Tick at least one ... table to export." A script that posts no `tables` to the Jen export still gets every table.
+6. **Smaller things.** An ntfy channel whose stored topic is `.` or `..` no longer posts its token one path level up: such a topic is not a destination and the send fails with a sentence. A stored ntfy address with a user name and password in it no longer replaces the channel's token with them. Settings → Kea says a Kea CA "expired 5 days ago", never "expires in -5 days". The All box on the migration page unticks when a table under it is unticked, as on the Export tab.
+
+**Why one release.** Opus's pass on v7.0.1 found that three of 7.0.1's fixes were verified at one end only: the consumer of a list whose producer never filled it on that route, one certificate of a chain, a script that was parsed and never run. Each had a test whose name carried the whole question and whose body built its own input. Every fix here has a test that drives the real producer into the real consumer or runs the thing it names: the rendered script under a real interpreter, the real change set into the real certificate handler, minted chains through the upload's own check with a real local TLS server as the oracle.
+
+**A correction to the 7.1.0-beta.1 notes.** They said a Kea migration never carries leases. The migration page has always offered Active Leases as one of its three groups; reservations are its default. The sentence is corrected below and in `docs/upgrading.md`.
+
+**The parts.**
+
+- `jen/services/kea_authoring.py`: `cfg = json.loads(<the JSON as one string literal>)`.
+- `jen/routes/settings/security.py`: `chain_refusal`, asked after `cert_refusal`. OpenSSL's "issuer not found" answers (codes 2, 18, 19, 20, 21) are not refusals; every other verification error is, and so is a handshake that fails for another reason.
+- `jen/services/kea_changeset.py`: `Target.restore_raised`; `_put_everything_back` sets it and says so in its line; all three returns that name a still-new target name the not-known ones beside it, and an api target whose rollback raised is among them.
+- `jen/routes/settings/alerts.py`: `_wire_rank` and `_endpoint` read `use_tls` with the sender's default. `jen/services/alerts.py`: `ntfy_target` builds the authority without user-info and answers "" for a dot-segment topic; the sender raises on "".
+- `jen/routes/database.py`, `templates/database.html`: the Jen card's form carries `picker`. `templates/database_migrate.html`: the follower listener.
+
+**Tests.** `tests/test_a_fix_reaches_both_ends.py` (no database). `tests/test_database.py::TestNothingTickedOnTheJenCardIsRefused` (3, against the database). `tests/e2e/test_export_cards.py` (6, a real browser): the first tests that tick the Export tab's boxes and press its buttons.
+
+**Registered, not in this release.** From the v7.0.1 pass: AQ3, AQ4, AQ6 to AQ9, AQ13, AQ14, AQ17 and the nits. From the v7.1.0-beta.1 pass: the migration page's Kea half is still three radio groups (it is the next item of the Databases menu work).
+
 ## [7.1.0-beta.1] - 2026-11-13
 
 *The first beta of 7.1.0, on the **beta** channel (a stable box is not offered it). It adds no migration, changes no helper build and no sudoers line, and nothing needs a manual step.*
@@ -13,7 +42,7 @@
 
 **Why the card changed.** The Jen and Kea sides of Settings → Databases grew apart: the Jen card has always let an operator tick any set of its tables, and the Kea card offered three fixed groups. The maintainer's request is to make the two sides look and behave alike across the whole menu (Connections, Export, Import, Backups, Schedule, Migrate, Recovery); Export is the first item.
 
-**What did not change.** The import side needed nothing: it has always restored by the tables a file contains, in foreign-key order (`hosts` before the option and IPv6 rows that point at it, `lease4` last), whatever the file's `_meta.group` says. A scheduled backup, Back Up Now, the Recovery step and a Kea migration still save the `reservations_all` group, never leases. A request that posts `group=` (a script written against an earlier release) is answered exactly as before.
+**What did not change.** The import side needed nothing: it has always restored by the tables a file contains, in foreign-key order (`hosts` before the option and IPv6 rows that point at it, `lease4` last), whatever the file's `_meta.group` says. A scheduled backup, Back Up Now and the Recovery step still save the `reservations_all` group, never leases; a Kea migration still offers its three groups, with `reservations_all` the default. A request that posts `group=` (a script written against an earlier release) is answered exactly as before.
 
 **The parts.**
 
