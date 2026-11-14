@@ -1073,8 +1073,12 @@ class TestRenderUnitCli:
     def test_main_dispatches_it_before_the_update_flow_and_it_is_not_a_sudoers_command(self):
         src = _SCRIPT_PATH.read_text(encoding="utf-8")
         assert 'if sys.argv[1:2] == ["--render-unit"]:' in src
-        sudoers = (_SCRIPT_PATH.parent / "jen-sudoers").read_text(encoding="utf-8")
-        assert "render-unit" not in sudoers
+        # (Q213) there is no sudoers file any more: the two units a trigger file starts run the script with no
+        # argument or with `--plugins`, and nothing the app can do names another
+        for unit, argv in (("jen-update.service", ""), ("jen-plugin-install.service", " --plugins")):
+            text = (_SCRIPT_PATH.parent / unit).read_text(encoding="utf-8")
+            assert f"ExecStart=/usr/bin/python3 /usr/local/sbin/jen-update-root.py{argv}\n" in text
+        assert not (_SCRIPT_PATH.parent / "jen-sudoers").exists()
 
 
 class TestVerifyReleaseChecksum:
@@ -1542,15 +1546,17 @@ class TestInstallExternalFiles:
         render_mock.assert_called_once_with(str(app / "jen.service.template"), "/etc/systemd/system/jen.service")
         assert ["/usr/bin/systemctl", "daemon-reload"] in calls
 
-    def test_valid_sudoers_installed_after_visudo_passes(self, jen_update_root, tmp_path):
+    def test_a_sudoers_file_a_release_carries_is_never_installed(self, jen_update_root, tmp_path):
+        """v7.1.0-beta.3 (Q213): it used to be copied to /etc/sudoers.d/jen after `visudo -c`. Nothing installs a grant now."""
         app = self._app_dir(tmp_path, with_service=False)
 
         def fake_run(cmd, **kw):
             return MagicMock(returncode=0, stderr="")
 
-        with patch("shutil.copy2") as copy2, patch("os.chmod"), patch("subprocess.run", side_effect=fake_run):
+        with patch("shutil.copy2") as copy2, patch("os.chmod"), patch("subprocess.run", side_effect=fake_run) as run:
             jen_update_root.install_external_files(str(app))
-        assert any("jen-sudoers" in str(c) and "sudoers.d/jen" in str(c) for c in copy2.call_args_list)
+        assert not any("sudoers" in str(c) for c in copy2.call_args_list)
+        assert not any("visudo" in str(c) for c in run.call_args_list)
 
     def test_invalid_sudoers_never_installed(self, jen_update_root, tmp_path):
         app = self._app_dir(tmp_path, with_service=False)

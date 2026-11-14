@@ -1,0 +1,16 @@
+# v7.1.0-beta.3 (Q213) - zero sudoers on Jen's own box.
+#
+# Jen asks for a plugin install or removal by creating /run/jen/plugins.request, a file in its own unit's runtime
+# directory (jen.service: RuntimeDirectory=jen). This unit watches for it and starts jen-plugin-install.service,
+# which runs as root and removes the file as its first act. The file carries nothing: its existence
+# is the whole request, which is what the `sudo systemctl start --no-block jen-plugin-install.service` line of
+# /etc/sudoers.d/jen used to be. See docs/ARCHITECTURE.md section 3.1.
+[Unit]
+Description=Jen: watch for a plugin install or removal request
+
+[Path]
+PathExists=/run/jen/plugins.request
+Unit=jen-plugin-install.service
+
+[Install]
+WantedBy=multi-user.target

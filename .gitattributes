@@ -24,6 +24,10 @@ uninstall.sh text eol=lf
 # template, not a file that no longer exists in the repo.
 jen.service.template text eol=lf
 jen-update.service text eol=lf
+jen-plugin-install.service text eol=lf
+# v7.1.0-beta.3 (Q213) - the two path units, for the same reason
+jen-update.path text eol=lf
+jen-plugin-install.path text eol=lf
 
 # v5.64.x (Q84) — the system-test stack's shell scripts and Dockerfiles run
 # inside Linux containers; a CRLF from a Windows checkout breaks their shebangs.

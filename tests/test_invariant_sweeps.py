@@ -499,10 +499,15 @@ S10_MODULES = (
     "jen/services/config_revisions.py",  # Q216 (AA11): the store a pending change and its settlement ride on - an unreadable store is never "nothing pending"
     "jen/services/kea_api_config.py",  # Q216 (AA11): the module that sends `config-set` and decides what a probe and a pending row mean
     "jen/services/kea_transport_switch.py",  # Q216 (AA11): the switch that makes a file the daemon's configuration
+    "jen/routes/settings/security.py",  # Q213 (AS9): the certificate upload decides what HTTPS presents after the restart
 )
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
+    ("jen/routes/settings/security.py", "chain_refusal", "(ssl.SSLWantReadError, ssl.SSLWantWriteError)", "pass"): (
+        "the in-memory handshake's own flow control: a side that needs the peer's bytes is not done, and only two completed sides return None - a handshake that never "
+        "completes is the refusal after the loop (Q213, AS9)"
+    ),
     ("jen/services/auth.py", "same_destination", "ValueError", "return False"): (
         "two addresses of which one cannot be parsed are NOT the same destination: the form then refuses the blank secret, so nothing is kept for an address nobody can read - fail closed (CRED-002, Q228)"
     ),

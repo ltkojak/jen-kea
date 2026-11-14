@@ -636,8 +636,8 @@ def request_is_pending(plugin_id: str, action: str) -> bool:
 
 
 def _start_plugin_install_unit() -> bool:
-    """Fixed, zero-parameter command — the exact string jen-sudoers
-    authorizes. --no-block matters here for the same reason it matters
+    """A fixed, zero-parameter request (a trigger file since v7.1.0-beta.3, Q213; the earlier
+    sudo command while the path unit is not installed). --no-block matters there for the same reason it matters
     for jen-update.service: this call must not block waiting on a unit
     whose own work has nothing to do with restarting THIS process, and
     blocking here would tie up a request-handling thread/worker for no
@@ -647,23 +647,14 @@ def _start_plugin_install_unit() -> bool:
     It used to be called for its side effect only, so a sudoers
     misconfiguration or a missing unit file left the caller reporting
     "Install requested" for a request that would never be picked up."""
-    try:
-        result = subprocess.run(
-            ["/usr/bin/sudo", "/usr/bin/systemctl", "start", "--no-block", "jen-plugin-install.service"],
-            capture_output=True,
-            timeout=15,
-            check=False,
-        )
-    except Exception as e:
-        logger.error(f"Failed to trigger jen-plugin-install.service: {e}")
-        return False
-    if result.returncode != 0:
-        logger.error(
-            f"jen-plugin-install.service failed to start (exit {result.returncode}): "
-            f"{result.stderr.decode('utf-8', 'replace').strip()}"
-        )
-        return False
-    return True
+    # v7.1.0-beta.3 (Q213): a trigger file `jen-plugin-install.path` watches (`jen/services/privileged.py`); the
+    # markers and the results stay where they were, in the plugin request directory
+    from jen.services import privileged
+
+    started, why = privileged.request("plugins")
+    if not started:
+        logger.error(f"Failed to trigger jen-plugin-install.service: {why}")
+    return started
 
 
 def _parse_systemctl_show(text: str) -> dict:
@@ -757,7 +748,7 @@ def request_plugin_deps(plugin_id: str) -> tuple[bool, str]:
             os.remove(_request_marker_path(plugin_id, "deps"))
         return False, (
             "Could not start the plugin install service — run `sudo ./install.sh` to repair "
-            "jen-sudoers and jen-plugin-install.service, then try again."
+            "jen-plugin-install.path and jen-plugin-install.service, then try again."
         )
     return True, "Package install requested — the plugin service is installing it; this page will update."
 
@@ -1039,7 +1030,7 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
                 os.remove(_request_marker_path(plugin_id, "install"))
             return False, (
                 "Could not start the plugin install service — run `sudo ./install.sh` to repair "
-                "jen-sudoers and jen-plugin-install.service, then try again."
+                "jen-plugin-install.path and jen-plugin-install.service, then try again."
             )
         return True, "Install requested — Jen will pick the plugin up within a few seconds."
 
@@ -1168,7 +1159,7 @@ def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
                 os.remove(_request_marker_path(plugin_id, "remove"))
             return False, (
                 "Could not start the plugin install service — run `sudo ./install.sh` to repair "
-                "jen-sudoers and jen-plugin-install.service, then try again."
+                "jen-plugin-install.path and jen-plugin-install.service, then try again."
             )
         return True, "Removal requested — Jen will pick this up within a few seconds."
 

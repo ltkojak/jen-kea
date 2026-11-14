@@ -10,6 +10,22 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.3: Jen's own box has no sudoers entry
+
+One step (7.1.0-beta.3). It adds no migration and no helper build, and there is nothing for you to do. What you may notice:
+
+**`/etc/sudoers.d/jen` is gone.** Jen used it to restart itself and to start an update or a plugin install. It now restarts by stopping its own process, which systemd starts again, and it asks for an update or a plugin install by leaving an empty request file in `/run/jen` that two new systemd path units watch (`jen-update.path`, `jen-plugin-install.path`). `sudo ./install.sh` installs the units and removes the file in one step. A box updated with **Update Now** converts itself within a minute of the restart. Docker installs never had the file and are unchanged.
+
+**Health has a new line, "Update and plugin triggers".** It warns when a path unit is not watching. `sudo ./install.sh` repairs that.
+
+**If you kept your own edits in `/etc/sudoers.d/jen`,** move them to a file of your own before upgrading. The upgrade removes that file.
+
+**Settings → Security judges every certificate of a chain.** 7.1.0-beta.2 judged the certificate and the one above it. A `fullchain.pem` of three certificates whose top one has expired was still accepted; it is refused now. A certificate whose only stated purpose is "any" is refused with the sentence that says it was not issued for a server.
+
+**Settings → Databases → Import: untick every table and nothing is restored.** It used to restore every table in the file.
+
+**Settings → Kea shows "expired N days ago"** beside a server certificate that has expired, where it showed a negative number.
+
 ## 7.1.0-beta.2: the certificate upload judges the whole chain; a Kea host without the helper takes a config again
 
 One step (7.1.0-beta.2). It adds no migration, no helper build and no sudoers line, and there is nothing for you to do. What you may notice:
@@ -18,7 +34,7 @@ One step (7.1.0-beta.2). It adds no migration, no helper build and no sudoers li
 
 **A Kea server without `jen-kea-helper` can be configured again.** Config tests and config pushes over the legacy path failed for every real config since 5.1.0. They work now. Installing the helper is still the recommended setup.
 
-**An e-mail alert channel may ask for its password once.** Only a channel stored before 2.6.7 that has no STARTTLS setting, and only when you untick STARTTLS on it.
+**An e-mail alert channel may ask for its password once.** Only a channel stored before 1.4.5 that has no STARTTLS setting, and only when you untick STARTTLS on it.
 
 **Settings → Databases → Export: untick everything and both cards refuse.** The Jen card used to export every table in that case.
 

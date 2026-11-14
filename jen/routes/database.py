@@ -150,6 +150,10 @@ def export_jen():
     if tables is None and "picker" in request.form:
         flash("Tick at least one Jen table to export.", "error")
         return redirect(url_for("database.database", tab="export"))
+    # (Q213, AS5) and a name the export does not offer is refused, the Kea card's rule: it used to be dropped, and a file with no table in it was written and audited as an export
+    if tables is not None and "picker" in request.form and not set(tables) <= set(dbexport.export_tables()):
+        flash("Not an exportable Jen table.", "error")
+        return redirect(url_for("database.database", tab="export"))
     tmp_path = None
     try:
         os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
@@ -764,6 +768,11 @@ def import_confirm():
     with open(tmp_path, "rb") as f:
         file_bytes = f.read()
     os.unlink(tmp_path)
+    # (Q213, AS2) the page's Jen form carries `picker`: with it, no box ticked is nothing to restore. It used to mean EVERY table of the file - in replace mode the
+    # users among them. A request without the marker (a script) is answered as before
+    if "picker" in request.form and not request.form.getlist("tables"):
+        flash("Tick at least one table to restore. Nothing was changed. Upload the file again.", "error")
+        return redirect(url_for("database.database", tab="import"))
 
     meta, _data, parse_err = dbexport.parse_import_file(file_bytes)
     if parse_err or not meta:

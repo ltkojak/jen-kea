@@ -1096,6 +1096,31 @@ before the replacement), and the kind chips count only what is open now.
 - `tests/test_client_problems_db.py::TestTheInboxShowsOnlyTheReplacementsRecentPast`
 - `tests/test_problems_generation_source.py::TestEveryStatementCarriesTheGeneration`
 
+### PRIV-001 - Jen's own box has no sudoers grant: a privileged run is asked for by an empty file, removed first, and the earlier grant goes only after its replacement works
+**Rule.** No `sudo` argument list for Jen's own box exists under `jen/` or `plugins/` outside `jen/services/privileged.py`, whose one such list is the earlier grant's command, byte for byte,
+reached only while the path unit is not active. A request is an empty file in `/run/jen` (the unit's own runtime directory, `0700`), written without following a link; root never reads a
+byte of it. The root script removes the request before it reads the layout or anything else that can make it return, through a handle on the directory opened without following a link,
+whatever the entry is. `/etc/sudoers.d/jen` is removed only after systemd says both path units are active, and a failure of systemd leaves it in place. No release ships a sudoers file.
+**Established.** Q213.
+**Enforced at.** `jen/services/privileged.py` (`request`, `converge_at_startup`), `jen-update-root.py` (`consume_trigger`, `converge_triggers`, `main`), `jen-update.path`,
+`jen-plugin-install.path`, `jen.service.template`.
+**Tests.**
+- `tests/test_sudoers_command_matching.py::TestNoSudoOnJensOwnBox`
+- `tests/test_sudoers_command_matching.py::TestTheTriggerIsOneName`
+- `tests/test_sudoers_command_matching.py::TestTheAppAsks`
+- `tests/test_sudoers_command_matching.py::TestRootRemovesTheTriggerFirst`
+- `tests/test_sudoers_command_matching.py::TestTheTriggerGoesBeforeAnythingThatCanReturn`
+- `tests/test_sudoers_command_matching.py::TestTheGrantGoesAfterItsReplacementWorks`
+
+### CERT-CHAIN-001 - An uploaded certificate chain is judged by a verifier that trusts ONE certificate, the top of the issuer path the upload holds
+**Rule.** `chain_refusal` gives the verifying client exactly one trust anchor, so every certificate between the first and that anchor is judged (validity, CA flag, path length,
+signature). A list of anchors lets the verifier stop at the first it can chain to. "Issuer not found" is never a refusal: the root is the client's.
+**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor).
+**Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
+**Tests.**
+- `tests/test_a_chain_is_walked_to_its_top.py::TestTheWholePathIsJudged`
+- `tests/test_a_fix_reaches_both_ends.py::TestTheChainIsJudgedByAVerifier`
+
 ## The browser surface (Q208)
 
 ### SESSION-001 - The idle deadline is one function, and the only request that moves it on purpose is a signed-in, CSRF-checked POST

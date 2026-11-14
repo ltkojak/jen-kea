@@ -20,7 +20,7 @@ Groups and check ids are stable (tests and the JSON twin key off them):
   ddns      d2_reachable · d2_errors · dns_reconcile
   jen       cert_expiry · db_jen · db_kea · schema_current ·
             kea_identifiers · helper_installed · background_workers ·
-            update_available · layout_trusted
+            update_available · layout_trusted · privileged_triggers
 """
 
 from __future__ import annotations
@@ -1733,6 +1733,24 @@ def _layout_trusted(ctx) -> Check:
     return c
 
 
+def _privileged_triggers(ctx) -> Check:
+    """v7.1.0-beta.3 (Q213) - Update Now and a plugin install are each a request file a systemd path unit watches for. A unit that is not watching means the button does
+    nothing new: Jen then uses the sudoers entry of an earlier release if the box still has it. A read-only question to systemd, no privilege."""
+    from jen.services import privileged, runtime
+
+    c = Check("privileged_triggers", "Update and plugin triggers", "jen", fix_url="/settings/system")
+    if runtime.deployment() != "systemd":
+        c.status, c.detail = "skip", "not a systemd install - updates and plugins are not Jen's to install here"
+        return c
+    idle = [privileged.TRIGGERS[kind][1] for kind in ("update", "plugins") if not privileged.path_unit_active(kind)]
+    if idle:
+        c.status = "warn"
+        c.detail = f"{' and '.join(idle)} not active - {privileged.REPAIR}"
+    else:
+        c.status, c.detail = "ok", "both path units are watching; Jen's own box needs no sudoers entry"
+    return c
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 _STATUS_RANK = {"ok": 0, "skip": 1, "warn": 2, "fail": 3}
@@ -2024,6 +2042,7 @@ _CHECKS = [
     _background_workers,
     _update_available,
     _layout_trusted,
+    _privileged_triggers,
     _kea32_control_transport,
     _kea32_helper_version,
     _kea32_removed_keys,
@@ -2064,6 +2083,7 @@ _CHECK_META = {
     "background_workers": ("Background workers running", "jen"),
     "update_available": ("Jen up to date", "jen"),
     "layout_trusted": ("Install path is trusted", "jen"),
+    "privileged_triggers": ("Update and plugin triggers", "jen"),
     "kea32_control_transport": ("Control transport ready for 3.2", "readiness"),
     "kea32_helper_version": ("Kea host helper current for 3.2", "readiness"),
     "kea32_removed_keys": ("No removed config keys", "readiness"),

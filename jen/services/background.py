@@ -226,6 +226,10 @@ def start_background_workers(app) -> bool:
     _periodic_thread = threading.Thread(target=_periodic_loop, name="jen-periodic", daemon=True)
     _periodic_thread.start()
     logger.info("Background workers started (scheduler + alert loop + periodic jobs)")
+    # v7.1.0-beta.3 (Q213): off the request path and never fatal - a box updated in place asks its new root script, once, to install the trigger units
+    from jen.services import privileged
+
+    threading.Thread(target=privileged.converge_at_startup, name="jen-triggers", daemon=True).start()
     return True
 
 

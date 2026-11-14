@@ -30,7 +30,6 @@ docs/manual-install.md without needing the new line at all.
 
 import os
 import signal
-import subprocess
 import threading
 import time
 
@@ -63,8 +62,9 @@ def restart_service(delay: float = 2.0) -> str:
     a thread, the page said "Jen is restarting...", and nothing restarted. The restart is now chosen by
     deployment():
 
-      * systemd -> `sudo /usr/bin/systemctl restart jen`, byte for byte the command jen-sudoers grants
-        (docs/ARCHITECTURE.md §3.1) — this function adds no new sudo string;
+      * systemd -> SIGTERM to the gunicorn master, as in a container (v7.1.0-beta.3, Q213): `jen.service` has
+        `Restart=always`, so systemd starts Jen again after `RestartSec`. It used to be `sudo /usr/bin/systemctl
+        restart jen`, one of the three lines of `/etc/sudoers.d/jen`; a restart needs no root and no grant;
       * docker  -> SIGTERM to the gunicorn master (this worker's parent); the container exits and its
         `restart: unless-stopped` policy (both compose files) brings it back with the new config — under Podman
         the same, given a restart policy (`--restart=unless-stopped`, or a systemd unit / Quadlet that restarts it);
@@ -73,16 +73,11 @@ def restart_service(delay: float = 2.0) -> str:
     The restart runs in a daemon thread after `delay` seconds so the HTTP response that asked for it is
     delivered first."""
     kind = deployment()
-    if kind == "systemd":
-
-        def _go():
-            subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])  # nosec B603
-    elif kind == "docker":
-
-        def _go():
-            os.kill(os.getppid(), signal.SIGTERM)
-    else:
+    if kind not in ("systemd", "docker"):
         return "none"
+
+    def _go():
+        os.kill(os.getppid(), signal.SIGTERM)
 
     def _later():
         time.sleep(delay)

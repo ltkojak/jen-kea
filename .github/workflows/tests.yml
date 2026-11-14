@@ -516,8 +516,24 @@ jobs:
           [[ "$(sudo stat -c '%U:%G' /etc/jen/jen.config)" == "www-data:www-data" ]]
           echo "jen.config is 0600, service-owned"
 
-          sudo visudo -c -f /etc/sudoers.d/jen
-          echo "sudoers entry is valid"
+          # Q213: zero sudoers. No grant is installed; the two path units watch /run/jen, which only the service user can write
+          sudo test ! -e /etc/sudoers.d/jen
+          systemctl is-active --quiet jen-update.path
+          systemctl is-active --quiet jen-plugin-install.path
+          systemctl is-enabled --quiet jen-update.path
+          systemctl is-enabled --quiet jen-plugin-install.path
+          [[ "$(sudo stat -c '%U:%a' /run/jen)" == "www-data:700" ]]
+          if sudo -u www-data sudo -n /usr/bin/systemctl restart jen 2>/dev/null; then
+            echo "::error::the service user can still run a command as root"; exit 1
+          fi
+          echo "no sudoers entry; both trigger path units are watching"
+
+          # a plugin request, the way the app makes it: the trigger file starts the root unit, which removes it
+          sudo -u www-data touch /run/jen/plugins.request
+          for _ in $(seq 1 30); do sudo test ! -e /run/jen/plugins.request && break; sleep 1; done
+          sudo test ! -e /run/jen/plugins.request
+          systemctl is-active --quiet jen-plugin-install.path
+          echo "a trigger file started the root unit and was consumed"
 
           systemctl cat jen-update.service >/dev/null
           systemctl cat jen-plugin-install.service >/dev/null
@@ -596,6 +612,8 @@ jobs:
           [[ ! -d /opt/jen ]]
           [[ ! -f /etc/systemd/system/jen.service ]]
           [[ ! -f /etc/sudoers.d/jen ]]
+          [[ ! -e /etc/systemd/system/jen-update.path ]]
+          [[ ! -e /etc/systemd/system/jen-plugin-install.path ]]
           sudo test -f /etc/jen/jen.config
           sudo test -d /etc/jen/ssl
           sudo test -d /etc/jen/ssh
@@ -1021,6 +1039,8 @@ jobs:
           sudo test ! -e /usr/local/sbin/jen-update-root.py
           sudo test ! -e /etc/systemd/system/jen-update.service
           sudo test ! -e /etc/systemd/system/jen-plugin-install.service
+          sudo test ! -e /etc/systemd/system/jen-update.path
+          sudo test ! -e /etc/systemd/system/jen-plugin-install.path
           echo "level 3 removed the app, config, content, layout record, the root updater and both oneshot units"
 
       # The whole life cycle on a relocated layout — fresh install, an
@@ -1515,6 +1535,10 @@ jobs:
           expect_eq "$(sudo grep config_transport /etc/jen/jen.config)" "config_transport = api" "the config_transport line after the installer upgrade"
           kea_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/kea")
           require 'data-transport="api"' "$kea_page" "Settings -> Kea does not show the primary on the transport it had before the upgrade"
+          # Q213: the stable release's sudoers entry is removed once the path units that replace it are watching
+          sudo test ! -e /etc/sudoers.d/jen
+          systemctl is-active --quiet jen-update.path
+          systemctl is-active --quiet jen-plugin-install.path
           echo "upgraded v${JEN_STABLE_VERSION} -> v${HEAD_VERSION}: running version, config and the admin account all survived"
 
       # ── via updater ──────────────────────────────────────────────────────
@@ -1550,7 +1574,13 @@ jobs:
           expect_eq "$(sudo grep config_transport /etc/jen/jen.config)" "config_transport = api" "the config_transport line after hop 1"
           kea_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/kea")
           require 'data-transport="api"' "$kea_page" "Settings -> Kea does not show the primary on the transport it had before hop 1"
-          echo "hop 1: v${JEN_STABLE_VERSION} -> v${HEAD_VERSION} by the stable release's own updater"
+          # Q213: the stable updater knows nothing of path units. HEAD's Jen, at its first start, asks HEAD's root script for them through the stable release's
+          # grant (`privileged.converge_at_startup`), and that run removes the grant once both units are watching. Nobody ran install.sh
+          for _ in $(seq 1 90); do sudo test ! -e /etc/sudoers.d/jen && break; sleep 1; done
+          sudo test ! -e /etc/sudoers.d/jen
+          systemctl is-active --quiet jen-update.path
+          systemctl is-active --quiet jen-plugin-install.path
+          echo "hop 1: v${JEN_STABLE_VERSION} -> v${HEAD_VERSION} by the stable release's own updater; the box converted itself to zero sudoers"
 
       - name: Hop 2 — HEAD's updater onto a newer release
         if: matrix.via == 'updater'
@@ -1582,6 +1612,9 @@ jobs:
           require 'Update Now' "$system_page" "Settings -> System has no Update control after hop 2"
           require 'data-confirm="Restart Jen now?"' "$system_page" "Settings -> System has no Restart control after hop 2"
           refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after hop 2"
+          sudo test ! -e /etc/sudoers.d/jen
+          systemctl is-active --quiet jen-update.path
+          systemctl is-active --quiet jen-plugin-install.path
           echo "hop 2: HEAD's own updater went v${HEAD_VERSION} -> v${NEXT_VERSION}; the rendered unit and both controls are right"
 
       - name: Kea log on failure
@@ -1595,7 +1628,7 @@ jobs:
   # v5.67.0-beta.10 (Q122) — docs/manual-install.md, RUN. The page's marked blocks
   # (tools/doc_commands.py) become one script that builds a whole install by hand on a
   # clean runner: packages, the versioned layout, a venv, the config, the unit rendered
-  # by `jen-update-root.py --render-unit`, sudoers, start. Where the page says to edit a
+  # by `jen-update-root.py --render-unit`, the trigger path units, start. Where the page says to edit a
   # file or paste SQL, a named stand-in (.github/scripts/manual-install-hooks.sh) does it.
   # What the job then asserts is what an operator following the page would rely on: Jen
   # answers at THIS tree's version, the unit has no unresolved placeholder and carries the

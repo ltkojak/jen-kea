@@ -706,3 +706,66 @@ class TestNothingTickedOnTheJenCardIsRefused:
     def test_a_request_without_the_marker_is_every_table_as_before(self, logged_in_client, db):
         r = logged_in_client.post("/database/export/jen", data={})
         assert r.status_code == 200 and r.mimetype == "application/gzip"
+
+
+class TestANameTheExportDoesNotOfferIsRefused:
+    """v7.1.0-beta.3 (Q213, AS5): with the page's marker, a `tables` value that is not an exportable Jen table is refused. It used to be dropped, and a file with no table
+    in it was written and audited as an export."""
+
+    @pytest.mark.parametrize("tables", [[""], ["nosuchtable"], ["settings", "nosuchtable"]])
+    def test_it_is_refused_and_writes_no_audit_row(self, logged_in_client, db, tables):
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='DB_EXPORT'")
+            before = cur.fetchone()["n"]
+        r = logged_in_client.post("/database/export/jen", data={"picker": "1", "tables": tables})
+        assert r.status_code == 302 and "tab=export" in r.headers["Location"]
+        assert b"Not an exportable Jen table." in logged_in_client.get(r.headers["Location"]).data
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='DB_EXPORT'")
+            assert cur.fetchone()["n"] == before
+
+
+class TestNothingTickedOnTheImportPageIsRefused:
+    """v7.1.0-beta.3 (Q213, AS2): the confirmation page's Jen form carries `picker`; with it, no box ticked restores nothing. It used to mean every table of the file."""
+
+    def _staged(self):
+        import base64
+        import os
+        import tempfile
+
+        from jen import extensions
+        from jen.services import dbexport
+
+        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+        fd, path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".jen-import")
+        os.close(fd)
+        dbexport.write_jen_export(path, ["settings"])
+        return path, base64.b64encode(path.encode()).decode()
+
+    def test_the_pickers_empty_form_restores_nothing(self, logged_in_client, db, monkeypatch):
+        import pathlib
+
+        from jen.services import dbexport
+
+        def never(*a, **k):
+            raise AssertionError("an import ran although no table was ticked")
+
+        monkeypatch.setattr(dbexport, "import_jen_guarded", never)
+        monkeypatch.setattr(dbexport, "import_jen", never)
+        path, token = self._staged()
+        r = logged_in_client.post(
+            "/database/import/confirm", data={"tmp_path": token, "picker": "1", "mode": "replace"}
+        )
+        assert r.status_code == 302 and "tab=import" in r.headers["Location"]
+        assert b"Tick at least one table to restore." in logged_in_client.get(r.headers["Location"]).data
+        assert not pathlib.Path(path).exists()
+
+    def test_a_request_without_the_marker_is_the_whole_file_as_before(self, logged_in_client, db, monkeypatch):
+        from jen.services import dbexport
+
+        asked = []
+        monkeypatch.setattr(dbexport, "import_jen", lambda data, tables, truncate=True: asked.append(tables) or [])
+        _path, token = self._staged()
+        logged_in_client.post("/database/import/confirm", data={"tmp_path": token, "mode": "merge"})
+        assert asked == [None]

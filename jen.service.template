@@ -57,6 +57,12 @@ TimeoutStopSec=40
 # left un-sandboxed — do not copy these lines there.
 ProtectSystem=strict
 ReadWritePaths=@@CONFIG_DIR@@ @@DATA_DIR@@
+# v7.1.0-beta.3 (Q213) - /run/jen, owned by this unit's user: where Jen leaves the two trigger files the path
+# units watch (jen-update.path, jen-plugin-install.path). Fixed, whatever the layout. Kept across a restart
+# (an update restarts Jen while its own request is being answered).
+RuntimeDirectory=jen
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectKernelTunables=yes

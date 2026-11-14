@@ -60,7 +60,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="7.1.0-beta.2"
+JEN_VERSION="7.1.0-beta.3"
 
 JEN_USER="www-data"
 # v5.67.0-beta.18 (Q132) — every apt-get / pip / venv / systemctl / mysql call's stdout AND stderr goes here
@@ -1889,6 +1889,8 @@ _EXTERNAL_FILES=(
     "/usr/local/sbin/jen-update-root.py"
     "/etc/systemd/system/jen-update.service"
     "/etc/systemd/system/jen-plugin-install.service"
+    "/etc/systemd/system/jen-update.path"
+    "/etc/systemd/system/jen-plugin-install.path"
 )
 snapshot_external_files() {
     [[ "$IS_UPGRADE" == "false" ]] && return
@@ -1936,6 +1938,8 @@ _restore_external_files() {
             jen-update-root.py) dest="/usr/local/sbin/jen-update-root.py" ;;
             jen-update.service) dest="/etc/systemd/system/jen-update.service" ;;
             jen-plugin-install.service) dest="/etc/systemd/system/jen-plugin-install.service" ;;
+            jen-update.path) dest="/etc/systemd/system/jen-update.path" ;;
+            jen-plugin-install.path) dest="/etc/systemd/system/jen-plugin-install.path" ;;
             *) continue ;;
         esac
         if [[ "$dest" == "$SUDOERS_FILE" ]]; then
@@ -2145,11 +2149,8 @@ install_files() {
     render_jen_service "$APP_DIR/jen.service.template" "$SERVICE_FILE"
     ok "Installed systemd service"
 
-    if [[ -f "$APP_DIR/jen-sudoers" ]]; then
-        cp "$APP_DIR/jen-sudoers" "$SUDOERS_FILE"
-        chmod 440 "$SUDOERS_FILE"
-        ok "Installed sudoers entry"
-    fi
+    # v7.1.0-beta.3 (Q213) — no sudoers entry is installed any more: a release ships none. The one an
+    # earlier release installed is removed below, AFTER the path units that replace it are watching.
 
     # v5.2.6 security fix — the self-update helper script lives OUTSIDE
     # $INSTALL_DIR entirely (this script chowns the whole tree root:root,
@@ -2171,6 +2172,17 @@ install_files() {
     if [[ -f "$APP_DIR/jen-plugin-install.service" ]]; then
         cp "$APP_DIR/jen-plugin-install.service" /etc/systemd/system/jen-plugin-install.service
         ok "Installed jen-plugin-install.service"
+    fi
+    # v7.1.0-beta.3 (Q213) — zero sudoers. Jen asks for an update or a plugin install by leaving a trigger
+    # file in /run/jen; the two path units watch for it and start the two units above. The root script
+    # installs and starts them and removes $SUDOERS_FILE only once systemd says both are active
+    # (`converge_triggers`): the grant goes after its replacement works, never before.
+    if [[ -f "$APP_DIR/jen-update.path" && -f /usr/local/sbin/jen-update-root.py ]]; then
+        case "$(/usr/bin/python3 /usr/local/sbin/jen-update-root.py --converge-triggers "$APP_DIR" 2>/dev/null | tail -1)" in
+            converged) ok "Installed the trigger path units  ${DIM}(the earlier sudoers entry is removed)${NC}" ;;
+            watching)  ok "Installed the trigger path units" ;;
+            *)         warn "The trigger path units did not start — Update and plugin installs need them (systemctl status jen-update.path jen-plugin-install.path)" ;;
+        esac
     fi
 
     # v5.13.0 — the whole application tree is root-owned and read-only to

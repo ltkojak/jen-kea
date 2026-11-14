@@ -180,6 +180,15 @@ UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
 # jen/services/plugins.py the same way jen-update.service is triggered
 # by settings/updates.py; see main()'s --plugins dispatch.
 PLUGIN_INSTALL_SERVICE_PATH = "/etc/systemd/system/jen-plugin-install.service"
+# v7.1.0-beta.3 (Q213) — zero sudoers. The app asks for a run by creating a TRIGGER FILE in its unit's runtime
+# directory (`RuntimeDirectory=jen`); a systemd path unit watches for it and starts the oneshot unit. The file
+# carries nothing. Fixed paths, independent of the layout file: this script must be able to remove the trigger
+# BEFORE it reads anything that can make it exit (a trigger left behind re-fires the path unit until systemd fails it).
+TRIGGER_DIR = "/run/jen"
+TRIGGER_FILES = {"update": "update.request", "plugins": "plugins.request"}
+SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+TRIGGER_PATH_UNITS = ("jen-update.path", "jen-plugin-install.path")
+SUDOERS_PATH = "/etc/sudoers.d/jen"
 PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
 
 # ── Layout (v5.67.0, Q114) ───────────────────────────────────────────────────
@@ -442,10 +451,13 @@ _FLAT_LEFTOVERS = (*_ROLLBACK_ITEMS, "venv")
 # get snapshotted too. {live path: name under snapshot_dir/_ext/}
 _EXTERNAL_ITEMS = {
     "/etc/systemd/system/jen.service": "jen.service",
+    # (Q213) kept: a box that still has the grant when a run starts has it snapshotted and restored with the rest
     "/etc/sudoers.d/jen": "sudoers-jen",
     SELF_INSTALL_PATH: "jen-update-root.py",
     UPDATE_SERVICE_PATH: "jen-update.service",
     PLUGIN_INSTALL_SERVICE_PATH: "jen-plugin-install.service",
+    "/etc/systemd/system/jen-update.path": "jen-update.path",
+    "/etc/systemd/system/jen-plugin-install.path": "jen-plugin-install.path",
 }
 
 
@@ -543,9 +555,9 @@ def install_external_files(app_dir):
     """
     v5.14.0 — install the files a release ships that live OUTSIDE the
     release directory: the systemd unit (rendered from
-    `jen.service.template`, + `daemon-reload`) and the sudoers grant
-    (`jen-sudoers`, validated with `visudo -c` first, never installed on
-    a failure). The application tree itself is no longer copied anywhere
+    `jen.service.template`, + `daemon-reload`). Until v7.1.0-beta.3 (Q213)
+    it also installed the sudoers grant a release shipped; a release ships
+    none now. The application tree itself is no longer copied anywhere
     — it IS `app_dir` (`releases/<ver>/app/`), reached through the
     `current` symlink. `jen-update-root.py` and `jen-update.service` are
     handled by install_self_update_files() with its atomic
@@ -564,15 +576,107 @@ def install_external_files(app_dir):
     if os.path.isfile(service_src):
         render_jen_service(service_src, "/etc/systemd/system/jen.service")
         subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True)
+    # v7.1.0-beta.3 (Q213): no sudoers file is installed any more. A release ships none, and `converge_triggers`
+    # removes the one an earlier release installed once the path units are watching.
 
-    sudoers_src = os.path.join(app_dir, "jen-sudoers")
-    if os.path.isfile(sudoers_src):
-        check = subprocess.run(["/usr/sbin/visudo", "-c", "-f", sudoers_src], capture_output=True, text=True)
-        if check.returncode != 0:
-            log(f"ERROR: new jen-sudoers failed validation, not installing it: {check.stderr}")
-        else:
-            shutil.copy2(sudoers_src, "/etc/sudoers.d/jen")
-            os.chmod("/etc/sudoers.d/jen", 0o440)
+
+def consume_trigger(kind, trigger_dir=TRIGGER_DIR):
+    """v7.1.0-beta.3 (Q213) — remove the trigger file that started this run. FIRST, before the layout is read or
+    anything else can exit: a path unit is level-triggered, so a trigger that outlives the run starts the unit
+    again at once, and after a handful of such starts systemd FAILS the path unit - the Update button is then
+    dead until someone resets it. The directory is the app's (`www-data` can write it), so nothing in it is
+    trusted: it is opened without following a link, the name is fixed, and the entry is removed through that
+    handle whatever it is - a file, a symbolic link (never followed) or a directory. Returns "removed",
+    "absent", "no-dir" (not started by a trigger: by hand, by the earlier grant, by a test) or "failed"."""
+    name = TRIGGER_FILES[kind]
+    try:
+        fd = os.open(trigger_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return "no-dir"
+    try:
+        try:
+            os.unlink(name, dir_fd=fd)
+            return "removed"
+        except FileNotFoundError:
+            return "absent"
+        except (IsADirectoryError, PermissionError):
+            pass
+        except OSError as e:
+            log(f"ERROR: could not remove the trigger {trigger_dir}/{name}: {e} — its path unit will fire again.")
+            return "failed"
+        try:
+            shutil.rmtree(name, dir_fd=fd)
+            return "removed"
+        except OSError as e:
+            log(f"ERROR: could not remove the trigger {trigger_dir}/{name}: {e} — its path unit will fire again.")
+            return "failed"
+    finally:
+        os.close(fd)
+
+
+def _install_root_file(src, dest, mode):
+    """Copy a release's file to a root-owned place outside it: a temp file in the destination's directory,
+    owner and mode set before the rename, so the path never exists half-written or writable. True when the
+    destination's content changed."""
+    with open(src, "rb") as f:
+        content = f.read()
+    try:
+        with open(dest, "rb") as f:
+            if f.read() == content:
+                return False
+    except OSError:
+        pass
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(dest), prefix=".jen-unit-", suffix=".tmp")
+    try:
+        os.write(fd, content)
+    finally:
+        os.close(fd)
+    os.chown(tmp_path, 0, 0)
+    os.chmod(tmp_path, mode)
+    os.replace(tmp_path, dest)
+    return True
+
+
+def converge_triggers(app_dir=None, unit_dir=SYSTEMD_UNIT_DIR, sudoers_path=SUDOERS_PATH):
+    """v7.1.0-beta.3 (Q213) — make this box a zero-sudoers one. Install the two path units the release at
+    `app_dir` ships, enable and start them, and ONLY when systemd says both are active remove
+    `/etc/sudoers.d/jen`: the grant goes after its replacement is watching, never before. Run at the start of
+    every privileged run and again after an update installed a new release, so a box updated in place by an
+    earlier release's script converts itself the first time this one runs. Never fatal: any failure leaves the
+    grant where it is and the app keeps using it. Returns "no-units" (the release ships none: an earlier one),
+    "not-active", "converged" (the grant was removed now) or "watching"."""
+    app_dir = app_dir or os.path.join(INSTALL_DIR, "current", "app")
+    sources = [os.path.join(app_dir, unit) for unit in TRIGGER_PATH_UNITS]
+    if not all(os.path.isfile(src) for src in sources):
+        return "no-units"
+    try:
+        changed = [
+            _install_root_file(src, os.path.join(unit_dir, unit), 0o644)
+            for src, unit in zip(sources, TRIGGER_PATH_UNITS, strict=True)
+        ]
+        if any(changed):
+            subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True)
+        for unit in TRIGGER_PATH_UNITS:
+            subprocess.run(["/usr/bin/systemctl", "enable", "--now", unit], check=False, capture_output=True)
+        active = all(
+            subprocess.run(["/usr/bin/systemctl", "is-active", "--quiet", unit], check=False).returncode == 0
+            for unit in TRIGGER_PATH_UNITS
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"WARNING: could not install the trigger path units ({e}) — the earlier sudoers grant is left in place.")
+        return "not-active"
+    if not active:
+        log("WARNING: the trigger path units are not active — the earlier sudoers grant is left in place.")
+        return "not-active"
+    if os.path.lexists(sudoers_path):
+        try:
+            os.unlink(sudoers_path)
+        except OSError as e:
+            log(f"WARNING: the trigger path units are active but {sudoers_path} could not be removed: {e}")
+            return "watching"
+        log(f"The trigger path units are active: removed {sudoers_path}. Jen's own box has no sudoers grant now.")
+        return "converged"
+    return "watching"
 
 
 _SHIPPED_PLUGIN_IDS = ("ipam", "network-discovery")
@@ -2476,6 +2580,18 @@ def main():
     # invocations.
     if sys.argv[1:2] == ["--render-unit"]:
         return render_unit_cli(sys.argv[2:])
+    # v7.1.0-beta.3 (Q213) — install.sh's own step, as root: `--converge-triggers <app dir>`
+    if sys.argv[1:2] == ["--converge-triggers"] and len(sys.argv) == 3:
+        state = converge_triggers(sys.argv[2])
+        print(state)
+        return 0 if state in ("converged", "watching") else 1
+
+    # v7.1.0-beta.3 (Q213) — the two runs a trigger file starts. Its removal is the FIRST thing either does: every
+    # `return` below this line would otherwise leave it for the path unit to fire on again (`consume_trigger`).
+    if not sys.argv[1:]:
+        consume_trigger("update")
+    elif sys.argv[1:] == ["--plugins"]:
+        consume_trigger("plugins")
 
     # v5.67.0 (Q114) — refuses outright, before touching anything, if
     # LAYOUT_FILE was present but failed validation (see load_layout()
@@ -2507,11 +2623,14 @@ def main():
     # malformed args (handled above, but a disagreeing invocation would
     # have already returned) — is refused outright rather than silently
     # falling through to the self-update flow.
-    if sys.argv[1:]:
-        if sys.argv[1:] == ["--plugins"]:
-            return process_plugin_requests()
+    if sys.argv[1:] and sys.argv[1:] != ["--plugins"]:
         log(f"ERROR: unrecognized arguments {sys.argv[1:]!r} — refusing.")
         return 2
+    # v7.1.0-beta.3 (Q213) — the layout is trusted from here: install the path units of the release that is
+    # current and drop the earlier grant (`converge_triggers`; never fatal)
+    converge_triggers()
+    if sys.argv[1:] == ["--plugins"]:
+        return process_plugin_requests()
 
     _prune_old_releases()
     channel = _update_channel()
@@ -2724,6 +2843,8 @@ def main():
 
             install_external_files(os.path.join(release_dir, "app"))
             install_self_update_files(os.path.join(release_dir, "app"))
+            # (Q213) the release just installed may ship changed path units
+            converge_triggers(os.path.join(release_dir, "app"))
 
             _switch_current(version)
             subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=False)

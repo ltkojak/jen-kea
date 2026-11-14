@@ -173,21 +173,27 @@ class TestRestartService:
     def _wait(self, event):
         assert event.wait(5), "the restart never ran"
 
-    def test_systemd_runs_exactly_the_command_the_sudoers_file_grants(self, monkeypatch):
+    def test_systemd_signals_the_gunicorn_master_and_the_unit_starts_it_again(self, monkeypatch):
+        """v7.1.0-beta.3 (Q213): it ran `sudo systemctl restart jen`, one of the three lines of a sudoers file that no longer exists."""
         import threading
 
         _clear_signals(monkeypatch)
         _patch_dockerenv(monkeypatch, False)
         monkeypatch.setenv("JEN_SERVICE_MANAGER", "systemd")
-        done, calls = threading.Event(), []
-        monkeypatch.setattr(runtime.subprocess, "run", lambda cmd, *a, **k: (calls.append(cmd), done.set()))
+        done, sent = threading.Event(), []
+        monkeypatch.setattr(runtime.os, "getppid", lambda: 4242)
+        monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: (sent.append((pid, sig)), done.set()))
         assert runtime.restart_service(delay=0) == "systemd"
         self._wait(done)
-        assert calls == [["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"]]
-        sudoers = (pathlib.Path(__file__).resolve().parent.parent / "jen-sudoers").read_text(encoding="utf-8")
-        assert "NOPASSWD: /usr/bin/systemctl restart jen\n" in sudoers
+        assert sent == [(4242, runtime.signal.SIGTERM)]
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        assert "Restart=always" in (repo / "jen.service.template").read_text(encoding="utf-8")
+        assert not (repo / "jen-sudoers").exists()
 
-    def test_docker_signals_the_gunicorn_master_and_never_shells_out(self, monkeypatch):
+    def test_the_module_cannot_shell_out(self):
+        assert not hasattr(runtime, "subprocess")
+
+    def test_docker_signals_the_gunicorn_master(self, monkeypatch):
         import threading
 
         _clear_signals(monkeypatch)
@@ -195,9 +201,6 @@ class TestRestartService:
         done, sent = threading.Event(), []
         monkeypatch.setattr(runtime.os, "getppid", lambda: 4242)
         monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: (sent.append((pid, sig)), done.set()))
-        monkeypatch.setattr(
-            runtime.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no sudo in a container"))
-        )
         assert runtime.restart_service(delay=0) == "docker"
         self._wait(done)
         assert sent == [(4242, runtime.signal.SIGTERM)]
@@ -205,9 +208,6 @@ class TestRestartService:
     def test_a_dev_checkout_restarts_nothing_and_says_so(self, monkeypatch):
         _clear_signals(monkeypatch)
         _patch_dockerenv(monkeypatch, False)
-        monkeypatch.setattr(
-            runtime.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run"))
-        )
         monkeypatch.setattr(runtime.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("must not signal")))
         assert runtime.restart_service(delay=0) == "none"
         assert "restart it yourself" in runtime.RESTART_BY_HAND
@@ -272,9 +272,6 @@ class TestPodman:
         done, sent = threading.Event(), []
         monkeypatch.setattr(runtime.os, "getppid", lambda: 4242)
         monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: (sent.append((pid, sig)), done.set()))
-        monkeypatch.setattr(
-            runtime.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no sudo in a container"))
-        )
         assert runtime.restart_service(delay=0) == "docker"
         assert done.wait(5), "the restart never ran"
         assert sent == [(4242, runtime.signal.SIGTERM)]

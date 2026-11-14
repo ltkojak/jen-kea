@@ -534,6 +534,23 @@ def _nav_pill_is_inert(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _path_units_are_not_watching(request, monkeypatch):
+    """v7.1.0-beta.3 (Q213) - `jen.services.privileged.request` asks the box's own systemd whether `jen-update.path` is active and, when it is, writes a request file
+    in `/run/jen`. On a box that has Jen installed that is a REAL request for a root run, made by a unit test. Every unit test gets "not watching", which is the
+    earlier command through `subprocess.run` - the seam the older tests already fake. The tests of the question itself (`tests/test_sudoers_command_matching.py`) and
+    the suites that drive a real process are left alone."""
+    if request.module.__name__.rpartition(".")[2] == "test_sudoers_command_matching" or any(
+        request.node.get_closest_marker(m) for m in ("e2e", "system", "kea_compat", "kea_log", "kea_write")
+    ):
+        yield
+        return
+    from jen.services import privileged
+
+    monkeypatch.setattr(privileged, "path_unit_active", lambda kind: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def clean_tables(db):
     yield
     with db.cursor() as cur:

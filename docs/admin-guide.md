@@ -2160,7 +2160,7 @@ config fresh each time, nothing is cached.
 | `/etc/jen/ssh/` | SSH keys for subnet editing |
 | `/opt/jen/.rollback/config/` | `jen.config` snapshots created during upgrades (root-owned, 0700; from 5.68.0-beta.20 - earlier releases wrote them to `/etc/jen/backups/`, which an upgrade leaves exactly as it is) |
 | `/etc/systemd/system/jen.service` | Systemd service definition |
-| `/etc/sudoers.d/jen` | Allows Jen to restart itself after cert upload |
+| `/etc/systemd/system/jen-update.path`, `jen-plugin-install.path` | Start the update and plugin-install units when Jen leaves a request file in `/run/jen` (7.1.0 on; `/etc/sudoers.d/jen` is removed by the upgrade) |
 
 ---
 

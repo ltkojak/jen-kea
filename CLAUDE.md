@@ -11,7 +11,7 @@ operator. Deployed as one process (`run.py`), no per-server agent — Jen connec
 Kea 3.0+ with a MySQL/MariaDB backend.
 
 **Read `docs/ARCHITECTURE.md` first.** It is the threat model and the record of every
-deliberate security tradeoff (the self-update sudoers grant, SSH trust-on-first-use,
+deliberate security tradeoff (the self-update triggers, SSH trust-on-first-use,
 SSH-based config push, global-scope API keys, floor-pinned deps). Changes that touch
 those areas need to be informed by it, not rediscovered.
 
@@ -490,11 +490,15 @@ carry that exact suffix (the box would re-install itself forever).
    tests asserting specific words are *absent* from certain pages (the word "other" has
    broken this before). Check new prose against the relevant test assertions before
    finalizing.
-8. **Any change to a command invoked via `sudo` requires updating the sudoers file in the
-   same change** to match it exactly — `sudo` matches command strings literally, word for
-   word, not by meaning. (See `jen-sudoers`, `jen-update-root.py`, and
-   `tests/test_sudoers_command_matching.py`.) `docs/ARCHITECTURE.md` §3.1 describes that
-   grant — update it in the same change too; it has gone stale before.
+8. **Jen's own box has no sudoers line, and gets none (v7.1.0-beta.3, Q213).** A restart is a
+   SIGTERM to Jen's own master; an update and a plugin install are an empty request file in
+   `/run/jen` that a systemd path unit watches (`jen/services/privileged.py`,
+   `jen-update.path`, `jen-plugin-install.path`, `jen-update-root.py::consume_trigger` and
+   `converge_triggers`). A request file never carries content root reads, and a new privileged
+   action is a new fixed unit, never a `sudo` string. The earlier `sudo` command survives in
+   `privileged.py` only, for a box updated in place whose path units are not installed yet.
+   `tests/test_sudoers_command_matching.py` holds all of it; `docs/ARCHITECTURE.md` §3.1
+   describes it — update it in the same change; it has gone stale before.
 9. **The same rule applies on the Kea hosts (v5.11.0).** A new Kea-side capability is a
    new op in `jen-kea-helper` — with its own path/argument validation — plus a matching
    `jen/services/kea_host.py` method (helper call + legacy fallback), plus a docs change

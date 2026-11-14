@@ -282,20 +282,13 @@ def self_update():
             flash("Database backup failed — aborting update. Check server logs for details.", "error")
             return redirect(url_for("settings.settings_system"))
 
-    try:
-        result = subprocess.run(
-            ["/usr/bin/sudo", "/usr/bin/systemctl", "start", "--no-block", "jen-update.service"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except Exception as e:
-        logger.error(f"Failed to trigger jen-update.service: {e}")
-        flash("Could not start the update — check server logs for details.", "error")
-        return redirect(url_for("settings.settings_system"))
+    # v7.1.0-beta.3 (Q213): the request is a trigger file `jen-update.path` watches, not a sudo command
+    # (`jen/services/privileged.py`, which also says what a box updated in place does until its path unit is installed)
+    from jen.services import privileged
 
-    if result.returncode != 0:
-        logger.error(f"jen-update.service failed to start: {result.stderr}")
+    started, why = privileged.request("update")
+    if not started:
+        logger.error(f"Failed to trigger jen-update.service: {why}")
         flash("Could not start the update — check server logs for details.", "error")
         return redirect(url_for("settings.settings_system"))
 

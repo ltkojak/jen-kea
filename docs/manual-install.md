@@ -44,7 +44,7 @@ conflicts with Oracle's `mysql-client-core`).
 | `/etc/jen/` | `www-data:www-data` | `jen.config`, `ssl/`, `ssh/` — **never touched by upgrades** (an older release's `backups/` here is left alone; the installer's `jen.config` backups are under `/opt/jen/.rollback/config/` since 5.68.0-beta.20) |
 | `/etc/jen/jen.config` | `www-data:www-data`, `0600` | config + secrets |
 | `/etc/systemd/system/jen.service` | root | the unit, **rendered** from `jen.service.template` (step 5) |
-| `/etc/sudoers.d/jen` | root, `0440` | the three `systemctl` grants `www-data` needs (restart, self-update trigger, plugin-install trigger) |
+| `/etc/systemd/system/jen-update.path`, `jen-plugin-install.path` | root | the two path units that start the units below when Jen leaves a request file in `/run/jen` (there is no sudoers entry) |
 | `/usr/local/sbin/jen-update-root.py` | `root:root`, `0700` | in-app self-updater (runs as root, outside every dir `www-data` can write) |
 | `/etc/systemd/system/jen-update.service`, `jen-plugin-install.service` | root | the two oneshot units that invoke the updater |
 
@@ -124,7 +124,7 @@ FLUSH PRIVILEGES;
 The Kea database and Control Agent are configured on the Kea side — see
 the main install guide.
 
-## 5. Service, sudoers, updater
+## 5. Service, updater, trigger units
 
 The unit is **rendered**, not copied: `jen.service.template` carries
 `@@APP_DIR@@`, `@@CONFIG_DIR@@` and `@@DATA_DIR@@` placeholders, and
@@ -144,11 +144,11 @@ sudo chmod 700                        /usr/local/sbin/jen-update-root.py
 sudo /usr/bin/python3 /usr/local/sbin/jen-update-root.py --render-unit \
     "$REL/app/jen.service.template" /etc/systemd/system/jen.service
 
-sudo cp "$REL/app/jen-sudoers"        /etc/sudoers.d/jen
-sudo chmod 440                        /etc/sudoers.d/jen
-sudo visudo -cf /etc/sudoers.d/jen    # sanity-check before it takes effect
 sudo cp "$REL/app/jen-update.service"         /etc/systemd/system/jen-update.service
 sudo cp "$REL/app/jen-plugin-install.service" /etc/systemd/system/jen-plugin-install.service
+# The two path units that start them: installed, enabled and started by the updater itself.
+# It prints "watching". Jen has no sudoers entry.
+sudo /usr/bin/python3 /usr/local/sbin/jen-update-root.py --converge-triggers "$REL/app"
 
 # Activate this release (relative symlink, replaced atomically).
 sudo ln -sfn "releases/$VER" /opt/jen/current.tmp

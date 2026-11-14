@@ -740,11 +740,8 @@ class TestTheContract:
         assert helper.HELPER_BUILD == 22 and helper.HELPER_VERSION == 7
 
     def test_there_is_still_no_sudoers_change(self):
-        root = _SCRIPT.parent
-        text = (root / "jen-sudoers").read_text(encoding="utf-8")
-        assert "investigation" not in text and "self-restore" not in text, (
-            "the one-line grant is unchanged: the timer runs the helper as root without sudo"
-        )
+        # (Q213) Jen's own box has no sudoers file at all now; the timer still runs the helper as root without sudo
+        assert not (_SCRIPT.parent / "jen-sudoers").exists()
 
     def test_the_timer_runs_the_installed_helper_as_a_oneshot(self, helper):
         assert "ExecStart=/usr/local/sbin/jen-kea-helper --self-restore" in helper._TIMER_SERVICE_TEXT

@@ -108,12 +108,12 @@ class TestTheManualInstallPage:
         declared = re.search(r'^JEN_VERSION\s*=\s*"([^"]+)"', (ROOT / "jen" / "__init__.py").read_text("utf-8"), re.M)
         assert got.stdout == declared.group(1)
 
-    def test_the_sudoers_grants_are_counted_as_the_file_has_them(self):
-        grants = [
-            ln for ln in (ROOT / "jen-sudoers").read_text(encoding="utf-8").splitlines() if ln.startswith("www-data")
-        ]
-        assert len(grants) == 3
-        assert "three" in PAGE.read_text(encoding="utf-8")
+    def test_the_page_installs_no_sudoers_entry_for_jen(self):
+        """v7.1.0-beta.3 (Q213): there is none to install. The page runs the updater's own step for the path units."""
+        assert not (ROOT / "jen-sudoers").exists()
+        runnable = "\n".join(b for k, b, _ in _page_items() if k == "run")
+        assert "/etc/sudoers.d/jen " not in runnable and "jen-sudoers" not in runnable
+        assert 'jen-update-root.py --converge-triggers "$REL/app"' in runnable
 
     def test_every_oneshot_unit_the_installer_places_is_placed_by_the_page_too(self):
         runnable = "\n".join(b for k, b, _ in _page_items() if k == "run")

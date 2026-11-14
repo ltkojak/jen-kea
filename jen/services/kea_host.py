@@ -1119,8 +1119,13 @@ def apply_config(
         )
         out, err, rc = _legacy_python3(server, script)
         result = _legacy_suffix(_parse_legacy_script_out(out, err, "legacy", rc))
-    except HelperError as e:
+    except HelperUnreachable as e:
+        # no SSH session was opened: nothing was sent, and the file is what it was
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
+    except HelperError as e:
+        # (Q213, AS7) the helper RAN and its answer could not be used: which config the file holds is not known. `raised` is the one word the change set reads for
+        # that (`kea_changeset._safe`), so a rollback that ends here is STATE NOT KNOWN and never "the new entry is still in the config"
+        return {"ok": False, "code": "error", "detail": str(e), "via": "helper", "raised": True}
 
     if result.get("ok"):
         _record_revision_after_apply(server, service, cfg, result.get("sha256"), summary, source)

@@ -236,20 +236,38 @@ _ISSUER_NOT_HELD = frozenset({2, 18, 19, 20, 21})
 def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None:
     """(Q234, AQ11, AQ18) What a verifying client refuses the PRESENTED CHAIN for, or None. `cert_refusal` reads one certificate and a `fullchain.pem` holds several: a valid
     leaf under an expired intermediate was accepted, installed and followed by a restart into an HTTPS every client refuses. This asks the verifier clients use: a TLS
-    handshake in memory between the server context that just loaded the material and a client that trusts the certificates presented AFTER the first (the first itself when it
-    is the only one). So an expired or not-yet-valid certificate anywhere in the chain, a critical extension no client handles, a CA that may not sign and a broken signature
-    are each refused in OpenSSL's own words. "Issuer not found" is not a refusal: the root is the client's, not the upload's."""
+    handshake in memory between the server context that just loaded the material and a client that trusts ONE certificate: the top of the issuer path the upload itself holds,
+    walked from the first certificate by issuer name (the first itself when nothing uploaded issued it). So an expired or not-yet-valid certificate anywhere on that path, a
+    critical extension no client handles, a CA that may not sign and a broken signature are each refused in OpenSSL's own words. "Issuer not found" is not a refusal: the root
+    is the client's, not the upload's.
+    (Q213, AS1) It used to trust EVERY certificate after the first, so the verifier stopped at the first one it could chain to: a leaf, its issuer and an expired certificate
+    above them was accepted. One anchor, at the top, makes the verifier walk the whole path. A certificate of the upload that is not on the path is not judged."""
     import re
     import ssl
+
+    from cryptography import x509
 
     pems = re.findall(
         r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", cert_data + "\n" + (ca_data or ""), re.S
     )
+    if not pems:
+        return "the certificate file is not a PEM certificate"
+    try:
+        certs = [x509.load_pem_x509_certificate(pem.encode("utf-8")) for pem in pems]
+    except ValueError as e:
+        return f"a certificate of the chain could not be read ({e})"
+    top, walked = 0, {0}
+    while True:
+        above = next((i for i, c in enumerate(certs) if i not in walked and c.subject == certs[top].issuer), None)
+        if above is None:
+            break
+        walked.add(above)
+        top = above
     client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     client.check_hostname = False
     client.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     try:
-        client.load_verify_locations(cadata="\n".join(pems[1:] or pems[:1]))
+        client.load_verify_locations(cadata=pems[top])
     except (ssl.SSLError, ValueError) as e:
         return f"a certificate of the chain could not be read ({getattr(e, 'strerror', None) or e})"
     c_in, c_out, s_in, s_out = ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO()
@@ -300,9 +318,9 @@ def cert_refusal(cert_data: str, now=None) -> str | None:
         usage = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     except x509.ExtensionNotFound:
         usage = None
-    if usage is not None and not {ExtendedKeyUsageOID.SERVER_AUTH, ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE} & set(
-        usage
-    ):
+    # (Q213, AS8) serverAuth, named. `anyExtendedKeyUsage` alone used to pass here; OpenSSL does not read it as a purpose, so the handshake below refused the same
+    # certificate with a sentence that did not say why
+    if usage is not None and ExtendedKeyUsageOID.SERVER_AUTH not in set(usage):
         return (
             "the certificate was not issued for a server (its extended key usage does not name server authentication)"
         )

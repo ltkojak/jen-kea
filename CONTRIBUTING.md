@@ -102,9 +102,10 @@ fail on you:
 - **Dependencies live in `requirements.txt` only.** Never re-list a
   package inline in `install.sh`, the `Dockerfile`, or CI —
   `tests/test_dependency_consistency.py` fails if you do.
-- **`sudo`-invoked commands.** If you change a command string that's run
-  via `sudo`, update `jen-sudoers` in the same commit to match it
-  byte-for-byte — `sudo` matches literally.
+- **No `sudo` on Jen's own box.** Jen asks root for an update or a plugin
+  install with an empty request file a systemd path unit watches
+  (`jen/services/privileged.py`); there is no sudoers file to edit. A new
+  privileged action is a new fixed unit, never a `sudo` string.
 - **Don't bump the version.** `JEN_VERSION` and the other version strings
   move together at release time, not per-PR. Leave them alone; the
   maintainer bumps them with the `CHANGELOG.md` entry.

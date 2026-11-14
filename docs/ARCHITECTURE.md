@@ -491,27 +491,44 @@ These are places where Jen makes a conscious security tradeoff rather
 than an oversight. Documenting them here so future changes are informed
 decisions, not accidental regressions.
 
-### 3.1 The self-update sudoers grant
+### 3.1 The self-update triggers (no sudoers grant since 7.1.0)
 
-`jen-sudoers` grants `www-data` (the user Jen runs as) exactly three
-passwordless commands, matched by `sudo` byte-for-byte:
+Jen's own box has **no sudoers entry** (v7.1.0-beta.3, Q213). Until then `jen-sudoers` granted
+`www-data` three passwordless commands: restart Jen, start `jen-update.service`, start
+`jen-plugin-install.service`. Each was fixed and took no input. None needs `sudo`:
 
-```
-/usr/bin/systemctl restart jen
-/usr/bin/systemctl start --no-block jen-update.service
-/usr/bin/systemctl start --no-block jen-plugin-install.service
-```
+- **Restart.** `jen.service` has `Restart=always`. Jen sends SIGTERM to its own gunicorn master
+  and systemd starts it again (`runtime.restart_service`), the mechanism a container always used.
+- **Update, plugin install.** Jen creates an empty request file in `/run/jen`, its unit's runtime
+  directory (`RuntimeDirectory=jen`, mode `0700`, `www-data`): `update.request` or
+  `plugins.request` (`jen/services/privileged.py`). A systemd **path unit**, `jen-update.path` or
+  `jen-plugin-install.path` (`PathExists=`), starts the matching `oneshot` unit.
 
-None of the three takes any input from Jen. `jen-update.service` and
-`jen-plugin-install.service` are both root `oneshot` units that run
-`/usr/local/sbin/jen-update-root.py` — owned `root:root`, mode `0700`,
-**outside** every directory `www-data` can write — the first with no
-arguments (re-derives "the current latest release" from the pinned
-`ltkojak/jen-kea` GitHub repo, verifies the tarball's SHA-256 against
-the published `SHA256SUMS`, and only then installs — see §6 for the
-staged/rollback flow), the second with exactly one fixed flag,
-`--plugins` (re-derives a requested plugin install/removal from
-`plugins/registry.json` the same way — see §3.10).
+The request file carries nothing. Its existence is the whole request, exactly what the `sudo`
+command was. The two units still run `/usr/local/sbin/jen-update-root.py` — owned `root:root`,
+mode `0700`, **outside** every directory `www-data` can write — the first with no arguments
+(re-derives "the current latest release" from the pinned `ltkojak/jen-kea` GitHub repo, verifies
+the tarball's SHA-256 against the published `SHA256SUMS`, and only then installs — see §6 for
+the staged/rollback flow), the second with exactly one fixed flag, `--plugins` (re-derives a
+requested plugin install/removal from `plugins/registry.json` the same way — see §3.10).
+
+**Root's first act is to remove the request file** (`consume_trigger`), before it reads the
+layout or anything else that can make it exit. `/run/jen` is the service user's directory, so
+nothing in it is trusted: root opens the directory without following a link, the name is fixed,
+and the entry is removed through that handle whatever it is (a file, a symbolic link, a
+directory). A path unit is level-triggered: a request that outlived its run would start the unit
+again until systemd failed the path unit.
+
+**The transition.** An in-app update from an earlier release is run by that release's root
+script, which knows no path unit. So `privileged.request` asks systemd whether the path unit is
+active and, while it is not, runs the earlier `sudo` command; the grant is still on such a box.
+The new root script installs and enables both path units at the start of every run and removes
+`/etc/sudoers.d/jen` only once systemd says both are active (`converge_triggers`): the grant goes
+after its replacement works, never before. Jen asks for that run once at startup
+(`converge_at_startup`). `install.sh` does all of it in one step. Health shows a path unit that
+is not watching (`privileged_triggers`). The `sudo` strings left under `jen/` for Jen's own box
+are in `jen/services/privileged.py` and nowhere else
+(`tests/test_sudoers_command_matching.py` walks the whole tree).
 
 **Why this is the boundary:** even a fully-compromised `www-data` can
 only trigger "install whatever GitHub currently publishes as latest"
@@ -532,10 +549,10 @@ root-owned script that takes no trusted caller input closed that; the
 same request/execute split was applied again in v5.27.0 (§3.10) for
 plugin installs, the one place that gap still existed.
 
-**What this means for any future change:** rule 8 in `CLAUDE.md` — a
-changed `sudo` command string is a changed sudoers line in the same
-commit, and this section is updated with it. Never add a parameter to
-any of the three commands, nor derive a decision from the *content* of
+**What this means for any future change:** rule 8 in `CLAUDE.md` — Jen's
+own box gets no sudoers line, and this section is updated with any change
+to a trigger. Never give a request file a content that root reads, never
+add a parameter to either unit, nor derive a decision from the *content* of
 any file `www-data` can write — a plugin marker's filename (which
 plugin id, which action) is the only thing read from it, never its
 bytes.
@@ -571,13 +588,14 @@ a restore) and then the mode; `os.replace` and an fsync of the directory, so the
 `restore.py` from `tests/test_private_files.py`'s source scan is gone.
 
 `jen-update-root.py` must never derive a decision from `sys.argv`
-reachable via the sudoers grant above beyond the fixed `--plugins`
+reachable through the two units above beyond the fixed `--plugins`
 dispatch (`tests/test_jen_update_root.py` pins this). `--check-layout`
 and `--write-layout-markers` (v5.67.0-beta.5, Q117 — see "Relocatable
 install" below) are a deliberate, narrower exception to that rule's
 *spirit*, not a loophole in it: neither is ever reachable through the
-sudoers grant at all. `jen-sudoers` still pins the two systemd units'
-`ExecStart` lines byte-for-byte (no argv, or exactly `--plugins`), and
+trigger at all (`--converge-triggers`, v7.1.0-beta.3, is a third of the
+same kind). The two systemd units' `ExecStart` lines are pinned
+byte-for-byte (no argv, or exactly `--plugins`), and
 the installed script is `root:root` mode `0700`, so a compromised
 `www-data` cannot exec it directly with *any* argv, pinned or not.
 Only a human already running `install.sh`/`uninstall.sh` as root

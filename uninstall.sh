@@ -235,6 +235,11 @@ if [[ "$REMOVAL_LEVEL" == "3" ]]; then
     # behind: a root-owned 0700 script and two unit files that name an
     # application that is no longer there. Nothing else here removes them
     # (levels 1 and 2 keep them, as they keep the config a reinstall expects).
+    # v7.1.0-beta.3 (Q213) — the two path units first, so nothing can start the units being removed
+    for unit in jen-update.path jen-plugin-install.path; do
+        systemctl disable --now "$unit" 2>/dev/null || true
+        rm -f "/etc/systemd/system/$unit"
+    done
     for unit in jen-update.service jen-plugin-install.service; do
         systemctl stop "$unit" 2>/dev/null || true
         if [[ -f "/etc/systemd/system/$unit" ]]; then

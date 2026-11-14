@@ -1049,6 +1049,40 @@ class TestLayoutTrusted:
         assert "error:" not in c.detail, "the 'error: ' prefix is for the cache file, not the operator-facing detail"
 
 
+class TestPrivilegedTriggers:
+    """v7.1.0-beta.3 (Q213) - Update Now and a plugin install are a request file a path unit watches for; the check asks systemd whether both are watching."""
+
+    def _check(self, monkeypatch, deployment, active):
+        from jen.services import privileged, runtime
+
+        monkeypatch.setattr(runtime, "deployment", lambda: deployment)
+        monkeypatch.setattr(privileged, "path_unit_active", lambda kind: kind in active)
+        return health._privileged_triggers(_ctx())
+
+    def test_both_watching_is_ok(self, monkeypatch):
+        assert self._check(monkeypatch, "systemd", {"update", "plugins"}).status == "ok"
+
+    def test_one_that_is_not_watching_is_named_with_the_repair(self, monkeypatch):
+        c = self._check(monkeypatch, "systemd", {"update"})
+        assert c.status == "warn"
+        assert "jen-plugin-install.path not active" in c.detail and "jen-update.path" not in c.detail
+        assert "sudo ./install.sh" in c.detail
+
+    def test_neither_names_both(self, monkeypatch):
+        c = self._check(monkeypatch, "systemd", set())
+        assert c.status == "warn" and "jen-update.path and jen-plugin-install.path not active" in c.detail
+
+    def test_a_container_is_not_asked(self, monkeypatch):
+        def never(kind):
+            raise AssertionError("systemd was asked in a container")
+
+        from jen.services import privileged, runtime
+
+        monkeypatch.setattr(runtime, "deployment", lambda: "docker")
+        monkeypatch.setattr(privileged, "path_unit_active", never)
+        assert health._privileged_triggers(_ctx()).status == "skip"
+
+
 # ── run_checks resilience ──────────────────────────────────────────────────
 
 

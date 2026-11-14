@@ -4589,7 +4589,11 @@ class TestTheStaleRecords:
     def test_the_page_prints_expiry_unreadable_not_a_none_of_days(self):
         template = pathlib.Path("templates/settings_kea.html").read_text(encoding="utf-8")
         assert "kea_ca.days_left is none" in template and "expiry unreadable" in template
-        assert "{% if d is none %}expiry unreadable{% else %}{{ d }} d{% endif %}" in template
+        # (Q213, AS4) and never a negative number of days
+        assert (
+            "{% if d is none %}expiry unreadable{% elif d < 0 %}expired {{ (0 - d)|plural('day') }} ago{% else %}{{ d }} d{% endif %}"
+            in template
+        )
 
 
 class TestHygieneOfQ197:

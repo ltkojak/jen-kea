@@ -309,8 +309,8 @@ details: **Admin Guide → Kea host helper**. A host still on this legacy path n
 had the ISC-package binary-ownership problem ("kea-dhcp4 is not installed on
 this server" although it is — see above); a helper build 7–9 does, and Update
 helper fixes it. (`/etc/sudoers.d/jen`, no `-kea`,
-is a DIFFERENT file — Jen's own self-update grant on the Jen box; removing it
-breaks self-update, not anything Kea-side.)
+is a DIFFERENT file — Jen's own self-update grant on the Jen box before 7.1.0,
+which an upgrade removes; it was never anything Kea-side.)
 
 **"No legacy python3 grant" even though the grant is definitely there
 (v5.65.13).** The old one-shot probe couldn't tell a missing line apart
@@ -922,8 +922,8 @@ own result confirms it. If the flash names a reason (a `requires_jen`
 version mismatch, a checksum failure, a missing tag) act on that
 directly. "Could not start the plugin install service" means the
 trigger itself didn't fire — run `sudo ./install.sh` to repair
-`jen-sudoers` and the `jen-plugin-install.service` unit, then try
-again. If a request seems to hang with no result at all, check
+`jen-plugin-install.path` and the `jen-plugin-install.service` unit, then try
+again. Health → "Update and plugin triggers" says whether the path unit is watching. If a request seems to hang with no result at all, check
 `sudo systemctl status jen-plugin-install.service` and
 `sudo journalctl -u jen-plugin-install.service` on the Jen host.
 
