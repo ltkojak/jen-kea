@@ -580,6 +580,25 @@ def install_external_files(app_dir):
     # removes the one an earlier release installed once the path units are watching.
 
 
+def _remove_tree_at(name, dir_fd):
+    """Remove the directory `name` inside the open directory `dir_fd`, and everything in it, following no link. Every step is relative to a handle:
+    `os.scandir` of the directory's own descriptor, `os.unlink(..., dir_fd=)` for a file or a link, this function again for a directory, `os.rmdir(..., dir_fd=)`
+    last. (`shutil.rmtree(dir_fd=)` does this from Python 3.11; this script runs under the system python3, which is 3.10 on Ubuntu 22.04, where that argument is a
+    TypeError - not an OSError, so the caller's handler never saw it and the trigger survived. Found by CI's 3.10 leg.) Raises OSError."""
+    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    try:
+        with os.scandir(fd) as entries:
+            children = [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in entries]
+        for child, is_dir in children:
+            if is_dir:
+                _remove_tree_at(child, fd)
+            else:
+                os.unlink(child, dir_fd=fd)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=dir_fd)
+
+
 def consume_trigger(kind, trigger_dir=TRIGGER_DIR):
     """v7.1.0-beta.3 (Q213) — remove the trigger file that started this run. FIRST, before the layout is read or
     anything else can exit: a path unit is level-triggered, so a trigger that outlives the run starts the unit
@@ -605,7 +624,7 @@ def consume_trigger(kind, trigger_dir=TRIGGER_DIR):
             log(f"ERROR: could not remove the trigger {trigger_dir}/{name}: {e} — its path unit will fire again.")
             return "failed"
         try:
-            shutil.rmtree(name, dir_fd=fd)
+            _remove_tree_at(name, fd)
             return "removed"
         except OSError as e:
             log(f"ERROR: could not remove the trigger {trigger_dir}/{name}: {e} — its path unit will fire again.")

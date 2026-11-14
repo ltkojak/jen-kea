@@ -299,6 +299,43 @@ class TestRootRemovesTheTriggerFirst:
         assert _root_script().consume_trigger("plugins", str(d)) == "removed"
         assert list(d.iterdir()) == []
 
+    def test_a_deep_directory_with_a_link_out_of_it_is_removed_and_the_link_is_not_followed(self, tmp_path):
+        """(fixup 2) The removal is this script's own, relative to handles: it must work on Python 3.10, where `shutil.rmtree` has no `dir_fd`."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("kept")
+        run = tmp_path / "run"
+        deep = run / "update.request" / "a" / "b"
+        deep.mkdir(parents=True)
+        (deep / "file").write_text("x")
+        (run / "update.request" / "a" / "link-to-dir").symlink_to(outside, target_is_directory=True)
+        (run / "update.request" / "link-to-file").symlink_to(outside / "keep")
+        assert _root_script().consume_trigger("update", str(run)) == "removed"
+        assert not (run / "update.request").exists()
+        assert (outside / "keep").read_text() == "kept"
+
+    def test_a_removal_that_fails_is_said_and_never_raised(self, tmp_path, monkeypatch):
+        run = tmp_path / "run"
+        (run / "update.request" / "a").mkdir(parents=True)
+
+        def refuse(*a, **k):
+            raise PermissionError("no")
+
+        monkeypatch.setattr(os, "rmdir", refuse)
+        assert _root_script().consume_trigger("update", str(run)) == "failed"
+
+    def test_no_script_root_runs_uses_an_argument_python_310_does_not_have(self):
+        """(fixup 2) The whole tree of what runs under the SYSTEM python3: `shutil.rmtree(..., dir_fd=...)` is 3.11."""
+        scripts = [ROOT / "jen-update-root.py", ROOT / "jen-kea-helper"]
+        scripts += sorted((ROOT / "tools").glob("*.py")) + sorted((ROOT / "jen").rglob("*.py"))
+        seen = 0
+        for path in scripts:
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) == "rmtree":
+                    seen += 1
+                    assert "dir_fd" not in [kw.arg for kw in node.keywords], f"{path.name}:{node.lineno}"
+        assert seen, "no rmtree call was found: the scan is not reading what it thinks it is"
+
     def test_nothing_there_and_no_directory_are_said_apart(self, tmp_path):
         root = _root_script()
         assert root.consume_trigger("update", str(self._dir(tmp_path))) == "absent"
