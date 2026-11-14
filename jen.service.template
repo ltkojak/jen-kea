@@ -16,6 +16,13 @@ WorkingDirectory=@@APP_DIR@@/current/app
 # path won't exist yet; the shim falls back to the flat venv or the
 # system interpreter, and the migration run / `install.sh --upgrade`
 # creates `current`.
+# v7.1.0-beta.3 (Q213) — before every start, as root (`+`: not User=, not the sandbox), never fatal (`-`): install
+# the two trigger path units of the release that is current and remove the earlier sudoers entry once both are
+# watching. This is what converts a box updated in place: the EARLIER release's updater renders this unit and
+# restarts Jen, and it knows no path unit. It must not depend on sudo: on Ubuntu 22.04 sudo is refused inside
+# this unit ("The no new privileges flag is set"), so there the service user could never ask for it.
+# No argument that names a path: the script reads the layout record and checks it, as its two units do.
+ExecStartPre=-+/usr/bin/python3 /usr/local/sbin/jen-update-root.py --converge-triggers
 ExecStart=@@APP_DIR@@/current/venv/bin/python @@APP_DIR@@/current/app/run.py
 Restart=always
 RestartSec=5

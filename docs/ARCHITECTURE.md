@@ -524,8 +524,13 @@ script, which knows no path unit. So `privileged.request` asks systemd whether t
 active and, while it is not, runs the earlier `sudo` command; the grant is still on such a box.
 The new root script installs and enables both path units at the start of every run and removes
 `/etc/sudoers.d/jen` only once systemd says both are active (`converge_triggers`): the grant goes
-after its replacement works, never before. Jen asks for that run once at startup
-(`converge_at_startup`). `install.sh` does all of it in one step. Health shows a path unit that
+after its replacement works, never before. `jen.service` runs that step itself, as root,
+before every start (`ExecStartPre=-+... --converge-triggers`: no path on the command line, the
+layout checked first, never fatal), so a box updated in place converts at the restart that ends
+the update. It does not depend on `sudo`: on Ubuntu 22.04 `sudo` is refused inside the unit
+("no new privileges"), which CI's 22.04 leg showed. Jen also asks once at startup through the
+earlier grant where that works (`converge_at_startup`). `install.sh` does all of it in one step,
+and `uninstall.sh` removes the path units at every level, as it removes the sudoers entry. Health shows a path unit that
 is not watching (`privileged_triggers`). The `sudo` strings left under `jen/` for Jen's own box
 are in `jen/services/privileged.py` and nowhere else
 (`tests/test_sudoers_command_matching.py` walks the whole tree).

@@ -14,7 +14,7 @@ the 7.0.0 baseline, is archived at
 
 One step (7.1.0-beta.3). It adds no migration and no helper build, and there is nothing for you to do. What you may notice:
 
-**`/etc/sudoers.d/jen` is gone.** Jen used it to restart itself and to start an update or a plugin install. It now restarts by stopping its own process, which systemd starts again, and it asks for an update or a plugin install by leaving an empty request file in `/run/jen` that two new systemd path units watch (`jen-update.path`, `jen-plugin-install.path`). `sudo ./install.sh` installs the units and removes the file in one step. A box updated with **Update Now** converts itself within a minute of the restart. Docker installs never had the file and are unchanged.
+**`/etc/sudoers.d/jen` is gone.** Jen used it to restart itself and to start an update or a plugin install. It now restarts by stopping its own process, which systemd starts again, and it asks for an update or a plugin install by leaving an empty request file in `/run/jen` that two new systemd path units watch (`jen-update.path`, `jen-plugin-install.path`). `sudo ./install.sh` installs the units and removes the file in one step. A box updated with **Update Now** converts itself at the restart that ends the update. Docker installs never had the file and are unchanged.
 
 **Health has a new line, "Update and plugin triggers".** It warns when a path unit is not watching. `sudo ./install.sh` repairs that.
 

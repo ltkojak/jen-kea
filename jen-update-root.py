@@ -2623,12 +2623,17 @@ def main():
     # malformed args (handled above, but a disagreeing invocation would
     # have already returned) — is refused outright rather than silently
     # falling through to the self-update flow.
-    if sys.argv[1:] and sys.argv[1:] != ["--plugins"]:
+    if sys.argv[1:] and sys.argv[1:] not in (["--plugins"], ["--converge-triggers"]):
         log(f"ERROR: unrecognized arguments {sys.argv[1:]!r} — refusing.")
         return 2
     # v7.1.0-beta.3 (Q213) — the layout is trusted from here: install the path units of the release that is
     # current and drop the earlier grant (`converge_triggers`; never fatal)
-    converge_triggers()
+    state = converge_triggers()
+    if sys.argv[1:] == ["--converge-triggers"]:
+        # `jen.service`'s own ExecStartPre, as root before every start: that step and nothing else. No path is
+        # taken from the command line here - the release is the layout's `current`, checked above
+        print(state)
+        return 0 if state in ("converged", "watching") else 1
     if sys.argv[1:] == ["--plugins"]:
         return process_plugin_requests()
 

@@ -150,6 +150,32 @@ class TestTheTriggerIsOneName:
             assert f'"/etc/systemd/system/{unit}": "{unit}"' in root
         assert '--converge-triggers "$APP_DIR"' in install
 
+    def test_every_uninstall_level_removes_the_path_units(self):
+        """(fixup 1) They were removed at level 3 only, and CI's level-1 uninstall left the service user's way to ask for a root run in place."""
+        uninstall = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
+        loop = uninstall.index("for unit in jen-update.path jen-plugin-install.path; do")
+        assert uninstall.count("for unit in jen-update.path jen-plugin-install.path; do") == 1
+        assert uninstall.index("# ── Remove sudoers") < loop < uninstall.index("# ── Remove app files")
+        assert loop < uninstall.index('if [[ "$REMOVAL_LEVEL" == "2" ]]; then')
+
+    def test_the_unit_converges_as_root_before_every_start_and_never_through_sudo(self):
+        """(fixup 1) On Ubuntu 22.04 sudo is refused inside the sandboxed unit, so a box updated in place never converted. The unit does it itself."""
+        unit = (ROOT / "jen.service.template").read_text(encoding="utf-8")
+        line = "ExecStartPre=-+/usr/bin/python3 /usr/local/sbin/jen-update-root.py --converge-triggers\n"
+        assert unit.count(line) == 1 and unit.count("ExecStartPre=") == 1
+        assert unit.index(line) < unit.index("ExecStart=@@APP_DIR@@")
+
+    def test_the_units_own_step_takes_no_path_and_runs_after_the_layout_is_checked(self):
+        root = (ROOT / "jen-update-root.py").read_text(encoding="utf-8")
+        main = root[root.index("\ndef main():") :]
+        bare = main.index('if sys.argv[1:] == ["--converge-triggers"]:')
+        assert main.index("if LAYOUT_ERROR:") < main.index('_ok, _result = check_layout("update")') < bare
+        assert bare < main.index("return process_plugin_requests()")
+        # the form with a path is the installer's, run by a person as root; it is the only one before the gate
+        assert main.index('if sys.argv[1:2] == ["--converge-triggers"] and len(sys.argv) == 3:') < main.index(
+            "if LAYOUT_ERROR:"
+        )
+
 
 # ── the app's half ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -302,7 +328,7 @@ class TestTheTriggerGoesBeforeAnythingThatCanReturn:
         assert main.index('consume_trigger("update")') < first_gate
         assert main.index('consume_trigger("plugins")') < first_gate
         # ... and the units converge only once the layout is trusted
-        assert main.index('check_layout("update")') < main.index("    converge_triggers()\n")
+        assert main.index('check_layout("update")') < main.index("    state = converge_triggers()\n")
 
 
 class _Systemd:

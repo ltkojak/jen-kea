@@ -205,6 +205,23 @@ if [[ -f "$SUDOERS_FILE" ]]; then
     ok "Removed sudoers entry"
 fi
 
+# ── Remove the trigger path units ─────────────────────────────────────────────
+# v7.1.0-beta.3 (Q213) — at EVERY level, as the sudoers entry they replaced: they are what lets the service
+# user ask for a root run, and with the app gone nothing should be able to. (The two oneshot units and the
+# updater stay at levels 1 and 2, as before; a reinstall puts the path units back.)
+removed_path_units=0
+for unit in jen-update.path jen-plugin-install.path; do
+    systemctl disable --now "$unit" 2>/dev/null || true
+    if [[ -f "/etc/systemd/system/$unit" ]]; then
+        rm -f "/etc/systemd/system/$unit"
+        removed_path_units=1
+    fi
+done
+if [[ "$removed_path_units" == "1" ]]; then
+    systemctl daemon-reload 2>/dev/null || true
+    ok "Removed the trigger path units"
+fi
+
 # ── Remove app files ──────────────────────────────────────────────────────────
 if [[ -d "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
@@ -235,11 +252,6 @@ if [[ "$REMOVAL_LEVEL" == "3" ]]; then
     # behind: a root-owned 0700 script and two unit files that name an
     # application that is no longer there. Nothing else here removes them
     # (levels 1 and 2 keep them, as they keep the config a reinstall expects).
-    # v7.1.0-beta.3 (Q213) — the two path units first, so nothing can start the units being removed
-    for unit in jen-update.path jen-plugin-install.path; do
-        systemctl disable --now "$unit" 2>/dev/null || true
-        rm -f "/etc/systemd/system/$unit"
-    done
     for unit in jen-update.service jen-plugin-install.service; do
         systemctl stop "$unit" 2>/dev/null || true
         if [[ -f "/etc/systemd/system/$unit" ]]; then

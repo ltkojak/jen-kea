@@ -1101,6 +1101,7 @@ before the replacement), and the kind chips count only what is open now.
 reached only while the path unit is not active. A request is an empty file in `/run/jen` (the unit's own runtime directory, `0700`), written without following a link; root never reads a
 byte of it. The root script removes the request before it reads the layout or anything else that can make it return, through a handle on the directory opened without following a link,
 whatever the entry is. `/etc/sudoers.d/jen` is removed only after systemd says both path units are active, and a failure of systemd leaves it in place. No release ships a sudoers file.
+The conversion never depends on `sudo`: `jen.service` runs it as root before every start, with no path on the command line and after the layout check.
 **Established.** Q213.
 **Enforced at.** `jen/services/privileged.py` (`request`, `converge_at_startup`), `jen-update-root.py` (`consume_trigger`, `converge_triggers`, `main`), `jen-update.path`,
 `jen-plugin-install.path`, `jen.service.template`.
