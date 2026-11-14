@@ -60,7 +60,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="7.1.0-beta.3"
+JEN_VERSION="7.1.0-beta.4"
 
 JEN_USER="www-data"
 # v5.67.0-beta.18 (Q132) — every apt-get / pip / venv / systemctl / mysql call's stdout AND stderr goes here
@@ -621,7 +621,7 @@ _set_paths() {
     CONFIG_FILE="$CONFIG_DIR/jen.config"
     CONFIG_LOCK_FILE="${CONFIG_DIR}/jen.config.lock"   # the advisory flock Jen's AppConfig writers take (v5.68.0-beta.18, Q153)
     # v5.67.0-beta.7 (Q119, item c) — the external-files rollback snapshot
-    # (jen-sudoers, the systemd units, jen-update-root.py itself) is NOT a
+    # (the earlier sudoers grant, the systemd units, jen-update-root.py itself) is NOT a
     # config backup and must never live under $CONFIG_DIR: that directory is
     # service-user-owned (§6.1), so a compromised service account could edit
     # a snapshotted copy of jen-update-root.py or a unit file and wait for
@@ -2120,7 +2120,7 @@ render_jen_service() {
 
 # ── Install files ─────────────────────────────────────────────────────────────
 # v5.14.0 — the whole tarball goes into releases/$JEN_VERSION/app; the
-# shipped OUT-OF-TREE files (jen.service.template, jen-sudoers,
+# shipped OUT-OF-TREE files (jen.service.template, the two path units,
 # jen-update-root.py, jen-update.service) are installed from that copy.
 # `current` is NOT flipped here — setup_venv() has to build
 # releases/$JEN_VERSION/venv first, then activate_release() does the
@@ -2181,6 +2181,7 @@ install_files() {
         case "$(/usr/bin/python3 /usr/local/sbin/jen-update-root.py --converge-triggers "$APP_DIR" 2>/dev/null | tail -1)" in
             converged) ok "Installed the trigger path units  ${DIM}(the earlier sudoers entry is removed)${NC}" ;;
             watching)  ok "Installed the trigger path units" ;;
+            grant-kept) warn "The trigger path units are watching, and $SUDOERS_FILE could not be removed — remove that file by hand" ;;
             *)         warn "The trigger path units did not start — Update and plugin installs need them (systemctl status jen-update.path jen-plugin-install.path)" ;;
         esac
     fi

@@ -1166,8 +1166,13 @@ def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict
             "code": "error",
             "detail": f"this host has no helper to remove {path} with - delete that file by hand",
         }
-    except HelperError as e:
+    except HelperUnreachable as e:
+        # no SSH session was opened: nothing was sent, and the file is where it was
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
+    except HelperError as e:
+        # (Q235, AT3) the helper RAN and its answer could not be used: whether the file is still there is not known. `raised`, as in `apply_config` (Q213, AS7):
+        # this is the other branch of the same rollback, and it said "the new entry is still in the config" about a file the helper may have removed
+        return {"ok": False, "code": "error", "detail": str(e), "via": "helper", "raised": True}
     if resp.get("ok"):
         return {"ok": True, "code": "ok", "via": "helper"}
     err = resp.get("error")

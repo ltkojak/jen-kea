@@ -2,6 +2,31 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.1.0-beta.4] - 2026-11-14
+
+*The fourth beta of 7.1.0, on the **beta** channel. It is the ONE fix set of the executing pass on v7.1.0-beta.3 (no P1; two P2, both in the certificate upload). It adds no migration and no helper build, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **The certificate upload no longer depends on the order of the paste.** 7.1.0-beta.3 found the top of an uploaded chain by following issuer NAMES and kept the last match. A CA that re-issued its root under the same name publishes a bundle that still carries the expired earlier copy; with both in the upload, the order they were pasted in chose which one judged the chain, and three of five ordinary arrangements were refused although every client accepts them. The top is now chosen by which certificate signed which, and the chain is accepted when a client that holds ANY top of the upload accepts it. An upload whose only root is the expired copy is still refused, and the refusal now names the certificate: `"CN=..." expired on 2026-11-09`. Take that certificate out of the file when your clients hold a newer one.
+2. **A `fullchain.pem` from a public CA has its intermediate's signature checked.** That file is the server certificate and one intermediate; the root is not in it. Jen trusted the intermediate itself to judge the file, and a verifier does not check the signature of the certificate it was told to trust, so a damaged or forged intermediate was accepted and installed. Jen now asks first with the CA certificates the box itself trusts (its `ca-certificates`), where the root is held, and the intermediate is judged like the rest. What stays outside is stated: for a private CA whose root is neither in the upload nor installed on Jen's box, the signature of the topmost uploaded certificate cannot be checked by anyone but your clients. Paste the root with the chain and it is.
+3. **A certificate with an extension that cannot be parsed is refused with a sentence.** It used to end in the page's general failure message.
+4. **Settings → Databases → Import.** A table name the file does not carry is refused before anything runs; it used to take a whole snapshot, restore nothing and show no message. And no ticked table restores nothing whichever release drew the confirmation page: a page drawn by 7.1.0-beta.2 and submitted after the upgrade still restored every table.
+5. **A rollback that removes a file and gets no usable answer is STATE NOT KNOWN.** 7.1.0-beta.3 fixed this for a rollback that writes the earlier config back. The rollback of a host that had no config file before the change removes the file instead, and it still said the new entry was in the config.
+6. **Restart under the fallback server.** When gunicorn cannot load, Jen runs on its fallback server and says so loudly. There, 7.1.0-beta.3's restart signaled a process Jen may not signal: the page said "restarting" and nothing happened. Jen now ends its own process and systemd, or the container's restart policy, starts it again.
+7. **On Ubuntu 22.04 the Restart button, Update Now and plugin installs from the page did not work in any release from 5.17.0 to 7.1.0-beta.2.** The 7.1.0-beta.3 notes said "may never have worked". It is measured now: systemd 249 gives Jen's sandboxed unit the no-new-privileges flag, and `sudo` refuses to run under it; Ubuntu 24.04 does not. A 22.04 box therefore cannot update itself to this release from the page: upgrade it once with `sudo ./install.sh`. From 7.1.0-beta.3 on, none of the three needs `sudo`.
+
+**Smaller things.**
+
+- The root script stops when the request file that started it cannot be removed. It used to carry on, and the path unit started it again the moment it finished. A directory nested too deep to remove is one such case and no longer raises.
+- A box whose path units are watching while the earlier sudoers file could not be removed says so; the installer printed it as done.
+- A rollback of an update reloads systemd for a restored path unit as it does for a restored service unit.
+- With the Jen database away, a ticked Jen export shows "Export failed" again where 7.1.0-beta.3 showed the error page.
+- The fail-closed audit (`S10`) reads an `if` inside an `except`: a handler that answers nothing for SOME errors was invisible to it. It found two more sites; both are reviewed and listed with their reason.
+- Comments and one docstring that still described the sudoers file are corrected; `docs/ARCHITECTURE.md` §3.10 no longer says the grant is unchanged.
+
+**Registered, not fixed here.** The Health row for the two path units answers from systemd alone (AT12). A failed `install.sh` upgrade restores the earlier sudoers file while the new path units stay (AT21). The recovery bundle restores `ssl/` without the upload's checks (AT16). The upload has no limit on the number of certificates (AT15).
+
 ## [7.1.0-beta.3] - 2026-11-13
 
 *The third beta of 7.1.0, on the **beta** channel. It is the release 7.1.0 is for: Jen's own box has no sudoers entry. It also carries the ONE fix set of the executing pass on v7.1.0-beta.2 (no P1; one P2). It adds no migration and no helper build, and nothing needs a manual step.*

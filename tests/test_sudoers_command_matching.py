@@ -324,6 +324,18 @@ class TestRootRemovesTheTriggerFirst:
         monkeypatch.setattr(os, "rmdir", refuse)
         assert _root_script().consume_trigger("update", str(run)) == "failed"
 
+    def test_a_directory_nested_deeper_than_python_recurses_is_said_and_never_raised(self, tmp_path, monkeypatch):
+        """(Q235, AT5) `RecursionError` is not an `OSError`: it left `consume_trigger` and `main` with the trigger in place."""
+        root = _root_script()
+        run = tmp_path / "run"
+        (run / "update.request" / "a").mkdir(parents=True)
+
+        def too_deep(name, dir_fd):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(root, "_remove_tree_at", too_deep)
+        assert root.consume_trigger("update", str(run)) == "failed"
+
     def test_no_script_root_runs_uses_an_argument_python_310_does_not_have(self):
         """(fixup 2) The whole tree of what runs under the SYSTEM python3: `shutil.rmtree(..., dir_fd=...)` is 3.11."""
         scripts = [ROOT / "jen-update-root.py", ROOT / "jen-kea-helper"]
@@ -364,8 +376,36 @@ class TestTheTriggerGoesBeforeAnythingThatCanReturn:
         first_gate = main.index("if LAYOUT_ERROR:")
         assert main.index('consume_trigger("update")') < first_gate
         assert main.index('consume_trigger("plugins")') < first_gate
+        # (Q235, AT5) ... and its answer is read: nothing runs over a trigger that could not be removed
+        assert main.index('if removed == "failed":') < first_gate
         # ... and the units converge only once the layout is trusted
         assert main.index('check_layout("update")') < main.index("    state = converge_triggers()\n")
+
+
+class TestNothingRunsOverATriggerThatStays:
+    """(Q235, AT5) `main` discarded `consume_trigger`'s answer, so "failed" changed nothing."""
+
+    @pytest.mark.parametrize("argv", [[], ["--plugins"]])
+    def test_main_stops_before_the_layout_is_read(self, monkeypatch, argv):
+        root = _root_script()
+        asked = []
+        monkeypatch.setattr(root, "consume_trigger", lambda kind: asked.append(kind) or "failed")
+        monkeypatch.setattr(root, "log", lambda *a, **k: None)
+
+        def never(*a, **k):
+            raise AssertionError("the run went on over a trigger that is still there")
+
+        monkeypatch.setattr(root, "check_layout", never)
+        monkeypatch.setattr(root, "converge_triggers", never)
+        monkeypatch.setattr(root.sys, "argv", ["jen-update-root.py", *argv])
+        assert root.main() == 1
+        assert asked == ["plugins" if argv else "update"]
+
+    def test_a_restored_path_unit_is_reloaded_like_a_service(self):
+        """(Q235, AT14)"""
+        src = (ROOT / "jen-update-root.py").read_text(encoding="utf-8")
+        assert 'live_path.endswith((".service", ".path"))' in src
+        assert 'live_path.endswith(".service")' not in src
 
 
 class _Systemd:
@@ -426,6 +466,20 @@ class TestTheGrantGoesAfterItsReplacementWorks:
         systemd.ran.clear()
         assert root.converge_triggers(str(app), str(units), str(sudoers)) == "watching"
         assert "daemon-reload" not in [argv[1] for argv in systemd.ran]
+
+    def test_a_grant_that_cannot_be_removed_is_not_called_watching(self, tmp_path, monkeypatch):
+        """(Q235, AT13) It answered "watching", which `main` exits 0 on and the installer prints as done."""
+        root, app, units, sudoers, _systemd = self._box(tmp_path, monkeypatch, active=True)
+
+        def refuse(path, *a, **k):
+            raise PermissionError("read-only file system")
+
+        monkeypatch.setattr(root.os, "unlink", refuse)
+        assert root.converge_triggers(str(app), str(units), str(sudoers)) == "grant-kept"
+        assert sudoers.exists()
+        assert "grant-kept)" in (ROOT / "install.sh").read_text(encoding="utf-8")
+        main = (ROOT / "jen-update-root.py").read_text(encoding="utf-8")
+        assert main.count('return 0 if state in ("converged", "watching") else 1') == 2
 
     def test_systemd_failing_is_never_fatal_and_leaves_the_grant(self, tmp_path, monkeypatch):
         root, app, units, sudoers, _systemd = self._box(tmp_path, monkeypatch, active=True)

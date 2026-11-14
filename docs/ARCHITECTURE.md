@@ -1758,7 +1758,8 @@ result lands as `<id>.deps.result` and is consumed like an install
 result (audit `PLUGIN_DEPS` / `PLUGIN_DEPS_FAILED`; no restart — the
 plugin checks for its binary at call time). Docker and non-systemd
 hosts see the `apt install` command instead, as before. Rule 8: the
-sudoers grant is unchanged — the unit and its argv are the same.
+unit and its argv are the same, and it is asked for the way §3.1 says
+(a request file since 7.1.0-beta.3; a sudoers grant before it).
 
 ### 3.11 Multi-server change sets (v5.28.0)
 

@@ -70,6 +70,8 @@ def restart_service(delay: float = 2.0) -> str:
         the same, given a restart policy (`--restart=unless-stopped`, or a systemd unit / Quadlet that restarts it);
       * dev     -> "none": nothing is restarted, and the caller must say so instead of claiming it.
 
+    Under run.py's werkzeug fallback (gunicorn could not load; `JEN_SERVER=werkzeug`) there is no master: the process ends itself.
+
     The restart runs in a daemon thread after `delay` seconds so the HTTP response that asked for it is
     delivered first."""
     kind = deployment()
@@ -77,6 +79,11 @@ def restart_service(delay: float = 2.0) -> str:
         return "none"
 
     def _go():
+        if os.environ.get("JEN_SERVER") == "werkzeug":
+            # (Q235, AT8) run.py's fallback server IS the unit's main process: its parent is PID 1, which Jen may not signal, so the page said "restarting" and
+            # nothing restarted. The process ends itself; `Restart=always` (systemd) or the container's restart policy starts it again. `os._exit`, not a signal:
+            # a container's first process ignores a SIGTERM it has no handler for
+            os._exit(0)
         os.kill(os.getppid(), signal.SIGTERM)
 
     def _later():

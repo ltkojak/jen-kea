@@ -150,12 +150,13 @@ def export_jen():
     if tables is None and "picker" in request.form:
         flash("Tick at least one Jen table to export.", "error")
         return redirect(url_for("database.database", tab="export"))
-    # (Q213, AS5) and a name the export does not offer is refused, the Kea card's rule: it used to be dropped, and a file with no table in it was written and audited as an export
-    if tables is not None and "picker" in request.form and not set(tables) <= set(dbexport.export_tables()):
-        flash("Not an exportable Jen table.", "error")
-        return redirect(url_for("database.database", tab="export"))
     tmp_path = None
     try:
+        # (Q213, AS5) and a name the export does not offer is refused, the Kea card's rule: it used to be dropped, and a file with no table in it was written and
+        # audited as an export. (Q235, AT9) Inside the `try`: the list of tables is a database read, and with the database away this was a 500 page
+        if tables is not None and "picker" in request.form and not set(tables) <= set(dbexport.export_tables()):
+            flash("Not an exportable Jen table.", "error")
+            return redirect(url_for("database.database", tab="export"))
         os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".jen-export.json.gz")
         os.close(fd)
@@ -768,21 +769,26 @@ def import_confirm():
     with open(tmp_path, "rb") as f:
         file_bytes = f.read()
     os.unlink(tmp_path)
-    # (Q213, AS2) the page's Jen form carries `picker`: with it, no box ticked is nothing to restore. It used to mean EVERY table of the file - in replace mode the
-    # users among them. A request without the marker (a script) is answered as before
-    if "picker" in request.form and not request.form.getlist("tables"):
-        flash("Tick at least one table to restore. Nothing was changed. Upload the file again.", "error")
-        return redirect(url_for("database.database", tab="import"))
-
-    meta, _data, parse_err = dbexport.parse_import_file(file_bytes)
+    meta, data, parse_err = dbexport.parse_import_file(file_bytes)
     if parse_err or not meta:
         flash("Import session expired. Please re-upload.", "error")
         return redirect(url_for("database.database", tab="import"))
     db = meta.get("database")
+    if db == "jen":
+        # (Q213, AS2) no box ticked is nothing to restore. It used to mean EVERY table of the file - in replace mode the users among them. (Q235, AT4) With or
+        # without the form's `picker` field: the one request that omits it is a confirmation page an earlier release rendered, submitted after the upgrade. And a
+        # name the file does not carry is refused: it was dropped later, after a whole snapshot was taken, and the page came back with no message at all
+        asked = request.form.getlist("tables")
+        if not asked:
+            flash("Tick at least one table to restore. Nothing was changed. Upload the file again.", "error")
+            return redirect(url_for("database.database", tab="import"))
+        if not set(asked) <= set(data):
+            flash("Not a table of this file. Nothing was changed. Upload the file again.", "error")
+            return redirect(url_for("database.database", tab="import"))
 
     try:
         if db == "jen":
-            tables = request.form.getlist("tables") or None
+            tables = request.form.getlist("tables")
             mode = request.form.get("mode", "replace")
             if mode == "replace":
                 # v5.67.0-beta.14 (Q128, item b) — a snapshot first, put back on any failure: the confirmation

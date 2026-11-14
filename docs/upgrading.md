@@ -10,6 +10,18 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.4: the certificate upload is judged by what signed what
+
+One step (7.1.0-beta.4). It adds no migration and no helper build. One thing to do, on Ubuntu 22.04 only:
+
+**On Ubuntu 22.04, upgrade once with `sudo ./install.sh`.** The Restart button, Update Now and plugin installs from the page did not work on 22.04 in any release from 5.17.0 to 7.1.0-beta.2: its systemd refuses `sudo` inside Jen's unit. From 7.1.0-beta.3 on they need no `sudo`, so after this one upgrade by hand they work. Ubuntu 24.04 was never affected.
+
+**Settings → Security: a CA bundle with an old and a new root is accepted in any order.** 7.1.0-beta.3 could refuse it depending on the order of the paste. When the only root in the upload has expired, the refusal names that certificate; take it out of the file when your clients hold a newer one.
+
+**A `fullchain.pem` from a public CA has its intermediate checked against the CA certificates Jen's box trusts.** A damaged intermediate is refused. For a private CA, paste the root with the chain so the whole chain can be checked.
+
+**Settings → Databases → Import refuses a table the file does not carry,** and restores nothing when no table is ticked, whichever release drew the page.
+
 ## 7.1.0-beta.3: Jen's own box has no sudoers entry
 
 One step (7.1.0-beta.3). It adds no migration and no helper build, and there is nothing for you to do. What you may notice:
@@ -20,7 +32,7 @@ One step (7.1.0-beta.3). It adds no migration and no helper build, and there is 
 
 **If you kept your own edits in `/etc/sudoers.d/jen`,** move them to a file of your own before upgrading. The upgrade removes that file.
 
-**Settings → Security judges every certificate of a chain.** 7.1.0-beta.2 judged the certificate and the one above it. A `fullchain.pem` of three certificates whose top one has expired was still accepted; it is refused now. A certificate whose only stated purpose is "any" is refused with the sentence that says it was not issued for a server.
+**Settings → Security judges every certificate on the path from yours to the top of the upload.** 7.1.0-beta.2 judged the certificate and the one above it. A `fullchain.pem` of three certificates whose top one has expired was still accepted; it is refused now. A certificate whose only stated purpose is "any" is refused with the sentence that says it was not issued for a server.
 
 **Settings → Databases → Import: untick every table and nothing is restored.** It used to restore every table in the file.
 

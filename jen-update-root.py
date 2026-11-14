@@ -192,8 +192,8 @@ SUDOERS_PATH = "/etc/sudoers.d/jen"
 PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
 
 # ── Layout (v5.67.0, Q114) ───────────────────────────────────────────────────
-# LAYOUT_FILE is a FIXED path, never an argument (rule 8 / jen-sudoers pins
-# this script's invocation byte-for-byte — www-data must never be able to
+# LAYOUT_FILE is a FIXED path, never an argument (rule 8: the units that start
+# this script fix its whole command line — www-data must never be able to
 # hand root a path of its own choosing; see docs/ARCHITECTURE.md §3.1).
 # Absent = every install before this Q, and every install that never asked
 # to relocate: today's historical defaults below, unchanged. Present but
@@ -626,7 +626,8 @@ def consume_trigger(kind, trigger_dir=TRIGGER_DIR):
         try:
             _remove_tree_at(name, fd)
             return "removed"
-        except OSError as e:
+        except (OSError, RecursionError) as e:
+            # (Q235, AT5) a directory nested deeper than Python recurses is a RecursionError, which is not an OSError: it left this function and `main`
             log(f"ERROR: could not remove the trigger {trigger_dir}/{name}: {e} — its path unit will fire again.")
             return "failed"
     finally:
@@ -663,7 +664,8 @@ def converge_triggers(app_dir=None, unit_dir=SYSTEMD_UNIT_DIR, sudoers_path=SUDO
     every privileged run and again after an update installed a new release, so a box updated in place by an
     earlier release's script converts itself the first time this one runs. Never fatal: any failure leaves the
     grant where it is and the app keeps using it. Returns "no-units" (the release ships none: an earlier one),
-    "not-active", "converged" (the grant was removed now) or "watching"."""
+    "not-active", "converged" (the grant was removed now), "watching" or "grant-kept" (Q235, AT13: both units watch and the grant could not be removed; it
+    said "watching", which the installer prints as done)."""
     app_dir = app_dir or os.path.join(INSTALL_DIR, "current", "app")
     sources = [os.path.join(app_dir, unit) for unit in TRIGGER_PATH_UNITS]
     if not all(os.path.isfile(src) for src in sources):
@@ -692,7 +694,7 @@ def converge_triggers(app_dir=None, unit_dir=SYSTEMD_UNIT_DIR, sudoers_path=SUDO
             os.unlink(sudoers_path)
         except OSError as e:
             log(f"WARNING: the trigger path units are active but {sudoers_path} could not be removed: {e}")
-            return "watching"
+            return "grant-kept"
         log(f"The trigger path units are active: removed {sudoers_path}. Jen's own box has no sudoers grant now.")
         return "converged"
     return "watching"
@@ -780,7 +782,7 @@ def install_self_update_files(
     """
     v5.3.3 fix — a real gap found by a third-party review of the v5.2.6
     redesign: the file install (the release directory, plus
-    install_external_files() for jen.service / jen-sudoers) never
+    install_external_files() for jen.service and, then, the sudoers file) never
     installed a new copy of THIS script or of jen-update.service itself.
     A fix shipped inside jen-update-root.py would never reach
     an already-running instance via the in-app update button — only a
@@ -1066,7 +1068,8 @@ def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR, current_link=None):
         saved = os.path.join(ext_dir, name)
         if os.path.isfile(saved):
             shutil.copy2(saved, live_path)
-            if live_path.endswith(".service"):
+            # (Q235, AT14) a path unit is a unit too: a restored `jen-update.path` went back with no reload, and systemd kept the content it had
+            if live_path.endswith((".service", ".path")):
                 reload_needed = True
     if reload_needed:
         subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=False)
@@ -1148,8 +1151,8 @@ def _installed_version():
 # ./install.sh`, so this is a direct function call, not a sudoers-gated
 # one) and by uninstall.sh (the installed /usr/local/sbin copy, same
 # reasoning). Neither this mode nor any other new argv is EVER reachable
-# from a compromised www-data: jen-sudoers pins the two systemd units'
-# ExecStart lines byte-for-byte (no argv, or exactly "--plugins" — see
+# from a compromised www-data: the two systemd units' ExecStart lines are
+# fixed, root-owned text (no argv, or exactly "--plugins" — see
 # main() below and docs/ARCHITECTURE.md §3.1), and the installed script
 # itself is root:root mode 0700, so www-data cannot even exec it directly.
 # Only a human already running install.sh/uninstall.sh as root reaches
@@ -1513,8 +1516,8 @@ def render_unit_cli(argv):
     with /opt/jen, /etc/jen and /var/lib/jen). Every directory — given or resolved — passes the layout
     path grammar before anything is written, an unresolved placeholder in the output is an error, and the
     file is written root-owned 0644 through a temporary file and a rename. Run by hand as root, like
-    --check-layout and --write-layout-markers: never reachable through sudoers (jen-sudoers pins its three
-    grants byte for byte, and none of them is this)."""
+    --check-layout and --write-layout-markers: never reachable from the service user (a trigger file starts a unit
+    whose command line is fixed, and neither unit's is this)."""
     if argv[:1] in (["--help"], ["-h"]):
         print(_RENDER_UNIT_USAGE)
         return 0
@@ -2553,7 +2556,7 @@ def _rollback_release(snapshot_dir, prev, migration_run, version, release_dir):
             saved = os.path.join(ext_dir, name)
             if os.path.isfile(saved):
                 shutil.copy2(saved, live_path)
-                if live_path.endswith(".service"):
+                if live_path.endswith((".service", ".path")):  # (Q235, AT14) as in restore_snapshot
                     reload_needed = True
         if reload_needed:
             subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=False)
@@ -2607,10 +2610,18 @@ def main():
 
     # v7.1.0-beta.3 (Q213) — the two runs a trigger file starts. Its removal is the FIRST thing either does: every
     # `return` below this line would otherwise leave it for the path unit to fire on again (`consume_trigger`).
+    removed = None
     if not sys.argv[1:]:
-        consume_trigger("update")
+        removed = consume_trigger("update")
     elif sys.argv[1:] == ["--plugins"]:
-        consume_trigger("plugins")
+        removed = consume_trigger("plugins")
+    if removed == "failed":
+        # (Q235, AT5) the answer was discarded and the run went on with its trigger still there, to be started again the moment it ended. Nothing runs over a
+        # trigger that cannot be removed: systemd stops the path unit after a few such starts, and Health says which unit is not watching
+        log(
+            "ERROR: the trigger file could not be removed — refusing to run. Remove it by hand, then: systemctl restart jen-update.path jen-plugin-install.path"
+        )
+        return 1
 
     # v5.67.0 (Q114) — refuses outright, before touching anything, if
     # LAYOUT_FILE was present but failed validation (see load_layout()
@@ -2633,10 +2644,9 @@ def main():
         log(f"ERROR: {_result} — refusing to run.")
         return 1
 
-    # v5.27.0 (Q23) — the other argv this script accepts via the
-    # sudoers-gated path, and only because jen-sudoers pins the entire
-    # invocation byte-for-byte ("sudo systemctl start --no-block
-    # jen-plugin-install.service", which in turn runs this script with
+    # v5.27.0 (Q23) — the other argv this script accepts from a unit the
+    # service user can start, and only because that unit's command line is
+    # fixed (`jen-plugin-install.service` runs this script with
     # exactly this one flag, nothing attacker-controllable). Anything
     # else — including --check-layout/--write-layout-markers with
     # malformed args (handled above, but a disagreeing invocation would

@@ -439,6 +439,8 @@ def _serve_werkzeug_fallback(use_ssl: bool, http_port: int, https_port: int):
 
     from jen.services.background import start_background_workers
 
+    # (Q235, AT8) `runtime.restart_service` reads this: there is no gunicorn master to signal here, the process restarts by ending itself
+    os.environ["JEN_SERVER"] = "werkzeug"
     app = create_app()
     start_background_workers(app)
 

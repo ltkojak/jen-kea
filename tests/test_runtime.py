@@ -190,6 +190,28 @@ class TestRestartService:
         assert "Restart=always" in (repo / "jen.service.template").read_text(encoding="utf-8")
         assert not (repo / "jen-sudoers").exists()
 
+    def test_the_fallback_server_ends_itself_and_signals_nobody(self, monkeypatch):
+        """(Q235, AT8) Under run.py's werkzeug fallback the app is the unit's main process: its parent is PID 1, the signal was refused in a thread and the page had
+        already said "restarting"."""
+        import threading
+
+        _clear_signals(monkeypatch)
+        _patch_dockerenv(monkeypatch, False)
+        monkeypatch.setenv("JEN_SERVICE_MANAGER", "systemd")
+        monkeypatch.setenv("JEN_SERVER", "werkzeug")
+        done, ended, sent = threading.Event(), [], []
+        monkeypatch.setattr(runtime.os, "_exit", lambda code: (ended.append(code), done.set()))
+        monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+        monkeypatch.setattr(runtime.os, "getppid", lambda: 1)
+        assert runtime.restart_service(delay=0) == "systemd"
+        self._wait(done)
+        assert ended == [0]
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        run_py = (repo / "run.py").read_text(encoding="utf-8")
+        fallback = run_py[run_py.index("def _serve_werkzeug_fallback") :]
+        assert 'os.environ["JEN_SERVER"] = "werkzeug"' in fallback
+        assert run_py.count('os.environ["JEN_SERVER"]') == 1
+
     def test_the_module_cannot_shell_out(self):
         assert not hasattr(runtime, "subprocess")
 

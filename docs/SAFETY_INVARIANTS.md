@@ -1115,11 +1115,15 @@ The conversion never depends on `sudo`: `jen.service` runs it as root before eve
 
 ### CERT-CHAIN-001 - An uploaded certificate chain is judged by a verifier that trusts ONE certificate, the top of the issuer path the upload holds
 **Rule.** `chain_refusal` gives the verifying client exactly one trust anchor, so every certificate between the first and that anchor is judged (validity, CA flag, path length,
-signature). A list of anchors lets the verifier stop at the first it can chain to. "Issuer not found" is never a refusal: the root is the client's.
-**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor).
+signature). A list of anchors lets the verifier stop at the first it can chain to. "Issuer not found" is never a refusal: the root is the client's. The top is chosen by which
+certificate SIGNED which (`_chain_tops`), never by a name or the order of the paste; when the upload holds several tops there is one handshake for each, and the chain is accepted
+when any accepts. Before them the verifier is asked with the box's own CA store and no uploaded anchor, so a top whose issuer the box holds has its own signature judged.
+**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature).
 **Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
 **Tests.**
 - `tests/test_a_chain_is_walked_to_its_top.py::TestTheWholePathIsJudged`
+- `tests/test_the_anchor_is_chosen_by_what_verifies.py::TestARootAndItsEarlierCopy`
+- `tests/test_the_anchor_is_chosen_by_what_verifies.py::TestTheBoxStoreJudgesTheTop`
 - `tests/test_a_fix_reaches_both_ends.py::TestTheChainIsJudgedByAVerifier`
 
 ## The browser surface (Q208)

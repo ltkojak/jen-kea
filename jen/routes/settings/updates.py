@@ -228,20 +228,14 @@ def self_update():
     itself. It optionally takes a database backup (unchanged — that's
     Jen backing up its own database with credentials it already
     legitimately has, not a privilege-boundary concern) and then
-    triggers `sudo systemctl start --no-block jen-update.service` — a
-    fixed, hardcoded command with no attacker-controllable input,
-    matching the same already-safe pattern used for
-    `sudo systemctl restart jen`. `--no-block` matters here: without
-    it, this call would wait for the triggered service to fully
-    complete, including its own final `systemctl restart jen` step —
-    which kills the very Flask worker process that's blocked waiting
-    for this call to return. (v5.2.9 fix: the sudoers rule authorizing
-    this command must match it byte-for-byte, including --no-block —
-    sudo matches commands literally, and the rule originally
-    authorized `start jen-update.service` without that flag, which
-    meant every self-update attempt failed with a sudo permission
-    denial, not the "sudo systemctl restart jen" pattern working as
-    intended.) The entire pipeline now runs
+    asks for `jen-update.service` through `privileged.request("update")`:
+    an empty request file in `/run/jen` that `jen-update.path` watches
+    (v7.1.0-beta.3, Q213) — nothing of this request reaches root, and the
+    call returns at once, before the update's own restart of Jen ends the
+    worker that made it. Until that release it was `sudo systemctl start
+    --no-block jen-update.service` under a sudoers grant; that command
+    survives in `privileged.py` only, for a box whose path units are not
+    installed yet. The entire pipeline runs
     inside /usr/local/sbin/jen-update-root.py, a script owned
     root:root, mode 0700, that www-data cannot read or modify, and
     which re-derives the release information from GitHub itself rather

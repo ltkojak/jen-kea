@@ -504,7 +504,19 @@ S10_MODULES = (
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
-    ("jen/routes/settings/security.py", "chain_refusal", "(ssl.SSLWantReadError, ssl.SSLWantWriteError)", "pass"): (
+    ("jen/routes/settings/security.py", "_signed_by", "Exception", "return False"): (
+        "False is 'this certificate did not sign that one': the walk then steps to the certificate of that NAME, and the verifier is what refuses the signature - "
+        "nothing is accepted on a False (Q235, AT2)"
+    ),
+    ("jen/services/kea_host.py", "_read_config_versioned", "HelperMissing", "if: return (None, None)"): (
+        "a host with no helper, read by a caller that asked for the helper and nothing else (the log tail): no config is 'not read' and the caller shows no log "
+        "lines for it - nothing is decided or written on it (found by the detector's `if` rule, Q235, AT6)"
+    ),
+    ("jen/services/kea_tls.py", "_group_certificate_path", "(OSError, ValueError)", 'if: return ""'): (
+        "'' is 'no certificate loads': the one caller answers `unknown` for it and the rotation records `remote-unknown`, never a guess (found by the "
+        "detector's `if` rule, Q235, AT6)"
+    ),
+    ("jen/routes/settings/security.py", "_handshake", "(ssl.SSLWantReadError, ssl.SSLWantWriteError)", "pass"): (
         "the in-memory handshake's own flow control: a side that needs the peer's bytes is not done, and only two completed sides return None - a handshake that never "
         "completes is the refusal after the loop (Q213, AS9)"
     ),
@@ -911,11 +923,18 @@ def s10_sites(source, rel="<test>"):
         if not isinstance(node, ast.ExceptHandler):
             continue
         body = [b for b in node.body if not _s10_is_log(b)]
+        kind = ast.unparse(node.type) if node.type is not None else "bare"
+        # (Q235, AT6) an `if` is not a hiding place: `except E as e: if e.code in SKIPPED: return None` followed by a refusal is an empty answer for SOME errors,
+        # and the detector used to read only a handler that was one bare statement. A branch of an `if` directly in the handler is read the same way
+        for branch in (b for b in body if isinstance(b, ast.If)):
+            for stmt in branch.body + branch.orelse:
+                effect = _s10_effect(stmt)
+                if effect:
+                    out.append((rel, _enclosing_function(node, parents), kind, "if: " + effect, node.lineno))
         if len(body) != 1:
             continue
         effect = _s10_effect(body[0])
         if effect:
-            kind = ast.unparse(node.type) if node.type is not None else "bare"
             out.append((rel, _enclosing_function(node, parents), kind, effect, node.lineno))
     return out
 
@@ -962,6 +981,8 @@ class TestS10FailedReadsOnSecurityPathsAreNotEmptyResults:
                 "def e():\n try:\n  x()\n except Exception:\n  raise\n"
                 "def f():\n try:\n  x()\n except Exception:\n  return refusal('no')\n"
                 "def g():\n try:\n  x()\n except Exception:\n  y()\n  return None\n"
+                "def h():\n try:\n  x()\n except E as e:\n  if e.code in SKIPPED:\n   return None\n  return refusal(e)\n"
+                "def i():\n try:\n  x()\n except E as e:\n  if e.code in SKIPPED:\n   return refusal(e)\n  raise\n"
             )
         }
         assert found == {
@@ -969,6 +990,7 @@ class TestS10FailedReadsOnSecurityPathsAreNotEmptyResults:
             ("b", "ValueError", "return None"),
             ("c", "(A, B)", "pass"),
             ("d", "Exception", "return default"),
+            ("h", "E", "if: return None"),
         }, found
 
 

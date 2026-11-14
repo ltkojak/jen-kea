@@ -233,43 +233,16 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
 _ISSUER_NOT_HELD = frozenset({2, 18, 19, 20, 21})
 
 
-def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None:
-    """(Q234, AQ11, AQ18) What a verifying client refuses the PRESENTED CHAIN for, or None. `cert_refusal` reads one certificate and a `fullchain.pem` holds several: a valid
-    leaf under an expired intermediate was accepted, installed and followed by a restart into an HTTPS every client refuses. This asks the verifier clients use: a TLS
-    handshake in memory between the server context that just loaded the material and a client that trusts ONE certificate: the top of the issuer path the upload itself holds,
-    walked from the first certificate by issuer name (the first itself when nothing uploaded issued it). So an expired or not-yet-valid certificate anywhere on that path, a
-    critical extension no client handles, a CA that may not sign and a broken signature are each refused in OpenSSL's own words. "Issuer not found" is not a refusal: the root
-    is the client's, not the upload's.
-    (Q213, AS1) It used to trust EVERY certificate after the first, so the verifier stopped at the first one it could chain to: a leaf, its issuer and an expired certificate
-    above them was accepted. One anchor, at the top, makes the verifier walk the whole path. A certificate of the upload that is not on the path is not judged."""
-    import re
+def _load_box_store(client) -> None:
+    """The CA certificates this box itself trusts (its `ca-certificates`), into `client`. A seam: the tests give it a store of their own."""
+    client.load_default_certs()
+
+
+def _handshake(server_ctx, client):
+    """A TLS handshake in memory between the server context that loaded the upload and `client`. None when both sides complete, else `(sentence, verify_code)`;
+    `verify_code` is None for a failure that is not the chain's verification."""
     import ssl
 
-    from cryptography import x509
-
-    pems = re.findall(
-        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", cert_data + "\n" + (ca_data or ""), re.S
-    )
-    if not pems:
-        return "the certificate file is not a PEM certificate"
-    try:
-        certs = [x509.load_pem_x509_certificate(pem.encode("utf-8")) for pem in pems]
-    except ValueError as e:
-        return f"a certificate of the chain could not be read ({e})"
-    top, walked = 0, {0}
-    while True:
-        above = next((i for i, c in enumerate(certs) if i not in walked and c.subject == certs[top].issuer), None)
-        if above is None:
-            break
-        walked.add(above)
-        top = above
-    client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    client.check_hostname = False
-    client.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
-    try:
-        client.load_verify_locations(cadata=pems[top])
-    except (ssl.SSLError, ValueError) as e:
-        return f"a certificate of the chain could not be read ({getattr(e, 'strerror', None) or e})"
     c_in, c_out, s_in, s_out = ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO()
     sides = (
         (client.wrap_bio(c_in, c_out), c_out, s_in),
@@ -284,15 +257,120 @@ def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None
             except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
                 pass
             except ssl.SSLCertVerificationError as e:
-                if e.verify_code in _ISSUER_NOT_HELD:
-                    return None
-                return f"a client that verifies the chain refuses it ({e.verify_message})"
+                return f"a client that verifies the chain refuses it ({e.verify_message})", e.verify_code
             except ssl.SSLError as e:
-                return f"a TLS handshake with this certificate and key fails ({e.strerror or e})"
+                return f"a TLS handshake with this certificate and key fails ({e.strerror or e})", None
             peer_in.write(out.read())
         if done == 2:
             return None
-    return "a TLS handshake with this certificate and key did not complete"
+    return "a TLS handshake with this certificate and key did not complete", None
+
+
+def _signed_by(cert, issuer) -> bool:
+    """True when `issuer`'s name is `cert`'s issuer AND `issuer`'s key made `cert`'s signature."""
+    try:
+        cert.verify_directly_issued_by(issuer)
+    except Exception:
+        return False
+    return True
+
+
+def _chain_tops(certs) -> list:
+    """The indexes of the certificates at the top of every issuer path the upload holds, walked up from the first one. One step up from a certificate is every
+    uploaded certificate that carries its issuer's name and whose key signed it - or, when none of that name signed it, every one of that name, so the verifier is
+    the one that says the signature is wrong. A certificate that signed itself is a top and nothing is above it. (Q235, AT2: the walk used to follow the NAME alone
+    and keep the last match, so of two roots with one name - a root and its re-issue - the order of the paste chose which one judged the chain.)"""
+    tops, seen, stack = [], set(), [0]
+    while stack:
+        i = stack.pop()
+        if i in seen:
+            continue
+        seen.add(i)
+        above = []
+        if not _signed_by(certs[i], certs[i]):
+            named = [j for j, c in enumerate(certs) if j != i and c.subject == certs[i].issuer]
+            above = [j for j in named if _signed_by(certs[i], certs[j])] or named
+        if above:
+            stack.extend(above)
+        else:
+            tops.append(i)
+    return sorted(tops)
+
+
+def _out_of_date(certs, now=None) -> str:
+    """Which uploaded certificates are outside their dates, as a clause for a refusal that is about a date: the verifier says "certificate has expired" and not which."""
+    from datetime import datetime, timezone
+
+    now = now or datetime.now(timezone.utc)
+    said = []
+    for cert in certs:
+        if now > cert.not_valid_after_utc:
+            said.append(f'"{cert.subject.rfc4514_string()}" expired on {cert.not_valid_after_utc:%Y-%m-%d}')
+        elif now < cert.not_valid_before_utc:
+            said.append(f'"{cert.subject.rfc4514_string()}" is not valid until {cert.not_valid_before_utc:%Y-%m-%d}')
+    return ("; in the upload: " + ", ".join(said)) if said else ""
+
+
+def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None:
+    """(Q234, AQ11, AQ18) What a verifying client refuses the PRESENTED CHAIN for, or None. `cert_refusal` reads one certificate and a `fullchain.pem` holds several: a valid
+    leaf under an expired intermediate was accepted, installed and followed by a restart into an HTTPS every client refuses. This asks the verifier clients use: a TLS
+    handshake in memory between the server context that just loaded the material and a client that trusts ONE certificate: the top of the issuer path the upload itself holds,
+    walked from the first certificate by issuer name (the first itself when nothing uploaded issued it). So an expired or not-yet-valid certificate anywhere on that path, a
+    critical extension no client handles, a CA that may not sign and a broken signature are each refused in OpenSSL's own words. "Issuer not found" is not a refusal: the root
+    is the client's, not the upload's.
+    (Q213, AS1) It used to trust EVERY certificate after the first, so the verifier stopped at the first one it could chain to: a leaf, its issuer and an expired certificate
+    above them was accepted. One anchor, at the top, makes the verifier walk the whole path. A certificate of the upload that is not on the path is not judged.
+    (Q235, AT1, AT2) Two questions, both asked of the verifier. FIRST with the CA certificates this box itself trusts and nothing else: a `fullchain.pem` from a public
+    CA ends at an intermediate whose issuer is not in the file, and trusting that intermediate judged its dates and never its signature, because a verifier does not
+    check the signature of the certificate it was told to trust. With the box's store the root is held, so the intermediate is judged like the rest. An answer there
+    is final unless it is "the issuer is not held" (a private CA). THEN one handshake for each top of the paths the upload holds (`_chain_tops`), trusting that one
+    certificate: the chain is accepted when a client that holds ANY of them accepts it, so a root and its expired earlier copy in one bundle are judged by the one
+    that verifies, whatever the order of the paste. What stays outside: the signature of a top certificate whose issuer neither the upload nor this box holds."""
+    import re
+    import ssl
+
+    from cryptography import x509
+
+    pems = re.findall(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", cert_data + "\n" + (ca_data or ""), re.S
+    )
+    if not pems:
+        return "the certificate file is not a PEM certificate"
+    try:
+        certs = [x509.load_pem_x509_certificate(pem.encode("utf-8")) for pem in pems]
+    except ValueError as e:
+        return f"a certificate of the chain could not be read ({e})"
+    # the same certificate pasted twice is one certificate
+    kept = [i for i, c in enumerate(certs) if c not in certs[:i]]
+    pems, certs = [pems[i] for i in kept], [certs[i] for i in kept]
+    tops = _chain_tops(certs)
+    if not tops:
+        return "the certificates of the upload name each other as issuer in a loop, so the chain has no top"
+    client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client.check_hostname = False
+    try:
+        _load_box_store(client)
+    except (ssl.SSLError, OSError) as e:
+        logger.warning(f"The box's own CA store could not be loaded for the certificate check: {e}")
+    refusal = _handshake(server_ctx, client)
+    if refusal is None:
+        return None
+    if refusal[1] not in _ISSUER_NOT_HELD:
+        return refusal[0] + _out_of_date(certs)
+    refusal = None
+    for top in tops:
+        client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client.check_hostname = False
+        client.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+        try:
+            client.load_verify_locations(cadata=pems[top])
+        except (ssl.SSLError, ValueError) as e:
+            return f"a certificate of the chain could not be read ({getattr(e, 'strerror', None) or e})"
+        answer = _handshake(server_ctx, client)
+        if answer is None or answer[1] in _ISSUER_NOT_HELD:
+            return None
+        refusal = refusal or answer
+    return refusal[0] + _out_of_date(certs)
 
 
 def cert_refusal(cert_data: str, now=None) -> str | None:
@@ -318,6 +396,9 @@ def cert_refusal(cert_data: str, now=None) -> str | None:
         usage = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     except x509.ExtensionNotFound:
         usage = None
+    except ValueError:
+        # (Q235, AT7) the extension is parsed when it is read: one that is there and empty raised out of this function, and the upload said nothing about why
+        return "the certificate carries an extension that cannot be read"
     # (Q213, AS8) serverAuth, named. `anyExtendedKeyUsage` alone used to pass here; OpenSSL does not read it as a purpose, so the handshake below refused the same
     # certificate with a sentence that did not say why
     if usage is not None and ExtendedKeyUsageOID.SERVER_AUTH not in set(usage):
@@ -328,6 +409,8 @@ def cert_refusal(cert_data: str, now=None) -> str | None:
         key_usage = leaf.extensions.get_extension_for_class(x509.KeyUsage).value
     except x509.ExtensionNotFound:
         key_usage = None
+    except ValueError:
+        return "the certificate carries an extension that cannot be read"
     if key_usage is not None and not (
         key_usage.digital_signature or key_usage.key_encipherment or key_usage.key_agreement
     ):
