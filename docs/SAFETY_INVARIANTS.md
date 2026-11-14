@@ -156,6 +156,19 @@ a unix control socket is used only under `/run/kea`, `/var/run/kea` or `/tmp`; a
 - `tests/test_kea_helper_investigation.py::TestTheCredentialAndSocketWalls`
 - `tests/kea_compat/test_log_levels.py::test_the_daemons_own_control_socket_answers_config_get`
 
+### INV-016 - Turning investigation logging on never takes a change out of a daemon whose transport is the API
+**Rule.** Investigation logging's own writes stay on the file path (INV-001: the host restores the FILE), and turning it on makes the daemon re-read that file. On a server whose
+`config_transport` is `api` the turn-on's write is therefore asked what every other file write there is asked - does the file carry what the daemon runs - and is refused before anything is
+sent when it does not. The writes that take the marker OUT (turn off, the sweep's restore, a revert) are never asked: the host's deadline waits on nothing.
+**Established.** Q214 (the hand-off Q212 left open, decided: the writes do not move to the API; the reload's cost is closed at turn-on).
+**Enforced at.** `jen/services/kea_host.py` (`investigation_writer(compare=True)`, read in `apply_config`), passed by `investigation_logging.turn_on` alone through `_change`.
+**Tests.**
+- `tests/test_investigation_model.py::TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon`
+- `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_turning_logging_on_is_asked_the_same_question_and_nothing_is_sent`
+- `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_a_write_that_takes_the_marker_out_inside_a_turn_on_is_not_asked`
+- `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_only_turn_on_asks_and_both_of_loggings_writes_stay_on_the_file`
+- `tests/system/test_boundaries.py::test_26_turning_logging_on_never_takes_a_change_out_of_a_daemon_whose_transport_is_the_api`
+
 ## Access control and shared definitions
 
 ### RBAC-001 - Stored data is judged by its own subnet; a hidden object never influences a visible answer

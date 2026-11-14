@@ -999,16 +999,21 @@ _investigation_writer = threading.local()
 
 
 @contextlib.contextmanager
-def investigation_writer():
+def investigation_writer(compare: bool = False):
     """The writes inside this block are investigation logging's own (turn on, turn off, the sweep's restore, the undo of an activation): they add and remove the
     marker on purpose. Nothing else may remove it - `apply_config` refuses a dhcp4 write that would, while an entry says Jen owes that server a restore. The flag is
-    per thread (a change set commits sequentially on the calling thread) and restored on exit, so blocks nest."""
-    previous = getattr(_investigation_writer, "on", False)
-    _investigation_writer.on = True
+    per thread (a change set commits sequentially on the calling thread) and restored on exit, so blocks nest.
+
+    `compare` (v7.1.0-beta.4, Q214) is passed by ONE caller, turning logging ON: the write is still the investigation's own (it may add the marker), and on a server
+    whose transport is the API it is ALSO asked the question every other file write there is asked - does the file carry what the daemon runs (`api_daemon_differs`).
+    Turning logging on makes the daemon re-read its file; over a file that lacks a change the daemon runs, that reload took the change out of the daemon. Every write
+    that takes the marker OUT (turn off, the sweep, a revert) leaves `compare` off: DEBUG 55 must always be able to come off, and the host's deadline waits on nothing."""
+    previous = getattr(_investigation_writer, "on", False), getattr(_investigation_writer, "compare", False)
+    _investigation_writer.on, _investigation_writer.compare = True, bool(compare)
     try:
         yield
     finally:
-        _investigation_writer.on = previous
+        _investigation_writer.on, _investigation_writer.compare = previous
 
 
 def guard_kea_write(server: dict, after_cfg: dict, service: str = "dhcp4") -> str:
@@ -1070,13 +1075,13 @@ def apply_config(
     if (
         _api.declared_transport(server) == "api"
         and source != "rollback"
-        and not getattr(_investigation_writer, "on", False)
+        and (not getattr(_investigation_writer, "on", False) or getattr(_investigation_writer, "compare", False))
     ):
         # (fix row 1) asked of a NEW write only: a rollback, and investigation logging's own revert, must always be able to put the file back
         # Q212 (BB2 e): the file path writing onto a server whose transport is the API. The file this write replaces must carry what the daemon runs, or an `unverified` apply (or a hand
         # `config-set`) would be erased by the next write of the file; both digests are named. Asked only when BOTH answer and differ. NOT asked of investigation logging's own writes (the condition
         # above): the toggle must always be able to take the marker out and the host's deadline must never wait on a compare - and `investigation_logging._change` says so in the operator's line
-        # (Q216 AA25), because a toggle can still erase what a hand `config-set` left the file without.
+        # (Q216 AA25), because a toggle can still erase what a hand `config-set` left the file without. (Q214) Turning logging ON is asked: `investigation_writer(compare=True)`.
         differs = _api.api_daemon_differs(server, service, restore=source == "restore")
         if differs:
             return {"ok": False, "code": "error", "detail": differs, "via": "guard"}

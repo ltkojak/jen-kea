@@ -173,7 +173,8 @@ class TestQ216AFileWriteOnAnApiServerRecordsTheDaemon:
         assert inv.turn_on(world.servers[0], 5)["ok"]
         assert store.rows == []
 
-    def test_the_operators_line_says_the_compare_was_not_asked_of_the_toggle(self, world, monkeypatch):
+    def test_the_operators_line_says_which_write_was_not_compared(self, world, monkeypatch):
+        """(Q214) Turning logging ON is compared now, so its lines no longer carry the note; a write that takes the marker out is still not compared, and says so."""
         from tests import _kea_api_world as api_world
 
         api_world.install_store(monkeypatch)
@@ -188,7 +189,13 @@ class TestQ216AFileWriteOnAnApiServerRecordsTheDaemon:
         world.servers[0].update(config_transport="api", api_url="http://10.0.0.1:8000/")
         server = world.servers[0]
         out = inv.turn_on(server, 5)
-        assert out["ok"] and any("not compared with what the daemon runs" in line for line in out["lines"])
+        assert out["ok"] and not any("not compared with what the daemon runs" in line for line in out["lines"])
+        result, _use_reload, _support = inv._change(
+            server, lambda cfg: inv._edit.clear_investigation_logging(cfg), "investigation logging off", "unsupported"
+        )
+        assert result.status == "ok" and any(
+            "not compared with what the daemon runs" in text for _kind, text in result.lines
+        )
 
 
 class TestSecondPassRowsOfTheTurnOnAndOff:

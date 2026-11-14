@@ -138,6 +138,9 @@ class Walk:
     #: Q217 (AB-n): how often the step is followed by `op_extend` - a live session's deadline extended, with the fault `first_marker_left_behind`. Its own random source.
     EXTEND_SHARE = float(os.environ.get("JEN_MODEL_EXTEND_SHARE", "0.05"))  # 0 takes the extension out of every walk
 
+    #: Q214: how often the step is followed by `op_turn_on_of_an_api_server` - logging turned on for a server whose transport is the API, with the fault `hand_set`. Its own random source.
+    API_ON_SHARE = float(os.environ.get("JEN_MODEL_API_ON_SHARE", "0.05"))  # 0 takes it out of every walk
+
     #: Q165: the HostTimer actor. False is the mutation check of I10 - the walk must go red without the host's timer.
     HOST_TIMER = True
 
@@ -153,6 +156,7 @@ class Walk:
             f"window-{seed}"
         )  # Q216: the same for the turn-on inside the finished session's window
         self.extend_rng = random.Random(f"extend-{seed}")  # Q217: and for the extension of a live session
+        self.api_on_rng = random.Random(f"api-on-{seed}")  # Q214: and for turning logging on over an API server
         self.stale_next: dict = {}  # host -> the earlier marker the NEXT file write must leave behind (the fault `first_marker_left_behind`)
         self.stale_marker: dict = {}  # host -> that marker's `until`, once a write has left it: I12 tolerates exactly it, and nothing else, below the extended deadline
         self.world, self.tmp_path = world, tmp_path
@@ -585,6 +589,8 @@ class Walk:
                     self.op != "idle" and self.extend_rng.random() < self.EXTEND_SHARE
                 ):  # (an elif: the window operation's turn-off and turn-on already restart the daemon twice, and I3 allows two per step)
                     self.op_extend()
+                elif self.op != "idle" and self.api_on_rng.random() < self.API_ON_SHARE:
+                    self.op_turn_on_of_an_api_server()
             except InvariantViolated:
                 raise
             except Exception as e:  # an operation must never raise: it is the page's route and the scheduler's job
@@ -1443,6 +1449,68 @@ class Walk:
             fake.include_hash = False
             fake.before_command.pop("config-set", None)
 
+    def op_turn_on_of_an_api_server(self):
+        """Q214: investigation logging turned ON for a server whose configuration transport is the API. The write stays on the file path (INV-001) and is followed by a reload of that
+        file, so the fault only this has is `hand_set`: the daemon runs a change its file does not carry (a `config-set` by hand, an apply whose `config-write` did not land). A turn-on
+        that went ahead would take that change out of the daemon. I14: after the step the daemon still runs it - the turn-on was refused before anything was sent, or the change was in
+        the file by then (a pending change settled). The server has a `kea` row for what it ran before the fault, as a server switched to the API has (`record_daemon_after_file_change`
+        is what the switch calls)."""
+        rng = self.api_on_rng
+        candidates = [s for s in self.world.servers if s.get("ssh_host")]
+        if not candidates or self._started_damaged():
+            return  # (a step that began with a damaged record is judged by I6/I9 as a whole: no second turn-on rides on it)
+        server = rng.choice(candidates)
+        minutes = rng.choice(inv.DURATIONS)
+        hand = rng.random() < 0.6
+        fake = self.api_fake(server)
+        if (
+            fake is None
+            or fake is not self.ssh_fake(server)
+            or fake.api_silent
+            or fake.list_unreachable
+            or fake.silent_gets
+            or fake.second is not None
+            or fake.host_down
+        ):
+            return  # the question is asked only when the file AND the daemon answer (`api_daemon_differs`): a daemon nobody can read is the walk's other faults
+        api_server = {**server, "config_transport": "api"}
+        section = fake.loaded.get("Dhcp4") if isinstance(fake.loaded, dict) else None
+        if not isinstance(section, dict):
+            return
+        fake.include_hash = True
+        try:
+            _api.record_daemon_after_file_change(api_server, "dhcp4", "walk: what the daemon ran when it was switched")
+            had = copy.deepcopy(section.get("subnet4"))
+            change = {"id": 4000 + self.step_no, "subnet": "10.250.0.0/24"}
+            if hand:
+                section["subnet4"] = [*(had or []), change]
+                self.say(f"FAULT hand_set: the daemon on {fake.host} runs a subnet its file does not carry")
+            out = self._turn_on(api_server, minutes)
+            refused = (not out["ok"]) and any(
+                "restore or resolve it from Config history first" in x for x in out["lines"]
+            )
+            self.say(
+                f"api_turn_on on {server['id']} hand_set={hand}: ok={out['ok']} refused_for_the_difference={refused} {out['lines'][-1][:230] if out['lines'] else ''}"
+            )
+            if hand:
+                now = fake.loaded.get("Dhcp4") if isinstance(fake.loaded, dict) else None
+                kept = isinstance(now, dict) and change in (now.get("subnet4") or [])
+                if not kept:
+                    self.fail(
+                        "I14",
+                        f"turning logging on for API server {server['id']} took a change out of the daemon that its file did not carry (ok={out['ok']}, lines={out['lines'][-2:]})",
+                    )
+                # the fault is undone: the daemon runs what it ran, in the file's terms, for every later step of the main stream
+                for cfg in (fake.loaded, fake.file):
+                    sec = cfg.get("Dhcp4") if isinstance(cfg, dict) else None
+                    if isinstance(sec, dict) and change in (sec.get("subnet4") or []):
+                        if had is None:
+                            sec.pop("subnet4", None)
+                        else:
+                            sec["subnet4"] = copy.deepcopy(had)
+        finally:
+            fake.include_hash = False
+
     def _host_timers_for(self, fake):
         """The host's restore, landing NOW - between Jen's `config-hash-get` and its `config-set`: an armed state whose deadline has passed and which the host has not yet restored (its next tick is
         still ahead of the clock) is restored at the moment Jen's command arrives. Needs nothing of Jen."""
@@ -1970,6 +2038,48 @@ class TestTheApiWriteCannotLandOverTheHostsRestore:
         assert TestTheApiWriteCannotLandOverTheHostsRestore.RED, (
             "the walk never found the API write landing over the restore - its fault does not bite"
         )
+
+
+class TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon:
+    """Q214 (I14). Logging's own write stays on the file path and is followed by a reload of the file; on a server whose transport is the API the turn-on is asked the choke point's
+    question first (`kea_host.investigation_writer(compare=True)`). The mutation check takes the question away."""
+
+    OUTCOMES = {"on": 0, "refused": 0, "hand": 0, "refused_over_another_difference": []}
+    RED = []
+
+    @pytest.mark.parametrize("seed", range(24))
+    def test_the_walk_with_api_turn_ons_is_green(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(Walk, "API_ON_SHARE", 0.3)
+        walk = walk_world(seed, STEPS)
+        walk.run()
+        out = TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon.OUTCOMES
+        for line in walk.log:
+            if "api_turn_on on" in line:
+                out["on"] += "ok=True" in line
+                out["refused"] += "refused_for_the_difference=True" in line
+                out["hand"] += "hand_set=True" in line
+                if "hand_set=False" in line and "refused_for_the_difference=True" in line:
+                    out["refused_over_another_difference"].append((seed, line[:420]))
+
+    def test_the_turn_ons_were_real(self):
+        out = TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon.OUTCOMES
+        print(f"MODEL API TURN-ONS over 24 seeds: {out}")
+        assert out["on"] >= 20 and out["refused"] >= 20 and out["hand"] >= out["refused"], out
+
+    @pytest.mark.parametrize("seed", range(24))
+    def test_i14_is_red_when_the_question_is_not_asked(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(_api, "api_daemon_differs", lambda server, service, restore=False: "")
+        monkeypatch.setattr(Walk, "API_ON_SHARE", 0.3)
+        try:
+            walk_world(seed, STEPS).run()
+        except InvariantViolated as red:
+            assert "I14 violated" in str(red), str(red)[:400]
+            TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon.RED.append(seed)
+
+    def test_without_the_question_it_goes_red_often_enough_to_mean_something(self):
+        red = TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon.RED
+        print(f"MODEL I14 MUTATION: {len(red)} of 24 seeds red: {red}")
+        assert len(red) >= 12, red
 
 
 class TestAnExtendedSessionKeepsTheFirstMarkerHarmlessly:

@@ -513,20 +513,32 @@ def _seen_line(entry: dict) -> str:
 
 
 def _change(
-    server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_unknown: bool = False, allow_restart: bool = True
+    server: dict,
+    mutate_fn,
+    summary: str,
+    unsupported: str,
+    *,
+    refuse_unknown: bool = False,
+    allow_restart: bool = True,
+    compare: bool = False,
 ):
     """Step 1: write one mutation to ONE server through apply_change - with a restart folded in when the daemon has no
     `config-reload`. Returns (ChangeSetResult, use_reload, support); with `refuse_unknown` and Kea's API silent nothing is written and the
     result is None. (Turning logging OFF never refuses: DEBUG 55 must come off, so there the restart is the fallback.)
 
     Passing False for `allow_restart` (v5.68.0-beta.28, Q163): the file is written WITHOUT the restart a daemon that lacks `config-reload` (or whose API is
-    silent) would otherwise get folded into the change set. The sweep does it once an entry has had its restore's one restart."""
+    silent) would otherwise get folded into the change set. The sweep does it once an entry has had its restore's one restart.
+
+    `compare` (v7.1.0-beta.4, Q214) is turn-on's: on a server whose transport is the API the write is refused, before anything is sent, when the daemon runs a
+    configuration its file does not carry (`kea_host.investigation_writer`). THE WRITE STAYS ON THE FILE PATH, by decision: the Kea host restores the FILE and tells
+    the daemon to re-read it (INV-001), so the marker and the host's record of what to put back must be in the file before the daemon runs DEBUG 55. A `config-set`
+    would have the daemon at DEBUG 55 before the host is armed and before this module's entry is stored - the order I1 and I10 rest on, reversed."""
     support = _reload_support(server)
     if support == "unknown" and refuse_unknown:
         return None, False, support
     use_reload = support == "yes"
-    with (
-        _host.investigation_writer()
+    with _host.investigation_writer(
+        compare=compare
     ):  # Q164: the one writer that may add and remove the marker; apply_config refuses every other that would remove it
         result = _changeset.apply_change(
             "dhcp4",
@@ -538,9 +550,9 @@ def _change(
                 "unsupported": unsupported,
                 "marker-invalid": "the investigation-logging marker is unreadable, so nothing was changed",
             },
-            transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path in 7.0.0-beta.1 (Q212)
+            transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path, by decision (Q214; docs/ARCHITECTURE.md 3.3)
         )
-    if result is not None and result.status == "ok" and _declared_api(server):
+    if result is not None and result.status == "ok" and _declared_api(server) and not compare:
         result.lines.append(
             (
                 "warning",
@@ -707,7 +719,7 @@ def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
             servers=[server],
             restart=False,
             code_messages={},
-            transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path in 7.0.0-beta.1 (Q212)
+            transport="file",  # the host's timer restores the FILE (INV-001): the marker's writes stay on the file path, by decision (Q214; docs/ARCHITECTURE.md 3.3)
         )
     _record_daemon_after_reload(
         server
@@ -1050,6 +1062,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
             f"investigation logging on for {minutes} min",
             "this config has no Dhcp4 section to log from",
             refuse_unknown=True,
+            compare=True,
         )
         if result is None:
             # Kea's API did not answer: turning ON must never become a restart of a production daemon. Nothing was written.

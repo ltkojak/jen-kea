@@ -25,6 +25,12 @@
 - The fail-closed audit (`S10`) reads an `if` inside an `except`: a handler that answers nothing for SOME errors was invisible to it. It found two more sites; both are reviewed and listed with their reason.
 - Comments and one docstring that still described the sudoers file are corrected; `docs/ARCHITECTURE.md` §3.10 no longer says the grant is unchanged.
 
+**The hand-offs 7.0.0 left open, decided (Q214).** Four things stayed on the SSH file path when configuration moved to Kea's own API, each "until a later release". They are decided now, and none moves; `docs/ARCHITECTURE.md` §3.3 has the reasons.
+
+- **Investigation logging still writes the file, and turning it on no longer costs an API server a change.** The Kea host puts the log level back by itself from the file, so the file must carry the marker before the daemon runs at DEBUG 55. Turning logging on makes the daemon re-read its file. On a server whose Write mode is the API, a daemon that ran a change its file did not carry (a change made on the daemon by hand, or one whose write to the file did not land) lost that change at that moment, with a note on the page and nothing else. Turning logging on is now refused there, before anything is written, with the sentence every such write gets: resolve it from Config history first. Turning logging OFF is never refused.
+- **The direct-socket setup, DHCPv6 and DDNS (D2) stay on the file path.** A change to a control socket is never sent over the socket it changes. No ISC test image carries `kea-dhcp6`, so nothing proves the API for it yet.
+- **The readiness check does not write.** For a server with no SSH, "Daemon can write its own config file" stays "unknown until the first change": the only way to learn it is a write, and a write replaces the file.
+
 **Registered, not fixed here.** The Health row for the two path units answers from systemd alone (AT12). A failed `install.sh` upgrade restores the earlier sudoers file while the new path units stay (AT21). The recovery bundle restores `ssl/` without the upload's checks (AT16). The upload has no limit on the number of certificates (AT15).
 
 ## [7.1.0-beta.3] - 2026-11-13

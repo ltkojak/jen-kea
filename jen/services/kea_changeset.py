@@ -149,7 +149,9 @@ def _transport(server: dict, service: str) -> str:
     if declared == "off":
         return "off"
     ssh = bool(server.get("ssh_host"))
-    if service not in _api.SERVICE_KEY:  # d2
+    if (
+        service not in _api.SERVICE_KEY
+    ):  # d2 and dhcp6: the file path (Q214: no compat image carries kea-dhcp6, so no row proves the API for it)
         return "file" if ssh else "off"
     if declared == "file":
         return "file" if ssh else "off"

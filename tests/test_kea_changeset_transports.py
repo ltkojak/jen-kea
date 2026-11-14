@@ -286,6 +286,65 @@ class TestSecondPassRowsOfTheChangeSet:
         with kea_host.investigation_writer():
             assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]
 
+    def test_turning_logging_on_is_asked_the_same_question_and_nothing_is_sent(self, daemon, helper, store):
+        """(Q214) `investigation_writer(compare=True)` is turn-on's: the reload that follows its write would take out of the daemon whatever the file lacks."""
+        server = {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3", "config_transport": "api", "api_url": daemon.url}
+        helper.configs[(3, "dhcp4")] = {"Dhcp4": {"valid-lifetime": 1}}  # a file the daemon does not run
+        helper.shas[(3, "dhcp4")] = "raw-c"
+        with kea_host.investigation_writer(compare=True):
+            refused = kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")
+        assert refused["ok"] is False and refused["via"] == "guard"
+        assert "restore or resolve it from Config history first" in refused["detail"]
+        assert "apply-config" not in helper.ops()
+
+    def test_a_write_that_takes_the_marker_out_inside_a_turn_on_is_not_asked(self, daemon, helper, store):
+        """(Q214) The blocks nest: turn-on's own revert of its file (`_revert_file`) opens the plain writer inside, and DEBUG 55 must always be able to come off."""
+        server = {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3", "config_transport": "api", "api_url": daemon.url}
+        helper.configs[(3, "dhcp4")] = {"Dhcp4": {"valid-lifetime": 1}}
+        helper.shas[(3, "dhcp4")] = "raw-c"
+        flags = kea_host._investigation_writer
+        with kea_host.investigation_writer(compare=True):
+            with kea_host.investigation_writer():
+                assert (flags.on, flags.compare) == (True, False)
+                assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]
+            assert (flags.on, flags.compare) == (True, True)
+        assert (flags.on, flags.compare) == (False, False)
+
+    def test_a_file_server_is_never_asked(self, daemon, helper, store, monkeypatch):
+        from jen.services import kea_api_config as api
+
+        def never(*a, **k):
+            raise AssertionError("a server whose transport is the file was asked what its daemon runs")
+
+        monkeypatch.setattr(api, "api_daemon_differs", never)
+        with kea_host.investigation_writer(compare=True):
+            assert kea_host.apply_config(FILE_SERVER, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]
+
+    def test_only_turn_on_asks_and_both_of_loggings_writes_stay_on_the_file(self):
+        """(Q214) The whole module, read as a syntax tree: ONE `compare=True`, inside `turn_on`; `_change` hands it to the writer; `_revert_file` opens the plain
+        writer; and both `apply_change` calls still pass `transport="file"` (INV-001: the host restores the FILE)."""
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        tree = ast.parse((root / "jen/services/investigation_logging.py").read_text(encoding="utf-8"))
+        asks, writers, transports = [], {}, []
+        for fn in [n for n in tree.body if isinstance(n, ast.FunctionDef)]:
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+                kw = {k.arg: k.value for k in node.keywords}
+                if isinstance(kw.get("compare"), ast.Constant) and kw["compare"].value is True:
+                    asks.append((fn.name, name))
+                if name == "investigation_writer":
+                    writers[fn.name] = ast.unparse(kw["compare"]) if "compare" in kw else None
+                if name == "apply_change":
+                    transports.append((fn.name, ast.unparse(kw.get("transport", ast.Constant(None)))))
+        assert asks == [("turn_on", "_change")]
+        assert writers == {"_change": "compare", "_revert_file": None}
+        assert transports == [("_change", "'file'"), ("_revert_file", "'file'")]
+
 
 class TestQ216TheRestoreWindowIsAskedAtPlan:
     def test_a_mixed_set_inside_the_window_writes_nothing_anywhere(self, daemon, helper, store, monkeypatch):

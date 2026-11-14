@@ -3992,3 +3992,102 @@ def test_25_a_hand_edit_the_daemon_reloaded_is_accepted_and_rendered(stack):
         "INVARIANT: the file on the host is what the daemon runs"
     )
     assert json.loads(on_host) == edited
+
+
+# ── 26. investigation logging on a server whose transport is the API (Q214) ──
+
+S26_SCRIPT = """
+from datetime import datetime, timezone
+from jen.models import user
+from jen.services import investigation_logging as inv, kea_api_config as api, kea_host
+
+def logger_of(section):
+    return next((x for x in section.get("loggers") or [] if x.get("name") == "kea-dhcp4"), {})
+
+with app.app_context():
+    base = next(s for s in inv._ssh_servers() if s.get("name") == "kea-a")
+    a = {**base, "config_transport": "api"}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    api.store_probe(a["id"], {"at": now, "config_api": True, "consented_at": now, "bound": api._bound(a)})  # the operator has read the card's facts once
+    if MODE == "baseline":
+        # what a switch to the API records: the configuration the daemon runs, as Jen's last record of it
+        was = user.get_global_setting(inv.ENABLED_KEY, "false")
+        user.set_global_setting(inv.ENABLED_KEY, "true")
+        emit({"recorded": api.record_daemon_after_file_change(a, "dhcp4", "system-test: what kea-a runs"), "was": was})
+    elif MODE == "hand":
+        # a `config-set` by hand: the daemon runs a lifetime its file does not carry
+        running = api._cmd(a, "dhcp4", "config-get")["arguments"]["Dhcp4"]
+        running["valid-lifetime"] = 4321
+        emit({"set": api._cmd(a, "dhcp4", "config-set", {"Dhcp4": running}).get("result")})
+    elif MODE == "on":
+        out = inv.turn_on(a, 5)
+        running = api._cmd(a, "dhcp4", "config-get")["arguments"]["Dhcp4"]
+        emit({"ok": out["ok"], "lines": out["lines"], "lifetime": running.get("valid-lifetime"), "logger": logger_of(running), "active": [e["name"] for e in inv.active()]})
+    elif MODE == "off":
+        out = inv.turn_off(a)
+        running = api._cmd(a, "dhcp4", "config-get")["arguments"]["Dhcp4"]
+        emit({"ok": out["ok"], "lines": out["lines"], "logger": logger_of(running), "active": [e["name"] for e in inv.active()]})
+    else:
+        user.set_global_setting(inv.ENABLED_KEY, MODE)
+        emit({"enabled": MODE})
+"""
+
+
+def _s26(mode):
+    objs, proc = st.jen_py(f"MODE = {mode!r}\n" + S26_SCRIPT, check=False)
+    result = emitted(objs)
+    assert result is not None, f"no result from the {mode} step:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    return result
+
+
+def test_26_turning_logging_on_never_takes_a_change_out_of_a_daemon_whose_transport_is_the_api(stack):
+    """Q214 (I14): investigation logging's own write stays on the FILE path (INV-001: the Kea host restores the file) and is followed by a reload of that file. On a server whose transport is
+    the API the daemon may run a change its file does not carry (a `config-set` by hand, an apply whose `config-write` did not land), and that reload would take it out. Turning logging ON
+    is therefore asked what every other file write there is asked, and refused: nothing is written, the host is not armed, the daemon keeps the change and is not restarted. With the file and
+    the daemon in agreement the same turn-on goes through, the daemon is at DEBUG 55 by a reload, and Turn off puts it back."""
+    st.dexec(st.KEA_A, "rm", "-f", S19_STATE)
+    _s24_world()
+    was = "false"
+    try:
+        baseline = _s26("baseline")
+        was = baseline["was"]
+        assert baseline["recorded"] is True, f"the daemon's configuration could not be recorded: {baseline}"
+        assert _s26("hand")["set"] == 0, "kea-a took the hand config-set"
+        on_host, pids = st.kea_conf_bytes(st.KEA_A), _s16_pids()
+
+        refused = _s26("on")
+        text = " ".join(refused["lines"])
+        assert refused["ok"] is False and "restore or resolve it from Config history first" in text, (
+            f"INVARIANT: turning logging on over a daemon that runs what its file lacks is refused, and the line says why: {refused}"
+        )
+        assert st.kea_conf_bytes(st.KEA_A) == on_host and '"jen-investigation"' not in on_host, (
+            "INVARIANT: nothing was written to the file on the host"
+        )
+        assert refused["lifetime"] == 4321, f"INVARIANT: the daemon still runs the change its file lacks: {refused}"
+        assert refused["active"] == [] and not st.file_exists(st.KEA_A, S19_STATE), (
+            f"INVARIANT: nothing is on and the host was not armed: {refused}"
+        )
+        assert _s16_pids() == pids, "INVARIANT: the daemon was not restarted"
+
+        reloaded = st.kea_command("kea-a", "config-reload")  # the operator's way out: the daemon runs its file again
+        assert reloaded and reloaded.get("result") == 0, f"kea-a would not reload its file: {reloaded}"
+        assert _s26("baseline")["recorded"] is True
+
+        on = _s26("on")
+        assert on["ok"] is True, f"INVARIANT: with the file and the daemon in agreement the turn-on goes through: {on}"
+        assert str(on["logger"].get("severity")).upper() == "DEBUG" and on["logger"].get("debuglevel") == 55, (
+            f"INVARIANT: the running daemon is at DEBUG 55: {on['logger']}"
+        )
+        assert '"jen-investigation"' in st.kea_conf_bytes(st.KEA_A), "INVARIANT: the marker is in the FILE (INV-001)"
+        assert on["active"] == ["kea-a"] and _s16_pids() == pids, (
+            f"INVARIANT: the session is recorded and the level arrived by a reload: {on}"
+        )
+
+        off = _s26("off")
+        assert off["ok"] is True and off["active"] == [], f"INVARIANT: Turn off finishes the session: {off}"
+        assert '"jen-investigation"' not in st.kea_conf_bytes(st.KEA_A), "INVARIANT: the marker is out of the file"
+        assert off["logger"].get("debuglevel") != 55, f"INVARIANT: the running daemon is back: {off['logger']}"
+    finally:
+        _s26("off")
+        _s26(was if was in ("true", "false") else "false")
+        st.dexec(st.KEA_A, "rm", "-f", S19_STATE)

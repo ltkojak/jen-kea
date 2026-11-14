@@ -20,6 +20,8 @@ One step (7.1.0-beta.4). It adds no migration and no helper build. One thing to 
 
 **A `fullchain.pem` from a public CA has its intermediate checked against the CA certificates Jen's box trusts.** A damaged intermediate is refused. For a private CA, paste the root with the chain so the whole chain can be checked.
 
+**Investigation logging on a server whose Write mode is the API.** Turn on is refused when the daemon runs a change its file does not carry, and the page says to resolve it from Config history first. It used to go ahead, and the daemon lost that change. Turn off is never refused.
+
 **Settings → Databases → Import refuses a table the file does not carry,** and restores nothing when no table is ticked, whichever release drew the page.
 
 ## 7.1.0-beta.3: Jen's own box has no sudoers entry
