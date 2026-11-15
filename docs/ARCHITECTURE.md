@@ -616,10 +616,11 @@ to the original, stricter rule.
 `ProtectSystem=strict` (only `/etc/jen` and `/var/lib/jen` writable —
 `/opt/jen` is read-only since v5.13.0), `PrivateTmp`, `PrivateDevices`
 and the `Protect*` / `Restrict*` family. It deliberately does **not**
-set `NoNewPrivileges`, `CapabilityBoundingSet` or `ProtectProc`: Jen's
-only privileged action is `sudo` (the three commands above, and the
-banner-warned legacy `python3` path on un-migrated Kea hosts), which
-needs the setuid transition. `jen-update.service` — the root updater —
+set `NoNewPrivileges`, `CapabilityBoundingSet` or `ProtectProc`: since
+v7.1.0-beta.3 Jen's own box needs no `sudo` (§3.1: a restart is a signal
+and an update or a plugin install is a request file), but a box updated
+in place whose path units are not installed yet still falls back to the
+earlier `sudo` command once, and that needs the setuid transition. `jen-update.service` — the root updater —
 is intentionally left un-sandboxed; it writes `/opt/jen` and
 `/usr/local/sbin`. `tests/test_service_hardening.py` pins both.
 `jen-plugin-install.service` (§3.10) is the same shape for the same
@@ -1367,6 +1368,15 @@ dependency (only exact-pinning + manual review addresses that).
 whatever actually gets installed against known CVEs on every push, so a
 newly-disclosed vulnerability in a floor-pinned dependency gets caught
 even without a version bump.
+
+Both upgrade paths pass `--upgrade` to pip: the in-app updater
+(`jen-update-root.py::install_python_dependencies`) always did, and
+`sudo ./install.sh` does since v7.1.0-beta.6. From 5.8.0 until then the
+by-hand path ran `pip install -r requirements.txt` alone, which leaves an
+installed version where it is while it satisfies its floor, so a box that
+was only upgraded by hand kept the versions of its first install and only
+a raised floor ever moved one. When the upgrade cannot run (no route to
+the package index) `install.sh` falls back to the plain install and warns.
 
 v5.5.0 — the self-updater started running `pip`. v5.8.0 moved that into
 a `/opt/jen/venv` and made the update transactional — see §6.

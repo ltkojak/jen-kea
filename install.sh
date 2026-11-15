@@ -60,7 +60,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="7.1.0-beta.5"
+JEN_VERSION="7.1.0-beta.6"
 
 JEN_USER="www-data"
 # v5.67.0-beta.18 (Q132) — every apt-get / pip / venv / systemctl / mysql call's stdout AND stderr goes here
@@ -991,7 +991,12 @@ install_dependencies() {
 # --break-system-packages` into system python. Idempotent: re-run on every
 # install/upgrade; `venv --upgrade` re-points an existing venv at the
 # current system python (so an OS python bump doesn't strand it), and pip
-# is a fast no-op when the pins are already satisfied.
+# upgrades every dependency to the newest release its floor allows (Q237:
+# it ran without --upgrade, so an installed version that satisfied the floor
+# stayed where it was on every by-hand upgrade while the in-app updater
+# moved it). When that upgrade fails - no route to the package index - the
+# step is tried again without it: installed versions that satisfy the
+# floors are kept and a warning says so.
 #
 # The venv is left root:root — the www-data service account only needs to
 # read and execute the interpreter and site-packages, never write them.
@@ -1025,9 +1030,12 @@ setup_venv() {
     ok "Virtualenv ready  ${DIM}($("$VENV_PY" --version 2>&1))${NC}"
 
     spinner_start "Installing Python dependencies into the venv..."
-    if _run_logged "pip install -r requirements.txt" "$VENV_PY" -m pip install -q -r "$req_file"; then
+    if _run_logged "pip install --upgrade -r requirements.txt" "$VENV_PY" -m pip install -q --upgrade -r "$req_file"; then
         spinner_stop
         ok "Python dependencies installed"
+    elif _run_logged "pip install -r requirements.txt" "$VENV_PY" -m pip install -q -r "$req_file"; then
+        spinner_stop
+        warn "pip could not upgrade the Python dependencies (see $INSTALL_LOG); the versions already installed satisfy requirements.txt and were kept"
     else
         spinner_stop
         _install_log_tail

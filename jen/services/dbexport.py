@@ -200,7 +200,8 @@ def _validate_tables(requested, known):
     if requested is None:
         return None
     known_set = set(known)
-    return [t for t in requested if t in known_set]
+    # (Q237, AV5) each name once, in the order asked: a name sent twice was a table exported twice under one JSON key
+    return [t for t in dict.fromkeys(requested) if t in known_set]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1530,8 +1531,9 @@ def import_kea(file_bytes, duplicate_mode="skip"):
             try:
                 vals = _decode_import_rows(tbl, rows, cols, _target_binary_columns(conn, tbl), fmt)
             except BinaryValueError as e:
-                results.append(f"❌ {tbl}: refused — {e}. Nothing was imported into this table.")
-                continue
+                # (Q237, the independent review's #2) a table of the file that cannot be read stops the import: the line used to be added to the results and the
+                # tables after it were written and committed, so a file of reservations and leases restored the leases and reported an import
+                raise ImportAborted(f"{tbl}: {e}") from e
             decoded[tbl] = (cols, [dict(zip(cols, v, strict=True)) for v in vals])
 
         host_map: dict = {}  # file host_id -> target host_id, or None when that host was skipped
@@ -1541,10 +1543,7 @@ def import_kea(file_bytes, duplicate_mode="skip"):
         if "hosts" in decoded:
             cols, hrows = decoded["hosts"]
             if "dhcp_identifier" not in cols or "dhcp_identifier_type" not in cols:
-                results.append(
-                    "❌ hosts: refused — the file's hosts carry no identifier. Nothing was imported into it."
-                )
-                decoded.pop("hosts")
+                raise ImportAborted("hosts: the file's hosts carry no identifier")
             else:
                 insert_cols = [c for c in cols if c != "host_id"]
                 extra = _required_defaults(conn, "hosts", set(insert_cols))

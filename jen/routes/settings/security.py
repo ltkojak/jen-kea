@@ -206,6 +206,14 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
         return "the private key file is not a PEM private key"
     if ca_data and "BEGIN CERTIFICATE" not in ca_data:
         return "the CA bundle is not a PEM certificate bundle"
+    # (Q237, AV31) both bounds come before anything is written, loaded or parsed: the count used to be taken after every certificate pasted had been parsed and
+    # compared with every one before it, so one certificate pasted 200,000 times held the one worker past its timeout
+    size = len(cert_data) + len(key_data) + len(ca_data or "")
+    if size > _MOST_CHARACTERS:
+        return f"the upload is {size:,} characters and a certificate, its key and the chain above it are a few thousand: upload those, not a bundle of CAs"
+    count = len(_distinct_pems(cert_data + "\n" + (ca_data or "")))
+    if count > _MOST_CERTIFICATES:
+        return f"the upload carries {count} certificates and a server presents at most {_MOST_CERTIFICATES}: upload the certificate and the chain above it, not a bundle of CAs"
     with tempfile.TemporaryDirectory() as tmp:
         chain = os.path.join(tmp, "chain.pem")
         key = os.path.join(tmp, "key.pem")
@@ -233,6 +241,19 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
 _ABOUT_A_DATE = frozenset({9, 10})
 # (Q236, AU6) a server presents a leaf and the few CAs above it; the walk verifies a signature for every pair and runs a handshake for every top
 _MOST_CERTIFICATES = 20
+# (Q237, AV31) twenty certificates and a key are well under a tenth of this
+_MOST_CHARACTERS = 1_000_000
+
+
+def _distinct_pems(text: str) -> list:
+    """Every PEM certificate of `text`, each once, in the order pasted. Compared as text with the white space taken out, in one pass, so the number of DISTINCT
+    certificates is known before any of them is parsed."""
+    import re
+
+    seen: dict = {}
+    for found in re.finditer(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", text, re.S):
+        seen.setdefault("".join(found.group(0).split()), found.group(0))
+    return list(seen.values())
 
 
 def _load_box_store(client) -> None:
@@ -288,28 +309,52 @@ def _held_by_box(client) -> list:
     return held
 
 
-def _box_refusal(certs, top: int, held: list, box_said):
-    """(Q236, AU1, AU2) The one pair the upload's own top cannot be asked about: `certs[top]` and its issuer, when that issuer is not in the upload. A client that
-    trusts the top accepted the chain; this says what the BOX'S store adds, as `(sentence, verify_code)` or None.
-    None when the top signed itself (the upload carries its own root, and the operator's root is not the box's to overrule) and when the box trusts no certificate of
-    the issuer's name (a private CA: the root is the client's). When the box trusts one of that name and none of them signed the top, that is the refusal - a wrong
-    intermediate under a root this box holds, whatever key identifiers it carries. When one of them did sign it, what the box's verifier refused is the path through
-    the box's own certificate: a date, with every uploaded certificate inside its dates, is the box's superseded copy and no refusal; anything else stands."""
+def _box_refusal(certs, top: int, held: list):
+    """(Q236, AU2; Q237, AV2) The one pair the upload's own top cannot be asked about: `certs[top]` and its issuer, when that issuer is not in the upload. A client that
+    trusts the top accepted the chain; this says what the BOX'S store adds, as `(sentence, None)` or None. The box's store answers ONE question: whose key signed the
+    top. None when the top signed itself (the upload carries its own root, and the operator's root is not the box's to overrule), when the box trusts no certificate
+    of the issuer's name (a private CA: the root is the client's) and when one of that name signed the top. When the box trusts some of that name and none of them
+    signed the top, that is the refusal - a wrong intermediate under a root this box holds, whatever key identifiers it carries.
+    Nothing else about the box's own copy is read. Q236 returned the box verifier's refusal here unless it was about a date, and every way the box's copy can differ
+    from the one a client holds - its serial under an issuer-and-serial key identifier, its path length, its dates - refused an honest chain. Those are properties
+    of the BOX'S copy; the clients' copy is the clients'."""
     cert = certs[top]
     if _signed_by(cert, cert):
         return None
     named = [c for c in held if c.subject == cert.issuer]
-    if not named:
+    if not named or any(_signed_by(cert, c) for c in named):
         return None
-    if not any(_signed_by(cert, c) for c in named):
-        return (
-            f'this box trusts a certificate named "{cert.issuer.rfc4514_string()}" and it did not sign "{cert.subject.rfc4514_string()}", which names it as issuer. '
-            "If that CA was issued again with a new key, add its new certificate to the upload or to this box's CA store (update-ca-certificates)",
-            None,
-        )
-    if box_said[1] in _ABOUT_A_DATE and not _out_of_date(certs):
+    return (
+        f'this box trusts a certificate named "{cert.issuer.rfc4514_string()}" and it did not sign "{cert.subject.rfc4514_string()}", which names it as issuer. '
+        "If that CA was issued again with a new key, add its new certificate to the upload or to this box's CA store (update-ca-certificates)",
+        None,
+    )
+
+
+def _not_a_ca(certs, top: int):
+    """(Q237, AV1) What the verifier does not say about the certificate it was told to trust: whether it is a CA by the rule a client applies to every CA BELOW its own
+    anchor. OpenSSL counts an anchor as a CA when it has no basic constraints and its key usage allows signing certificates; one step down the same certificate is
+    "invalid CA certificate". The upload's top is Jen's anchor and, unless it signed itself, an intermediate for every client: `(sentence, None)` when it signs a
+    certificate of the upload and carries no basic constraints with CA set, else None. A top that is the server's own certificate signs nothing, and one that signed
+    itself is the clients' anchor too."""
+    from cryptography import x509
+
+    cert = certs[top]
+    if top == 0 or _signed_by(cert, cert):
         return None
-    return box_said
+    try:
+        is_ca = cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    except x509.ExtensionNotFound:
+        is_ca = False
+    except ValueError:
+        return (f'"{cert.subject.rfc4514_string()}" carries an extension that cannot be read', None)
+    if is_ca:
+        return None
+    return (
+        f'"{cert.subject.rfc4514_string()}" signed a certificate of the upload and does not say it is a CA (it carries no basic constraints with CA set), '
+        "so a client that holds the CA above it refuses the chain",
+        None,
+    )
 
 
 def _signed_by(cert, issuer) -> bool:
@@ -322,10 +367,15 @@ def _signed_by(cert, issuer) -> bool:
 
 
 def _chain_tops(certs) -> list:
-    """The indexes of the certificates at the top of every issuer path the upload holds, walked up from the first one. One step up from a certificate is every
+    return _chain_walk(certs)[0]
+
+
+def _chain_walk(certs) -> tuple:
+    """`(tops, on_a_path)`. The indexes of the certificates at the top of every issuer path the upload holds, walked up from the first one. One step up from a certificate is every
     uploaded certificate that carries its issuer's name and whose key signed it - or, when none of that name signed it, every one of that name, so the verifier is
     the one that says the signature is wrong. A certificate that signed itself is a top and nothing is above it. (Q235, AT2: the walk used to follow the NAME alone
-    and keep the last match, so of two roots with one name - a root and its re-issue - the order of the paste chose which one judged the chain.)"""
+    and keep the last match, so of two roots with one name - a root and its re-issue - the order of the paste chose which one judged the chain.) `on_a_path` is every
+    index the walk visited: a certificate of the upload that is on no path from the first one is judged by nobody and named by no refusal (Q237)."""
     tops, seen, stack = [], set(), [0]
     while stack:
         i = stack.pop()
@@ -340,7 +390,7 @@ def _chain_tops(certs) -> list:
             stack.extend(above)
         else:
             tops.append(i)
-    return sorted(tops)
+    return sorted(tops), sorted(seen)
 
 
 def _out_of_date(certs, now=None) -> str:
@@ -373,27 +423,28 @@ def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None
     that verifies, whatever the order of the paste. What stays outside: the signature of a top certificate whose issuer neither the upload nor this box holds.
     (Q236, AU1, AU2) The box's answer is final only when it ACCEPTS. A refusal there is evidence about the box - its store may hold a superseded copy of a renewed
     root - so the upload's own tops are asked next, and a client that trusts one must COMPLETE the handshake: "the issuer is not held" from it used to be an acceptance,
-    and it is what OpenSSL answers for a key identifier that does not match, before it checks any signature. What the box adds to an accepting top is `_box_refusal`."""
-    import re
+    and it is what OpenSSL answers for a key identifier that does not match, before it checks any signature. What the box adds to an accepting top is `_box_refusal`.
+    (Q237, AV1, AV2) What the box adds is ONE answer: whose key signed the top. Its verifier's refusal is no longer read at all - it is about the box's own copy of the
+    issuer (a serial, a path length, a date), and the clients' copy is the clients'. And the top Jen trusts is asked what the verifier does not ask of an anchor: is
+    it a CA by the rule every client applies one step below its own (`_not_a_ca`). Outside, by decision: a property of the box's own copy of an issuer, and a
+    certificate in the box's store that OpenSSL does not count as a CA, which is no certificate the box trusts (AV3)."""
     import ssl
 
     from cryptography import x509
 
-    pems = re.findall(
-        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", cert_data + "\n" + (ca_data or ""), re.S
-    )
+    pems = _distinct_pems(cert_data + "\n" + (ca_data or ""))
     if not pems:
         return "the certificate file is not a PEM certificate"
+    if len(pems) > _MOST_CERTIFICATES:
+        return f"the upload carries {len(pems)} certificates and a server presents at most {_MOST_CERTIFICATES}: upload the certificate and the chain above it, not a bundle of CAs"
     try:
         certs = [x509.load_pem_x509_certificate(pem.encode("utf-8")) for pem in pems]
     except ValueError as e:
         return f"a certificate of the chain could not be read ({e})"
-    # the same certificate pasted twice is one certificate
+    # one certificate in two encodings is one certificate (at most twenty are compared)
     kept = [i for i, c in enumerate(certs) if c not in certs[:i]]
     pems, certs = [pems[i] for i in kept], [certs[i] for i in kept]
-    if len(certs) > _MOST_CERTIFICATES:
-        return f"the upload carries {len(certs)} certificates and a server presents at most {_MOST_CERTIFICATES}: upload the certificate and the chain above it, not a bundle of CAs"
-    tops = _chain_tops(certs)
+    tops, on_a_path = _chain_walk(certs)
     if not tops:
         return "the certificates of the upload name each other as issuer in a loop, so the chain has no top"
     client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -402,8 +453,7 @@ def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None
         _load_box_store(client)
     except (ssl.SSLError, OSError) as e:
         logger.warning(f"The box's own CA store could not be loaded for the certificate check: {e}")
-    box_said = _handshake(server_ctx, client)
-    if box_said is None:
+    if _handshake(server_ctx, client) is None:
         return None
     held = _held_by_box(client)
     refusal = None
@@ -415,11 +465,11 @@ def chain_refusal(server_ctx, cert_data: str, ca_data: str | None) -> str | None
             client.load_verify_locations(cadata=pems[top])
         except (ssl.SSLError, ValueError) as e:
             return f"a certificate of the chain could not be read ({getattr(e, 'strerror', None) or e})"
-        answer = _handshake(server_ctx, client) or _box_refusal(certs, top, held, box_said)
+        answer = _handshake(server_ctx, client) or _not_a_ca(certs, top) or _box_refusal(certs, top, held)
         if answer is None:
             return None
         refusal = refusal or answer
-    return refusal[0] + (_out_of_date(certs) if refusal[1] in _ABOUT_A_DATE else "")
+    return refusal[0] + (_out_of_date([certs[i] for i in on_a_path]) if refusal[1] in _ABOUT_A_DATE else "")
 
 
 def cert_refusal(cert_data: str, now=None) -> str | None:
@@ -521,7 +571,9 @@ def upload_cert():
 @_recent_auth_required(minutes=10)
 def remove_cert():
     # Q202 (AR6): see upload_cert - removing the certificate takes the site back to HTTP and restarts Jen
-    for f in [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]:
+    # (Q237, AV10) and the `.prev` copy `commit_file_set` keeps beside each: a removal that left `private.key.prev` on disk had not removed the key
+    live = [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]
+    for f in live + [name + ".prev" for name in live]:
         try:
             if os.path.exists(f):
                 os.remove(f)

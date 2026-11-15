@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Kea DHCP Management Console"
-LABEL version="7.1.0-beta.5"
+LABEL version="7.1.0-beta.6"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mariadb-client-core \
     openssh-client \
     openssl \
+    ca-certificates \
     curl \
     nmap \
     iputils-ping \

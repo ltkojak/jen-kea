@@ -320,8 +320,7 @@ class TestSecondPassRowsOfTheChangeSet:
             refused = kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")
         assert refused["ok"] is False and refused["via"] == "guard"
         assert (
-            "did not answer when Jen asked what it runs" in refused["detail"]
-            and "nothing was written" in refused["detail"]
+            "Jen could not read what the daemon on" in refused["detail"] and "nothing was written" in refused["detail"]
         )
         assert "apply-config" not in helper.ops()
 

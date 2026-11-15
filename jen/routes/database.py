@@ -144,7 +144,9 @@ def export_jen():
     """v5.66.0-beta.4 (Q106) — streams from a tempfile via dbexport.write_jen_export()
     instead of building the whole document (and then a whole second gzip.compress() copy
     of it) in memory first — the same reason the recovery bundle moved onto it."""
-    tables = request.form.getlist("tables") or None
+    tables = (
+        list(dict.fromkeys(request.form.getlist("tables"))) or None
+    )  # (Q237, AV5) each name once, for the file and for the audit row
     # (Q234, AR1) the page's form carries `picker`: with it, no box ticked is nothing to export, the Kea card's rule. It used to mean EVERY table, the users and the
     # sessions among them, for the gesture the card beside it refuses. A request without the marker (a script) is answered as before: no `tables` is all of them
     if tables is None and "picker" in request.form:
@@ -759,7 +761,21 @@ def import_inspect():
 def import_confirm():
     import base64
 
-    tmp_path = base64.b64decode(request.form.get("tmp_path", "")).decode()
+    # (Q237, the independent review's #4 and #5) the two modes are a closed set and are read BEFORE the uploaded file is opened or removed: any value but
+    # `replace` used to be a merge, and an unknown Kea mode was the generic failure line after the file was gone. And a token that is not base64 of a path
+    # raised out of the route as a 500: it is an import session that is not there, like a path outside the scratch directory
+    mode = request.form.get("mode", "replace")
+    dup = request.form.get("duplicate_mode", "skip")
+    if mode not in ("replace", "merge") or dup not in ("skip", "overwrite"):
+        flash("Not a mode this page offers. Nothing was changed.", "error")
+        return redirect(url_for("database.database", tab="import"))
+    token = request.form.get("tmp_path", "")
+    try:
+        tmp_path = base64.b64decode(token, validate=True).decode() if len(token) <= 4096 else ""
+    except ValueError:  # binascii.Error and UnicodeDecodeError are both ValueError
+        tmp_path = ""
+    if "\x00" in tmp_path:
+        tmp_path = ""
     # Validate the path is within Jen's own scratch directory — prevent path traversal
     real_tmp_dir = os.path.realpath(extensions.CONTENT_TMP_DIR)
     real_tmp_path = os.path.realpath(tmp_path) if tmp_path else ""
@@ -790,7 +806,6 @@ def import_confirm():
         if db == "jen":
             # (Q236, AU15) a name sent twice is one table: the importer and the audit row get each name once
             tables = list(dict.fromkeys(request.form.getlist("tables")))
-            mode = request.form.get("mode", "replace")
             if mode == "replace":
                 # v5.67.0-beta.14 (Q128, item b) — a snapshot first, put back on any failure: the confirmation
                 # page's promise is true for this mode. Merge mode has no snapshot and says so on the page.
@@ -799,7 +814,6 @@ def import_confirm():
                 results = dbexport.import_jen(file_bytes, tables, truncate=False)
             __user.audit("DB_IMPORT", "jen", f"tables={tables or 'all'} mode={mode}")
         elif db == "kea":
-            dup = request.form.get("duplicate_mode", "skip")
             results = dbexport.import_kea(file_bytes, duplicate_mode=dup)
             __user.audit("DB_IMPORT", "kea", f"duplicate_mode={dup}")
         else:
@@ -818,6 +832,7 @@ def import_confirm():
         # v5.67.0-beta.13 (Q127) — an error that names the table and row (never a value): the whole import was
         # rolled back, and the page says so instead of the generic line
         logger.error(f"Kea import aborted: {e}")
+        __user.audit("DB_IMPORT_FAILED", "kea", "rolled back; nothing was changed")
         flash(f"Import aborted and rolled back — {e.public}. Nothing was changed.", "error")
     except Exception as e:
         logger.error(f"DB import failed: {e}")
@@ -982,7 +997,8 @@ def migrate_run():
     db = request.form.get("database", "").strip()
     # v5.67.0-beta.13 (Q127) — the Jen selection is exactly what was ticked: nothing ticked is refused by
     # migrate_jen (it used to turn an empty list into "everything"); None would mean everything
-    tables = request.form.getlist("tables") if which == "jen" else None
+    # (Q237, AV6) a name sent twice is one table: the second one used to stop the run as "appeared on the target while the migration was starting"
+    tables = list(dict.fromkeys(request.form.getlist("tables"))) if which == "jen" else None
     kea_grp = request.form.get("kea_group", dbexport.KEA_BACKUP_GROUP)
     ca, ca_err = _migrate_target_ca()
     if ca_err:

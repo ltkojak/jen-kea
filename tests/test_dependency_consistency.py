@@ -28,6 +28,40 @@ CONSUMERS = [
 ]
 
 
+class TestBothUpgradePathsUpgradeTheDependencies:
+    """(Q237) `sudo ./install.sh` ran pip without `--upgrade`: an installed dependency that satisfied its floor stayed where it was on every by-hand upgrade,
+    while the in-app updater moved it. Both carry the flag; the by-hand path falls back to the plain install so an upgrade with no network still completes."""
+
+    def _pip_lines(self):
+        text = (REPO / "install.sh").read_text(encoding="utf-8")
+        return [line.strip() for line in text.splitlines() if re.search(r"-m pip install .*-r \"\$req_file\"", line)]
+
+    def test_install_sh_upgrades_first_and_falls_back_to_the_plain_install(self):
+        lines = self._pip_lines()
+        assert len(lines) == 2, lines
+        assert lines[0].startswith("if _run_logged") and " --upgrade -r " in lines[0]
+        assert lines[1].startswith("elif _run_logged") and "--upgrade" not in lines[1]
+
+    def test_the_fallback_warns_and_does_not_stop(self):
+        text = (REPO / "install.sh").read_text(encoding="utf-8")
+        after = text.split(self._pip_lines()[1], 1)[1]
+        assert after.index('warn "pip could not upgrade the Python dependencies') < after.index("fatal ")
+
+    def test_the_updater_passes_upgrade_too(self):
+        import ast
+
+        tree = ast.parse((REPO / "jen-update-root.py").read_text(encoding="utf-8"))
+        func = next(
+            n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "install_python_dependencies"
+        )
+        cmds = [
+            [e.value for e in n.value.elts if isinstance(e, ast.Constant)]
+            for n in ast.walk(func)
+            if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "cmd" and isinstance(n.value, ast.List)
+        ]
+        assert cmds and all("--upgrade" in c and "install" in c for c in cmds), cmds
+
+
 def _runtime_package_names():
     names = []
     for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines():

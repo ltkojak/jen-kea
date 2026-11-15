@@ -541,15 +541,69 @@ class TestASecretInsideAnAddressIsMasked:
     )
     def test_a_query_parameter_named_like_a_secret(self, name):
         shown = kea_authoring.redact_secrets({"url": f"https://h.example/hook?room=7&{name}={SENTINEL}&x=1"})
-        assert shown == {"url": f"https://h.example/hook?room=7&{name}=********&x=1"}
+        assert shown == {"url": f"https://h.example/hook?room=********&{name}=********&x=********"}
 
     def test_it_is_idempotent_and_leaves_the_rest_as_written(self):
         value = f"https://u:{SENTINEL}@h.example/hook?token={SENTINEL}&room=7#frag"
         once = secret_keys.without_credentials(value)
-        assert once == "https://h.example/hook?token=********&room=7#frag"
+        assert once == "https://h.example/hook?token=********&room=********#********"
         assert secret_keys.without_credentials(once) == once
-        for untouched in ("https://h.example/x?room=7", "file:///etc/kea/x@y", "eth0", "a note with an @ in it", ""):
+        for untouched in (
+            "https://h.example/x",
+            "http://10.0.0.9:8000/",
+            "file:///etc/kea/x@y",
+            "eth0",
+            "a note with an @ in it",
+            "",
+        ):
             assert secret_keys.without_credentials(untouched) == untouched
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "sig={s}",
+            "X-Amz-Signature={s}&X-Amz-Credential=AKIA%2F20261115&X-Amz-Date=20261115T000000Z",
+            "se=2026-12-01&sp=r&sv=2022&sr=b&sig={s}",
+            "a_name_nobody_listed={s}",
+            "k=%7B{s}%7D",
+            "{s}",
+            "a=1;b={s}",
+        ],
+        ids=["sig", "aws", "azure sas", "unknown name", "percent-encoded", "a bare word", "semicolons"],
+    )
+    def test_a_signed_address_keeps_no_value_of_its_query(self, query):
+        """(Q237, the independent review's #3) A signature is a secret under any name: every value of a query is masked and every name is kept."""
+        shown = kea_authoring.redact_secrets(
+            {"hooks-libraries": [{"parameters": {"upload": "https://s3.example/b/k?" + query.format(s=SENTINEL)}}]}
+        )
+        text = json.dumps(shown)
+        assert SENTINEL not in text and "https://s3.example/b/k?" in text
+        for name in ("X-Amz-Signature", "sig", "a_name_nobody_listed"):
+            assert (name + "=" in query) <= (name + "=********" in text)
+
+    def test_an_address_in_the_middle_of_a_sentence(self):
+        value = (
+            f"post to https://a.example/x?sig={SENTINEL} then ldap://u:{SENTINEL}@h.example/dc?scope={SENTINEL} (twice)"
+        )
+        shown = secret_keys.without_credentials(value)
+        assert shown == "post to https://a.example/x?sig=******** then ldap://h.example/dc?scope=******** (twice)"
+        assert secret_keys.without_credentials(shown) == shown
+
+    def test_a_fragment_is_masked(self):
+        assert (
+            secret_keys.without_credentials(f"https://h.example/cb#access_token={SENTINEL}")
+            == "https://h.example/cb#********"
+        )
+
+    def test_the_configuration_that_was_masked_is_not_changed(self):
+        import copy
+
+        cfg = {
+            "Dhcp4": {"hooks-libraries": [{"parameters": {"url": f"https://u:{SENTINEL}@h.example/x?sig={SENTINEL}"}}]}
+        }
+        before = copy.deepcopy(cfg)
+        shown = kea_authoring.redact_secrets(cfg)
+        assert cfg == before and SENTINEL not in json.dumps(shown)
 
     def test_a_value_with_no_scheme_is_not_read_as_an_address(self):
         """The acknowledged limit: `user:pw@host` is also how a SIP or a mail address is written."""

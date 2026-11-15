@@ -44,33 +44,53 @@ _PADDING = " \t\r\n"
 # (Q190 second pass, finding 5: the user-info runs to the LAST '@' before the path - a password may contain one - so the pattern is greedy up to a delimiter. Q221, AE7: a quote or an angle
 # bracket is NOT a delimiter - a password may contain those too - so an address ends at whitespace, `/`, `?` or `#` and nowhere else; over-scrubbing a sentence is the safe direction)
 _USERINFO_RE = re.compile(r"(?i)\b(https?://)[^\s/?#]*@")
+# (Q237) an address inside a text, for `without_credentials`: a scheme, `://` and everything up to the next white space
+_ADDRESS_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S+")
+_MASK = "********"
+
+
+def _masked_query(query: str) -> str:
+    """Every parameter of a query with its value masked and its name kept; a parameter that is a bare word is masked whole. (Q237, the independent review's #3) Only a
+    value under a secret's NAME used to go, and a signature is a secret under any name: `sig`, `X-Amz-Signature`, `se`, a name nobody has listed."""
+    out = []
+    for pair in query.split("&"):
+        name, eq, held = pair.partition("=")
+        out.append(f"{name}={_MASK}" if eq and held else (_MASK if pair and not eq else pair))
+    return "&".join(out)
+
+
+def _address_without_credentials(address: str) -> str:
+    """One address without its user-info, with every query value and its fragment masked; as written when it has none of the three or cannot be split."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(address)
+    except ValueError:
+        return address
+    netloc = parts.netloc.rsplit("@", 1)[1] if "@" in parts.netloc else parts.netloc
+    query = _masked_query(parts.query) if parts.query else parts.query
+    fragment = _MASK if parts.fragment else parts.fragment
+    if not parts.scheme or (netloc, query, fragment) == (parts.netloc, parts.query, parts.fragment):
+        return address
+    return urlunsplit(parts._replace(netloc=netloc, query=query, fragment=fragment))
 
 
 def without_credentials(value) -> str:
-    """A string VALUE of a configuration as a page may show it (Q230, AP9 and the beta.15 review's #2; CRED-005 at the display). Two places a secret sits inside an address that
-    `without_userinfo` does not reach: the user-info of an address whose scheme is not http(s) (`ldap://u:pw@h`, `postgresql://`, `redis://`, `wss://` - the authority of ANY
-    scheme `urlsplit` reads a host from is split at its LAST `@`), and a query parameter whose NAME is a secret's (`?token=...`, `&api_key=...`, by `is_secret_key`), which keeps
-    its name and loses its value. Everything else of the value is returned as written; what is left goes through `scrub_urls`. Idempotent. A value with no `://` is not read as
-    an address: `user:pw@host` is also how a SIP or a mail address is written, and a rule that cannot tell them apart is not applied."""
-    from urllib.parse import unquote, urlsplit, urlunsplit
-
+    """A string VALUE of a configuration as a page may show it (Q230, AP9 and the beta.15 review's #2; CRED-005 at the display). The places a secret sits inside an
+    address that `without_userinfo` does not reach: the user-info of an address whose scheme is not http(s) (`ldap://u:pw@h`, `postgresql://`, `redis://`, `wss://` -
+    the authority of ANY scheme `urlsplit` reads a host from is split at its LAST `@`), the VALUE of every query parameter, which keeps its name (Q237: it was only a
+    parameter whose name is a secret's, and a signed address carries its secret under any name), and the fragment. The value is read twice: whole, as ONE address,
+    so a password or a query value with a space in it goes too; then every address inside it as a text, so one in the middle of a sentence is masked like one that
+    is the whole value. Everything else is returned as written; what is left goes through `scrub_urls`. Idempotent. A value with no `://` is not read as an
+    address: `user:pw@host` is also how a SIP or a mail address is written, and a rule that cannot tell them apart is not applied. This masks a COPY for display;
+    the configuration it was read from is never written from it."""
     text = str(value if value is not None else "")
     if "://" not in text:
         return scrub_urls(text)
-    try:
-        parts = urlsplit(text.strip(_PADDING))
-    except ValueError:
-        return scrub_urls(text)
-    netloc = parts.netloc.rsplit("@", 1)[1] if "@" in parts.netloc else parts.netloc
-
-    def masked(pair: str) -> str:
-        name, eq, held = pair.partition("=")
-        return f"{name}=********" if eq and held and is_secret_key(unquote(name)) else pair
-
-    query = "&".join(masked(pair) for pair in parts.query.split("&")) if parts.query else parts.query
-    if not parts.scheme or (netloc == parts.netloc and query == parts.query):
-        return scrub_urls(text)
-    return scrub_urls(urlunsplit(parts._replace(netloc=netloc, query=query)))
+    whole = _address_without_credentials(text.strip(_PADDING))
+    if whole != text.strip(_PADDING):
+        text = whole
+    return scrub_urls(_ADDRESS_RE.sub(lambda found: _address_without_credentials(found.group(0)), text))
 
 
 def scrub_urls(text) -> str:

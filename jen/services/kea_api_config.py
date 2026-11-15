@@ -1610,12 +1610,14 @@ def api_daemon_differs(server: dict, service: str, restore: bool = False, must_a
         unresolved = pending_block(server, service)
         if unresolved:
             return unresolved
-    live, digest, _why = _get(server, service)
+    live, digest, why = _get(server, service)
     if live is None:
         if must_answer:
+            # (Q237, AV11) with `_get`'s own reason: a daemon that did not answer, one that refused `config-get` and one whose answer has no section or no
+            # digest used to be one sentence that said "did not answer"
             return (
-                f"the daemon on {_name(server)} did not answer when Jen asked what it runs, so Jen cannot tell whether its file carries that; "
-                "nothing was written. Try again when Kea's API answers"
+                f"Jen could not read what the daemon on {_name(server)} runs ({why}), so it cannot tell whether its file carries that; "
+                "nothing was written. Try again when Kea's API answers config-get"
             )
         return ""
     sid = server.get("id")

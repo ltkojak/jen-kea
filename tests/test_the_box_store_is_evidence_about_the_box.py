@@ -239,23 +239,19 @@ class TestWhatTheBoxAdds:
         )
 
     def test_each_branch(self, pki):
+        """(Q237, AV2) The box's store answers whose key signed the top, and nothing about its own copy: the box verifier's answer is no longer an argument."""
         from jen.routes.settings.security import _box_refusal
 
-        expired, other, not_held = ("expired", 10), ("path length", 25), ("not held", 20)
         certs, held = self._args(pki, ("leaf", "mid", "root"), ["root_rekeyed"])
-        assert _box_refusal(certs, 2, held, other) is None  # the top signed itself
+        assert _box_refusal(certs, 2, held) is None  # the top signed itself
         certs, held = self._args(pki, ("leaf", "mid"), [])
-        assert _box_refusal(certs, 1, held, not_held) is None  # the box trusts nobody of that name
+        assert _box_refusal(certs, 1, held) is None  # the box trusts nobody of that name
         certs, held = self._args(pki, ("leaf", "mid"), ["root_rekeyed"])
-        assert _box_refusal(certs, 1, held, not_held)[1] is None  # one of that name, and it did not sign
+        assert _box_refusal(certs, 1, held)[1] is None  # one of that name, and it did not sign
         certs, held = self._args(pki, ("leaf", "mid"), ["root_old"])
-        assert _box_refusal(certs, 1, held, expired) is None  # the box's own copy is out of date
-        assert (
-            _box_refusal(certs, 1, held, other) == other
-        )  # any other answer about the path through the box's certificate stands
-        assert _box_refusal(certs, 1, held, not_held) == not_held
-        certs, held = self._args(pki, ("late_leaf", "late_mid"), ["root_old"])
-        assert _box_refusal(certs, 1, held, expired) == expired  # a date, and the upload has one of its own
+        assert _box_refusal(certs, 1, held) is None  # the box's own copy signed it: its dates are the box's
+        certs, held = self._args(pki, ("leaf", "mid"), ["root_rekeyed", "root"])
+        assert _box_refusal(certs, 1, held) is None  # one of the two of that name signed it
 
     def test_issuer_not_held_is_never_an_acceptance_any_more(self):
         import pathlib
@@ -278,7 +274,7 @@ class TestTheSmallRows:
         assert (
             security.validate_cert_material(pki["leaf"] + extra + pki["leaf"], pki["key"], None) is None
         )  # a repeat is one certificate
-        monkeypatch.setattr(security, "_chain_tops", never)
+        monkeypatch.setattr(security, "_chain_walk", never)
         said = security.validate_cert_material(pki["leaf"] + extra + pki["mid"], pki["key"], None)
         assert said == (
             "the upload carries 21 certificates and a server presents at most 20: upload the certificate and the chain above it, not a bundle of CAs"

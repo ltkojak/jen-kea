@@ -10,6 +10,20 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.6: a by-hand upgrade moves the Python dependencies
+
+One step (7.1.0-beta.6). It adds no migration and no helper build, and there is nothing to do.
+
+**`sudo ./install.sh` now upgrades the Python dependencies.** It used to leave an installed dependency where it was as long as it satisfied its floor, so a box that was only ever upgraded by hand kept the versions of its first install. On this upgrade those move to current releases, which the in-app updater has always done. Without a route to the package index the step keeps the installed versions and prints a warning; the upgrade still completes. `--repair` and `--configure` run the same step.
+
+**Settings → Security: the certificate upload.** A root that was renewed with a new serial number no longer refuses a good chain when the box still holds the earlier copy. An intermediate that does not say it is a CA is refused. More than twenty certificates, or more than a million characters, is refused before anything is read. Removing the certificate also removes the `.prev` copies.
+
+**Settings → Databases → Import.** A Kea file is restored whole or not at all: a table that cannot be read stops the import and everything is rolled back. A mode the page does not offer is refused.
+
+**Config history and the support bundle** mask every value of an address's query, not only a parameter named like a secret. Names are kept.
+
+**The HA failover alert** is retried until a channel takes it and is not lost across a restart of Jen. The first check after this upgrade records each server's state and announces nothing.
+
 ## 7.1.0-beta.5: what the box's CA store says is evidence about the box
 
 One step (7.1.0-beta.5). It adds no migration and no helper build, and there is nothing to do.

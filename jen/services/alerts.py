@@ -2027,6 +2027,63 @@ def check_kea_status_alert(srv, srv_up) -> str:
     )
 
 
+_HA_KNOWN = "alert_state:event:ha_states"
+
+
+def _ha_known() -> dict:
+    """{server id: [told, seen]}: the HA state last ANNOUNCED for each server and the one last observed. Stored, so a restart forgets neither."""
+    import json
+
+    if _HA_KNOWN in _unsaved_states:
+        return dict(_unsaved_states[_HA_KNOWN])
+    try:
+        known = json.loads(__get_global_setting(_HA_KNOWN, "") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(known, dict):
+        return {}
+    return {k: v for k, v in known.items() if isinstance(v, list) and len(v) == 2}
+
+
+def check_ha_state_alert(srv, new_state) -> str:
+    """`ha_failover` for one server, through the delivery contract every other alert of this loop has (Q237, AP14). It was `last_ha_states`, a dict local to
+    `check_alerts`, and a `send_alert` whose answer nobody read: a failover whose channels all failed was recorded as announced and never tried again, and the first
+    observation after a restart was silent by construction, so a failover across a restart of Jen was never announced at all.
+
+    The condition is "the state differs from the one last ANNOUNCED" (`told`, stored). While it holds, `notify_condition` sends, retries with its backoff and
+    survives a restart; the alert says `told -> the state now`, so two changes nobody was told about are announced as one, from the last state the operator knows.
+    When it is delivered the new state becomes `told`. A state that went back to `told` before anybody was told ends the condition with nothing sent - the same
+    rule as a `kea_down` nobody received and its `kea_up`. The `ha.state_changed` event is written once per OBSERVED change (`seen`, stored), delivered or not.
+    The first state ever seen for a server is recorded and announces nothing. Returns what `notify_condition` did, or "first"."""
+    import json
+
+    known = _ha_known()
+    key = str(srv["id"])
+    told, seen = known.get(key) or (None, None)
+    if told is None:
+        did, told = "first", new_state
+    else:
+        if new_state != seen:
+            __emit_event("ha.state_changed", server=srv["name"], detail=f"{seen} -> {new_state}")
+        details = {"server_name": srv["name"], "old_state": told, "new_state": new_state}
+        did = notify_condition("ha_failover", srv["id"], new_state != told, kwargs=details)
+        if did == "sent":
+            told = new_state
+            notify_condition(
+                "ha_failover", srv["id"], False, kwargs=details
+            )  # delivered: the condition is over, and nothing is owed for it
+    live = {str(s["id"]) for s in extensions.KEA_SERVERS or []}
+    kept = {k: v for k, v in known.items() if k in live}
+    kept[key] = [told, new_state]
+    if kept != known or _HA_KNOWN in _unsaved_states:
+        if __set_global_setting(_HA_KNOWN, json.dumps(kept, separators=(",", ":"))):
+            _unsaved_states.pop(_HA_KNOWN, None)
+        else:
+            _unsaved_states[_HA_KNOWN] = dict(kept)
+            logger.warning("the HA state record could not be stored: a restart may repeat a failover notification")
+    return did
+
+
 def check_stale_reservation_alerts(cur) -> None:
     """`stale_reservation` for every device not seen for `stale_device_days` that has a reservation, once - recorded as told only when a channel TOOK it. The set of
     macs already told was `alerted_stale_macs`, local to `check_alerts`: a restart told every one of them again, and an alert nobody received was recorded as sent.
@@ -2135,7 +2192,6 @@ def check_alerts():
         None  # v5.68.0-beta.20 (Q155): the certificate and forecast conditions run every CONDITION_INTERVAL_MINUTES
     )
     last_snapshot_time = 0
-    last_ha_states = {}  # server_id -> last known HA state
     last_stale_pass = None  # time.time() of the last stale-reservation pass
 
     # Seed known_macs from devices table so restarts don't flood with "new device" alerts for every known device. v5.68.0-beta.21 (Q156): the seed
@@ -2173,18 +2229,10 @@ def check_alerts():
                     if srv_up and len(extensions.KEA_SERVERS) > 1:
                         ha = __kea_command("ha-heartbeat", server=srv)
                         if ha.get("result") == 0:
-                            new_state = (ha.get("arguments") or {}).get("state", "")
-                            old_state = last_ha_states.get(srv_id)
-                            if old_state is not None and new_state != old_state:
-                                send_alert(
-                                    "ha_failover", server_name=srv["name"], old_state=old_state, new_state=new_state
-                                )
-                                __emit_event(
-                                    "ha.state_changed", server=srv["name"], detail=f"{old_state} -> {new_state}"
-                                )
-                            last_ha_states[srv_id] = new_state
+                            check_ha_state_alert(srv, (ha.get("arguments") or {}).get("state", ""))
                 time.sleep(5)
             _clear_orphan_states("kea_down", [srv["id"] for srv in extensions.KEA_SERVERS or []])
+            _clear_orphan_states("ha_failover", [srv["id"] for srv in extensions.KEA_SERVERS or []])
 
             kea_up = any(last_kea_status.values()) if last_kea_status else True
 

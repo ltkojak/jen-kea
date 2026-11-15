@@ -485,16 +485,18 @@ class TestAFileWrittenBeforeThisFix:
                 },
             }
         ).encode("utf-8")
-        results = dbexport.import_kea(content, "skip")
-        refused = [r for r in results if r.startswith("❌")]
-        assert len(refused) == 1 and "hosts.dhcp_identifier" in refused[0] and "row 2" in refused[0]
+        # (Q237) the whole import stops: the leases of this file used to be written and committed beside the refused reservations
+        with pytest.raises(dbexport.ImportAborted) as e:
+            dbexport.import_kea(content, "skip")
+        assert "hosts.dhcp_identifier" in e.value.public and "row 2" in e.value.public
         snap = _snapshot(kea_tables)
         assert not snap["hosts"], "the table with an undecodable value must be refused whole, not half-restored"
-        assert snap["lease4"][0]["hw"] == MAC2.hex().upper(), "an unrelated table is still imported"
+        assert not snap["lease4"], "and no table of the file is imported beside it"
 
     def test_odd_length_hex_is_refused_too(self, kea_tables):
         content = self._old_file(2, [{"host_id": 1, "dhcp_identifier": "abc", "dhcp_identifier_type": 0}])
-        assert any(r.startswith("❌") for r in dbexport.import_kea(content, "skip"))
+        with pytest.raises(dbexport.ImportAborted):
+            dbexport.import_kea(content, "skip")
         assert not _snapshot(kea_tables)["hosts"]
 
     def test_a_format3_file_with_a_bare_string_in_a_binary_column_is_refused(self, kea_tables):
@@ -504,8 +506,8 @@ class TestAFileWrittenBeforeThisFix:
                 "data": {"hosts": [{"host_id": 1, "dhcp_identifier": "341343e60e2a", "dhcp_identifier_type": 0}]},
             }
         ).encode("utf-8")
-        results = dbexport.import_kea(content, "skip")
-        assert any(r.startswith("❌") and "tags every binary value" in r for r in results), results
+        with pytest.raises(dbexport.ImportAborted, match="tags every binary value"):
+            dbexport.import_kea(content, "skip")
         assert not _snapshot(kea_tables)["hosts"]
 
     def test_a_tagged_value_with_invalid_hex_is_refused(self, kea_tables):
@@ -515,7 +517,23 @@ class TestAFileWrittenBeforeThisFix:
                 "data": {"hosts": [{"host_id": 1, "dhcp_identifier": {"$bin": "xyz"}, "dhcp_identifier_type": 0}]},
             }
         ).encode("utf-8")
-        assert any(r.startswith("❌") for r in dbexport.import_kea(content, "skip"))
+        with pytest.raises(dbexport.ImportAborted):
+            dbexport.import_kea(content, "skip")
+
+    def test_a_file_whose_hosts_carry_no_identifier_stops_the_import_too(self, kea_tables):
+        content = json.dumps(
+            {
+                "_meta": {"database": "kea", "jen_export_version": 1, "format": 2, "tables": ["hosts", "lease4"]},
+                "data": {
+                    "hosts": [{"host_id": 1, "hostname": "nameless"}],
+                    "lease4": [{"address": 3232236300, "hwaddr": MAC2.hex(), "client_id": None, "subnet_id": 1}],
+                },
+            }
+        ).encode("utf-8")
+        with pytest.raises(dbexport.ImportAborted, match="carry no identifier"):
+            dbexport.import_kea(content, "skip")
+        snap = _snapshot(kea_tables)
+        assert not snap["hosts"] and not snap["lease4"]
 
 
 class TestMigration:

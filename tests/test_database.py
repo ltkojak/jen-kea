@@ -819,6 +819,141 @@ class TestNothingTickedOnTheImportPageIsRefused:
             row = cur.fetchone()
         assert "tables=['settings'] mode=merge" in str(row)
 
+    @pytest.mark.parametrize(
+        "form",
+        [
+            {"mode": "Replace"},
+            {"mode": "truncate"},
+            {"mode": ""},
+            {"duplicate_mode": "replace"},
+            {"duplicate_mode": ""},
+        ],
+        ids=["Replace", "truncate", "an empty mode", "a Kea mode of the other form", "an empty Kea mode"],
+    )
+    def test_a_mode_the_page_does_not_offer_is_refused_before_the_file_is_opened(
+        self, form, logged_in_client, db, monkeypatch
+    ):
+        """(Q237, the independent review's #4) Any `mode` but `replace` was a merge, and an unknown Kea mode was the generic failure after the file was gone."""
+        import os
+
+        from jen.services import dbexport
+
+        def never(*a, **k):
+            raise AssertionError("an import ran")
+
+        for name in ("import_jen", "import_jen_guarded", "import_kea"):
+            monkeypatch.setattr(dbexport, name, never)
+        path, token = self._staged()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action LIKE 'DB_IMPORT%%'")
+            before = cur.fetchone()["n"]
+        r = logged_in_client.post("/database/import/confirm", data={"tmp_path": token, "tables": ["settings"], **form})
+        assert r.status_code == 302
+        assert b"Not a mode this page offers. Nothing was changed." in logged_in_client.get(r.headers["Location"]).data
+        assert os.path.exists(path), "the uploaded file is still there: nothing consumed it"
+        os.unlink(path)
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action LIKE 'DB_IMPORT%%'")
+            assert cur.fetchone()["n"] == before
+
+    def test_both_modes_the_page_offers_still_run(self, logged_in_client, db, monkeypatch):
+        from jen.services import dbexport
+
+        ran = []
+        monkeypatch.setattr(dbexport, "import_jen", lambda data, tables, truncate=True: ran.append("merge") or [])
+        monkeypatch.setattr(dbexport, "import_jen_guarded", lambda data, tables: ran.append("replace") or [])
+        for mode in ("merge", "replace"):
+            _path, token = self._staged()
+            logged_in_client.post(
+                "/database/import/confirm", data={"tmp_path": token, "mode": mode, "tables": ["settings"]}
+            )
+        assert ran == ["merge", "replace"]
+
+    @pytest.mark.parametrize(
+        "token",
+        ["A", "/w==", "", "not base64 at all!", "QQ==" * 2000, "AA=="],
+        ids=["bad padding", "not UTF-8", "missing", "not base64", "too long", "a NUL"],
+    )
+    def test_a_token_that_is_not_a_path_is_an_import_session_that_is_not_there(self, token, logged_in_client):
+        """(Q237, the independent review's #5) The token was decoded above the route's own handling: bad padding and bytes that are not UTF-8 were a 500."""
+        r = logged_in_client.post("/database/import/confirm", data={"tmp_path": token, "mode": "merge"})
+        assert r.status_code == 302
+        assert b"Import session expired. Please re-upload." in logged_in_client.get(r.headers["Location"]).data
+
+    def test_a_path_outside_the_scratch_directory_is_still_refused_and_left_alone(self, logged_in_client, tmp_path):
+        import base64
+
+        outside = tmp_path / "outside.json"
+        outside.write_text("{}")
+        for path in (str(outside), "/etc/passwd", "../../etc/passwd"):
+            token = base64.b64encode(path.encode()).decode()
+            r = logged_in_client.post("/database/import/confirm", data={"tmp_path": token, "mode": "merge"})
+            assert b"Import session expired. Please re-upload." in logged_in_client.get(r.headers["Location"]).data
+        assert outside.exists()
+
+    def test_an_export_of_a_table_named_twice_writes_it_once(self, logged_in_client, db, monkeypatch):
+        """(Q237, AV5) The fix of the import did not reach the export: a JSON object with one key twice, the rows streamed twice, the audit row naming it twice."""
+        from jen.services import dbexport
+
+        asked = []
+        real = dbexport.write_jen_export
+        monkeypatch.setattr(
+            dbexport, "write_jen_export", lambda path, tables=None: asked.append(tables) or real(path, tables)
+        )
+        r = logged_in_client.post("/database/export/jen", data={"picker": "1", "tables": ["settings", "settings"]})
+        assert r.status_code == 200 and asked == [["settings"]]
+        meta, data, err = dbexport.parse_import_file(r.data)
+        assert err is None and list(data) == ["settings"] and meta["tables"] == ["settings"]
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT details FROM audit_log WHERE action='DB_EXPORT' ORDER BY id DESC LIMIT 1")
+            assert "['settings']" in str(cur.fetchone())
+
+    def test_the_one_filter_of_table_names_keeps_each_once(self):
+        from jen.services import dbexport
+
+        assert dbexport._validate_tables(["b", "a", "b", "x", "a"], ["a", "b"]) == ["b", "a"]
+        assert dbexport._validate_tables(None, ["a"]) is None
+
+    def test_a_kea_import_that_was_rolled_back_leaves_an_audit_row_that_says_so(
+        self, logged_in_client, db, monkeypatch
+    ):
+        """(Q237, the independent review's #2) The route's half: an import that stopped is `DB_IMPORT_FAILED`, never `DB_IMPORT`."""
+        import base64
+        import json
+        import os
+        import tempfile
+
+        from jen import extensions
+        from jen.services import dbexport
+
+        def aborted(file_bytes, duplicate_mode="skip"):
+            raise dbexport.ImportAborted("hosts: hosts.dhcp_identifier (row 2): not valid hex")
+
+        monkeypatch.setattr(dbexport, "import_kea", aborted)
+        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+        fd, path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".jen-import")
+        with os.fdopen(fd, "w") as f:
+            json.dump(
+                {
+                    "_meta": {"database": "kea", "jen_export_version": 1, "format": 2, "tables": ["hosts"]},
+                    "data": {"hosts": []},
+                },
+                f,
+            )
+        token = base64.b64encode(path.encode()).decode()
+        r = logged_in_client.post("/database/import/confirm", data={"tmp_path": token, "duplicate_mode": "skip"})
+        page = logged_in_client.get(r.headers["Location"]).data
+        assert b"Import aborted and rolled back" in page and b"Nothing was changed." in page
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT action, details FROM audit_log WHERE action LIKE 'DB_IMPORT%%' ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        assert row["action"] == "DB_IMPORT_FAILED" and "rolled back" in row["details"]
+
     def test_an_export_that_cannot_list_its_tables_is_the_handled_failure(self, logged_in_client, db, monkeypatch):
         """(Q235, AT9) The list of exportable tables is a database read; it ran above the route's `try` and a database that was away was a 500 page."""
         from jen.services import dbexport

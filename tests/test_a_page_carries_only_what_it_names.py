@@ -191,7 +191,8 @@ class TestTheDailySummaryGoesOnlyToAChannelForEverySubnet:
 
     def test_every_alert_sent_with_no_subnet_is_on_the_reviewed_list(self):
         """Where else is this true: every `send_alert(` call under `jen/` and `plugins/` that names its type with a literal and passes no `subnet_id`. The daily summary is about
-        the whole network; `ha_failover` is about one Kea server and names no subnet or client. A new one is reviewed here before it ships."""
+        the whole network. (Q237, AP14) `ha_failover`, about one Kea server and naming no subnet or client, was the second: it is sent through `notify_condition` now, as
+        `kea_down` is. A new one is reviewed here before it ships."""
         bare = set()
         for path in _python_files():
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -204,7 +205,7 @@ class TestTheDailySummaryGoesOnlyToAChannelForEverySubnet:
                 keywords = [k.arg for k in node.keywords]
                 if "subnet_id" not in keywords and None not in keywords:
                     bare.add(node.args[0].value)
-        assert bare == {"daily_summary", "ha_failover"}, sorted(bare)
+        assert bare == {"daily_summary"}, sorted(bare)
 
     def test_the_form_offers_it_only_to_an_account_that_can_make_such_a_channel(self):
         html = (ROOT / "templates/settings_alerts.html").read_text(encoding="utf-8")

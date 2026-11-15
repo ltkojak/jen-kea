@@ -160,9 +160,10 @@ a unix control socket is used only under `/run/kea`, `/var/run/kea` or `/tmp`; a
 **Rule.** Investigation logging's own writes stay on the file path (INV-001: the host restores the FILE), and turning it on makes the daemon re-read that file. On a server whose
 `config_transport` is `api` the turn-on's write is therefore asked what every other file write there is asked - does the file carry what the daemon runs - and is refused before anything is
 sent when it does not. The writes that take the marker OUT (turn off, the sweep's restore, a revert) are never asked: the host's deadline waits on nothing.
-The refusal is `api_daemon_differs`'s own sentence, one of five: the two that name a difference, the three of an earlier change that is unresolved or whose record is
-damaged or unreadable. A sixth is the turn-on's alone (Q236, AU3): a daemon that does NOT ANSWER the question is a refusal there (`must_answer`), because the question
-unanswered is not the answer "no difference". For every other write a daemon that cannot be read is still not a difference (Q212's stated limit).
+The refusal is `api_daemon_differs`'s own sentence, whichever it is: one that names a difference, or `pending_block`'s for an earlier change that is unresolved or whose
+record is damaged or unreadable (those carry the reconcile's own note, so they are not a fixed list). One more is the turn-on's alone (Q236, AU3): a daemon whose running
+configuration cannot be READ is a refusal there (`must_answer`), with the reason the read gave (Q237, AV11), because the question unanswered is not the answer "no
+difference". For every other write a daemon that cannot be read is still not a difference (Q212's stated limit).
 **Established.** Q214 (the hand-off Q212 left open, decided: the writes do not move to the API; the reload's cost is closed at turn-on); Q236 (AU3, the unanswered question).
 **Enforced at.** `jen/services/kea_host.py` (`investigation_writer(compare=True)`, read in `apply_config`), passed by `investigation_logging.turn_on` alone through `_change`.
 **Tests.**
@@ -1138,8 +1139,13 @@ certificate SIGNED which (`_chain_tops`), never by a name or the order of the pa
 when any accepts. Before them the verifier is asked with the box's own CA store and no uploaded anchor; when it accepts, the chain is accepted.
 When it does not, its answer is evidence about the BOX: a client that trusts a top of the upload must COMPLETE the handshake ("issuer not found" from it is a refusal), and the one
 pair that client cannot judge - a top and an issuer that is not in the upload - is judged by `_box_refusal`: the box trusting a certificate of that name that did not sign the top is
-a refusal whatever key identifiers the certificates carry; the box's own copy being out of date, with every uploaded certificate inside its dates, is not.
-**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box).
+a refusal whatever key identifiers the certificates carry. The box's store answers that ONE question, whose key signed the top: nothing else about the box's own copy of the issuer
+(its dates, its serial, its constraints) is read, and the box verifier's refusal is not a verdict (Q237). The top Jen tells the verifier to trust is asked what a verifier does not
+ask of its own anchor: a top that signed a certificate of the upload and did not sign itself must carry basic constraints with CA set (`_not_a_ca`). The size and the count of the
+upload are judged before anything is written, loaded or parsed. Outside, by decision: a certificate in the box's store that OpenSSL does not count as a CA is no certificate the
+box trusts.
+**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box);
+Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the bounds first).
 **Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
 **Tests.**
 - `tests/test_a_chain_is_walked_to_its_top.py::TestTheWholePathIsJudged`
@@ -1148,6 +1154,10 @@ a refusal whatever key identifiers the certificates carry; the box's own copy be
 - `tests/test_the_box_store_is_evidence_about_the_box.py::TestASupersededCopyInTheBoxStore`
 - `tests/test_the_box_store_is_evidence_about_the_box.py::TestAWrongIntermediateIsRefusedWithAndWithoutKeyIdentifiers`
 - `tests/test_the_box_store_is_evidence_about_the_box.py::TestWhatTheBoxAdds`
+- `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheBoxLendsItsKeyAndNothingElse`
+- `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheTopIsACaByTheRuleOfTheClientsBelowIt`
+- `tests/test_the_boxs_copy_is_the_boxs_own.py::TestAnExpiredCertificateOnNoPathDecidesNothing`
+- `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheBoundsComeFirst`
 - `tests/test_a_fix_reaches_both_ends.py::TestTheChainIsJudgedByAVerifier`
 
 ## The browser surface (Q208)
