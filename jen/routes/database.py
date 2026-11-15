@@ -788,7 +788,8 @@ def import_confirm():
 
     try:
         if db == "jen":
-            tables = request.form.getlist("tables")
+            # (Q236, AU15) a name sent twice is one table: the importer and the audit row get each name once
+            tables = list(dict.fromkeys(request.form.getlist("tables")))
             mode = request.form.get("mode", "replace")
             if mode == "replace":
                 # v5.67.0-beta.14 (Q128, item b) — a snapshot first, put back on any failure: the confirmation

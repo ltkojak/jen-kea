@@ -310,6 +310,46 @@ class TestSecondPassRowsOfTheChangeSet:
             assert (flags.on, flags.compare) == (True, True)
         assert (flags.on, flags.compare) == (False, False)
 
+    def test_a_turn_on_is_refused_when_the_daemon_cannot_be_asked(self, daemon, helper, store):
+        """(Q236, AU3) `config-get` did not answer: "no difference" was the answer, the file was written and the reload took out whatever the daemon ran without it."""
+        server = {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3", "config_transport": "api", "api_url": daemon.url}
+        helper.configs[(3, "dhcp4")] = {"Dhcp4": {}}
+        helper.shas[(3, "dhcp4")] = "raw-c"
+        daemon.stop()
+        with kea_host.investigation_writer(compare=True):
+            refused = kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")
+        assert refused["ok"] is False and refused["via"] == "guard"
+        assert (
+            "did not answer when Jen asked what it runs" in refused["detail"]
+            and "nothing was written" in refused["detail"]
+        )
+        assert "apply-config" not in helper.ops()
+
+    def test_every_write_that_is_not_a_turn_on_still_goes_ahead_over_a_silent_daemon(self, daemon, helper, store):
+        """(Q236, AU3) The limit Q212 stated stays where it was: a host whose daemon is down can be put back, and DEBUG 55 can always come off."""
+        server = {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3", "config_transport": "api", "api_url": daemon.url}
+        helper.configs[(3, "dhcp4")] = {"Dhcp4": {}}
+        helper.shas[(3, "dhcp4")] = "raw-c"
+        daemon.stop()
+        assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]
+        with kea_host.investigation_writer():
+            assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="jen")["ok"]
+        with kea_host.investigation_writer(compare=True):
+            assert kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, source="rollback")["ok"]
+
+    def test_only_the_choke_point_passes_must_answer(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        hits = [
+            (p.relative_to(root).as_posix(), len(re.findall(r"must_answer=", p.read_text(encoding="utf-8"))))
+            for p in sorted((root / "jen").rglob("*.py"))
+            if "must_answer=" in p.read_text(encoding="utf-8")
+            and p.name != "kea_api_config.py"  # the definition and its docstring
+        ]
+        assert hits == [("jen/services/kea_host.py", 1)]
+
     def test_a_file_server_is_never_asked(self, daemon, helper, store, monkeypatch):
         from jen.services import kea_api_config as api
 

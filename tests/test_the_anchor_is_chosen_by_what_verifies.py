@@ -201,14 +201,15 @@ class TestARootAndItsEarlierCopy:
 class TestTheBoxStoreJudgesTheTop:
     """AT1. A verifier does not check the signature of the certificate it was told to trust, and in a two-certificate `fullchain.pem` that was the intermediate."""
 
-    def test_a_forged_intermediate_is_refused_in_the_words_of_a_client_that_holds_the_root(
-        self, pki, tmp_path, box_store
-    ):
+    def test_a_forged_intermediate_is_refused_and_the_sentence_names_the_box(self, pki, tmp_path, box_store):
+        """(Q236) The sentence is Jen's own since 7.1.0-beta.5: the verifier's words for this depend on the key identifiers the certificates carry."""
         certs = ("forged_leaf", "forged_mid")
         theirs = _a_real_client_says(tmp_path, pki, certs, "forged_key", holds="pub_root")
         box_store.append("pub_root")
         assert theirs == "certificate signature failure"
-        assert _judge(pki, certs, "forged_key") == f"a client that verifies the chain refuses it ({theirs})"
+        assert _judge(pki, certs, "forged_key").startswith(
+            'this box trusts a certificate named "CN=pub-root" and it did not sign "CN=pub-mid", which names it as issuer. '
+        )
 
     def test_a_healthy_fullchain_is_accepted_with_and_without_the_root_on_the_box(self, pki, box_store):
         assert _judge(pki, ("good_leaf", "good_mid"), "good_key") is None
@@ -322,4 +323,19 @@ class TestRemovingAFileAnswersLikeWritingOne:
                 ):
                     seen += 1
                     assert "'raised': True" in ast.unparse(node), f"{fn.name}:{node.lineno}"
+            # (Q236, AU8) the ORDER is the fix: `HelperUnreachable` is a `HelperError`, so one handler for the parent catches both and says `raised` for a host
+            # no session ever reached. Every `try` that answers the parent answers the child first, and the child's answer does not say `raised`.
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Try):
+                    continue
+                names = [h.type.id for h in node.handlers if isinstance(h.type, ast.Name)]
+                if "HelperError" in names:
+                    assert "HelperUnreachable" in names[: names.index("HelperError")], f"{fn.name}:{node.lineno}"
+                    child = node.handlers[names.index("HelperUnreachable")]
+                    assert "raised" not in ast.unparse(child), f"{fn.name}:{child.lineno}"
         assert seen == 2
+
+    def test_the_child_is_a_helper_error(self):
+        from jen.services import kea_host
+
+        assert issubclass(kea_host.HelperUnreachable, kea_host.HelperError)

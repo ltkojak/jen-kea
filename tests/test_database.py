@@ -803,6 +803,22 @@ class TestNothingTickedOnTheImportPageIsRefused:
         )
         assert asked == [["settings"]]
 
+    def test_a_table_named_twice_is_restored_once(self, logged_in_client, db, monkeypatch):
+        """(Q236, AU15) The membership check is a set and could not see a repeat: the importer and the audit row both got the name twice."""
+        from jen.services import dbexport
+
+        asked = []
+        monkeypatch.setattr(dbexport, "import_jen", lambda data, tables, truncate=True: asked.append(tables) or [])
+        _path, token = self._staged()
+        logged_in_client.post(
+            "/database/import/confirm", data={"tmp_path": token, "mode": "merge", "tables": ["settings", "settings"]}
+        )
+        assert asked == [["settings"]]
+        with db.cursor() as cur:
+            cur.execute("SELECT details FROM audit_log WHERE action='DB_IMPORT' ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+        assert "tables=['settings'] mode=merge" in str(row)
+
     def test_an_export_that_cannot_list_its_tables_is_the_handled_failure(self, logged_in_client, db, monkeypatch):
         """(Q235, AT9) The list of exportable tables is a database read; it ran above the route's `try` and a database that was away was a 500 page."""
         from jen.services import dbexport

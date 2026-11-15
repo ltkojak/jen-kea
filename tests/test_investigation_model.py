@@ -1468,11 +1468,10 @@ class Walk:
             or fake is not self.ssh_fake(server)
             or fake.api_silent
             or fake.list_unreachable
-            or fake.silent_gets
             or fake.second is not None
             or fake.host_down
         ):
-            return  # the question is asked only when the file AND the daemon answer (`api_daemon_differs`): a daemon nobody can read is the walk's other faults
+            return  # a daemon nobody can reach at all is the walk's other faults. (Q236, AU3) One whose `config-get` alone is silent is NOT skipped: the turn-on is refused there
         api_server = {**server, "config_transport": "api"}
         section = fake.loaded.get("Dhcp4") if isinstance(fake.loaded, dict) else None
         if not isinstance(section, dict):
@@ -2068,7 +2067,7 @@ class TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon:
 
     @pytest.mark.parametrize("seed", range(24))
     def test_i14_is_red_when_the_question_is_not_asked(self, seed, walk_world, monkeypatch):
-        monkeypatch.setattr(_api, "api_daemon_differs", lambda server, service, restore=False: "")
+        monkeypatch.setattr(_api, "api_daemon_differs", lambda server, service, restore=False, must_answer=False: "")
         monkeypatch.setattr(Walk, "API_ON_SHARE", 0.3)
         try:
             walk_world(seed, STEPS).run()
@@ -2080,6 +2079,29 @@ class TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon:
         red = TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon.RED
         print(f"MODEL I14 MUTATION: {len(red)} of 24 seeds red: {red}")
         assert len(red) >= 12, red
+
+    UNANSWERED = []
+
+    @pytest.mark.parametrize("seed", range(24))
+    def test_i14_is_red_when_a_silent_daemon_reads_as_no_difference(self, seed, walk_world, monkeypatch):
+        """(Q236, AU3) The question itself is asked; only `must_answer` is taken away, which is the code of 7.1.0-beta.4. The fault `silent_gets` then lets a turn-on through."""
+        real = _api.api_daemon_differs
+        monkeypatch.setattr(
+            _api,
+            "api_daemon_differs",
+            lambda server, service, restore=False, must_answer=False: real(server, service, restore=restore),
+        )
+        monkeypatch.setattr(Walk, "API_ON_SHARE", 0.3)
+        try:
+            walk_world(seed, STEPS).run()
+        except InvariantViolated as red:
+            assert "I14 violated" in str(red), str(red)[:400]
+            TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon.UNANSWERED.append(seed)
+
+    def test_without_must_answer_the_walk_finds_the_silent_daemon(self):
+        red = TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon.UNANSWERED
+        print(f"MODEL I14 MUTATION (must_answer): {len(red)} of 24 seeds red: {red}")
+        assert red, "no walk of the 24 reached a turn-on over a daemon whose config-get is silent"
 
 
 class TestAnExtendedSessionKeepsTheFirstMarkerHarmlessly:

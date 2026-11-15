@@ -160,13 +160,18 @@ a unix control socket is used only under `/run/kea`, `/var/run/kea` or `/tmp`; a
 **Rule.** Investigation logging's own writes stay on the file path (INV-001: the host restores the FILE), and turning it on makes the daemon re-read that file. On a server whose
 `config_transport` is `api` the turn-on's write is therefore asked what every other file write there is asked - does the file carry what the daemon runs - and is refused before anything is
 sent when it does not. The writes that take the marker OUT (turn off, the sweep's restore, a revert) are never asked: the host's deadline waits on nothing.
-**Established.** Q214 (the hand-off Q212 left open, decided: the writes do not move to the API; the reload's cost is closed at turn-on).
+The refusal is `api_daemon_differs`'s own sentence, one of five: the two that name a difference, the three of an earlier change that is unresolved or whose record is
+damaged or unreadable. A sixth is the turn-on's alone (Q236, AU3): a daemon that does NOT ANSWER the question is a refusal there (`must_answer`), because the question
+unanswered is not the answer "no difference". For every other write a daemon that cannot be read is still not a difference (Q212's stated limit).
+**Established.** Q214 (the hand-off Q212 left open, decided: the writes do not move to the API; the reload's cost is closed at turn-on); Q236 (AU3, the unanswered question).
 **Enforced at.** `jen/services/kea_host.py` (`investigation_writer(compare=True)`, read in `apply_config`), passed by `investigation_logging.turn_on` alone through `_change`.
 **Tests.**
 - `tests/test_investigation_model.py::TestTurningLoggingOnNeverTakesAChangeOutOfAnApiDaemon`
 - `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_turning_logging_on_is_asked_the_same_question_and_nothing_is_sent`
 - `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_a_write_that_takes_the_marker_out_inside_a_turn_on_is_not_asked`
 - `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_only_turn_on_asks_and_both_of_loggings_writes_stay_on_the_file`
+- `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_a_turn_on_is_refused_when_the_daemon_cannot_be_asked`
+- `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_every_write_that_is_not_a_turn_on_still_goes_ahead_over_a_silent_daemon`
 - `tests/system/test_boundaries.py::test_26_turning_logging_on_never_takes_a_change_out_of_a_daemon_whose_transport_is_the_api`
 
 ## Access control and shared definitions
@@ -1130,13 +1135,19 @@ The conversion never depends on `sudo`: `jen.service` runs it as root before eve
 **Rule.** `chain_refusal` gives the verifying client exactly one trust anchor, so every certificate between the first and that anchor is judged (validity, CA flag, path length,
 signature). A list of anchors lets the verifier stop at the first it can chain to. "Issuer not found" is never a refusal: the root is the client's. The top is chosen by which
 certificate SIGNED which (`_chain_tops`), never by a name or the order of the paste; when the upload holds several tops there is one handshake for each, and the chain is accepted
-when any accepts. Before them the verifier is asked with the box's own CA store and no uploaded anchor, so a top whose issuer the box holds has its own signature judged.
-**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature).
+when any accepts. Before them the verifier is asked with the box's own CA store and no uploaded anchor; when it accepts, the chain is accepted.
+When it does not, its answer is evidence about the BOX: a client that trusts a top of the upload must COMPLETE the handshake ("issuer not found" from it is a refusal), and the one
+pair that client cannot judge - a top and an issuer that is not in the upload - is judged by `_box_refusal`: the box trusting a certificate of that name that did not sign the top is
+a refusal whatever key identifiers the certificates carry; the box's own copy being out of date, with every uploaded certificate inside its dates, is not.
+**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box).
 **Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
 **Tests.**
 - `tests/test_a_chain_is_walked_to_its_top.py::TestTheWholePathIsJudged`
 - `tests/test_the_anchor_is_chosen_by_what_verifies.py::TestARootAndItsEarlierCopy`
 - `tests/test_the_anchor_is_chosen_by_what_verifies.py::TestTheBoxStoreJudgesTheTop`
+- `tests/test_the_box_store_is_evidence_about_the_box.py::TestASupersededCopyInTheBoxStore`
+- `tests/test_the_box_store_is_evidence_about_the_box.py::TestAWrongIntermediateIsRefusedWithAndWithoutKeyIdentifiers`
+- `tests/test_the_box_store_is_evidence_about_the_box.py::TestWhatTheBoxAdds`
 - `tests/test_a_fix_reaches_both_ends.py::TestTheChainIsJudgedByAVerifier`
 
 ## The browser surface (Q208)

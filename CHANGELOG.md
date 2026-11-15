@@ -2,6 +2,23 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.1.0-beta.5] - 2026-11-14
+
+*The fifth beta of 7.1.0, on the **beta** channel. It is the ONE fix set of the executing pass on v7.1.0-beta.4 (no P1; three P2, two in the certificate upload and one in investigation logging). It adds no migration and no helper build, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **A superseded root in the box's own CA store no longer refuses a good chain.** 7.1.0-beta.4 asked the box's own CA store first and took its answer as final. A private CA that renewed its root under the same name with the same key leaves the expired copy in that store until somebody removes it, and the store then answered "certificate has expired" for a chain every client accepts. The sentence named nothing in the upload, because nothing in the upload was wrong. What the box's store says is now treated as what it is: evidence about the box. When the box's own copy of the issuer is the only thing out of date, the chain is accepted.
+2. **A wrong intermediate is refused whatever key identifiers it carries.** Real CAs put a key identifier in every certificate, and a verifier matches those before it checks a signature. A mismatch reads "issuer not found", which 7.1.0-beta.4 took for "a private CA" and accepted. So the refusals that release added fired on test certificates and not on the certificates a CA really issues. Two changes close it. A client that trusts the top of the upload must now complete the handshake; "issuer not found" from it is a refusal. And when the top of the upload names an issuer the box itself trusts, Jen checks that signature itself: `this box trusts a certificate named "..." and it did not sign "...", which names it as issuer`. The same sentence appears when a private CA was issued again with a new key and the box holds only the old one. It says what to do: add the new certificate to the upload, or to the box's CA store.
+3. **Turning investigation logging on is refused when the daemon cannot be asked.** On a server whose Write mode is the API, 7.1.0-beta.4 refuses a turn-on when the daemon runs a change its file lacks. It could only know that when the daemon answered. With the daemon silent for that one question it went ahead, and the change was lost. A turn-on now needs the answer: `the daemon on ... did not answer when Jen asked what it runs ... nothing was written. Try again when Kea's API answers`. Turning logging off, the automatic restore and every other write are as they were and are never held up by a daemon that does not answer.
+4. **An upload of more than twenty certificates is refused** before anything is verified, with a sentence that says so. A server presents its certificate and the few CAs above it; a whole bundle of CAs pasted as the chain could hold the one worker for minutes.
+5. **A refusal that is not about a date no longer names a date.** The clause that says which uploaded certificate has expired was added to every refusal, also to "certificate signature failure", where it named a certificate that had nothing to do with it.
+6. **Settings → Databases → Import restores a table named twice once,** and the audit row lists it once.
+
+**What stays outside, stated.** The signature of the top certificate of an upload whose issuer neither the upload nor the box holds is not checked: that is a private CA, and the root is the client's. An upload that carries its own root is judged against that root, also when the box trusts a different certificate of the same name. When the box's CA store is empty or cannot be read, the box adds nothing and the upload's own top decides; `ca-certificates` is present on every supported install and Jen does not check for it (AU4).
+
+**Registered, not fixed here.** With the Jen database away the Export tab is an error page, as every page is (AU5). Two tops of one name that differ in a constraint are judged by the one that accepts (AU7). The fail-closed audit still cannot see a handler that only logs (AU9). Two CAs that certify each other are refused as a loop (AU10). `install.sh` drops the reason behind its `grant-kept` warning (AU14). The I14 test class keeps its counts across cells (AU16). A refused turn-on is a message on the page and leaves no audit row (AU18).
+
 ## [7.1.0-beta.4] - 2026-11-14
 
 *The fourth beta of 7.1.0, on the **beta** channel. It is the ONE fix set of the executing pass on v7.1.0-beta.3 (no P1; two P2, both in the certificate upload). It adds no migration and no helper build, and nothing needs a manual step.*

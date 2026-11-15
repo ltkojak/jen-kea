@@ -697,7 +697,9 @@ class TestAFileWriteAsksAboutAPendingChange:
 
     def test_the_choke_point_says_which_write_is_a_restore(self):
         src = _function("jen/services/kea_host.py", "apply_config")
-        assert '_api.api_daemon_differs(server, service, restore=source == "restore")' in src
+        assert (
+            "_api.api_daemon_differs(" in src and 'server, service, restore=source == "restore", must_answer=' in src
+        )  # (Q236) re-wrapped
         assert (
             'and source != "rollback"' in src
         )  # a rollback and investigation logging's own writes are still not asked at all

@@ -1582,7 +1582,7 @@ def record_daemon_after_file_change(server: dict, service: str, summary: str, so
     )
 
 
-def api_daemon_differs(server: dict, service: str, restore: bool = False) -> str:
+def api_daemon_differs(server: dict, service: str, restore: bool = False, must_answer: bool = False) -> str:
     """The choke point's question for a FILE-path write onto a server whose transport is `api` (Q212, BB2 e): does the file the writer is about to replace carry what the daemon runs? A sentence
     naming both digests when BOTH answered and differ - the next logging toggle would otherwise erase an `unverified` apply or a hand `config-set` - else "". A file or a daemon that cannot be read
     is not a difference (the write's own guards decide), so a host whose daemon is down can still be put back - UNLESS a change is pending for it (below): a pending change needs
@@ -1600,7 +1600,10 @@ def api_daemon_differs(server: dict, service: str, restore: bool = False) -> str
 
     (Q230, AP12) No caller passes `restore=True` for a server this function asks anything of: the restore route sends a server whose transport is `api` to `_restore_over_api`
     before its file branch, and that branch's server answers "" on the first line here. The parameter is kept for a caller that restores a file under an `api` server; the
-    operator's way out of a refusal today is Settle it now, or a restore over the API."""
+    operator's way out of a refusal today is Settle it now, or a restore over the API.
+
+    (Q236, AU3) `must_answer=True` is the turn-on of investigation logging (INV-016): the one write that may always be declined. A daemon that cannot be read is then a
+    refusal and not "no difference" - the reload that follows that write would take out of the daemon whatever its file lacks, and nobody could say there was nothing."""
     if declared_transport(server) != "api" or service not in SERVICE_KEY:
         return ""
     if not restore:
@@ -1609,6 +1612,11 @@ def api_daemon_differs(server: dict, service: str, restore: bool = False) -> str
             return unresolved
     live, digest, _why = _get(server, service)
     if live is None:
+        if must_answer:
+            return (
+                f"the daemon on {_name(server)} did not answer when Jen asked what it runs, so Jen cannot tell whether its file carries that; "
+                "nothing was written. Try again when Kea's API answers"
+            )
         return ""
     sid = server.get("id")
     try:

@@ -10,6 +10,18 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.5: what the box's CA store says is evidence about the box
+
+One step (7.1.0-beta.5). It adds no migration and no helper build, and there is nothing to do.
+
+**Settings → Security: a renewed private root.** 7.1.0-beta.4 refused a good chain when the box's own CA store still held the expired copy of a root that was renewed with the same key. It is accepted now. When the CA was issued again with a NEW key and the box holds only the old one, the upload is refused with a sentence that names the certificate; add the new root to the upload, or to the box's CA store (`update-ca-certificates`).
+
+**A wrong intermediate is refused also when the certificates carry key identifiers,** which every real CA's do.
+
+**An upload of more than twenty certificates is refused.** Upload the certificate and the chain above it, not a bundle of CAs.
+
+**Investigation logging on a server whose Write mode is the API.** Turn on is also refused when the daemon does not answer the question; try again when Kea's API answers. Turn off is never refused.
+
 ## 7.1.0-beta.4: the certificate upload is judged by what signed what
 
 One step (7.1.0-beta.4). It adds no migration and no helper build. One thing to do, on Ubuntu 22.04 only:
@@ -20,7 +32,7 @@ One step (7.1.0-beta.4). It adds no migration and no helper build. One thing to 
 
 **A `fullchain.pem` from a public CA has its intermediate checked against the CA certificates Jen's box trusts.** A damaged intermediate is refused. For a private CA, paste the root with the chain so the whole chain can be checked.
 
-**Investigation logging on a server whose Write mode is the API.** Turn on is refused when the daemon runs a change its file does not carry, and the page says to resolve it from Config history first. It used to go ahead, and the daemon lost that change. Turn off is never refused.
+**Investigation logging on a server whose Write mode is the API.** Turn on is refused when the daemon runs a change its file does not carry, or when an earlier change on that server is unresolved or its record cannot be read; the page says which, and what to do. It used to go ahead, and the daemon lost that change. Turn off is never refused.
 
 **Settings → Databases → Import refuses a table the file does not carry,** and restores nothing when no table is ticked, whichever release drew the page.
 

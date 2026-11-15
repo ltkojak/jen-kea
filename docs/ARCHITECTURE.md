@@ -499,6 +499,8 @@ Jen's own box has **no sudoers entry** (v7.1.0-beta.3, Q213). Until then `jen-su
 
 - **Restart.** `jen.service` has `Restart=always`. Jen sends SIGTERM to its own gunicorn master
   and systemd starts it again (`runtime.restart_service`), the mechanism a container always used.
+  Under the fallback server (`run.py` sets `JEN_SERVER=werkzeug` when gunicorn cannot load) there
+  is no master: Jen ends its own process and signals nobody.
 - **Update, plugin install.** Jen creates an empty request file in `/run/jen`, its unit's runtime
   directory (`RuntimeDirectory=jen`, mode `0700`, `www-data`): `update.request` or
   `plugins.request` (`jen/services/privileged.py`). A systemd **path unit**, `jen-update.path` or
@@ -517,7 +519,8 @@ layout or anything else that can make it exit. `/run/jen` is the service user's 
 nothing in it is trusted: root opens the directory without following a link, the name is fixed,
 and the entry is removed through that handle whatever it is (a file, a symbolic link, a
 directory). A path unit is level-triggered: a request that outlived its run would start the unit
-again until systemd failed the path unit.
+again until systemd failed the path unit. So a request root cannot remove STOPS the root script
+(`consume_trigger` answers `failed`, `main` exits 1) before it acts on anything.
 
 **The transition.** An in-app update from an earlier release is run by that release's root
 script, which knows no path unit. So `privileged.request` asks systemd whether the path unit is
