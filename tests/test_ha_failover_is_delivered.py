@@ -21,6 +21,7 @@ class World:
         self.events: list = []
         self.delivers = True
         self.stores = True
+        self.readable = True
         self.now = datetime.datetime(2026, 11, 15, 12, 0, 0)
 
     def later(self, minutes):
@@ -49,9 +50,13 @@ def world(monkeypatch):
             w.settings[key] = value
         return w.stores
 
-    monkeypatch.setattr(
-        "jen.services.alerts.__get_global_setting", lambda key, default=None: w.settings.get(key, default)
-    )
+    def read(key, default=None, strict=False):
+        if strict and not w.readable:
+            raise RuntimeError("the Jen database is away")
+        # the cached read of a Jen that started with its database down answers its default
+        return w.settings.get(key, default) if w.readable else default
+
+    monkeypatch.setattr("jen.services.alerts.__get_global_setting", read)
     monkeypatch.setattr("jen.services.alerts.__set_global_setting", store)
     monkeypatch.setattr("jen.services.alerts.__emit_event", lambda name, **kw: w.events.append((name, kw["detail"])))
     monkeypatch.setattr(alerts, "send_alert", send)
@@ -209,3 +214,62 @@ class TestTheLoopSendsItNoOtherWay:
         source = (ROOT / "jen/services/alerts.py").read_text(encoding="utf-8")
         assert "last_ha_states = " not in source
         assert "check_ha_state_alert(srv, " in source
+
+
+class TestARecordThatCannotBeReadIsNotAFirstState:
+    """(Q238, AW2) `{}` meant "no server has been seen", and it was also what an unreadable record answered: the failover was recorded as the first state, told
+    to nobody, and never announced later because it was on record as told."""
+
+    def test_a_failover_seen_while_the_record_cannot_be_read_is_announced_when_it_can(self, world):
+        _see("hot-standby")
+        before = dict(world.settings)
+        world.readable = False
+        for _ in range(3):
+            assert _see("partner-down") == "unreadable"
+        assert world.sent == [] and world.events == [] and world.settings == before
+        world.readable = True
+        assert _see("partner-down") == "sent"
+        assert world.sent == [("ha_failover", "hot-standby", "partner-down", "kea-a")]
+
+    def test_a_jen_that_starts_with_its_database_down_decides_nothing_until_it_is_back(self, world):
+        _see("hot-standby")
+        world.restart()
+        world.readable = False
+        assert _see("partner-down") == "unreadable"
+        world.readable = True
+        assert _see("partner-down") == "sent"
+
+    def test_the_record_is_asked_of_the_table_and_not_of_the_cache(self):
+        import inspect
+
+        from jen.services import alerts
+
+        assert '__get_global_setting(_HA_KNOWN, "", strict=True)' in inspect.getsource(alerts._ha_known)
+
+    @pytest.mark.parametrize("stored", ["not json", "[1, 2]", '"a string"'], ids=["not JSON", "a list", "a string"])
+    def test_a_damaged_record_is_started_again_and_says_so(self, stored, world, caplog):
+        """Decided: with no usable record there is no state to compare with, so the state seen now is recorded and a warning is logged."""
+        world.settings["alert_state:event:ha_states"] = stored
+        with caplog.at_level("WARNING"):
+            assert _see("partner-down") == "first"
+        assert "damaged" in caplog.text
+        assert _see("hot-standby") == "sent"
+
+    def test_one_damaged_row_starts_that_server_again_and_keeps_the_rest(self, world):
+        other = {"id": 2, "name": "kea-b"}
+        _see("hot-standby")
+        _see("hot-standby", other)
+        world.settings["alert_state:event:ha_states"] = '{"1":["hot-standby"],"2":["hot-standby","hot-standby"]}'
+        assert _see("partner-down") == "first"
+        assert _see("partner-down", other) == "sent"
+
+    def test_an_empty_server_list_drops_nobody(self, world):
+        from jen import extensions
+
+        other = {"id": 2, "name": "kea-b"}
+        _see("hot-standby")
+        _see("hot-standby", other)
+        extensions.KEA_SERVERS[:] = []
+        _see("partner-down")
+        extensions.KEA_SERVERS[:] = [SRV, other]
+        assert _see("partner-down", other) == "sent"

@@ -200,6 +200,10 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
     import ssl
     import tempfile
 
+    # (Q238, AW12) OpenSSL's loader also reads a `TRUSTED CERTIFICATE` block and Jen's checks do not, so the certificate the server presents and the one
+    # Jen judged could be two certificates
+    if "BEGIN TRUSTED CERTIFICATE" in cert_data + (ca_data or ""):
+        return "the upload carries a TRUSTED CERTIFICATE block, which is OpenSSL's own trust format: export it as a plain PEM certificate (openssl x509 -in <file> -out <file>)"
     if "BEGIN CERTIFICATE" not in cert_data:
         return "the certificate file is not a PEM certificate"
     if "PRIVATE KEY" not in key_data:
@@ -248,11 +252,18 @@ _MOST_CHARACTERS = 1_000_000
 def _distinct_pems(text: str) -> list:
     """Every PEM certificate of `text`, each once, in the order pasted. Compared as text with the white space taken out, in one pass, so the number of DISTINCT
     certificates is known before any of them is parsed."""
-    import re
-
+    # (Q238, AW1) two `find`s that only move forward. This was a lazy pattern, and a lazy pattern starts again from every BEGIN that has no END and reads to
+    # the end of the text each time: 35,000 unterminated markers, inside the character bound, held the one worker past its timeout
+    begin, end = "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"
     seen: dict = {}
-    for found in re.finditer(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", text, re.S):
-        seen.setdefault("".join(found.group(0).split()), found.group(0))
+    at = text.find(begin)
+    while at != -1:
+        stop = text.find(end, at + len(begin))
+        if stop == -1:
+            break  # no END after this BEGIN, so none after any later one
+        block = text[at : stop + len(end)]
+        seen.setdefault("".join(block.split()), block)
+        at = text.find(begin, stop + len(end))
     return list(seen.values())
 
 
@@ -322,13 +333,50 @@ def _box_refusal(certs, top: int, held: list):
     if _signed_by(cert, cert):
         return None
     named = [c for c in held if c.subject == cert.issuer]
-    if not named or any(_signed_by(cert, c) for c in named):
+    if not named:
+        return None
+    signers = [c for c in named if _signed_by(cert, c)]
+    if not signers:
+        return (
+            f'this box trusts a certificate named "{cert.issuer.rfc4514_string()}" and it did not sign "{cert.subject.rfc4514_string()}", which names it as issuer. '
+            "If that CA was issued again with a new key, add its new certificate to the upload or to this box's CA store (update-ca-certificates)",
+            None,
+        )
+    # (Q238, AW40) and the key's NAME: the top may say which key signed it (an authority key identifier), and a client looks its issuer up by that before it
+    # checks any signature. Dropping the box verifier's refusal (Q237) dropped this with it. It is the one such property that can be decided here: an
+    # identifier is of a KEY, and every copy of the issuer that verifies the top holds the same key.
+    wanted = _authority_key_id(cert)
+    if wanted is None or any(_carries_key_id(c, wanted) for c in signers):
         return None
     return (
-        f'this box trusts a certificate named "{cert.issuer.rfc4514_string()}" and it did not sign "{cert.subject.rfc4514_string()}", which names it as issuer. '
-        "If that CA was issued again with a new key, add its new certificate to the upload or to this box's CA store (update-ca-certificates)",
+        f'"{cert.subject.rfc4514_string()}" names the key that signed it by an identifier, and the certificate this box trusts as '
+        f'"{cert.issuer.rfc4514_string()}" does not carry that identifier, so a client that holds that CA does not find the issuer. '
+        "If the CA's own certificate carries it, add that certificate to the upload",
         None,
     )
+
+
+def _authority_key_id(cert):
+    """The key identifier `cert` names its issuer by, or None when it names none (no extension, one that cannot be read, or the issuer-and-serial form alone)."""
+    from cryptography import x509
+
+    try:
+        return cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
+    except (x509.ExtensionNotFound, ValueError):
+        return None
+
+
+def _carries_key_id(issuer, wanted: bytes) -> bool:
+    """Does `issuer` answer to the key identifier `wanted`? Yes when it states none (a client then does not compare), when it states that one, and when
+    `wanted` is the identifier RFC 5280 derives from its key: a renewal of a CA under the same key may state its identifier another way than the copy a
+    client holds, and the derived one is what an issuing CA writes unless it was told otherwise."""
+    from cryptography import x509
+
+    try:
+        stated = issuer.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
+    except (x509.ExtensionNotFound, ValueError):
+        return True
+    return wanted in (stated, x509.SubjectKeyIdentifier.from_public_key(issuer.public_key()).digest)
 
 
 def _not_a_ca(certs, top: int):
@@ -347,7 +395,9 @@ def _not_a_ca(certs, top: int):
     except x509.ExtensionNotFound:
         is_ca = False
     except ValueError:
-        return (f'"{cert.subject.rfc4514_string()}" carries an extension that cannot be read', None)
+        # (Q238, AW41) the verifier read this certificate and completed the handshake; this library cannot parse one of its extensions (a BOOLEAN in BER
+        # is one). That is no ground for a refusal no client makes
+        return None
     if is_ca:
         return None
     return (
@@ -573,7 +623,8 @@ def remove_cert():
     # Q202 (AR6): see upload_cert - removing the certificate takes the site back to HTTP and restarts Jen
     # (Q237, AV10) and the `.prev` copy `commit_file_set` keeps beside each: a removal that left `private.key.prev` on disk had not removed the key
     live = [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]
-    for f in live + [name + ".prev" for name in live]:
+    # (Q238, AW11) the copies FIRST: one that will not go stops the route with the live files and the serving setup as they were
+    for f in [name + ".prev" for name in live] + live:
         try:
             if os.path.exists(f):
                 os.remove(f)

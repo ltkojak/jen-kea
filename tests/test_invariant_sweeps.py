@@ -504,6 +504,16 @@ S10_MODULES = (
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
+    ("jen/routes/settings/security.py", "_authority_key_id", "(x509.ExtensionNotFound, ValueError)", "return None"): (
+        "None is 'the top names no key by an identifier', which is the common case; one that cannot be read is one no comparison can be made with. It is reached "
+        "only after a certificate this box trusts was shown to have SIGNED the top and a client that trusts the top completed the handshake, so nothing is accepted "
+        "on this None that those two did not already accept (Q238, AW40)"
+    ),
+    ("jen/routes/settings/security.py", "_not_a_ca", "ValueError", "return None"): (
+        "reached only after the verifier completed the handshake with this certificate as its anchor: an extension this library cannot parse (a BOOLEAN in BER) is "
+        "not a refusal a client makes, and refusing here refused an honest upload (Q238, AW41). What is given up is stated: a top with NO basic constraints AND an "
+        "extension this library cannot parse is not caught by `_not_a_ca`"
+    ),
     ("jen/routes/settings/security.py", "_signed_by", "Exception", "return False"): (
         "False is 'this certificate did not sign that one': the walk then steps to the certificate of that NAME, and the verifier is what refuses the signature - "
         "nothing is accepted on a False (Q235, AT2)"

@@ -320,6 +320,8 @@ drops on the floor). A refusal is of the form whole, never of one value out of a
 **Enforced at.** `jen/services/alerts.py` (`notify_condition`, the daily summary, `check_kea_status_alert`, `check_stale_reservation_alerts`, `check_drift_alerts`), `jen/services/client_problems.py::sweep`.
 **Tests.**
 - `tests/test_alert_delivery.py::TestEveryChannelFails`
+- `tests/test_ha_failover_is_delivered.py::TestAFailoverIsAnnouncedOnceAndOnlyWhenSomebodyTookIt`
+- `tests/test_ha_failover_is_delivered.py::TestARecordThatCannotBeReadIsNotAFirstState`
 - `tests/test_alert_delivery.py::TestEventStyleAlertsRemember`
 - `tests/test_client_problems_db.py::TestASweepIsOneTransaction`
 - `tests/test_alert_delivery.py::TestTheDailySummaryIsDueAtOrAfterItsTime`
@@ -1142,10 +1144,12 @@ pair that client cannot judge - a top and an issuer that is not in the upload - 
 a refusal whatever key identifiers the certificates carry. The box's store answers that ONE question, whose key signed the top: nothing else about the box's own copy of the issuer
 (its dates, its serial, its constraints) is read, and the box verifier's refusal is not a verdict (Q237). The top Jen tells the verifier to trust is asked what a verifier does not
 ask of its own anchor: a top that signed a certificate of the upload and did not sign itself must carry basic constraints with CA set (`_not_a_ca`). The size and the count of the
-upload are judged before anything is written, loaded or parsed. Outside, by decision: a certificate in the box's store that OpenSSL does not count as a CA is no certificate the
-box trusts.
+upload are judged before anything is written, loaded or parsed, and the count is one forward scan (Q238, AW1: a pattern was quadratic in unterminated markers). Outside, by
+decision: a certificate in the box's store that OpenSSL does not count as a CA is no certificate the box trusts.
+One more answer is read from the box's signers (Q238, AW40): when the top names the key that signed it by an identifier, a signer must state none, state that one, or hold
+the key it is derived from. It is the one property of the box's copy that is decided, because it is a property of the KEY and every copy that verifies the top holds that key.
 **Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box);
-Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the bounds first).
+Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the bounds first); Q238 (AW1 the scan, AW40 the key's identifier).
 **Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
 **Tests.**
 - `tests/test_a_chain_is_walked_to_its_top.py::TestTheWholePathIsJudged`
@@ -1158,6 +1162,8 @@ Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the 
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheTopIsACaByTheRuleOfTheClientsBelowIt`
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestAnExpiredCertificateOnNoPathDecidesNothing`
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheBoundsComeFirst`
+- `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheTopNamesTheKeyThatSignedIt`
+- `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheScanOfTheUploadOnlyMovesForward`
 - `tests/test_a_fix_reaches_both_ends.py::TestTheChainIsJudgedByAVerifier`
 
 ## The browser surface (Q208)

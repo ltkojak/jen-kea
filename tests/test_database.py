@@ -910,6 +910,83 @@ class TestNothingTickedOnTheImportPageIsRefused:
             cur.execute("SELECT details FROM audit_log WHERE action='DB_EXPORT' ORDER BY id DESC LIMIT 1")
             assert "['settings']" in str(cur.fetchone())
 
+    def test_the_same_confirmation_sent_twice_is_a_session_that_is_not_there(self, logged_in_client, monkeypatch):
+        """(Q238, AW6) The file went between the route's check and its `open`: that was an error page."""
+        import os
+
+        _path, token = self._staged()
+        os.unlink(_path)
+        monkeypatch.setattr(os.path, "isfile", lambda p: True)
+        r = logged_in_client.post(
+            "/database/import/confirm", data={"tmp_path": token, "mode": "merge", "tables": ["settings"]}
+        )
+        assert r.status_code == 302
+        monkeypatch.undo()
+        assert b"Import session expired. Please re-upload." in logged_in_client.get(r.headers["Location"]).data
+
+    def test_a_script_that_names_a_table_jen_does_not_have_gets_no_empty_export(
+        self, logged_in_client, db, monkeypatch
+    ):
+        """(Q238, AW7) Without the page's marker the name was dropped, a document with no table in it was sent and audited as an export."""
+        from jen.services import dbexport
+
+        def never(*a, **k):
+            raise AssertionError("an export was written")
+
+        monkeypatch.setattr(dbexport, "write_jen_export", never)
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='DB_EXPORT'")
+            before = cur.fetchone()["n"]
+        r = logged_in_client.post("/database/export/jen", data={"tables": ["secrets"]})
+        assert r.status_code == 302
+        assert b"Not an exportable Jen table." in logged_in_client.get(r.headers["Location"]).data
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='DB_EXPORT'")
+            assert cur.fetchone()["n"] == before
+
+    @pytest.mark.parametrize(
+        "error, said",
+        [("scope", "refused; nothing was changed"), ("other", "RuntimeError; the outcome is not known")],
+        ids=["a refused scope", "a failure nobody named"],
+    )
+    def test_every_way_an_import_ends_leaves_an_audit_row(self, error, said, logged_in_client, db, monkeypatch):
+        """(Q238, AW10) Success and two named failures were recorded; a refused scope and anything else left nothing."""
+        from jen.services import dbexport
+
+        def fails(data, tables, truncate=True):
+            raise dbexport.ScopeRefused("Not this scope.") if error == "scope" else RuntimeError("commit failed")
+
+        monkeypatch.setattr(dbexport, "import_jen", fails)
+        _path, token = self._staged()
+        logged_in_client.post(
+            "/database/import/confirm", data={"tmp_path": token, "mode": "merge", "tables": ["settings"]}
+        )
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT action, details FROM audit_log WHERE action LIKE 'DB_IMPORT%%' ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        assert row["action"] == "DB_IMPORT_FAILED" and said in row["details"]
+
+    @pytest.mark.parametrize("tab", ["export", "recovery"])
+    def test_the_two_tabs_that_list_plugin_tables_render_with_the_database_away(
+        self, tab, logged_in_client, monkeypatch
+    ):
+        """(Q238, AW5) `export_table_groups()` is a database read made while the page is built: these two tabs were an error page and the five beside them rendered."""
+        from jen.models import user
+        from jen.services import dbexport
+
+        def away():
+            raise RuntimeError("the Jen database is not reachable")
+
+        monkeypatch.setattr(dbexport, "export_table_groups", away)
+        monkeypatch.setattr(user, "get_global_setting", lambda key, default=None, **k: default)
+        r = logged_in_client.get(f"/settings/databases?tab={tab}")
+        assert r.status_code == 200
+        assert b"so the plugin tables are not listed here" in r.data
+
     def test_the_one_filter_of_table_names_keeps_each_once(self):
         from jen.services import dbexport
 

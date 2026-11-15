@@ -58,8 +58,9 @@ KillMode=mixed
 TimeoutStopSec=40
 
 # v5.17.0 (Q6 6E) — sandboxing. NOT NoNewPrivileges / CapabilityBoundingSet
-# / ProtectProc: Jen shells out to `sudo` for the self-updater and (on the
-# legacy path) the Kea hosts, which needs the setuid transition. The root
+# / ProtectProc: since v7.1.0-beta.3 Jen's own box needs no `sudo`, but a box
+# updated in place whose path units are not installed yet still falls back to
+# the earlier `sudo` command once, which needs the setuid transition. The root
 # self-updater is its own unit (jen-update.service) and is deliberately
 # left un-sandboxed — do not copy these lines there.
 ProtectSystem=strict

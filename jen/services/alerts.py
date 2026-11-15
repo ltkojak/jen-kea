@@ -2036,11 +2036,17 @@ def _ha_known() -> dict:
 
     if _HA_KNOWN in _unsaved_states:
         return dict(_unsaved_states[_HA_KNOWN])
+    # (Q238, AW2) `strict`: read from the table, and RAISE when it cannot be read. The cached read answers its default while the Jen database is away -
+    # a Jen that starts with its database down - and "{}" was then "no server has been seen": the failover was recorded as the first state and never told
+    raw = __get_global_setting(_HA_KNOWN, "", strict=True) or "{}"
     try:
-        known = json.loads(__get_global_setting(_HA_KNOWN, "") or "{}")
+        known = json.loads(raw)
     except (TypeError, ValueError):
-        return {}
+        known = None
     if not isinstance(known, dict):
+        logger.warning(
+            "the HA state record is damaged and is started again: a failover since the last good record is not announced"
+        )
         return {}
     return {k: v for k, v in known.items() if isinstance(v, list) and len(v) == 2}
 
@@ -2054,10 +2060,17 @@ def check_ha_state_alert(srv, new_state) -> str:
     survives a restart; the alert says `told -> the state now`, so two changes nobody was told about are announced as one, from the last state the operator knows.
     When it is delivered the new state becomes `told`. A state that went back to `told` before anybody was told ends the condition with nothing sent - the same
     rule as a `kea_down` nobody received and its `kea_up`. The `ha.state_changed` event is written once per OBSERVED change (`seen`, stored), delivered or not.
-    The first state ever seen for a server is recorded and announces nothing. Returns what `notify_condition` did, or "first"."""
+    The first state ever seen for a server is recorded and announces nothing. Returns what `notify_condition` did, "first", or "unreadable" (Q238, AW2): the
+    record could not be READ, so this pass decides nothing and writes nothing, and the next one asks again."""
     import json
 
-    known = _ha_known()
+    try:
+        known = _ha_known()
+    except Exception as e:
+        logger.warning(
+            f"the HA state record could not be read ({type(e).__name__}): nothing is decided about {srv['name']} on this pass"
+        )
+        return "unreadable"
     key = str(srv["id"])
     told, seen = known.get(key) or (None, None)
     if told is None:
@@ -2072,8 +2085,9 @@ def check_ha_state_alert(srv, new_state) -> str:
             notify_condition(
                 "ha_failover", srv["id"], False, kwargs=details
             )  # delivered: the condition is over, and nothing is owed for it
+    # a server that left the configuration leaves the record - but never on the strength of an EMPTY list (Q238, AW2: it dropped every server's `told`)
     live = {str(s["id"]) for s in extensions.KEA_SERVERS or []}
-    kept = {k: v for k, v in known.items() if k in live}
+    kept = {k: v for k, v in known.items() if k in live} if live else dict(known)
     kept[key] = [told, new_state]
     if kept != known or _HA_KNOWN in _unsaved_states:
         if __set_global_setting(_HA_KNOWN, json.dumps(kept, separators=(",", ":"))):

@@ -546,7 +546,7 @@ class TestASecretInsideAnAddressIsMasked:
     def test_it_is_idempotent_and_leaves_the_rest_as_written(self):
         value = f"https://u:{SENTINEL}@h.example/hook?token={SENTINEL}&room=7#frag"
         once = secret_keys.without_credentials(value)
-        assert once == "https://h.example/hook?token=********&room=********#********"
+        assert once == "https://h.example/hook?token=********&room=********#frag"
         assert secret_keys.without_credentials(once) == once
         for untouched in (
             "https://h.example/x",
@@ -589,10 +589,49 @@ class TestASecretInsideAnAddressIsMasked:
         assert shown == "post to https://a.example/x?sig=******** then ldap://h.example/dc?scope=******** (twice)"
         assert secret_keys.without_credentials(shown) == shown
 
-    def test_a_fragment_is_masked(self):
+    @pytest.mark.parametrize(
+        "value, shown",
+        [
+            ("https://d.example/page#ha-setup and the service is dhcp4", None),
+            ("https://a.example/x?k=T1 https://b.example/y", "https://a.example/x?k=******** https://b.example/y"),
+            ("line one https://a.example/#note\nline two\nline three", None),
+            (
+                "https://d.example/manual#section-4 is where the pool is described, and the lease time is in section 5",
+                None,
+            ),
+            ("see https://d.example/a and https://d.example/b#two", None),
+        ],
+        ids=["a fragment, then a sentence", "two addresses", "three lines", "a comment", "two plain addresses"],
+    )
+    def test_nothing_but_a_user_info_and_a_query_value_is_removed(self, value, shown):
+        """(Q238, AW3) The whole value was read as ONE address for its query and its fragment too, so everything after the first `?` or `#` - a second address,
+        the rest of the sentence, the next two lines - became one mask."""
+        assert secret_keys.without_credentials(value) == (value if shown is None else shown)
+
+    @pytest.mark.parametrize(
+        "one, two",
+        [
+            ("https://d.example/page#one", "https://d.example/page#two"),
+            ("https://d.example/p?x=1 and the pool is 10", "https://d.example/p?x=1 and the pool is 20"),
+            ("https://d.example/a\nrelay 10.0.0.1", "https://d.example/a\nrelay 10.0.0.2"),
+        ],
+        ids=["the fragment changed", "the text after an address changed", "the second line changed"],
+    )
+    def test_two_revisions_that_differ_are_shown_as_different(self, one, two):
+        from jen.services import config_revisions
+
+        shown = [
+            config_revisions.canonical(kea_authoring.redact_secrets({"Dhcp4": {"comment": v}})) for v in (one, two)
+        ]
+        assert shown[0] != shown[1]
+
+    def test_a_password_with_a_space_in_it_still_goes_whole(self):
+        assert secret_keys.without_credentials(f"ldap://u:pass {SENTINEL}@h.example/dc") == "ldap://h.example/dc"
+
+    def test_a_fragment_is_kept(self):
+        """(Q238) It is the part of an address that is never sent to a server; in a configuration it is an anchor in a manual."""
         assert (
-            secret_keys.without_credentials(f"https://h.example/cb#access_token={SENTINEL}")
-            == "https://h.example/cb#********"
+            secret_keys.without_credentials("https://h.example/manual#ha-setup") == "https://h.example/manual#ha-setup"
         )
 
     def test_the_configuration_that_was_masked_is_not_changed(self):

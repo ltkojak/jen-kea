@@ -2,6 +2,27 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.1.0-beta.7] - 2026-11-15
+
+*The seventh beta of 7.1.0, on the **beta** channel. It is the ONE fix set of the executing pass on v7.1.0-beta.6 (no P1; four P2, three of them in code 7.1.0-beta.6 added). It adds no migration and no helper build, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **The certificate upload cannot be held by a pasted text.** 7.1.0-beta.6 bounded the upload at a million characters and then counted its certificates with a pattern that starts again from every `BEGIN CERTIFICATE` that has no `END`. A text inside the bound, made of such markers, held the one worker for minutes. The count is now a single forward scan.
+2. **A chain whose intermediate names a different signing key is refused again.** A certificate may say which key signed it by an identifier, and a client looks the issuer up by that identifier before it checks a signature. When 7.1.0-beta.6 stopped reading the box verifier's refusal, this check went with it. It is back as a check of its own, because it is the one such property that can be decided: an identifier belongs to a key, and every copy of the issuer that verifies the chain holds that key. A renewal of a CA under the same key is still accepted, also when the box's copy states its identifier another way.
+3. **Config history shows what changed again.** 7.1.0-beta.6 read a whole value as one address to mask its query, and everything after the first `?` or `#` became part of that query or fragment: a second address, the rest of a sentence and the next lines of a multi-line value were replaced by one mask, so two revisions that differed only there were shown as the same. Now only two things are ever removed from a value: the user and password of an address, and the value of each of its query parameters. A fragment is kept; it is the part of an address that is never sent to a server.
+4. **An HA failover seen while Jen's database is away is announced when it is back.** The record of each server's last announced state could not be read then, and "cannot be read" was taken for "this server has never been seen": the failover was recorded as the first state, told to nobody and never announced later. A pass that cannot read the record now decides nothing and writes nothing. A record that is damaged is started again and a warning is logged.
+5. **Removing the certificate removes the kept copies first.** A `.prev` copy that could not be removed stopped the route after the live files were gone, with no audit row and no restart.
+6. **An upload with an OpenSSL `TRUSTED CERTIFICATE` block is refused by name,** with the command that converts it.
+7. **Settings → Databases.** The Export and Recovery tabs render when Jen's database is away, with a line that says the plugin tables are not listed. The same import confirmation sent twice is "Import session expired" where it was an error page. A script that asks the export for a table Jen does not have is refused; it used to get a document with no table in it, audited as an export. Every way an import ends now leaves an audit row, the refused scope and the failure nobody named among them. A Kea import whose rollback itself fails says the outcome is not known; it used to say nothing was changed, or record nothing.
+8. **A CA certificate with an extension this release's library cannot parse is no longer refused for that alone,** when the verifier itself accepted the chain.
+
+**Corrections to the 7.1.0-beta.6 notes.** `sudo ./install.sh --configure` does not touch the Python dependencies; only an install, an upgrade and `--repair` run that step. The comment in `jen.service` about `sudo` is corrected.
+
+**What stays outside, stated.** A property of the box's own copy of an issuer that can differ between copies (its dates, its serial, its path length, its name constraints) is not read: Jen cannot tell the copy a client holds from the one on the box, and reading them refused honest chains (the pass measured both sides and calls it a forced trade). With the root in the upload all of them are judged. A query value written with a literal space in it is masked up to that space. A closing bracket directly after a masked address goes with the value.
+
+**Registered, not fixed here.** The export of every table, the backup download and an import in replace mode ask for no fresh sign-in, where the recovery bundle does (AW8; it belongs with the Databases menu work). The character bound is read after the whole request body (AW15). The fail-closed audit does not read `continue` (AW16). A refused import token leaves no audit row (AW17). The Kea import's message can carry up to 24 characters of the file's value (AW31). Restoring an older Jen export restores an older HA record (AW32). Two CAs that certify each other are refused as a loop (AW42).
+
 ## [7.1.0-beta.6] - 2026-11-15
 
 *The sixth beta of 7.1.0, on the **beta** channel. It is the ONE fix set of the two reviews of v7.1.0-beta.5 (the executing pass: no P1, four P2; the independent review: three P2, two P3), with two items held over for this line: a by-hand upgrade now upgrades the Python dependencies, and the HA failover alert is retried and survives a restart. It adds no migration and no helper build, and nothing needs a manual step.*

@@ -1465,6 +1465,17 @@ def _insert_row(cur, table, cols, vals):
     return cur.rowcount
 
 
+def _rolled_back(conn) -> bool:
+    """Roll `conn` back; False when the rollback itself raised (Q238, AW9: the raise used to replace the import's own error, and "rolled back, nothing was
+    changed" was then said - or nothing recorded - about a transaction whose outcome nobody knew)."""
+    try:
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Kea import: the rollback failed: {type(e).__name__}")
+        return False
+    return True
+
+
 def import_kea(file_bytes, duplicate_mode="skip"):
     """
     Restore Kea reservations from export bytes.
@@ -1696,10 +1707,12 @@ def import_kea(file_bytes, duplicate_mode="skip"):
             results.append(line + f", {dup} duplicates skipped")
         conn.commit()
     except ImportAborted:
-        conn.rollback()
+        if not _rolled_back(conn):
+            raise RuntimeError("Kea import failed and the rollback failed too: the outcome is not known") from None
         raise
     except Exception as e:
-        conn.rollback()
+        if not _rolled_back(conn):
+            raise RuntimeError(f"Kea import failed and the rollback failed too: the outcome is not known: {e}") from e
         raise RuntimeError(f"Kea import failed and was rolled back: {e}") from e
     finally:
         conn.close()

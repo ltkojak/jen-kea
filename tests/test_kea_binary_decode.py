@@ -108,3 +108,59 @@ class TestRecognizingDamage:
         assert not f(TEXTISH_HEX, 2)  # circuit-id: never flagged — ASCII hex is legitimate text there
         assert not f(TEXTISH_HEX, 4)  # flex-id: same
         assert not f(None, 0)
+
+
+class TestARollbackThatFailsIsNotARollback:
+    """(Q238, AW9) `conn.rollback()` raising replaced the import's own error: the page then said nothing useful and no row recorded the one import whose
+    outcome nobody knew."""
+
+    class Conn:
+        def __init__(self, rollback_fails):
+            self.rollback_fails, self.calls = rollback_fails, []
+
+        def begin(self):
+            self.calls.append("begin")
+
+        def commit(self):
+            self.calls.append("commit")
+
+        def rollback(self):
+            self.calls.append("rollback")
+            if self.rollback_fails:
+                raise OSError("server has gone away")
+
+        def close(self):
+            self.calls.append("close")
+
+    def _run(self, monkeypatch, rollback_fails, error):
+        import json
+
+        conn = self.Conn(rollback_fails)
+
+        def stop(*a, **k):
+            raise error
+
+        monkeypatch.setattr(dbexport, "_direct_kea_conn", lambda: conn)
+        monkeypatch.setattr(dbexport, "_table_exists", stop)
+        content = json.dumps(
+            {
+                "_meta": {"database": "kea", "jen_export_version": 1, "format": 2, "tables": ["hosts"]},
+                "data": {"hosts": [{"host_id": 1}]},
+            }
+        ).encode("utf-8")
+        with pytest.raises(Exception) as e:
+            dbexport.import_kea(content, "skip")
+        assert conn.calls == ["begin", "rollback", "close"]
+        return e.value
+
+    def test_an_aborted_import_that_rolled_back_says_so(self, monkeypatch):
+        e = self._run(monkeypatch, False, dbexport.ImportAborted("hosts: unreadable"))
+        assert isinstance(e, dbexport.ImportAborted)
+
+    def test_an_aborted_import_whose_rollback_failed_is_not_rolled_back(self, monkeypatch):
+        e = self._run(monkeypatch, True, dbexport.ImportAborted("hosts: unreadable"))
+        assert not isinstance(e, dbexport.ImportAborted) and "the outcome is not known" in str(e)
+
+    def test_any_failure_whose_rollback_failed_says_the_outcome_is_not_known(self, monkeypatch):
+        e = self._run(monkeypatch, True, KeyError("x"))
+        assert "the rollback failed too" in str(e) and "was rolled back" not in str(e)

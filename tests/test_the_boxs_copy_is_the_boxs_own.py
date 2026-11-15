@@ -36,6 +36,7 @@ def _mint(
     end=300,
     serial=None,
     aki=None,
+    ski=None,
 ):
     """`(certificate, key)`. `ca`: True / False for a basic-constraints extension, None for a certificate that carries none. `usage`: "sign" for a key usage that
     allows signing certificates, "tls" for one that does not, None for no key usage. `aki`: "key" names the issuer by its key, "serial" by its name and serial
@@ -71,11 +72,21 @@ def _mint(
         builder = builder.add_extension(
             x509.AuthorityKeyIdentifier.from_issuer_public_key((signer or key).public_key()), critical=False
         )
+    elif isinstance(aki, bytes):
+        builder = builder.add_extension(x509.AuthorityKeyIdentifier(aki, None, None), critical=False)
     elif aki == "serial" and issuer is not None:
         builder = builder.add_extension(
             x509.AuthorityKeyIdentifier(None, [x509.DirectoryName(issuer.issuer)], issuer.serial_number), critical=False
         )
+    if ski is not None:
+        builder = builder.add_extension(x509.SubjectKeyIdentifier(ski), critical=False)
     return builder.sign(signer or key, hashes.SHA256()), key
+
+
+def _derived(key) -> bytes:
+    from cryptography import x509
+
+    return x509.SubjectKeyIdentifier.from_public_key(key.public_key()).digest
 
 
 def _pem(cert) -> str:
@@ -377,6 +388,16 @@ class TestRemovingTheCertificateRemovesTheKeptCopies:
         loop = next(n for n in ast.walk(route) if isinstance(n, ast.For))
         assert '".prev"' in ast.unparse(loop.iter).replace("'", '"')
 
+    def test_the_copies_go_before_the_live_files(self):
+        """(Q238, AW11) A copy that will not go stopped the route after the four live files were gone: no audit row, no restart, and a site with no certificate."""
+        import ast
+
+        tree = ast.parse((ROOT / "jen/routes/settings/security.py").read_text(encoding="utf-8"))
+        route = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "remove_cert")
+        loop = next(n for n in route.body if isinstance(n, ast.For))
+        order = eval(compile(ast.Expression(loop.iter), "iter", "eval"), {"live": ["a", "b"]})
+        assert order == ["a.prev", "b.prev", "a", "b"]
+
     def test_every_file_and_its_copy_goes(self, tmp_path, monkeypatch):
         """The loop itself, run over a real directory: the four live files and the four `.prev` copies."""
         import ast
@@ -403,3 +424,150 @@ class TestRemovingTheCertificateRemovesTheKeptCopies:
             if os.path.exists(f):
                 os.remove(f)
         assert list(tmp_path.iterdir()) == []
+
+
+class TestTheTopNamesTheKeyThatSignedIt:
+    """(Q238, AW40) The box's store holds the issuer of the top. The top may name the key that signed it by an identifier, and a client looks the issuer up by
+    that before it checks a signature. An identifier is of a KEY, and every copy of the issuer that verifies the top holds the same key - so this one is decided."""
+
+    def _world(self, top_aki, box_ski="derived", root_ski="derived"):
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        root_key = ec.generate_private_key(ec.SECP256R1())
+        pick = lambda how: _derived(root_key) if how == "derived" else how  # noqa: E731
+        root, _ = _mint("identified root", key=root_key, ca=True, ski=pick(root_ski))
+        copy, _ = _mint("identified root", key=root_key, ca=True, ski=pick(box_ski))
+        mid, mid_key = _mint("identified mid", root, root_key, ca=True, aki=pick(top_aki))
+        leaf, leaf_key = _mint(HOST, mid, mid_key, ca=False)
+        return root, copy, [leaf, mid], leaf_key
+
+    def test_an_identifier_of_the_key_that_signed_it_is_accepted(self, box_store, tmp_path):
+        root, copy, chain, key = self._world("derived")
+        box_store.append(_pem(root))
+        assert _a_client_holding(tmp_path, root, chain, key) is None
+        assert _judge(chain, key) is None
+
+    def test_an_identifier_of_another_key_is_refused(self, box_store, tmp_path):
+        root, copy, chain, key = self._world(b"\x01" * 20)
+        box_store.append(_pem(root))
+        assert _a_client_holding(tmp_path, root, chain, key) is not None
+        assert _judge(chain, key) == (
+            '"CN=identified mid" names the key that signed it by an identifier, and the certificate this box trusts as "CN=identified root" does not carry that '
+            "identifier, so a client that holds that CA does not find the issuer. If the CA's own certificate carries it, add that certificate to the upload"
+        )
+
+    def test_a_renewal_under_the_same_key_that_states_its_identifier_another_way(self, box_store, tmp_path):
+        """The honest case 7.1.0-beta.5 refused: the box's copy states an identifier of its own, the clients' root states the derived one, and the top names that."""
+        root, copy, chain, key = self._world("derived", box_ski=b"\x02" * 20)
+        box_store.append(_pem(copy))
+        assert _a_client_holding(tmp_path, root, chain, key) is None
+        assert _judge(chain, key) is None
+
+    def test_the_boxs_copy_states_the_identifier_the_top_names(self, box_store, tmp_path):
+        stated = b"\x03" * 20
+        root, copy, chain, key = self._world(stated, box_ski=stated, root_ski=stated)
+        box_store.append(_pem(copy))
+        assert _a_client_holding(tmp_path, root, chain, key) is None
+        assert _judge(chain, key) is None
+
+    def test_a_copy_that_states_no_identifier_is_not_compared(self, box_store, tmp_path):
+        root, copy, chain, key = self._world(b"\x04" * 20, box_ski=None, root_ski=None)
+        box_store.append(_pem(copy))
+        assert _a_client_holding(tmp_path, root, chain, key) is None
+        assert _judge(chain, key) is None
+
+    def test_the_root_in_the_upload_decides_it_whatever_the_box_holds(self, box_store, tmp_path):
+        """The remedy the sentence names: the stated limit is a CA whose identifier is neither derived nor the one the box's copy states."""
+        stated = b"\x05" * 20
+        root, copy, chain, key = self._world(stated, box_ski=b"\x06" * 20, root_ski=stated)
+        box_store.append(_pem(copy))
+        assert _judge(chain, key).startswith('"CN=identified mid" names the key that signed it')
+        assert _a_client_holding(tmp_path, root, chain + [root], key) is None
+        assert _judge(chain + [root], key) is None
+
+
+class TestTheScanOfTheUploadOnlyMovesForward:
+    """(Q238, AW1) The bound of Q237 was on characters and the pattern beside it was quadratic in the markers pasted."""
+
+    def test_many_markers_with_no_end_cost_nothing(self):
+        import time
+
+        from jen.routes.settings.security import _distinct_pems, validate_cert_material
+
+        text = "-----BEGIN CERTIFICATE-----\n" * 35700
+        assert len(text) < 1_000_000
+        started = time.monotonic()
+        assert _distinct_pems(text) == []
+        said = validate_cert_material(text, "-----BEGIN PRIVATE KEY-----", None)
+        assert time.monotonic() - started < 20, "it took 100 seconds and more before"
+        assert said is not None
+
+    def test_it_uses_no_pattern(self):
+        import inspect
+
+        from jen.routes.settings import security
+
+        body = inspect.getsource(security._distinct_pems)
+        assert "re." not in body and "import re" not in body and body.count(".find(") == 3
+
+    def test_it_finds_what_the_pattern_found(self):
+        import re
+
+        from jen.routes.settings.security import _distinct_pems
+
+        a, b = "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"
+        for text in (
+            "",
+            a,
+            b + a,
+            f"{a}\nAA\n{b}",
+            f"x{a}AA{b}y{a}BB{b}{a}AA{b}",
+            f"{a}AA{a}BB{b}{a}CC",
+            f"{a}\r\nAA\r\n{b}\n{a}\nAA\n{b}",
+            f"{a}{b}{b}{a}",
+        ):
+            seen: dict = {}
+            for found in re.finditer(re.escape(a) + ".*?" + re.escape(b), text, re.S):
+                seen.setdefault("".join(found.group(0).split()), found.group(0))
+            assert _distinct_pems(text) == list(seen.values()), text
+
+    def test_a_trusted_certificate_block_is_refused_by_name(self):
+        """(Q238, AW12) OpenSSL's loader reads it and Jen's checks do not: the certificate the server presents and the one judged could be two."""
+        from jen.routes.settings.security import validate_cert_material
+
+        root, root_key = _mint("a private root", ca=True)
+        leaf, leaf_key = _mint(HOST, root, root_key, ca=False)
+        trusted = (
+            _pem(leaf)
+            .replace("BEGIN CERTIFICATE", "BEGIN TRUSTED CERTIFICATE")
+            .replace("END CERTIFICATE", "END TRUSTED CERTIFICATE")
+        )
+        for cert_data, bundle in ((trusted + _pem(leaf), None), (_pem(leaf), trusted)):
+            assert validate_cert_material(cert_data, _key(leaf_key), bundle).startswith(
+                "the upload carries a TRUSTED CERTIFICATE block"
+            )
+
+
+class TestAnExtensionThisLibraryCannotReadIsNotARefusal:
+    """(Q238, AW41) `_not_a_ca` runs after the verifier completed the handshake. A basic-constraints BOOLEAN in BER is `CA:TRUE` to OpenSSL and a `ValueError`
+    here, and the upload was refused for it. The certificate is stood in for: building that encoding needs a signature over hand-written DER."""
+
+    def test_it_answers_nothing(self):
+        from jen.routes.settings import security
+
+        class Unreadable:
+            subject = issuer = None
+
+            @property
+            def extensions(self):
+                raise ValueError("error parsing asn1 value")
+
+        class Leaf:
+            pass
+
+        real = security._signed_by
+        try:
+            security._signed_by = lambda cert, issuer: False
+            assert security._not_a_ca([Leaf(), Unreadable()], 1) is None
+        finally:
+            security._signed_by = real

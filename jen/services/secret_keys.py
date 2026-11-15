@@ -59,8 +59,9 @@ def _masked_query(query: str) -> str:
     return "&".join(out)
 
 
-def _address_without_credentials(address: str) -> str:
-    """One address without its user-info, with every query value and its fragment masked; as written when it has none of the three or cannot be split."""
+def _address_without_credentials(address: str, query: bool = True) -> str:
+    """One address without its user-info and, with `query`, with every query value masked; as written when it has neither or cannot be split. The fragment is
+    kept (Q238): it is the part of an address that is never sent to a server, and in a configuration it is an anchor in a manual."""
     from urllib.parse import urlsplit, urlunsplit
 
     try:
@@ -68,27 +69,31 @@ def _address_without_credentials(address: str) -> str:
     except ValueError:
         return address
     netloc = parts.netloc.rsplit("@", 1)[1] if "@" in parts.netloc else parts.netloc
-    query = _masked_query(parts.query) if parts.query else parts.query
-    fragment = _MASK if parts.fragment else parts.fragment
-    if not parts.scheme or (netloc, query, fragment) == (parts.netloc, parts.query, parts.fragment):
+    masked = _masked_query(parts.query) if query and parts.query else parts.query
+    if not parts.scheme or (netloc, masked) == (parts.netloc, parts.query):
         return address
-    return urlunsplit(parts._replace(netloc=netloc, query=query, fragment=fragment))
+    return urlunsplit(parts._replace(netloc=netloc, query=masked))
 
 
 def without_credentials(value) -> str:
     """A string VALUE of a configuration as a page may show it (Q230, AP9 and the beta.15 review's #2; CRED-005 at the display). The places a secret sits inside an
     address that `without_userinfo` does not reach: the user-info of an address whose scheme is not http(s) (`ldap://u:pw@h`, `postgresql://`, `redis://`, `wss://` -
-    the authority of ANY scheme `urlsplit` reads a host from is split at its LAST `@`), the VALUE of every query parameter, which keeps its name (Q237: it was only a
-    parameter whose name is a secret's, and a signed address carries its secret under any name), and the fragment. The value is read twice: whole, as ONE address,
-    so a password or a query value with a space in it goes too; then every address inside it as a text, so one in the middle of a sentence is masked like one that
-    is the whole value. Everything else is returned as written; what is left goes through `scrub_urls`. Idempotent. A value with no `://` is not read as an
-    address: `user:pw@host` is also how a SIP or a mail address is written, and a rule that cannot tell them apart is not applied. This masks a COPY for display;
-    the configuration it was read from is never written from it."""
+    the authority of ANY scheme `urlsplit` reads a host from is split at its LAST `@`), and the VALUE of every query parameter, which keeps its name (Q237: a signed
+    address carries its secret under any name). The value is read twice. Whole, as ONE address, for its USER-INFO only: a password with a space in it goes, which no
+    pattern over a text can promise. Then every address inside it, each ending at the next white space, for its user-info and its query.
+    (Q238, AW3) The whole-value read used to mask the query too, and `urlsplit` over a whole value puts everything after its first `?` or `#` into the query or the
+    fragment: a second address, the rest of a sentence and the next two lines of a three-line value were replaced by one mask, and two revisions that differed only
+    there were shown as the same. Nothing but a user-info and a query VALUE is removed now, and a fragment is kept. The stated limit: a query value written with a
+    literal space in it is masked up to that space.
+    Everything else is returned as written; what is left goes through `scrub_urls`. Idempotent. A value with no `://` is not read as an address: `user:pw@host`
+    is also how a SIP or a mail address is written, and a rule that cannot tell them apart is not applied. This masks a COPY for display; the configuration it
+    was read from is never written from it."""
     text = str(value if value is not None else "")
     if "://" not in text:
         return scrub_urls(text)
-    whole = _address_without_credentials(text.strip(_PADDING))
-    if whole != text.strip(_PADDING):
+    stripped = text.strip(_PADDING)
+    whole = _address_without_credentials(stripped, query=False)
+    if whole != stripped:
         text = whole
     return scrub_urls(_ADDRESS_RE.sub(lambda found: _address_without_credentials(found.group(0)), text))
 

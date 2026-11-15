@@ -51,6 +51,17 @@ bp = Blueprint("database", __name__)
 
 
 # ── Main page ─────────────────────────────────────────────────────────────────
+def _table_groups() -> dict:
+    """`dbexport.export_table_groups()` for the page, or {} with a message when the Jen database is away (Q238, AW5: the Export and Recovery tabs were an error
+    page then, and the tabs beside them rendered)."""
+    try:
+        return dbexport.export_table_groups()
+    except Exception as e:
+        logger.error(f"Databases page: the plugin tables could not be listed: {type(e).__name__}")
+        flash("Jen's database is not reachable, so the plugin tables are not listed here.", "warning")
+        return {}
+
+
 def _render_database_page(tab: str):
     """The Settings → Databases page body, factored out of database()
     (v5.67.0-beta.5, Q117, item j) so a validation failure elsewhere in
@@ -74,9 +85,7 @@ def _render_database_page(tab: str):
     }
     # v5.66.0-beta.5 (Q107) — one group per plugin, only computed for the export tab (the one
     # DB round trip a superadmin viewing another tab shouldn't pay for).
-    plugin_table_groups = (
-        dbexport.export_table_groups() if tab == "export" and current_user.role == "superadmin" else {}
-    )
+    plugin_table_groups = _table_groups() if tab == "export" and current_user.role == "superadmin" else {}
     # The recovery card's one-time notice: only a superadmin viewing that tab pays for the
     # lookup, and only while it could possibly still be true — write_jen_export() flips
     # plugin_backup_notice_seen the first time any real export actually carries a plugin's
@@ -87,7 +96,7 @@ def _render_database_page(tab: str):
     show_plugin_backup_notice = False
     if tab == "recovery" and current_user.role == "superadmin":
         already_seen = __user.get_global_setting("plugin_backup_notice_seen", "") == "1"
-        show_plugin_backup_notice = not already_seen and any(dbexport.export_table_groups().values())
+        show_plugin_backup_notice = not already_seen and any(_table_groups().values())
     return render_template(
         "database.html",
         active_tab=tab,
@@ -156,7 +165,8 @@ def export_jen():
     try:
         # (Q213, AS5) and a name the export does not offer is refused, the Kea card's rule: it used to be dropped, and a file with no table in it was written and
         # audited as an export. (Q235, AT9) Inside the `try`: the list of tables is a database read, and with the database away this was a 500 page
-        if tables is not None and "picker" in request.form and not set(tables) <= set(dbexport.export_tables()):
+        # (Q238, AW7) with or without the page's marker: a script that named a table Jen does not have was sent a document with no table in it, audited as an export
+        if tables is not None and not set(tables) <= set(dbexport.export_tables()):
             flash("Not an exportable Jen table.", "error")
             return redirect(url_for("database.database", tab="export"))
         os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
@@ -782,9 +792,14 @@ def import_confirm():
     if not tmp_path or not real_tmp_path.startswith(real_tmp_dir + os.sep) or not os.path.isfile(tmp_path):
         flash("Import session expired. Please re-upload.", "error")
         return redirect(url_for("database.database", tab="import"))
-    with open(tmp_path, "rb") as f:
-        file_bytes = f.read()
-    os.unlink(tmp_path)
+    try:
+        with open(tmp_path, "rb") as f:
+            file_bytes = f.read()
+        os.unlink(tmp_path)
+    except OSError:
+        # (Q238, AW6) the file went between the check above and here - the same confirmation sent twice: the second one is a session that is not there
+        flash("Import session expired. Please re-upload.", "error")
+        return redirect(url_for("database.database", tab="import"))
     meta, data, parse_err = dbexport.parse_import_file(file_bytes)
     if parse_err or not meta:
         flash("Import session expired. Please re-upload.", "error")
@@ -827,6 +842,9 @@ def import_confirm():
         flash(e.public, "error")
     except dbexport.ScopeRefused as e:
         # refused before anything was touched (v5.67.0-beta.14, Q128)
+        __user.audit(
+            "DB_IMPORT_FAILED", "jen", "refused; nothing was changed"
+        )  # (Q238, AW10) every way an import ends leaves a row
         flash(f"{e.public} Nothing was changed.", "error")
     except dbexport.ImportAborted as e:
         # v5.67.0-beta.13 (Q127) — an error that names the table and row (never a value): the whole import was
@@ -836,6 +854,12 @@ def import_confirm():
         flash(f"Import aborted and rolled back — {e.public}. Nothing was changed.", "error")
     except Exception as e:
         logger.error(f"DB import failed: {e}")
+        # (Q238, AW9, AW10) the one ending whose outcome is not known - a commit or a rollback that itself failed - is the one that left no record
+        __user.audit(
+            "DB_IMPORT_FAILED",
+            db if db in ("jen", "kea") else "unknown",
+            f"{type(e).__name__}; the outcome is not known",
+        )
         flash("Import failed. Check server logs for details.", "error")
     return redirect(url_for("database.database", tab="import"))
 

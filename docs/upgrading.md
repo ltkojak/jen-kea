@@ -10,11 +10,23 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.7: Config history shows what changed again
+
+One step (7.1.0-beta.7). It adds no migration and no helper build, and there is nothing to do.
+
+**Config history and the support bundle.** 7.1.0-beta.6 could replace the rest of a value by one mask after the first `?` or `#` of an address in it, so two revisions could look the same. Only the user and password of an address and the values of its query are masked now.
+
+**Settings → Security: the certificate upload.** A chain whose intermediate names a different signing key than the CA this box trusts is refused, as it was before 7.1.0-beta.6. An OpenSSL `TRUSTED CERTIFICATE` block is refused with the command that converts it.
+
+**The HA failover alert.** A failover seen while Jen's database is away is announced when it is back.
+
+**Settings → Databases.** The Export and Recovery tabs render when Jen's database is away. Every way an import ends leaves an audit row.
+
 ## 7.1.0-beta.6: a by-hand upgrade moves the Python dependencies
 
 One step (7.1.0-beta.6). It adds no migration and no helper build, and there is nothing to do.
 
-**`sudo ./install.sh` now upgrades the Python dependencies.** It used to leave an installed dependency where it was as long as it satisfied its floor, so a box that was only ever upgraded by hand kept the versions of its first install. On this upgrade those move to current releases, which the in-app updater has always done. Without a route to the package index the step keeps the installed versions and prints a warning; the upgrade still completes. `--repair` and `--configure` run the same step.
+**`sudo ./install.sh` now upgrades the Python dependencies.** It used to leave an installed dependency where it was as long as it satisfied its floor, so a box that was only ever upgraded by hand kept the versions of its first install. On this upgrade those move to current releases, which the in-app updater has always done. Without a route to the package index the step keeps the installed versions and prints a warning; the upgrade still completes. `--repair` runs the same step; `--configure` does not touch the dependencies.
 
 **Settings → Security: the certificate upload.** A root that was renewed with a new serial number no longer refuses a good chain when the box still holds the earlier copy. An intermediate that does not say it is a CA is refused. More than twenty certificates, or more than a million characters, is refused before anything is read. Removing the certificate also removes the `.prev` copies.
 
