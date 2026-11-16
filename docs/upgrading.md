@@ -10,6 +10,16 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.8: the HA failover alert works again
+
+One step (7.1.0-beta.8). It adds no migration and no helper build, and there is nothing to do.
+
+**The HA failover alert announced nothing in 7.1.0-beta.7,** on every installation with two or more Kea servers. If you ran that beta, a failover in that time was not announced. It works again from this release; the first check records each server's state.
+
+**Settings → Security: the certificate upload** refuses a certificate block under any PEM label but `CERTIFICATE`, with the command that converts it.
+
+**Config history and the support bundle** mask a token written after `#` in an address again, and keep a plain anchor.
+
 ## 7.1.0-beta.7: Config history shows what changed again
 
 One step (7.1.0-beta.7). It adds no migration and no helper build, and there is nothing to do.

@@ -85,10 +85,12 @@ def __get_stale_device_days():
     return get_stale_device_days()
 
 
-def __get_global_setting(key, default=None):
+def __get_global_setting(key, default=None, strict=False):
+    # (Q239, AX1) `strict` is passed through. Q238 called this with `strict=True` and it took no such argument: the call raised TypeError before any database
+    # was asked, the caller's `except Exception` read that as "the record cannot be read", and the HA failover alert announced nothing on any box
     from jen.models.user import get_global_setting
 
-    return get_global_setting(key, default)
+    return get_global_setting(key, default, strict=strict)
 
 
 def __set_global_setting(key, value):
@@ -2066,6 +2068,8 @@ def check_ha_state_alert(srv, new_state) -> str:
 
     try:
         known = _ha_known()
+    except (TypeError, AttributeError, NameError):
+        raise  # (Q239, AX1) a mistake in this code is not a record that cannot be read: it is raised, and the loop logs it as an error on every pass
     except Exception as e:
         logger.warning(
             f"the HA state record could not be read ({type(e).__name__}): nothing is decided about {srv['name']} on this pass"

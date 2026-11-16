@@ -56,8 +56,10 @@ def world(monkeypatch):
         # the cached read of a Jen that started with its database down answers its default
         return w.settings.get(key, default) if w.readable else default
 
-    monkeypatch.setattr("jen.services.alerts.__get_global_setting", read)
-    monkeypatch.setattr("jen.services.alerts.__set_global_setting", store)
+    # (Q239, AX1) the fakes stand where the DATABASE is, in `jen.models.user`, and `alerts`' own two wrappers run for real. Q238 faked the wrappers
+    # themselves with a `strict`-aware function the product did not have, so every test here passed over a call that raised TypeError on every box
+    monkeypatch.setattr("jen.models.user.get_global_setting", read)
+    monkeypatch.setattr("jen.models.user.set_global_setting", store)
     monkeypatch.setattr("jen.services.alerts.__emit_event", lambda name, **kw: w.events.append((name, kw["detail"])))
     monkeypatch.setattr(alerts, "send_alert", send)
     monkeypatch.setattr(alerts, "_utcnow", lambda: w.now)
@@ -239,12 +241,25 @@ class TestARecordThatCannotBeReadIsNotAFirstState:
         world.readable = True
         assert _see("partner-down") == "sent"
 
-    def test_the_record_is_asked_of_the_table_and_not_of_the_cache(self):
-        import inspect
+    def test_the_record_is_asked_of_the_table_and_not_of_the_cache(self, world, monkeypatch):
+        """Asked of the real call: what reaches `jen.models.user.get_global_setting` for the HA record carries `strict=True`."""
+        asked = []
+        monkeypatch.setattr(
+            "jen.models.user.get_global_setting",
+            lambda key, default=None, strict=False: asked.append((key, strict)) or default,
+        )
+        _see("hot-standby")
+        assert ("alert_state:event:ha_states", True) in asked
 
-        from jen.services import alerts
+    def test_a_mistake_in_the_code_is_raised_and_is_not_a_record_that_cannot_be_read(self, world, monkeypatch):
+        """(Q239, AX1) The P1: the reader raised TypeError and the catch-all answered "unreadable" for ever."""
 
-        assert '__get_global_setting(_HA_KNOWN, "", strict=True)' in inspect.getsource(alerts._ha_known)
+        def broken(key, default=None):
+            return default
+
+        monkeypatch.setattr("jen.models.user.get_global_setting", broken)
+        with pytest.raises(TypeError):
+            _see("hot-standby")
 
     @pytest.mark.parametrize("stored", ["not json", "[1, 2]", '"a string"'], ids=["not JSON", "a list", "a string"])
     def test_a_damaged_record_is_started_again_and_says_so(self, stored, world, caplog):
@@ -273,3 +288,47 @@ class TestARecordThatCannotBeReadIsNotAFirstState:
         _see("partner-down")
         extensions.KEA_SERVERS[:] = [SRV, other]
         assert _see("partner-down", other) == "sent"
+
+
+class TestNoCallPassesWhatItsOwnFunctionDoesNotTake:
+    """(Q239, AX1) The class, over the whole tree. A module calls one of its OWN module-level functions with a keyword that function does not take, or with
+    more positional arguments than it has parameters: nothing but running that line finds it, and a test that fakes the function hides it."""
+
+    def test_every_call_of_a_module_level_function_fits_its_signature(self):
+        import ast
+
+        wrong = []
+        for path in sorted((ROOT / "jen").rglob("*.py")) + sorted((ROOT / "plugins").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            defs: dict = {}
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    defs[node.name] = None if node.name in defs else node  # defined twice: not judged
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                    continue
+                fn = defs.get(node.func.id)
+                if fn is None:
+                    continue
+                a = fn.args
+                names = {p.arg for p in a.posonlyargs + a.args + a.kwonlyargs}
+                for kw in node.keywords:
+                    if kw.arg is not None and kw.arg not in names and a.kwarg is None:
+                        wrong.append(f"{path.relative_to(ROOT).as_posix()}:{node.lineno} {fn.name}({kw.arg}=...)")
+                positional = [x for x in node.args if not isinstance(x, ast.Starred)]
+                if a.vararg is None and len(positional) > len(a.posonlyargs) + len(a.args):
+                    wrong.append(
+                        f"{path.relative_to(ROOT).as_posix()}:{node.lineno} {fn.name}: {len(positional)} positional"
+                    )
+        assert not wrong, wrong
+
+    def test_the_sweep_sees_the_defect_it_was_written_for(self):
+        """The call of 7.1.0-beta.7, in a module of its own."""
+        import ast
+
+        source = "def __get(key, default=None):\n    return default\n\ndef known():\n    return __get('k', '', strict=True)\n"
+        tree = ast.parse(source)
+        fn = tree.body[0]
+        call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+        names = {p.arg for p in fn.args.args}
+        assert [kw.arg for kw in call.keywords if kw.arg not in names] == ["strict"]

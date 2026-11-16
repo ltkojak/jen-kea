@@ -60,8 +60,9 @@ def _masked_query(query: str) -> str:
 
 
 def _address_without_credentials(address: str, query: bool = True) -> str:
-    """One address without its user-info and, with `query`, with every query value masked; as written when it has neither or cannot be split. The fragment is
-    kept (Q238): it is the part of an address that is never sent to a server, and in a configuration it is an anchor in a manual."""
+    """One address without its user-info and, with `query`, with every query value masked; as written when it has neither or cannot be split. A fragment
+    that carries parameters (`#access_token=...`: it holds an `=`) is masked the way a query is; one that does not is an anchor in a manual and is kept
+    (Q239, AX2: Q237 masked every fragment and lost the anchors, Q238 kept every fragment and printed a token written after `#`)."""
     from urllib.parse import urlsplit, urlunsplit
 
     try:
@@ -70,9 +71,10 @@ def _address_without_credentials(address: str, query: bool = True) -> str:
         return address
     netloc = parts.netloc.rsplit("@", 1)[1] if "@" in parts.netloc else parts.netloc
     masked = _masked_query(parts.query) if query and parts.query else parts.query
-    if not parts.scheme or (netloc, masked) == (parts.netloc, parts.query):
+    fragment = _masked_query(parts.fragment) if query and "=" in parts.fragment else parts.fragment
+    if not parts.scheme or (netloc, masked, fragment) == (parts.netloc, parts.query, parts.fragment):
         return address
-    return urlunsplit(parts._replace(netloc=netloc, query=masked))
+    return urlunsplit(parts._replace(netloc=netloc, query=masked, fragment=fragment))
 
 
 def without_credentials(value) -> str:

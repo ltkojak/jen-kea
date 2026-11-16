@@ -628,11 +628,21 @@ class TestASecretInsideAnAddressIsMasked:
     def test_a_password_with_a_space_in_it_still_goes_whole(self):
         assert secret_keys.without_credentials(f"ldap://u:pass {SENTINEL}@h.example/dc") == "ldap://h.example/dc"
 
-    def test_a_fragment_is_kept(self):
-        """(Q238) It is the part of an address that is never sent to a server; in a configuration it is an anchor in a manual."""
+    def test_an_anchor_is_kept_and_a_fragment_that_carries_parameters_is_masked(self):
+        """(Q239, AX2) Q237 masked every fragment and lost the anchors; Q238 kept every fragment and printed a token written after `#`."""
         assert (
             secret_keys.without_credentials("https://h.example/manual#ha-setup") == "https://h.example/manual#ha-setup"
         )
+        for written, shown in (
+            (f"https://h.example/cb#access_token={SENTINEL}", "https://h.example/cb#access_token=********"),
+            (
+                f"https://h.example/cb?state=1#id_token={SENTINEL}&x=2",
+                "https://h.example/cb?state=********#id_token=********&x=********",
+            ),
+            (f"see https://h.example/cb#t={SENTINEL} for it", "see https://h.example/cb#t=******** for it"),
+        ):
+            assert secret_keys.without_credentials(written) == shown
+            assert secret_keys.without_credentials(shown) == shown
 
     def test_the_configuration_that_was_masked_is_not_changed(self):
         import copy

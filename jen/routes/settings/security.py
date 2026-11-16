@@ -200,10 +200,13 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
     import ssl
     import tempfile
 
-    # (Q238, AW12) OpenSSL's loader also reads a `TRUSTED CERTIFICATE` block and Jen's checks do not, so the certificate the server presents and the one
-    # Jen judged could be two certificates
-    if "BEGIN TRUSTED CERTIFICATE" in cert_data + (ca_data or ""):
-        return "the upload carries a TRUSTED CERTIFICATE block, which is OpenSSL's own trust format: export it as a plain PEM certificate (openssl x509 -in <file> -out <file>)"
+    # (Q238, AW12; Q239, AX24) What OpenSSL loads and serves must be what Jen counted and judged. OpenSSL reads a certificate under three PEM labels
+    # (`CERTIFICATE`, `X509 CERTIFICATE`, `TRUSTED CERTIFICATE`) and Jen's checks read the first. Q238 refused the third by name and left the second: an
+    # expired CA spelled `X509 CERTIFICATE` was loaded, served and judged by nothing. The rule is the label, not a list of spellings: in the certificate
+    # and CA fields, a block whose label names a certificate and is not exactly `CERTIFICATE` is refused
+    label = _other_certificate_label(cert_data + "\n" + (ca_data or ""))
+    if label:
+        return f"the upload carries a block labeled {label}; Jen reads a certificate only as a plain PEM block (BEGIN CERTIFICATE): convert it with openssl x509 -in <file> -out <file>"
     if "BEGIN CERTIFICATE" not in cert_data:
         return "the certificate file is not a PEM certificate"
     if "PRIVATE KEY" not in key_data:
@@ -247,6 +250,20 @@ _ABOUT_A_DATE = frozenset({9, 10})
 _MOST_CERTIFICATES = 20
 # (Q237, AV31) twenty certificates and a key are well under a tenth of this
 _MOST_CHARACTERS = 1_000_000
+
+
+def _other_certificate_label(text: str) -> str:
+    """The first PEM label of `text` that names a certificate and is not exactly `CERTIFICATE`, or "". One forward scan over the BEGIN lines."""
+    at = text.find("-----BEGIN ")
+    while at != -1:
+        stop = text.find("-----", at + 11)
+        if stop == -1:
+            return ""
+        label = text[at + 11 : stop]
+        if "CERTIFICATE" in label.upper() and label != "CERTIFICATE" and "\n" not in label and len(label) <= 64:
+            return label
+        at = text.find("-----BEGIN ", stop)
+    return ""
 
 
 def _distinct_pems(text: str) -> list:

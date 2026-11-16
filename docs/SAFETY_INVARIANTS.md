@@ -322,6 +322,7 @@ drops on the floor). A refusal is of the form whole, never of one value out of a
 - `tests/test_alert_delivery.py::TestEveryChannelFails`
 - `tests/test_ha_failover_is_delivered.py::TestAFailoverIsAnnouncedOnceAndOnlyWhenSomebodyTookIt`
 - `tests/test_ha_failover_is_delivered.py::TestARecordThatCannotBeReadIsNotAFirstState`
+- `tests/test_ha_failover_is_delivered.py::TestNoCallPassesWhatItsOwnFunctionDoesNotTake`
 - `tests/test_alert_delivery.py::TestEventStyleAlertsRemember`
 - `tests/test_client_problems_db.py::TestASweepIsOneTransaction`
 - `tests/test_alert_delivery.py::TestTheDailySummaryIsDueAtOrAfterItsTime`
@@ -1148,6 +1149,8 @@ upload are judged before anything is written, loaded or parsed, and the count is
 decision: a certificate in the box's store that OpenSSL does not count as a CA is no certificate the box trusts.
 One more answer is read from the box's signers (Q238, AW40): when the top names the key that signed it by an identifier, a signer must state none, state that one, or hold
 the key it is derived from. It is the one property of the box's copy that is decided, because it is a property of the KEY and every copy that verifies the top holds that key.
+What OpenSSL loads and serves is what was counted and judged (Q239, AX24): in the certificate and CA fields a block whose PEM label names a certificate and is not exactly
+`CERTIFICATE` is refused, so no certificate reaches the wire under a spelling the checks do not read.
 **Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box);
 Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the bounds first); Q238 (AW1 the scan, AW40 the key's identifier).
 **Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
@@ -1164,6 +1167,7 @@ Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the 
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheBoundsComeFirst`
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheTopNamesTheKeyThatSignedIt`
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheScanOfTheUploadOnlyMovesForward`
+- `tests/test_the_boxs_copy_is_the_boxs_own.py::TestWhatIsServedIsWhatWasJudged`
 - `tests/test_a_fix_reaches_both_ends.py::TestTheChainIsJudgedByAVerifier`
 
 ## The browser surface (Q208)

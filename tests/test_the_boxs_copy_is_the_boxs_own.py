@@ -544,7 +544,7 @@ class TestTheScanOfTheUploadOnlyMovesForward:
         )
         for cert_data, bundle in ((trusted + _pem(leaf), None), (_pem(leaf), trusted)):
             assert validate_cert_material(cert_data, _key(leaf_key), bundle).startswith(
-                "the upload carries a TRUSTED CERTIFICATE block"
+                "the upload carries a block labeled TRUSTED CERTIFICATE;"
             )
 
 
@@ -571,3 +571,59 @@ class TestAnExtensionThisLibraryCannotReadIsNotARefusal:
             assert security._not_a_ca([Leaf(), Unreadable()], 1) is None
         finally:
             security._signed_by = real
+
+
+class TestWhatIsServedIsWhatWasJudged:
+    """(Q239, AX24) OpenSSL reads a certificate under three PEM labels and Jen's checks read one. An expired CA spelled `X509 CERTIFICATE`, pasted ABOVE the top
+    Jen walks to, was loaded by `load_cert_chain` and served, and was counted, walked, bounded and judged by nothing: Jen accepted what every client refuses."""
+
+    def _world(self):
+        old_root, old_key = _mint("an expired root", ca=True, start=-400, end=-5)
+        mid, mid_key = _mint("a mid under it", old_root, old_key, ca=True)
+        leaf, leaf_key = _mint(HOST, mid, mid_key, ca=False)
+        return old_root, mid, leaf, leaf_key
+
+    @staticmethod
+    def _spelled(cert, label):
+        return _pem(cert).replace("BEGIN CERTIFICATE", f"BEGIN {label}").replace("END CERTIFICATE", f"END {label}")
+
+    def test_openssl_really_loads_and_serves_that_spelling(self, tmp_path):
+        """The premise, measured: a real client that holds the expired root is sent it and refuses."""
+        old_root, mid, leaf, key = self._world()
+        chain, key_file = tmp_path / "c.pem", tmp_path / "k.pem"
+        chain.write_text(_pem(leaf) + _pem(mid) + self._spelled(old_root, "X509 CERTIFICATE"))
+        key_file.write_text(_key(key))
+        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(chain), str(key_file))
+        assert _a_client_holding(tmp_path, old_root, [leaf, mid, old_root], key) is not None
+
+    @pytest.mark.parametrize(
+        "label", ["X509 CERTIFICATE", "TRUSTED CERTIFICATE", "NEW CERTIFICATE REQUEST", "x509 certificate"]
+    )
+    @pytest.mark.parametrize("where", ["chain", "bundle"])
+    def test_a_block_that_names_a_certificate_under_another_label_is_refused(self, label, where):
+        from jen.routes.settings.security import validate_cert_material
+
+        old_root, mid, leaf, key = self._world()
+        hidden = self._spelled(old_root, label)
+        if where == "chain":
+            said = validate_cert_material(_pem(leaf) + _pem(mid) + hidden, _key(key), None)
+        else:
+            said = validate_cert_material(_pem(leaf), _key(key), _pem(mid) + hidden)
+        assert said.startswith(
+            f"the upload carries a block labeled {label}; Jen reads a certificate only as a plain PEM block"
+        )
+
+    def test_the_same_certificate_spelled_plainly_is_judged_and_refused_for_what_it_is(self):
+        old_root, mid, leaf, key = self._world()
+        assert "certificate has expired" in _judge([leaf, mid, old_root], key)
+
+    def test_a_key_in_the_certificate_file_is_not_a_certificate_label(self):
+        from jen.routes.settings.security import _other_certificate_label
+
+        assert (
+            _other_certificate_label(
+                "-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n-----BEGIN CERTIFICATE-----"
+            )
+            == ""
+        )
+        assert _other_certificate_label("-----BEGIN " * 40000) == ""

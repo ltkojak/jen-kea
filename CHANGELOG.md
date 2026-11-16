@@ -2,6 +2,18 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.1.0-beta.8] - 2026-11-16
+
+*The eighth beta of 7.1.0, on the **beta** channel. It fixes the executing pass on v7.1.0-beta.7: one P1 that 7.1.0-beta.7 itself introduced, and two P2. It adds no migration and no helper build, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **The HA failover alert works again. In 7.1.0-beta.7 it announced nothing, on every installation.** That release changed how the alert reads its record of each server's last announced state, and called its settings reader with an argument the reader did not take. The call failed before any database was asked. The code around it was written to treat "the record cannot be read" as "decide nothing on this pass", and it treated this failure the same way, on every pass. No alert was sent and nothing was logged as an error. 7.1.0-beta.6 is not affected. The reader now takes the argument, a mistake of that kind is raised and logged as an error instead of being read as a database that is away, and the tests no longer stand in for the reader: they run it, and one runs the whole path over the real settings table.
+2. **A certificate block under another PEM label is refused, whatever the label.** OpenSSL reads a certificate under three labels and Jen's checks read `CERTIFICATE`. 7.1.0-beta.7 refused `TRUSTED CERTIFICATE` by name and left `X509 CERTIFICATE`: an expired CA spelled that way was loaded and served to clients while Jen never counted or judged it, so Jen accepted a chain every client refuses. The rule is now the label itself: in the certificate and CA fields, a block whose label names a certificate and is not exactly `CERTIFICATE` is refused, with the command that converts it.
+3. **A token written after `#` in an address is masked again; an anchor is kept.** 7.1.0-beta.6 masked every fragment and lost the anchors of links to a manual. 7.1.0-beta.7 kept every fragment and so printed `#access_token=...` in Config history and the support bundle. A fragment that carries parameters is now masked the way a query is, and one that does not is kept.
+
+**Registered, not fixed here.** An intermediate that chains to a root the box does not hold is accepted when the box holds a different root for the same CA (the pass's reader C; the module's stated rule is that a root the box lacks is the client's). The remaining P3 rows and nits of the pass on v7.1.0-beta.7.
+
 ## [7.1.0-beta.7] - 2026-11-15
 
 *The seventh beta of 7.1.0, on the **beta** channel. It is the ONE fix set of the executing pass on v7.1.0-beta.6 (no P1; four P2, three of them in code 7.1.0-beta.6 added). It adds no migration and no helper build, and nothing needs a manual step.*

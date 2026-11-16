@@ -1245,6 +1245,35 @@ class TestEventStyleAlertsRemember:
         alerts.check_kea_status_alert(srv, True)
         assert sender2.sent == ["kea_up"]
 
+    def test_ha_failover_runs_over_the_real_settings_table_with_only_the_channel_faked(self, db, monkeypatch, send):
+        """(Q239, AX1) 7.1.0-beta.7 called its settings reader with an argument the reader did not take; the call raised before any database was asked and
+        every test of it faked the reader. Here the reader, the writer and the table are the real ones."""
+        from jen import extensions as ext
+
+        def wipe():
+            with db.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM settings WHERE setting_key LIKE 'alert_state:ha_failover:%' OR setting_key='alert_state:event:ha_states'"
+                )
+            db.commit()
+
+        wipe()
+        srv = {"id": 1, "name": "kea-a"}
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        monkeypatch.setattr(ext, "KEA_SERVERS", [srv], raising=False)
+        sender = send(OK)
+        try:
+            assert alerts.check_ha_state_alert(srv, "hot-standby") == "first"
+            assert alerts.check_ha_state_alert(srv, "partner-down") == "sent"
+            assert alerts.check_ha_state_alert(srv, "partner-down") == "quiet"
+            assert sender.sent == ["ha_failover"]
+            db.commit()
+            with db.cursor() as cur:
+                cur.execute("SELECT setting_value FROM settings WHERE setting_key='alert_state:event:ha_states'")
+                assert '"1":["partner-down","partner-down"]' in str(cur.fetchone())
+        finally:
+            wipe()
+
     def test_a_kea_down_nobody_took_is_retried_and_no_kea_up_is_sent_for_it(self, db, monkeypatch, send):
         srv = {"id": 1, "name": "kea-a"}
         monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
