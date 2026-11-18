@@ -546,7 +546,7 @@ class TestASecretInsideAnAddressIsMasked:
     def test_it_is_idempotent_and_leaves_the_rest_as_written(self):
         value = f"https://u:{SENTINEL}@h.example/hook?token={SENTINEL}&room=7#frag"
         once = secret_keys.without_credentials(value)
-        assert once == "https://h.example/hook?token=********&room=********#frag"
+        assert once == "https://h.example/hook?token=********&room=********#********"
         assert secret_keys.without_credentials(once) == once
         for untouched in (
             "https://h.example/x",
@@ -592,16 +592,33 @@ class TestASecretInsideAnAddressIsMasked:
     @pytest.mark.parametrize(
         "value, shown",
         [
-            ("https://d.example/page#ha-setup and the service is dhcp4", None),
+            (
+                "https://d.example/page#ha-setup and the service is dhcp4",
+                "https://d.example/page#******** and the service is dhcp4",
+            ),
             ("https://a.example/x?k=T1 https://b.example/y", "https://a.example/x?k=******** https://b.example/y"),
-            ("line one https://a.example/#note\nline two\nline three", None),
+            (
+                "line one https://a.example/#note\nline two\nline three",
+                "line one https://a.example/#********\nline two\nline three",
+            ),
             (
                 "https://d.example/manual#section-4 is where the pool is described, and the lease time is in section 5",
-                None,
+                "https://d.example/manual#******** is where the pool is described, and the lease time is in section 5",
             ),
-            ("see https://d.example/a and https://d.example/b#two", None),
+            (
+                "see https://d.example/a and https://d.example/b#two",
+                "see https://d.example/a and https://d.example/b#********",
+            ),
+            ("see https://d.example/a and https://d.example/b", None),
         ],
-        ids=["a fragment, then a sentence", "two addresses", "three lines", "a comment", "two plain addresses"],
+        ids=[
+            "a fragment, then a sentence",
+            "two addresses",
+            "three lines",
+            "a comment",
+            "two addresses, one anchor",
+            "two plain addresses",
+        ],
     )
     def test_nothing_but_a_user_info_and_a_query_value_is_removed(self, value, shown):
         """(Q238, AW3) The whole value was read as ONE address for its query and its fragment too, so everything after the first `?` or `#` - a second address,
@@ -611,11 +628,10 @@ class TestASecretInsideAnAddressIsMasked:
     @pytest.mark.parametrize(
         "one, two",
         [
-            ("https://d.example/page#one", "https://d.example/page#two"),
             ("https://d.example/p?x=1 and the pool is 10", "https://d.example/p?x=1 and the pool is 20"),
             ("https://d.example/a\nrelay 10.0.0.1", "https://d.example/a\nrelay 10.0.0.2"),
         ],
-        ids=["the fragment changed", "the text after an address changed", "the second line changed"],
+        ids=["the text after an address changed", "the second line changed"],
     )
     def test_two_revisions_that_differ_are_shown_as_different(self, one, two):
         from jen.services import config_revisions
@@ -628,21 +644,60 @@ class TestASecretInsideAnAddressIsMasked:
     def test_a_password_with_a_space_in_it_still_goes_whole(self):
         assert secret_keys.without_credentials(f"ldap://u:pass {SENTINEL}@h.example/dc") == "ldap://h.example/dc"
 
-    def test_an_anchor_is_kept_and_a_fragment_that_carries_parameters_is_masked(self):
-        """(Q239, AX2) Q237 masked every fragment and lost the anchors; Q238 kept every fragment and printed a token written after `#`."""
+    @pytest.mark.parametrize(
+        "after",
+        [
+            "STANDIN",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.STANDIN",
+            "access_token=STANDIN",
+            "Bearer+STANDIN",
+            "U1RBTkRJTi1UT0tFTg==",
+            "tok/STANDIN",
+            "STANDIN&STANDIN",
+            "ha-setup",
+        ],
+        ids=["bare", "a JWT", "name=value", "Bearer", "base64", "a path", "two", "an anchor"],
+    )
+    @pytest.mark.parametrize("scheme", ["https", "ldap"])
+    def test_everything_after_the_hash_of_an_address_is_masked(self, after, scheme):
+        """(Q240, AY2) Three releases tried to tell an anchor from a secret by its shape. Nothing after `#` is shown, and nothing after the address is touched."""
+        shown = secret_keys.without_credentials(f"see {scheme}://h.example/cb#{after} for it")
+        assert shown == f"see {scheme}://h.example/cb#******** for it"
+        assert secret_keys.without_credentials(shown) == shown
         assert (
-            secret_keys.without_credentials("https://h.example/manual#ha-setup") == "https://h.example/manual#ha-setup"
+            secret_keys.without_credentials(f"{scheme}://h.example/cb#{after}") == f"{scheme}://h.example/cb#********"
         )
-        for written, shown in (
-            (f"https://h.example/cb#access_token={SENTINEL}", "https://h.example/cb#access_token=********"),
+
+    @pytest.mark.parametrize(
+        "query, shown",
+        [
+            ("U1RBTkRJTi1UT0tFTg==", "********"),
+            ("U1RBTkRJTi1UT0tFTg=", "********"),
+            ("k=U1RBTkRJTi1UT0tFTg==", "k=********"),
+            ("a=1&U1RBTkRJTi1UT0tFTg==&b=2", "a=********&********&b=********"),
+            ("STANDIN" * 7 + "=x", "********"),
+            ("a+b=STANDIN", "********"),
+            ("empty=", "********"),
             (
-                f"https://h.example/cb?state=1#id_token={SENTINEL}&x=2",
-                "https://h.example/cb?state=********#id_token=********&x=********",
+                "X-Amz-Signature=STANDIN&filter[name]=x&a%20b=y",
+                "X-Amz-Signature=********&filter[name]=********&a%20b=********",
             ),
-            (f"see https://h.example/cb#t={SENTINEL} for it", "see https://h.example/cb#t=******** for it"),
-        ):
-            assert secret_keys.without_credentials(written) == shown
-            assert secret_keys.without_credentials(shown) == shown
+        ],
+        ids=[
+            "base64",
+            "one pad",
+            "named base64",
+            "between two",
+            "a long name",
+            "a name with a plus",
+            "an empty value",
+            "real names",
+        ],
+    )
+    def test_a_name_is_kept_only_when_it_is_one(self, query, shown):
+        """(Q240, AY3) A base64 token ends in `=`, so it was "the name" and its padding "the value", and names are kept."""
+        assert secret_keys.without_credentials(f"https://h.example/x?{query}") == f"https://h.example/x?{shown}"
+        assert secret_keys.without_credentials(f"https://h.example/x?{shown}") == f"https://h.example/x?{shown}"
 
     def test_the_configuration_that_was_masked_is_not_changed(self):
         import copy

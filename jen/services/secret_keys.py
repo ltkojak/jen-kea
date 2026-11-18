@@ -47,6 +47,8 @@ _USERINFO_RE = re.compile(r"(?i)\b(https?://)[^\s/?#]*@")
 # (Q237) an address inside a text, for `without_credentials`: a scheme, `://` and everything up to the next white space
 _ADDRESS_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S+")
 _MASK = "********"
+# what a parameter's name looks like: `X-Amz-Signature`, `access_token`, `filter[name]`, `a%20b`. Forty characters is longer than any name and shorter than a token
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_.\-\[\]%]{1,40}")
 
 
 def _masked_query(query: str) -> str:
@@ -55,14 +57,22 @@ def _masked_query(query: str) -> str:
     out = []
     for pair in query.split("&"):
         name, eq, held = pair.partition("=")
-        out.append(f"{name}={_MASK}" if eq and held else (_MASK if pair and not eq else pair))
+        # (Q240, AY3) the name is kept only when it IS one: short, plain, with a value after it that is more than `=` signs. A base64 token ends in `=`,
+        # so the whole token was "the name" and the padding "the value". Anything else is masked whole - an empty value and its name among them
+        if not pair:
+            out.append(pair)
+        elif eq and held.strip("=") and _PLAIN_NAME.fullmatch(name):
+            out.append(f"{name}={_MASK}")
+        else:
+            out.append(_MASK)
     return "&".join(out)
 
 
 def _address_without_credentials(address: str, query: bool = True) -> str:
-    """One address without its user-info and, with `query`, with every query value masked; as written when it has neither or cannot be split. A fragment
-    that carries parameters (`#access_token=...`: it holds an `=`) is masked the way a query is; one that does not is an anchor in a manual and is kept
-    (Q239, AX2: Q237 masked every fragment and lost the anchors, Q238 kept every fragment and printed a token written after `#`)."""
+    """One address without its user-info and, with `query`, with every query value masked; as written when it has neither or cannot be split. With `query`
+    a fragment is masked WHOLE (Q240, AY2). Three releases tried to tell an anchor from a secret by its shape - mask all (and, read over a whole value, lose the
+    sentence after it), keep all, mask the ones with an `=` - and a bearer token, a JWT and a bare base64 string have no shape an anchor lacks. So the anchor
+    of a link is given up: `#ha-setup` is shown as `#********`, in this one address, and nothing after it is touched."""
     from urllib.parse import urlsplit, urlunsplit
 
     try:
@@ -71,7 +81,7 @@ def _address_without_credentials(address: str, query: bool = True) -> str:
         return address
     netloc = parts.netloc.rsplit("@", 1)[1] if "@" in parts.netloc else parts.netloc
     masked = _masked_query(parts.query) if query and parts.query else parts.query
-    fragment = _masked_query(parts.fragment) if query and "=" in parts.fragment else parts.fragment
+    fragment = _MASK if query and parts.fragment else parts.fragment
     if not parts.scheme or (netloc, masked, fragment) == (parts.netloc, parts.query, parts.fragment):
         return address
     return urlunsplit(parts._replace(netloc=netloc, query=masked, fragment=fragment))
@@ -85,7 +95,7 @@ def without_credentials(value) -> str:
     pattern over a text can promise. Then every address inside it, each ending at the next white space, for its user-info and its query.
     (Q238, AW3) The whole-value read used to mask the query too, and `urlsplit` over a whole value puts everything after its first `?` or `#` into the query or the
     fragment: a second address, the rest of a sentence and the next two lines of a three-line value were replaced by one mask, and two revisions that differed only
-    there were shown as the same. Nothing but a user-info and a query VALUE is removed now, and a fragment is kept. The stated limit: a query value written with a
+    there were shown as the same. Nothing but a user-info, a query value and a fragment is removed now, each inside its own address (the fragment whole: Q240). The stated limit: a query value written with a
     literal space in it is masked up to that space.
     Everything else is returned as written; what is left goes through `scrub_urls`. Idempotent. A value with no `://` is not read as an address: `user:pw@host`
     is also how a SIP or a mail address is written, and a rule that cannot tell them apart is not applied. This masks a COPY for display; the configuration it

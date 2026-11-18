@@ -323,6 +323,7 @@ drops on the floor). A refusal is of the form whole, never of one value out of a
 - `tests/test_ha_failover_is_delivered.py::TestAFailoverIsAnnouncedOnceAndOnlyWhenSomebodyTookIt`
 - `tests/test_ha_failover_is_delivered.py::TestARecordThatCannotBeReadIsNotAFirstState`
 - `tests/test_ha_failover_is_delivered.py::TestNoCallPassesWhatItsOwnFunctionDoesNotTake`
+- `tests/test_ha_failover_is_delivered.py::TestAFailedHaCheckEndsTheHaCheckAndNothingElse`
 - `tests/test_alert_delivery.py::TestEventStyleAlertsRemember`
 - `tests/test_client_problems_db.py::TestASweepIsOneTransaction`
 - `tests/test_alert_delivery.py::TestTheDailySummaryIsDueAtOrAfterItsTime`

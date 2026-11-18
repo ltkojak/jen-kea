@@ -10,6 +10,16 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.9: everything after the `#` of an address is masked
+
+One step (7.1.0-beta.9). It adds no migration and no helper build, and there is nothing to do.
+
+**Config history and the support bundle** show nothing after the `#` of an address, and mask a query token that has no parameter name. The anchor of a link to a manual is shown as `#********`.
+
+**Alerts.** A failure inside the HA failover check is logged as an error and no longer stops the rest of the alert cycle.
+
+**Settings → Security.** Removing the certificate when none is installed does nothing; it used to restart Jen.
+
 ## 7.1.0-beta.8: the HA failover alert works again
 
 One step (7.1.0-beta.8). It adds no migration and no helper build, and there is nothing to do.
@@ -18,7 +28,7 @@ One step (7.1.0-beta.8). It adds no migration and no helper build, and there is 
 
 **Settings → Security: the certificate upload** refuses a certificate block under any PEM label but `CERTIFICATE`, with the command that converts it.
 
-**Config history and the support bundle** mask a token written after `#` in an address again, and keep a plain anchor.
+**Config history and the support bundle** mask a token written after `#` in an address when it is written as `name=value`. (7.1.0-beta.9 masks everything after the `#`.)
 
 ## 7.1.0-beta.7: Config history shows what changed again
 

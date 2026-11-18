@@ -205,6 +205,8 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
     # expired CA spelled `X509 CERTIFICATE` was loaded, served and judged by nothing. The rule is the label, not a list of spellings: in the certificate
     # and CA fields, a block whose label names a certificate and is not exactly `CERTIFICATE` is refused
     label = _other_certificate_label(cert_data + "\n" + (ca_data or ""))
+    if label and "REQUEST" in label.upper():
+        return f"the upload carries a block labeled {label}: that is a certificate REQUEST, which a CA answers with a certificate. Upload the certificate the CA issued for it"
     if label:
         return f"the upload carries a block labeled {label}; Jen reads a certificate only as a plain PEM block (BEGIN CERTIFICATE): convert it with openssl x509 -in <file> -out <file>"
     if "BEGIN CERTIFICATE" not in cert_data:
@@ -260,8 +262,9 @@ def _other_certificate_label(text: str) -> str:
         if stop == -1:
             return ""
         label = text[at + 11 : stop]
-        if "CERTIFICATE" in label.upper() and label != "CERTIFICATE" and "\n" not in label and len(label) <= 64:
-            return label
+        # (Q240, AY5) no bound on its length: `and len(label) <= 64` was here, and a 65-character label was skipped and served
+        if "CERTIFICATE" in label.upper() and label != "CERTIFICATE" and "\n" not in label:
+            return label[:80]
         at = text.find("-----BEGIN ", stop)
     return ""
 
@@ -640,6 +643,10 @@ def remove_cert():
     # Q202 (AR6): see upload_cert - removing the certificate takes the site back to HTTP and restarts Jen
     # (Q237, AV10) and the `.prev` copy `commit_file_set` keeps beside each: a removal that left `private.key.prev` on disk had not removed the key
     live = [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]
+    if not any(os.path.exists(name) or os.path.exists(name + ".prev") for name in live):
+        # (Q240, AY14) with no certificate installed the route removed nothing, audited a removal and restarted Jen
+        flash("No certificate is installed. Nothing was changed.", "warning")
+        return redirect(url_for("settings.settings_security"))
     # (Q238, AW11) the copies FIRST: one that will not go stops the route with the live files and the serving setup as they were
     for f in [name + ".prev" for name in live] + live:
         try:

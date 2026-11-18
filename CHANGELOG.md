@@ -2,6 +2,25 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.1.0-beta.9] - 2026-11-16
+
+*The ninth beta of 7.1.0, on the **beta** channel. It fixes the three P2 of the executing pass on v7.1.0-beta.8 (no P1) and five of its smaller rows. It adds no migration and no helper build, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **A failure inside the HA failover check no longer stops the rest of the alert cycle.** 7.1.0-beta.8 made a coding mistake in that check raise instead of being read as "the record cannot be read". The background loop has one handler around its whole cycle, so the raise skipped everything after it: the servers still to be checked, the lease and new-device passes, the certificate-expiry conditions and the stale-reservation pass, on every cycle while it lasted. The check now has a handler of its own. Whatever it raises is logged as an error with its name, the HA check for that server is tried again on the next pass, and the cycle goes on.
+2. **Everything after the `#` of an address is masked in Config history and the support bundle.** Three releases tried to tell an anchor from a secret by its shape: 7.1.0-beta.6 masked every fragment (and, by a separate defect, the text after it), 7.1.0-beta.7 kept every fragment, 7.1.0-beta.8 masked the ones written `name=value`. A bearer token, a JWT and a bare base64 string have no shape an anchor lacks, so they were still printed, and the upgrade notes said otherwise. Nothing after `#` is shown now. The cost is the anchor of a link to a manual: `#ha-setup` is shown as `#********`. Only that address is touched; the text after it is kept.
+3. **A token with no parameter name is masked whole.** The masker keeps a parameter's name and masks its value. A base64 token ends in `=`, so the token was taken for the name and its padding for the value, and the token was printed. A name is kept only when it is one: short, plain, and followed by a value that is more than `=` signs. Anything else is masked whole, an empty value and its name among them.
+4. **A certificate block under another PEM label is refused whatever the label's length.** The check added in 7.1.0-beta.8 skipped a label longer than 64 characters.
+5. **Removing the certificate when none is installed does nothing.** It used to remove nothing, record a removal in the audit log and restart Jen.
+6. **A certificate request is refused with what to upload.** The refusal used to name an `openssl` command that does not convert a request.
+7. **An HA heartbeat that names no state is ignored.** It used to be announced as a change to an empty state, stored, and announced again as a change back.
+8. **A row of the HA record that cannot be read is logged.** That server was started again without a word.
+
+**Stated limit, unchanged.** An address ends at white space. A query written with a literal space in it is masked up to that space.
+
+**Registered, not fixed here.** The remaining P3 rows, nits and observations of the pass on v7.1.0-beta.8. A test of a local stand-in server timed out once on a loaded runner during the v7.1.0-beta.8 tag run; the pass measured it as timing-dependent, in a family of twelve files.
+
 ## [7.1.0-beta.8] - 2026-11-16
 
 *The eighth beta of 7.1.0, on the **beta** channel. It fixes the executing pass on v7.1.0-beta.7: one P1 that 7.1.0-beta.7 itself introduced, and two P2. It adds no migration and no helper build, and nothing needs a manual step.*

@@ -215,7 +215,7 @@ class TestTheLoopSendsItNoOtherWay:
     def test_the_loop_keeps_no_ha_state_of_its_own(self):
         source = (ROOT / "jen/services/alerts.py").read_text(encoding="utf-8")
         assert "last_ha_states = " not in source
-        assert "check_ha_state_alert(srv, " in source
+        assert "ha_state_alert_in_the_loop(srv, " in source
 
 
 class TestARecordThatCannotBeReadIsNotAFirstState:
@@ -290,45 +290,130 @@ class TestARecordThatCannotBeReadIsNotAFirstState:
         assert _see("partner-down", other) == "sent"
 
 
+def _calls_that_do_not_fit(source: str, where: str) -> list:
+    """Every call in `source` of a module-level function of the same module with a keyword that function does not take, or with more positional arguments than
+    it has parameters. ONE implementation: the sweep over the tree and the proof that it sees the defect both call it (Q240, AY10)."""
+    import ast
+
+    tree = ast.parse(source)
+    defs: dict = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            defs[node.name] = None if node.name in defs else node  # defined twice: not judged
+    wrong = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        fn = defs.get(node.func.id)
+        if fn is None:
+            continue
+        a = fn.args
+        names = {p.arg for p in a.posonlyargs + a.args + a.kwonlyargs}
+        for kw in node.keywords:
+            if kw.arg is not None and kw.arg not in names and a.kwarg is None:
+                wrong.append(f"{where}:{node.lineno} {fn.name}({kw.arg}=...)")
+        positional = [x for x in node.args if not isinstance(x, ast.Starred)]
+        if a.vararg is None and len(positional) > len(a.posonlyargs) + len(a.args):
+            wrong.append(f"{where}:{node.lineno} {fn.name}: {len(positional)} positional")
+    return wrong
+
+
 class TestNoCallPassesWhatItsOwnFunctionDoesNotTake:
     """(Q239, AX1) The class, over the whole tree. A module calls one of its OWN module-level functions with a keyword that function does not take, or with
     more positional arguments than it has parameters: nothing but running that line finds it, and a test that fakes the function hides it."""
 
     def test_every_call_of_a_module_level_function_fits_its_signature(self):
-        import ast
-
         wrong = []
         for path in sorted((ROOT / "jen").rglob("*.py")) + sorted((ROOT / "plugins").rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            defs: dict = {}
-            for node in tree.body:
-                if isinstance(node, ast.FunctionDef):
-                    defs[node.name] = None if node.name in defs else node  # defined twice: not judged
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
-                    continue
-                fn = defs.get(node.func.id)
-                if fn is None:
-                    continue
-                a = fn.args
-                names = {p.arg for p in a.posonlyargs + a.args + a.kwonlyargs}
-                for kw in node.keywords:
-                    if kw.arg is not None and kw.arg not in names and a.kwarg is None:
-                        wrong.append(f"{path.relative_to(ROOT).as_posix()}:{node.lineno} {fn.name}({kw.arg}=...)")
-                positional = [x for x in node.args if not isinstance(x, ast.Starred)]
-                if a.vararg is None and len(positional) > len(a.posonlyargs) + len(a.args):
-                    wrong.append(
-                        f"{path.relative_to(ROOT).as_posix()}:{node.lineno} {fn.name}: {len(positional)} positional"
-                    )
+            wrong += _calls_that_do_not_fit(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
         assert not wrong, wrong
 
     def test_the_sweep_sees_the_defect_it_was_written_for(self):
-        """The call of 7.1.0-beta.7, in a module of its own."""
+        """The call of 7.1.0-beta.7, and its two neighbors, through the sweep itself."""
+        source = (
+            "def __get(key, default=None):\n    return default\n\n"
+            "def known():\n    return __get('k', '', strict=True)\n\n"
+            "def many():\n    return __get('k', '', 3)\n\n"
+            "def fine():\n    return __get('k', default='')\n"
+        )
+        assert _calls_that_do_not_fit(source, "m.py") == ["m.py:5 __get(strict=...)", "m.py:8 __get: 3 positional"]
+
+
+class TestAFailedHaCheckEndsTheHaCheckAndNothingElse:
+    """(Q240, AY1) Q239 raises a programming error out of `check_ha_state_alert`, and `check_alerts` has one `try` around its whole cycle: the raise skipped
+    the servers still to be checked, the lease passes, the certificate conditions and the stale pass, on every cycle."""
+
+    def test_whatever_the_check_raises_is_logged_by_name_and_answered(self, world, monkeypatch, caplog):
+        from jen.services import alerts
+
+        def broken(key, default=None):
+            return default
+
+        monkeypatch.setattr("jen.models.user.get_global_setting", broken)
+        with caplog.at_level("ERROR"):
+            assert alerts.ha_state_alert_in_the_loop(SRV, "hot-standby") == "failed"
+        assert "HA state alert for kea-a: TypeError" in caplog.text
+
+    @pytest.mark.parametrize("error", [AttributeError("x"), RuntimeError("x"), KeyError("x")])
+    def test_any_exception_of_the_check(self, error, monkeypatch):
+        from jen.services import alerts
+
+        def raises(srv, state):
+            raise error
+
+        monkeypatch.setattr(alerts, "check_ha_state_alert", raises)
+        assert alerts.ha_state_alert_in_the_loop(SRV, "hot-standby") == "failed"
+
+    def test_a_check_that_works_answers_what_it_did(self, world):
+        from jen.services import alerts
+
+        assert alerts.ha_state_alert_in_the_loop(SRV, "hot-standby") == "first"
+        assert alerts.ha_state_alert_in_the_loop(SRV, "partner-down") == "sent"
+
+    def test_the_loop_calls_the_check_only_through_it(self):
+        """Over the function itself: `check_alerts` never calls `check_ha_state_alert`, and the one caller of that is the wrapper, inside its own `try`."""
         import ast
 
-        source = "def __get(key, default=None):\n    return default\n\ndef known():\n    return __get('k', '', strict=True)\n"
-        tree = ast.parse(source)
-        fn = tree.body[0]
-        call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
-        names = {p.arg for p in fn.args.args}
-        assert [kw.arg for kw in call.keywords if kw.arg not in names] == ["strict"]
+        tree = ast.parse((ROOT / "jen/services/alerts.py").read_text(encoding="utf-8"))
+        funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+        def calls(fn):
+            return [n.func.id for n in ast.walk(funcs[fn]) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+
+        assert "check_ha_state_alert" not in calls("check_alerts")
+        assert calls("check_alerts").count("ha_state_alert_in_the_loop") == 1
+        wrapper = funcs["ha_state_alert_in_the_loop"]
+        guarded = next(n for n in wrapper.body if isinstance(n, ast.Try))
+        assert [h.type.id for h in guarded.handlers] == ["Exception"]
+        assert "check_ha_state_alert" in [
+            n.func.id for n in ast.walk(guarded) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        ]
+        callers = [name for name in funcs if name != "check_ha_state_alert" and "check_ha_state_alert" in calls(name)]
+        assert callers == ["ha_state_alert_in_the_loop"]
+
+
+class TestTheSmallRowsOfTheHaRecord:
+    def test_a_row_that_is_not_a_pair_is_said(self, world, caplog):
+        """(Q240, AY7)"""
+        _see("hot-standby")
+        world.settings["alert_state:event:ha_states"] = '{"1":["hot-standby"],"2":["a","b"]}'
+        with caplog.at_level("WARNING"):
+            assert _see("partner-down") == "first"
+        assert "1 row(s) that cannot be read" in caplog.text
+
+    def test_a_heartbeat_with_no_state_is_not_handed_to_the_check(self):
+        """(Q240, AY8) The source: in `check_alerts` the one call of the check sits under `if ha_state:`. The loop itself is run in
+        `tests/test_alert_delivery.py::...::test_a_heartbeat_that_names_no_state_announces_nothing`."""
+        import ast
+
+        tree = ast.parse((ROOT / "jen/services/alerts.py").read_text(encoding="utf-8"))
+        loop = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "check_alerts")
+        guards = [
+            n
+            for n in ast.walk(loop)
+            if isinstance(n, ast.If) and isinstance(n.test, ast.Name) and n.test.id == "ha_state" and not n.orelse
+        ]
+        assert len(guards) == 1
+        assert [c.func.id for c in ast.walk(guards[0]) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)] == [
+            "ha_state_alert_in_the_loop"
+        ]

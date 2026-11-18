@@ -597,7 +597,14 @@ class TestWhatIsServedIsWhatWasJudged:
         assert _a_client_holding(tmp_path, old_root, [leaf, mid, old_root], key) is not None
 
     @pytest.mark.parametrize(
-        "label", ["X509 CERTIFICATE", "TRUSTED CERTIFICATE", "NEW CERTIFICATE REQUEST", "x509 certificate"]
+        "label",
+        [
+            "X509 CERTIFICATE",
+            "TRUSTED CERTIFICATE",
+            "x509 certificate",
+            "X" * 60 + " CERTIFICATE",
+        ],
+        ids=["X509", "TRUSTED", "lower case", "longer than 64 characters"],
     )
     @pytest.mark.parametrize("where", ["chain", "bundle"])
     def test_a_block_that_names_a_certificate_under_another_label_is_refused(self, label, where):
@@ -610,7 +617,7 @@ class TestWhatIsServedIsWhatWasJudged:
         else:
             said = validate_cert_material(_pem(leaf), _key(key), _pem(mid) + hidden)
         assert said.startswith(
-            f"the upload carries a block labeled {label}; Jen reads a certificate only as a plain PEM block"
+            f"the upload carries a block labeled {label[:80]}; Jen reads a certificate only as a plain PEM block"
         )
 
     def test_the_same_certificate_spelled_plainly_is_judged_and_refused_for_what_it_is(self):
@@ -627,3 +634,21 @@ class TestWhatIsServedIsWhatWasJudged:
             == ""
         )
         assert _other_certificate_label("-----BEGIN " * 40000) == ""
+
+
+class TestARequestIsNotACertificate:
+    """(Q240, AY12) A certificate REQUEST was refused with `openssl x509 -in ... -out ...`, which does not convert one."""
+
+    @pytest.mark.parametrize("label", ["CERTIFICATE REQUEST", "NEW CERTIFICATE REQUEST"])
+    def test_it_is_refused_with_what_to_upload(self, label):
+        from jen.routes.settings.security import validate_cert_material
+
+        root, root_key = _mint("a private root", ca=True)
+        leaf, leaf_key = _mint(HOST, root, root_key, ca=False)
+        request = _pem(leaf).replace("BEGIN CERTIFICATE", f"BEGIN {label}").replace("END CERTIFICATE", f"END {label}")
+        said = validate_cert_material(request + _pem(leaf), _key(leaf_key), None)
+        assert said == (
+            f"the upload carries a block labeled {label}: that is a certificate REQUEST, which a CA answers with a certificate. "
+            "Upload the certificate the CA issued for it"
+        )
+        assert "openssl x509" not in said

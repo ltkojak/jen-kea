@@ -256,3 +256,46 @@ class TestHttpsRedirectHardening:
         assert safe_host("a b") is None
         assert safe_host("[::1") is None
         assert safe_host("x" * 300) is None
+
+
+class TestRemoveCertRoute(TestUploadCertRoute):
+    """(Q240, AY14; Q238, AW11) The removal route, run. It had no route test: with nothing installed it removed nothing, wrote REMOVE_CERT and restarted Jen."""
+
+    def _removals(self, db):
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='REMOVE_CERT'")
+            return cur.fetchone()["n"]
+
+    def test_with_nothing_installed_nothing_is_audited_and_nothing_restarts(
+        self, logged_in_client, db, tmp_path, monkeypatch
+    ):
+        self._point_ssl_at(monkeypatch, tmp_path)
+        restarts = []
+        monkeypatch.setattr("jen.services.runtime.restart_service", lambda *a, **k: restarts.append(1) or "systemd")
+        before = self._removals(db)
+        r = logged_in_client.post("/settings/remove-cert", follow_redirects=True)
+        assert r.status_code == 200 and b"No certificate is installed. Nothing was changed." in r.data
+        assert restarts == [] and self._removals(db) == before
+
+    def test_an_installed_certificate_and_its_kept_copies_go_and_it_is_audited(
+        self, logged_in_client, db, tmp_path, monkeypatch
+    ):
+        ssl_dir = self._point_ssl_at(monkeypatch, tmp_path)
+        restarts = []
+        monkeypatch.setattr("jen.services.runtime.restart_service", lambda *a, **k: restarts.append(1) or "systemd")
+        for attr in ("SSL_CERT", "SSL_KEY", "SSL_CA", "SSL_COMBINED"):
+            for name in (getattr(extensions, attr), getattr(extensions, attr) + ".prev"):
+                with open(name, "w") as f:
+                    f.write("x")
+        before = self._removals(db)
+        r = logged_in_client.post("/settings/remove-cert", follow_redirects=True)
+        assert r.status_code == 200 and b"Certificate removed." in r.data
+        assert list(ssl_dir.iterdir()) == [] and restarts == [1] and self._removals(db) == before + 1
+
+    def test_only_a_kept_copy_left_behind_is_still_removed(self, logged_in_client, db, tmp_path, monkeypatch):
+        ssl_dir = self._point_ssl_at(monkeypatch, tmp_path)
+        with open(extensions.SSL_KEY + ".prev", "w") as f:
+            f.write("x")
+        r = logged_in_client.post("/settings/remove-cert", follow_redirects=True)
+        assert b"Certificate removed." in r.data and list(ssl_dir.iterdir()) == []

@@ -1274,6 +1274,69 @@ class TestEventStyleAlertsRemember:
         finally:
             wipe()
 
+    @pytest.mark.parametrize("answer", [{}, {"state": ""}, None], ids=["no state", "an empty state", "no arguments"])
+    def test_a_heartbeat_that_names_no_state_announces_nothing(self, answer, db, monkeypatch, send):
+        """(Q240, AY8) `check_alerts` itself, run: a heartbeat that answers 0 and names no state never reaches the HA check."""
+        from jen import extensions as ext
+
+        class Stop(BaseException):
+            pass
+
+        naps, checked = [], []
+
+        def nap(seconds):
+            naps.append(seconds)
+            if len(naps) >= 3:
+                raise Stop
+
+        monkeypatch.setattr("time.sleep", nap)
+        monkeypatch.setitem(alerts.__dict__, "__kea_is_up", lambda server=None: True)
+        monkeypatch.setitem(alerts.__dict__, "__kea_command", lambda *a, **k: {"result": 0, "arguments": answer})
+        monkeypatch.setattr(alerts, "check_ha_state_alert", lambda srv, state: checked.append(state) or "first")
+        monkeypatch.setattr(ext, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b"}], raising=False)
+        sender = send(OK)
+        with pytest.raises(Stop):
+            alerts.check_alerts()
+        assert checked == [] and "ha_failover" not in sender.sent
+
+    def test_a_failed_ha_check_does_not_end_the_alert_cycle(self, db, monkeypatch, send):
+        """(Q240, AY1) `check_alerts` itself, run: the HA check raises a programming error for every server on every pass, and the cycle still reaches what
+        comes after the HA loop. In 7.1.0-beta.8 the raise left through the one `try` around the whole cycle and nothing after it ran."""
+        from jen import extensions as ext
+
+        class Stop(BaseException):
+            pass
+
+        naps, ups, reached = [], [], []
+
+        def nap(seconds):
+            naps.append(seconds)
+            if len(naps) >= 8:
+                raise Stop
+
+        def up(server=None):
+            ups.append(server["id"])
+            if len(ups) > 400:
+                raise Stop  # a cycle that never sleeps must still end this test
+            return True
+
+        def broken():
+            raise TypeError("a mistake in the reader")
+
+        monkeypatch.setattr("time.sleep", nap)
+        monkeypatch.setitem(alerts.__dict__, "__kea_is_up", up)
+        monkeypatch.setitem(
+            alerts.__dict__, "__kea_command", lambda *a, **k: {"result": 0, "arguments": {"state": "hot-standby"}}
+        )
+        monkeypatch.setattr(alerts, "_ha_known", broken)
+        monkeypatch.setattr(alerts, "_clear_orphan_states", lambda alert_type, keys: reached.append(alert_type) or 0)
+        monkeypatch.setattr(ext, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b"}], raising=False)
+        send(OK)
+        with pytest.raises(Stop):
+            alerts.check_alerts()
+        assert set(ups) == {1, 2}, "the second server is still checked after the first one's HA check failed"
+        assert "kea_down" in reached, "the cycle went on past the HA loop"
+
     def test_a_kea_down_nobody_took_is_retried_and_no_kea_up_is_sent_for_it(self, db, monkeypatch, send):
         srv = {"id": 1, "name": "kea-a"}
         monkeypatch.setattr(alerts, "_utcnow", lambda: T0)

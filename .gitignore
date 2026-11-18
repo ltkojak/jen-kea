@@ -19,6 +19,7 @@ static/icons/custom/
 # that SECURITY.md says not to disclose publicly before a fix ships
 PENDING.md
 LESSONS.md
+HANDOFF.md
 
 # Screenshots written by tests/e2e/test_mobile.py (uploaded by CI, never committed)
 artifacts/

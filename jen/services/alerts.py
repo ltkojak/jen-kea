@@ -2050,7 +2050,13 @@ def _ha_known() -> dict:
             "the HA state record is damaged and is started again: a failover since the last good record is not announced"
         )
         return {}
-    return {k: v for k, v in known.items() if isinstance(v, list) and len(v) == 2}
+    rows = {k: v for k, v in known.items() if isinstance(v, list) and len(v) == 2}
+    if len(rows) != len(known):
+        # (Q240, AY7) it was dropped without a word, and that server then read as never seen
+        logger.warning(
+            f"the HA state record has {len(known) - len(rows)} row(s) that cannot be read: those servers are started again"
+        )
+    return rows
 
 
 def check_ha_state_alert(srv, new_state) -> str:
@@ -2100,6 +2106,20 @@ def check_ha_state_alert(srv, new_state) -> str:
             _unsaved_states[_HA_KNOWN] = dict(kept)
             logger.warning("the HA state record could not be stored: a restart may repeat a failover notification")
     return did
+
+
+def ha_state_alert_in_the_loop(srv, new_state) -> str:
+    """`check_ha_state_alert` as `check_alerts` calls it (Q240, AY1). Q239 re-raises a programming error out of `check_ha_state_alert` so that it is never read
+    as "the record cannot be read" - and `check_alerts` has ONE `try` around its whole cycle, so that raise skipped everything after it: the servers still
+    to be checked, the lease passes, the certificate conditions, the stale pass, on every cycle. Whatever the HA check raises is logged here as an error, by
+    name, and ends the HA check for this server on this pass. Returns what the check did, or "failed"."""
+    try:
+        return check_ha_state_alert(srv, new_state)
+    except Exception as e:
+        logger.error(
+            f"HA state alert for {srv.get('name')}: {type(e).__name__}: the check failed and is tried again on the next pass"
+        )
+        return "failed"
 
 
 def check_stale_reservation_alerts(cur) -> None:
@@ -2247,7 +2267,10 @@ def check_alerts():
                     if srv_up and len(extensions.KEA_SERVERS) > 1:
                         ha = __kea_command("ha-heartbeat", server=srv)
                         if ha.get("result") == 0:
-                            check_ha_state_alert(srv, (ha.get("arguments") or {}).get("state", ""))
+                            # (Q240, AY8) an answer with no `state` used to be the state "": announced as a change to nothing, stored, and announced back
+                            ha_state = (ha.get("arguments") or {}).get("state", "")
+                            if ha_state:
+                                ha_state_alert_in_the_loop(srv, ha_state)
                 time.sleep(5)
             _clear_orphan_states("kea_down", [srv["id"] for srv in extensions.KEA_SERVERS or []])
             _clear_orphan_states("ha_failover", [srv["id"] for srv in extensions.KEA_SERVERS or []])
