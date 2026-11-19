@@ -27,7 +27,7 @@ from jen.services.runtime import deployment
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "7.1.0"
+JEN_VERSION = "7.2.0-beta.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -639,6 +639,18 @@ def create_app() -> Flask:
         token = csrf_svc.get_submitted_token()
         if not csrf_svc.validate_csrf_token(app, token):
             logger.warning(f"CSRF check failed: {request.method} {request.path} from {request.remote_addr}")
+            # v7.2.0-beta.1 (Q243) - the sign-in form is the one form a person meets with a page that can be hours old (a session that expired overnight, a tab the
+            # browser restored): its token is past its four hours or belongs to a session cookie that is gone. The token is still REFUSED - nothing the form carried is
+            # read but the username - and the answer is the sign-in page again with a fresh token, not a page with no way forward. A message the old page already
+            # showed ("Session expired") is dropped, so it is not shown a second time above the new one.
+            if request.endpoint == "auth.login":
+                from flask import flash, session
+
+                from jen.routes.auth import SIGN_IN_AGAIN, _render_login
+
+                session.pop("_flashes", None)
+                flash(SIGN_IN_AGAIN, "error")
+                return _render_login(prefill_username=request.form.get("username", "").strip()[:100]), 403
             from flask import render_template
 
             return render_template(
@@ -995,6 +1007,13 @@ def create_app() -> Flask:
                 pill = cached_pill(current_user, is_superadmin=role == "superadmin")
             except Exception:
                 pill = None
+        # v7.2.0-beta.1 (Q243) - the person's own navigation (favorites, the phone bar). Read for a page, never for an htmx fragment: a fragment carries no navigation, and
+        # the polled ones would ask the database every few seconds for a row nothing renders. `load` never raises (the default navigation is what a failed read gives).
+        prefs = None
+        if role and not request.headers.get("HX-Request"):
+            from jen.services import nav_prefs
+
+            prefs = nav_prefs.load(current_user.id)
         return {
             "plugin_nav_items": items,
             "nav": nav_context(
@@ -1002,6 +1021,7 @@ def create_app() -> Flask:
                 role,
                 items,
                 all_subnets=bool(getattr(current_user, "all_subnets", True)) if role else True,
+                prefs=prefs,
             ),
             "getting_started_pill": pill,
         }
@@ -1073,6 +1093,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.health import bp as health_bp
     from jen.routes.leases import bp as leases_bp
     from jen.routes.mfa_routes import bp as mfa_bp
+    from jen.routes.navigation import bp as navigation_bp
     from jen.routes.onboarding import bp as onboarding_bp
     from jen.routes.plugins import bp as plugins_bp
     from jen.routes.problems import bp as problems_bp
@@ -1102,6 +1123,7 @@ def _register_blueprints(app: Flask) -> None:
         trace_bp,
         leases_bp,
         mfa_bp,
+        navigation_bp,
         onboarding_bp,
         plugins_bp,
         problems_bp,

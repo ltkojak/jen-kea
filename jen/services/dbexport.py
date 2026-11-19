@@ -55,6 +55,7 @@ JEN_TABLES = {
     "alert_log": "Historical alert delivery log",
     "saved_searches": "Saved filter presets",
     "dashboard_prefs": "Per-user dashboard widget layout",
+    "user_nav": "Per-user navigation (top-row favorites and the phone bar)",
     "mfa_methods": "MFA method records (TOTP secrets encrypted at rest; the key lives in the config directory, NOT in this export — secrets will not restore onto a different install)",
     "mfa_backup_codes": "MFA backup/recovery codes",
     "mfa_trusted_devices": "Trusted device tokens for MFA bypass",
@@ -980,6 +981,7 @@ JEN_DEPENDENTS = {
         "webauthn_credentials",
         "saved_searches",
         "dashboard_prefs",
+        "user_nav",
         "api_keys",
     ),
 }

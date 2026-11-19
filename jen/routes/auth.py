@@ -60,22 +60,34 @@ def _delete_initial_admin_password_file():
         logger.warning(f"could not remove {path}: {e}")
 
 
+#: v7.2.0-beta.1 (Q243) - what the sign-in page says when its form came back with a token that is missing, expired or another session's (`_csrf_protect`, jen/__init__.py)
+SIGN_IN_AGAIN = "This sign-in page was open too long. Sign in again."
+
+
 def _render_login(prefill_username=""):
     """v5.25.0 (Q21) — every login.html render needs the same SSO
     context: whether to show the button (enabled AND actually
     registered — a config typo shouldn't crash the login page), and
     whether the local form shows at all (?local=1 is always the escape
     hatch, even when the operator has hidden it by default)."""
+    from flask import make_response
+
     from jen import extensions
 
-    return render_template(
-        "login.html",
-        jen_version=_JEN_VERSION(),
-        prefill_username=prefill_username,
-        oidc_enabled=extensions.OIDC_ENABLED and __oidc.oidc_client() is not None,
-        oidc_button_label=extensions.OIDC_BUTTON_LABEL,
-        show_local_form=extensions.OIDC_LOCAL_LOGIN or request.args.get("local") == "1",
+    response = make_response(
+        render_template(
+            "login.html",
+            jen_version=_JEN_VERSION(),
+            prefill_username=prefill_username,
+            oidc_enabled=extensions.OIDC_ENABLED and __oidc.oidc_client() is not None,
+            oidc_button_label=extensions.OIDC_BUTTON_LABEL,
+            show_local_form=extensions.OIDC_LOCAL_LOGIN or request.args.get("local") == "1",
+        )
     )
+    # v7.2.0-beta.1 (Q243) - the page carries a token bound to this session and good for four hours: a browser must ask for it again, never show a kept copy (a
+    # restored tab, the back button) whose token the next POST would be refused for
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.route("/login", methods=["GET", "POST"])

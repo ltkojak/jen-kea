@@ -338,7 +338,7 @@ class TestAPermanentLockoutIsARow:
         from jen.models.migrations import MIGRATIONS, _m039_login_lockouts
 
         by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
-        assert by_version[39] == "_m039_login_lockouts" and MIGRATIONS[-1][0] == 39
+        assert by_version[39] == "_m039_login_lockouts" and MIGRATIONS[-1][0] >= 39
         src = (ROOT / "jen/models/migrations.py").read_text(encoding="utf-8")
         body = src.split("def _m039_login_lockouts", 1)[1].split("\n\n\n", 1)[0]
         assert body.count("cur.execute(") == 1 and "CREATE TABLE IF NOT EXISTS login_lockouts" in body

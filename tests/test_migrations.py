@@ -1506,7 +1506,7 @@ class TestMigration39LoginLockouts:
         from jen.models.migrations import MIGRATIONS
 
         by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
-        assert by_version[39] == "_m039_login_lockouts" and MIGRATIONS[-1][0] == 39
+        assert by_version[39] == "_m039_login_lockouts" and MIGRATIONS[-1][0] >= 39
         assert 39 in applied_versions()
 
     def test_the_table_shape(self):
@@ -1552,3 +1552,65 @@ class TestMigration39LoginLockouts:
             cur.execute("DELETE FROM login_lockouts WHERE subject='_m39_twice'")
             db.commit()
         assert n == 1
+
+
+class TestMigration40UserNav:
+    """Q243 (v7.2.0-beta.1): `user_nav` - a person's own navigation, one row per person, gone with the person. One DDL statement (CREATE TABLE IF NOT EXISTS), so there is no
+    point between statements to interrupt it at: a rerun changes nothing and a run over a database that lost the table rebuilds it, foreign key included."""
+
+    @staticmethod
+    def _table(cur):
+        cur.execute(
+            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_nav' ORDER BY ORDINAL_POSITION"
+        )
+        return {r["COLUMN_NAME"]: (r["DATA_TYPE"], r["IS_NULLABLE"], r["COLUMN_DEFAULT"]) for r in cur.fetchall()}
+
+    @staticmethod
+    def _cascades(cur):
+        cur.execute(
+            "SELECT DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS "
+            "WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'user_nav' AND CONSTRAINT_NAME = 'fk_user_nav_user' "
+            "AND REFERENCED_TABLE_NAME = 'users'"
+        )
+        row = cur.fetchone()
+        return bool(row) and row["DELETE_RULE"] == "CASCADE"
+
+    def test_registered_and_applied(self):
+        from jen.models.migrations import MIGRATIONS
+
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[40] == "_m040_user_nav" and MIGRATIONS[-1][0] >= 40
+        assert 40 in applied_versions()
+
+    def test_the_table_shape(self):
+        with jen_db() as db, db.cursor() as cur:
+            table = self._table(cur)
+            assert set(table) == {"user_id", "top_row", "tabbar", "updated_at"}
+            for column in ("top_row", "tabbar"):
+                kind, nullable, default = table[column]
+                # a VARCHAR with a literal default: MySQL 8 refuses one on TEXT/JSON. MariaDB reports the default quoted, MySQL bare.
+                assert kind == "varchar" and nullable == "NO" and default.strip("'") == "[]"
+            assert self._cascades(cur), "the row goes with its person"
+
+    def test_a_rerun_changes_nothing_and_a_lost_table_is_rebuilt(self):
+        from jen.models.migrations import _m040_user_nav
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_nav (user_id, top_row) VALUES (1, '[\"/reports\"]') ON DUPLICATE KEY UPDATE top_row=VALUES(top_row)"
+            )
+            db.commit()
+            _m040_user_nav(db)  # a rerun over the final state
+            db.commit()
+            cur.execute("SELECT top_row, tabbar FROM user_nav WHERE user_id=1")
+            assert cur.fetchone() == {"top_row": '["/reports"]', "tabbar": "[]"}, (
+                "the rerun kept the row, and the unnamed list took its default"
+            )
+            cur.execute("DROP TABLE user_nav")  # the state before 40
+            db.commit()
+            assert self._table(cur) == {}
+            _m040_user_nav(db)
+            db.commit()
+            assert set(self._table(cur)) == {"user_id", "top_row", "tabbar", "updated_at"}
+            assert self._cascades(cur)

@@ -295,6 +295,10 @@
     </div>
 
     <script nonce="{{ csp_nonce }}">
+    // v7.2.0-beta.1 (Q243): a page the browser kept whole and put back (back/forward) carries an old token; ask for the page again
+    window.addEventListener('pageshow', function (e) { if (e.persisted) { window.location.reload(); } });
+    </script>
+    <script nonce="{{ csp_nonce }}">
     // Binary rain / network packet background
     (function() {
         const canvas = document.getElementById('bgCanvas');

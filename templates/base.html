@@ -207,6 +207,11 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .nav-brand-version { color: var(--text-muted); font-size: 11px; font-weight: 400; display: inline-block; white-space: nowrap; }
         .nav a.nav-link { color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius); font-size: 13px; display: flex; align-items: center; gap: 5px; text-decoration: none; white-space: nowrap; }
         .nav a.nav-link:hover, .nav a.nav-link.active { background: var(--surface2); color: var(--text); text-decoration: none; }
+        /* v7.2.0-beta.1 (Q243) - the person's own favorites after the fixed items: a hairline, then links that keep their icon and drop their word when the row is short of room */
+        .nav-links { min-width: 0; }
+        .nav-fav-sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
+        .nav a.nav-fav { color: var(--text); }
+        @media screen and (max-width: 1500px) { .nav-fav-label { display: none; } }
         .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
         .kea-status { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .kea-up { background: var(--success); box-shadow: 0 0 6px var(--success); }
@@ -218,6 +223,11 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; -webkit-touch-callout: none; }
         .section-tab:hover { color: var(--text); text-decoration: none; }
         .section-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+        /* v7.2.0-beta.1 (Q243) - the pin button at the end of the strip (the page being shown, into or out of the top row); a phone has no top row, so it is not shown there */
+        .section-pin { margin: 0 12px 0 auto; padding-left: 12px; flex-shrink: 0; }
+        .section-pin-btn { display: inline-flex; align-items: center; gap: 5px; background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+        .section-pin-btn:hover, .section-pin-btn.pinned { color: var(--text); border-color: var(--primary); }
+        @media screen and (max-width: 768px) { .section-pin { display: none; } }
         /* fade hint that the strip scrolls (v5.9.0) */
         .section-tabs-wrap { position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; }
         .section-tabs-wrap::after { content: ""; position: absolute; right: 0; top: 0; bottom: 1px; width: 28px; pointer-events: none; background: linear-gradient(to right, transparent, var(--surface)); }
@@ -659,6 +669,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; background: var(--surface); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
         .tabbar a, .tabbar button { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: var(--tabbar-h); background: none; border: none; border-radius: 0; color: var(--text-muted); font: inherit; font-size: var(--fs-xs); text-decoration: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
         .tabbar a:hover { text-decoration: none; }
+        /* v7.2.0-beta.1 (Q243) - a slot the person chose can carry a long name ("Alerts & Integrations"): one line, cut with an ellipsis, never a wrapped or widened bar */
+        .tabbar a > span { max-width: 100%; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .tabbar .ico { width: 22px; height: 22px; }
         .tabbar a.active, .tabbar button.active { color: var(--primary); }
         .sheet-backdrop { position: fixed; inset: 0; z-index: 1100; background: rgba(0,0,0,0.6); }
@@ -904,6 +916,13 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         {% for item in nav.top %}
         <a href="{{ item.url }}" class="nav-link {% if item.active %}active{% endif %}">{{ nav_icon(item.icon) }} {{ item.label }}</a>
         {% endfor %}
+        {# v7.2.0-beta.1 (Q243) - the person's own favorites, after the fixed items (nav.favorites; chosen on /navigation or with the section strip's pin button) #}
+        {% if nav.favorites %}
+        <span class="nav-fav-sep" aria-hidden="true"></span>
+        {% for f in nav.favorites %}
+        <a href="{{ f.url if f.url is defined else url_for(f.endpoint) }}" class="nav-link nav-fav {% if f.active %}active{% endif %}" title="{{ f.label }}">{{ nav_icon(f.icon) }} <span class="nav-fav-label">{{ f.label }}</span></a>
+        {% endfor %}
+        {% endif %}
     </div>
 
     <div class="nav-right">
@@ -960,6 +979,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
                 <div class="nav-dropdown-divider"></div>
                 <a href="/profile">{{ icon("user") }} My Profile</a>
                 <a href="/saved-searches">{{ icon("bookmark") }} Saved Searches</a>
+                <a href="/navigation">{{ icon("sliders-horizontal") }} Customize navigation</a>
                 <a href="/mfa/enroll">{{ icon("lock") }} Security & MFA</a>
                 <a href="/mfa/trusted-devices">{{ icon("monitor-smartphone") }} Trusted Devices</a>
                 <div class="nav-dropdown-divider"></div>
@@ -998,6 +1018,17 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     {% for t in nav.strip %}
     <a href="{{ t.url if t.url is defined else url_for(t.endpoint) }}" class="section-tab {% if t.active %}active{% endif %}">{{ nav_icon(t.icon) }} {{ t.label }}</a>
     {% endfor %}
+    {# v7.2.0-beta.1 (Q243) - the pin button: the page being shown goes into the top row, or comes out of it. Hidden on a phone, where there is no top row (the More menu
+       links to /navigation). #}
+    {% if nav.pin %}
+    <form method="POST" action="{{ url_for('navigation.pin') }}" class="section-pin">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="dest" value="{{ nav.pin.id }}">
+        <input type="hidden" name="pinned" value="{{ '1' if nav.pin.pinned else '0' }}">
+        <input type="hidden" name="next" value="{{ request.path }}">
+        <button type="submit" class="section-pin-btn{% if nav.pin.pinned %} pinned{% endif %}" aria-pressed="{{ 'true' if nav.pin.pinned else 'false' }}">{{ icon("pin") }} {{ "Remove from top row" if nav.pin.pinned else "Add to top row" }}</button>
+    </form>
+    {% endif %}
 </div>
 </div>
 {% endif %}
@@ -1091,7 +1122,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
      Rendered from `nav.tabbar` / `nav.sheet` (jen/routes/settings/nav.py). -->
 <nav class="tabbar" aria-label="Primary">
     {% for t in nav.tabbar %}
-    <a href="{{ t.url }}" class="{% if t.active %}active{% endif %}" {% if t.active %}aria-current="page"{% endif %}>{{ icon(t.icon) }}<span>{{ t.label }}</span></a>
+    <a href="{{ t.url if t.url is defined else url_for(t.endpoint) }}" class="{% if t.active %}active{% endif %}" {% if t.active %}aria-current="page"{% endif %}>{{ nav_icon(t.icon) }}<span>{{ t.label }}</span></a>
     {% endfor %}
     <button type="button" class="{% if nav.tabbar_more_active %}active{% endif %}" data-sheet-open="more-sheet" aria-haspopup="dialog" aria-controls="more-sheet">{{ icon("menu") }}<span>More</span></button>
 </nav>
@@ -1116,6 +1147,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     <div class="sheet-list">
         <a href="/profile">{{ icon("user") }} My Profile</a>
         <a href="/saved-searches">{{ icon("bookmark") }} Saved Searches</a>
+        <a href="/navigation">{{ icon("sliders-horizontal") }} Customize navigation</a>
         <a href="/mfa/enroll">{{ icon("lock") }} Security &amp; MFA</a>
         <a href="/mfa/trusted-devices">{{ icon("monitor-smartphone") }} Trusted Devices</a>
         <button type="button" class="sheet-theme" data-sheet-open="theme-sheet">{{ icon("palette") }} Theme</button>

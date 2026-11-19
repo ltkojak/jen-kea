@@ -652,12 +652,27 @@ To upload a custom icon, enter an icon name (e.g. `amazon`, `mydevice`) and sele
 
 ---
 
+## Customize navigation (v7.2.0)
+
+The top row always holds Dashboard, Management, Network, Settings and About. After them you can keep up to five **favorites**: pages you want one click away, such as a plugin's page that otherwise sits under Network.
+
+- **From the page itself.** At the right end of a section's tabs is a button that reads **Add to top row**. Click it and the page you are on appears in the top row. On a page that is already a favorite the button reads **Remove from top row**.
+- **From one place.** Open your account menu (your avatar, top right) and choose **Customize navigation**. The page has two lists, *Top row favorites* and *Phone bar*. Each has the same controls: pick a page and **Add**, move an entry up or down, remove it, or **Reset to default**.
+
+The **phone bar** is the row of buttons along the bottom of the screen on a phone. Choose up to four pages for it; **More** is always the last button, so every page stays reachable. With nothing chosen the bar shows its default pages. On a phone your favorites are the first group in the More menu, and **Customize navigation** is among your account links there.
+
+When the window is too narrow for the words, favorites show their icon alone; hover one to read its name.
+
+These choices belong to your account, not to the browser: they follow you to every device you sign in from, and nobody else sees them. A favorite is a shortcut and nothing more. If your role or subnet access changes, or a plugin is switched off, a page you can no longer open is not shown; it comes back by itself when the page does.
+
+---
+
 ## Mobile Access
 
 Jen is fully usable on iPhone and iPad.
 
 ### iPhone
-A tab bar along the bottom holds Dashboard, Leases, Reservations, Settings (a viewer, who has no Settings page, sees Devices there) and **More**. More opens a sheet that lists every page grouped as on desktop — Management, Network, Settings, plugins — with search, the theme picker, your account links and Logout. The top bar keeps the logo, the Kea status dot and your avatar. The section sub-tabs sit below it, scroll sideways, and start with the current page in view. Tables that have been converted show one two-line row per item; pages not yet converted still show per-row cards, so there is no horizontal scrolling either way.
+A tab bar along the bottom holds Dashboard, Leases, Reservations, Settings (a viewer, who has no Settings page, sees Devices there) and **More**. You can choose your own four pages for it (see *Customize navigation* above). More opens a sheet that lists every page grouped as on desktop — Management, Network, Settings, plugins — with search, the theme picker, your account links and Logout. The top bar keeps the logo, the Kea status dot and your avatar. The section sub-tabs sit below it, scroll sideways, and start with the current page in view. Tables that have been converted show one two-line row per item; pages not yet converted still show per-row cards, so there is no horizontal scrolling either way.
 
 ### iPad
 The full desktop navigation is shown. Some lower-priority columns (MAC addresses, timestamps) are hidden on narrower iPad screens to keep tables readable — they are still available on desktop.

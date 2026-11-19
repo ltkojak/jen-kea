@@ -168,6 +168,11 @@ SUBTABS = {
 }
 
 
+#: v7.2.0-beta.1 (Q243) - a person's own navigation: at most this many favorites after the fixed top items, and this many slots in the phone's bottom bar (More is always there)
+TOP_FAVORITES_MAX = 5
+TABBAR_SLOTS = 4
+
+
 def _matches(endpoint, patterns):
     if not endpoint:
         return False
@@ -236,10 +241,13 @@ def _sheet_groups(endpoint, role, section_strips, plugin_nav_items):
 
     def item(t, active):
         d = {"icon": t.get("icon", ""), "label": t.get("label", ""), "active": active}
+        # `id` (v7.2.0-beta.1, Q243) is what a person's own navigation stores: the page's address, or `plugin:<endpoint>` for a plugin's page
         if t.get("url"):
             d["url"] = t["url"]
+            d["id"] = t["url"]
         else:
             d["endpoint"] = t.get("endpoint")
+            d["id"] = "plugin:" + str(t.get("endpoint"))
         return d
 
     groups.append(
@@ -279,12 +287,69 @@ def _sheet_groups(endpoint, role, section_strips, plugin_nav_items):
     return [g for g in groups if g["items"]]
 
 
-def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True):
+def _destinations(endpoint, role, in_settings, sheet):
+    """Every page a person can put in their own navigation, in the More sheet's order, each with a stable `id` (its address, or `plugin:<endpoint>`), its `group` label and whether
+    it is the page being shown. The Dashboard comes first and, for the roles that have one, the Settings landing page second: the phone bar may hold either, and neither is in
+    the sheet. The list is already filtered by role and subnet scope, because the sheet is: a page the person cannot open is not a destination."""
+    out = [
+        {
+            "id": "/",
+            "icon": "layout-dashboard",
+            "label": "Dashboard",
+            "url": "/",
+            "group": "Jen",
+            "active": _matches(endpoint, ("dashboard.dashboard",)),
+        }
+    ]
+    if role in ADMIN_ROLES:
+        out.append(
+            {
+                "id": "/settings",
+                "icon": "settings",
+                "label": "Settings",
+                "url": "/settings",
+                "group": "Settings",
+                "active": in_settings,
+            }
+        )
+    for g in sheet:
+        for i in g["items"]:
+            out.append({**i, "group": g["label"]})
+    return out
+
+
+#: the addresses the fixed top items already link to: none of them is offered as a top-row favorite (it would be the same link twice)
+_FIXED_TOP_URLS = frozenset(t["url"] for t in TOP_NAV)
+
+
+def _resolve(ids, by_id, limit, skip=()):
+    """The stored ids that are destinations for THIS person now, in stored order, each once, at most `limit`. An id that no longer resolves (a plugin switched off, a role
+    changed, a page that moved) is skipped and stays stored: it comes back when the page does."""
+    out, seen = [], set()
+    for i in ids or ():
+        if i in seen or i in skip or i not in by_id:
+            continue
+        seen.add(i)
+        out.append(by_id[i])
+        if len(out) == limit:
+            break
+    return out
+
+
+def pinnable(role, plugin_nav_items=None, all_subnets=True):
+    """What the Customize navigation page offers this person: `(top, tabbar)`, two lists of destinations. Pure."""
+    ctx = nav_context(None, role, plugin_nav_items, all_subnets)
+    return [d for d in ctx["destinations"] if d["id"] not in _FIXED_TOP_URLS], list(ctx["destinations"])
+
+
+def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=None):
     """
     Everything base.html needs for one request. Pure — tested directly in
-    tests/test_settings_ia.py.
+    tests/test_settings_ia.py. `prefs` (v7.2.0-beta.1, Q243) is the person's own
+    navigation, `{"top": [ids], "tabbar": [ids]}`, or None for the defaults.
     """
     plugin_nav_items = plugin_nav_items or []
+    prefs = prefs or {}
     # Items flagged requires_all_subnets render the whole Kea config; a
     # subnet-restricted user is not shown them (the route refuses anyway).
     section_strips = {
@@ -331,12 +396,31 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True):
                             )
                 break
 
-    tabbar = _tabbar(endpoint, role, in_settings)
+    sheet = _sheet_groups(endpoint, role, section_strips, plugin_nav_items)
+    destinations = _destinations(endpoint, role, in_settings, sheet)
+    by_id = {d["id"]: d for d in destinations}
+    favorites = _resolve(prefs.get("top"), by_id, TOP_FAVORITES_MAX, skip=_FIXED_TOP_URLS)
+    # the phone bar is the person's own four when they chose any that still resolve, else the default four (never an empty bar)
+    tabbar = _resolve(prefs.get("tabbar"), by_id, TABBAR_SLOTS) or _tabbar(endpoint, role, in_settings)
+    # the pin button on the section strip acts on the page being shown, when that page can be a favorite
+    current = next((d for d in destinations if d["active"] and d["id"] not in _FIXED_TOP_URLS), None)
+    pin = None
+    if current is not None and strip:
+        pin = {
+            "id": current["id"],
+            "label": current["label"],
+            "pinned": any(f["id"] == current["id"] for f in favorites),
+        }
+    if favorites:
+        sheet = [{"id": "favorites", "label": "Favorites", "items": favorites}, *sheet]
     return {
         "top": top,
+        "favorites": favorites,
+        "pin": pin,
+        "destinations": destinations,
         "tabbar": tabbar,
         "tabbar_more_active": not any(t["active"] for t in tabbar),
-        "sheet": _sheet_groups(endpoint, role, section_strips, plugin_nav_items),
+        "sheet": sheet,
         "strip": strip,
         "in_settings": in_settings,
         # v5.55.1 (Q64) — True on a group *landing* page: inside Settings, but

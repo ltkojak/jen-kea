@@ -62,6 +62,7 @@ PAGES = [
     ("about", "/about"),
     ("profile", "/profile"),
     ("saved-searches", "/saved-searches"),
+    ("navigation", "/navigation"),  # v7.2.0-beta.1 (Q243)
     ("settings-home", "/settings"),
     ("settings-kea", "/settings/kea"),
     ("settings-databases", "/settings/databases"),

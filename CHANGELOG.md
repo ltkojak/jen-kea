@@ -2,6 +2,38 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.2.0-beta.1] - 2026-11-19
+
+**Your own navigation: favorites in the top row and a phone bar you choose. And the sign-in page that was open too long gives you the sign-in page, not a 403 with no way forward.** One step. One migration (40, a new table), no helper build, no sudoers line, nothing for an operator to do.
+
+**1. Favorites in the top row (the maintainer's request).** A page that lives two clicks down, a plugin's page under Network above all, had no shorter way to it. Each person can now keep up to five pages after About in the top row.
+
+- *Adding one where you are.* The right end of a section's tabs carries one button for the page being shown: **Add to top row**, or **Remove from top row** when it already is one. It is one button on the strip and not a star on every tab, because a control that appears on hover does not exist on a touch screen. A phone has no top row, so the button is not shown there.
+- *One page for the whole list.* **Customize navigation**, in the account menu and among the account links of the phone's More menu, shows the two lists with the same controls in each: add from a list of every page you can open, move up, move down, remove, reset to default. Every control is a plain form post; the page has no script.
+- *Add-only.* Dashboard, Management, Network, Settings and About are never hidden and never move, whatever is stored. A page one of them already links to is not offered as a favorite.
+- *When the row is short of room* the favorites keep their icons and drop their words (below 1500 px), with the name as the tooltip. Five favorites at 1280 px fit without pushing the search box off the bar; a browser test holds that.
+
+**2. The phone's bottom bar is the person's own.** The bar was Dashboard, Leases, Reservations and Settings for everyone. On the same page a person picks up to four pages for it, the Dashboard and the Settings landing page among the choices. **More** is always the last button, so nothing becomes unreachable, and a bar with no choice that still resolves is the default four, never an empty bar. A long name is one line cut with an ellipsis. The favorites of the top row are the first group of the More menu.
+
+**3. What is stored, and what it can never do.** One row per person in a new table, `user_nav` (migration 40): two short lists of page ids, an id being the page's address or `plugin:<endpoint>`. The choice is per ACCOUNT, in Jen's database, so it follows a person across browsers and devices; the theme stays per browser as before. The row goes with its person (a foreign key with ON DELETE CASCADE) and the table is in the database export, the backups and the list of tables a scoped restore of `users` must carry with it.
+
+The stored list is a list of shortcuts and nothing else. `jen/routes/settings/nav.py` already decides, on every render, which pages exist for this person: by role, by subnet scope and by which plugins are enabled. A stored id is shown only when it is one of those pages NOW. An id that does not resolve (a role that changed, a plugin switched off) is skipped at render and refused at save, is never an error, and comes back by itself when the page does. A person reads and writes their own row only; every signed-in role has the page, a viewer included.
+
+The row is read once per full page. An htmx fragment carries no navigation and never reads it, so the polled fragments do not ask the database for it every few seconds. A row that cannot be read is the default navigation and a log line, never a failed page.
+
+**4. The sign-in page that was open too long (the maintainer's report: "Session expired" on the sign-in page, then a 403 on signing in).** The sign-in form carries a token that is good for four hours and belongs to the session cookie the page was rendered under. The sign-in page is exactly the page that sits open for longer than that: it is where an expired session lands, and a browser that restores a tab or goes back shows the copy it kept, token and all. The POST was then refused, correctly, and answered with the generic 403 page whose only button leads back to the Dashboard, which leads back to the sign-in page.
+
+- The token is still refused: nothing the form carried is read except the username, and nobody is signed in. A test submits the CORRECT password with a refused token and asserts no session.
+- The answer is the sign-in page again, at the same address (so `?next=` survives), with a fresh token that works, the username kept and one sentence: "This sign-in page was open too long. Sign in again." A message the old page had already shown ("Session expired") is not shown a second time above it.
+- The sign-in page is served `Cache-Control: no-store`, and reloads itself when the browser puts back a copy it kept whole, so a restored tab or the back button gets a fresh page in the first place.
+- Every OTHER form's refused token is the 403 page it always was.
+
+Reproduced before it was fixed: of the ten new tests, eight fail on v7.1.0, the dead end among them. Which of the two causes the maintainer hit (four hours, or a kept copy) was not determined; both end in the same refusal and both are answered now.
+
+**After a promotion.** This is the first release after 7.1.0: `docs/upgrading.md` starts again as "Upgrading from 7.1.0" (the page it replaces is `docs/release-history/upgrading-7.0.0-to-7.1.0.md`), the page's floor moves to 7.2.0-beta.1, and the upgrade-from-stable CI job starts from 7.1.0.
+
+**Not in this beta.** The rows registered by the passes on the 7.1.0 betas, and the findings of the plugin audit of 2026-11-19, ship in later 7.2.0 betas.
+
 ## [7.1.0] - 2026-11-19
 
 *Stable. Everything below shipped beta-first between 2026-11-13 and 2026-11-19.*

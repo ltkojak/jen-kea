@@ -1371,6 +1371,27 @@ def _m039_login_lockouts(db):
     logger.info("Migration 39: login_lockouts table")
 
 
+def _m040_user_nav(db):
+    """
+    v7.2.0-beta.1 (Q243) - `user_nav`: a person's own navigation, one row per person. `top_row` is the favorites shown after the fixed top items and `tabbar` the slots of the
+    phone's bottom bar, each a short JSON array of destination ids (`jen/services/nav_prefs.py`). Both are VARCHAR with a literal default, the `dashboard_prefs` shape: MySQL 8
+    refuses a literal DEFAULT on a TEXT or JSON column. The row goes with its person (ON DELETE CASCADE, as migration 23 gave the per-person tables before it). ONE DDL
+    statement, idempotent (CREATE TABLE IF NOT EXISTS): a crash before the version was recorded is finished by the next start, and a rerun over the final state changes
+    nothing. No row is touched.
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS user_nav (
+                user_id INT PRIMARY KEY,
+                top_row VARCHAR(1000) NOT NULL DEFAULT '[]',
+                tabbar VARCHAR(1000) NOT NULL DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                CONSTRAINT fk_user_nav_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )"""
+        )
+    logger.info("Migration 40: user_nav table")
+
+
 _LEGACY_TELEGRAM_KEYS = ("telegram_token", "telegram_chat_id", "telegram_enabled")
 
 
@@ -1525,6 +1546,11 @@ MIGRATIONS = [
         39,
         "login_lockouts: a permanent login lockout is a row, ended only by clear-lockouts (v7.0.0-beta.12, Q226)",
         _m039_login_lockouts,
+    ),
+    (
+        40,
+        "user_nav: a person's own navigation, top-row favorites and the phone bar (v7.2.0-beta.1, Q243)",
+        _m040_user_nav,
     ),
 ]
 

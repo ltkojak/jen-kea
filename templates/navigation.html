@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Customize navigation{% endblock %}
+{% block content %}
+{# v7.2.0-beta.1 (Q243) - a person's own navigation. Two lists, the same rows and buttons in each: move up, move down, remove, add, reset. Every button is a plain form post
+   (jen/routes/navigation.py); nothing here needs a script. #}
+<style>
+    .navc-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+    .navc-list { list-style: none; margin: 0; padding: 0; }
+    .navc-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .navc-list li:first-child { border-top: none; }
+    .navc-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .navc-group { color: var(--text-muted); font-size: 12px; }
+    .navc-list form, .navc-foot form { margin: 0; }
+    .navc-add { display: flex; gap: 8px; margin-top: 12px; }
+    .navc-add select { flex: 1; min-width: 0; }
+    .navc-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; color: var(--text-muted); font-size: 12px; }
+    .navc-empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+</style>
+<div class="page-header">
+    <h1>{{ icon("sliders-horizontal", "ico-lg") }} Customize navigation</h1>
+    <p>Choose the pages you want one click away. These choices are yours alone and follow you to every browser you sign in from.</p>
+</div>
+
+{% set cards = [
+    ("top", "star", "Top row favorites", "Shown after About in the top row, and as Favorites in the phone's More menu.", "No favorites yet. Add a page below, or use the pin button at the end of a section's tabs."),
+    ("tabbar", "monitor-smartphone", "Phone bar", "The buttons along the bottom of the screen on a phone. More is always the last one.", "The phone bar shows its default pages."),
+] %}
+<div class="navc-cols">
+{% for place, card_icon, title, blurb, empty in cards %}
+{% set l = lists[place] %}
+<div class="card" id="navc-{{ place }}">
+    <div class="card-header"><span class="card-title">{{ icon(card_icon) }} {{ title }} ({{ l.chosen|length }} of {{ l.limit }})</span></div>
+    <p class="navc-group">{{ blurb }}</p>
+    {% if l.chosen %}
+    <ul class="navc-list">
+        {% for d in l.chosen %}
+        <li>
+            <span class="navc-name">{{ nav_icon(d.icon) }} {{ d.label }} <span class="navc-group">{{ d.group }}</span></span>
+            {% for action, glyph, word in [("up", "chevron-up", "Move up"), ("down", "chevron-down", "Move down"), ("remove", "x", "Remove")] %}
+            <form method="POST" action="{{ url_for('navigation.edit') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="place" value="{{ place }}">
+                <input type="hidden" name="action" value="{{ action }}">
+                <input type="hidden" name="dest" value="{{ d.id }}">
+                <button type="submit" class="btn btn-sm btn-secondary" title="{{ word }}" aria-label="{{ word }} {{ d.label }}">{{ icon(glyph) }}</button>
+            </form>
+            {% endfor %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="navc-empty">{{ empty }}</p>
+    {% endif %}
+    {% if l.available and l.chosen|length < l.limit %}
+    <form method="POST" action="{{ url_for('navigation.edit') }}" class="navc-add">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="place" value="{{ place }}">
+        <input type="hidden" name="action" value="add">
+        <select name="dest" aria-label="Page to add to {{ title }}">
+            {% for d in l.available %}
+            <option value="{{ d.id }}">{% if d.group != d.label %}{{ d.group }}: {% endif %}{{ d.label }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-primary">{{ icon("plus") }} Add</button>
+    </form>
+    {% endif %}
+    <div class="navc-foot">
+        <span>{% if l.chosen|length >= l.limit %}This list is full. Remove a page to add another.{% endif %}</span>
+        {% if l.chosen %}
+        <form method="POST" action="{{ url_for('navigation.edit') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="place" value="{{ place }}">
+            <input type="hidden" name="action" value="reset">
+            <button type="submit" class="btn btn-sm btn-secondary">{{ icon("rotate-ccw") }} Reset to default</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+</div>
+{% endblock %}
