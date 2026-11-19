@@ -656,7 +656,7 @@ class TestTheModuleIsTheOneSender:
             "re",  # the pool-path rule blanks list indexes
             "pathlib",  # the defaults vectors live beside the code (Q217 AB6)
             "jen.services.secret_keys.is_secret_key",  # the ONE definition of a secret key name: the compare prints a path, never a value under one (LEAK-001)
-            "jen.services.secret_keys.without_userinfo",  # (Q221, AE12) the ONE definition of an address without its user-info: a leaf the compare prints never carries a password; a pure module
+            "jen.services.secret_keys.without_credentials",  # (Q221, AE12; Q241, AZ2) the ONE definition of a value as a page may show it: a leaf the compare prints carries no password, no query value and nothing after a `#`; a pure module
             "jen.services.config_revisions",
             "jen.services.kea",
             "jen.services.kea_host",

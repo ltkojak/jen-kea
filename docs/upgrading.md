@@ -10,11 +10,21 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.10: an uploaded certificate is written as Jen read it
+
+One step (7.1.0-beta.10). It adds no migration and no helper build.
+
+**One thing to check.** If you ever uploaded a file that holds a private key in the *certificate* or *CA bundle* field under Settings → Security (a combined PEM, for example), that key is in `certificate.crt`, `ca_bundle.crt` or `combined.crt` under `/etc/jen/ssl`, which any local account on the Jen box can read. Upload the certificate again after upgrading: Jen now writes only the certificates to those three files.
+
+**Settings → Security: the certificate upload** writes the certificates it read, each as a plain PEM block, and nothing else of the pasted text. A CA bundle with a space, a tab or a word before a `-----BEGIN CERTIFICATE-----` line used to be accepted and then not served.
+
+**Settings → Kea and the support bundle.** The sentence that says where a server's file and its running daemon differ masks what Config history masks: a query value, what follows a `#`, and the password of an address that is not http(s). A sentence stored by an earlier release shows the place and no values until the readiness check runs again.
+
 ## 7.1.0-beta.9: everything after the `#` of an address is masked
 
 One step (7.1.0-beta.9). It adds no migration and no helper build, and there is nothing to do.
 
-**Config history and the support bundle** show nothing after the `#` of an address, and mask a query token that has no parameter name. The anchor of a link to a manual is shown as `#********`.
+**Config history and the Kea configurations in the support bundle** show nothing after the `#` of an address, and mask a query token that has no parameter name. The anchor of a link to a manual is shown as `#********`, and so is any text joined to it with no space. (The readiness sentence in the bundle's `servers.json` was not covered until 7.1.0-beta.10.)
 
 **Alerts.** A failure inside the HA failover check is logged as an error and no longer stops the rest of the alert cycle.
 

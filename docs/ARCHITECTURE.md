@@ -763,8 +763,9 @@ contract — against real temp dirs.
 
 **Secrets are private from their first byte (v5.68.0-beta.15, Q150).** `jen.config` (every database password and API credential), the SSL private
 key and the Fernet key used to be written with `open(tmp, "w")` and tightened with `chmod` afterward: created with the process umask (0644 under
-systemd's default 0022), the secret written into it, and only then restricted. The only thing that closed the window was the directory's own mode
-(`/etc/jen` is service-owned 0750 on a stock install), which is not a thing to depend on. `jen/services/private_files.py::write_private_file` is the
+systemd's default 0022), the secret written into it, and only then restricted. Nothing closed the window: `/etc/jen` and `/etc/jen/ssl` are
+created by `install.sh` with `mkdir -p` and owned by the service account, which makes them 0755 on a stock install (this paragraph said 0750 until 7.1.0-beta.10;
+the executing pass on v7.1.0-beta.9 measured 0755, row AZ3). A file under them is as private as its own mode and no more. `jen/services/private_files.py::write_private_file` is the
 discipline in one place and is the same one the Kea-host helper uses for every file it writes (§3.3): a unique `O_CREAT|O_EXCL|O_NOFOLLOW` temp in the
 target's own directory, mode 0600 from the first byte, written and fsynced, the FINAL owner and mode applied to the descriptor (never to a path another
 process could swap), then `os.replace`. A file meant to be 0640 (the Flask secret key, the SSL key) is 0600 until it is complete. `run.py` sets

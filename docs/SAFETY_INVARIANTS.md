@@ -779,6 +779,9 @@ it to the user and password fields, and Jen keeps dialing it as written (the cre
 - `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
 - `tests/test_a_rollback_puts_the_file_back_too.py::TestTheBundlesChokePointMasksByName`
 - `tests/test_an_exported_address_carries_no_password.py::TestTheOneDefinition`
+- `tests/test_the_readiness_sentence_is_masked.py::TestTheSentence`
+- `tests/test_the_readiness_sentence_is_masked.py::TestASentenceAnEarlierReleaseStored`
+- `tests/test_the_readiness_sentence_is_masked.py::TestTheProbeMarksItsSentence`
 - `tests/test_an_exported_address_carries_no_password.py::TestNoMemberOfTheBundleCarriesAPassword`
 - `tests/test_an_exported_address_carries_no_password.py::TestTheComparesSentence`
 - `tests/test_a_secret_leaves_the_box_masked.py::TestASecretIsMaskedByNameAlone`
@@ -1152,7 +1155,10 @@ One more answer is read from the box's signers (Q238, AW40): when the top names 
 the key it is derived from. It is the one property of the box's copy that is decided, because it is a property of the KEY and every copy that verifies the top holds that key.
 What OpenSSL loads and serves is what was counted and judged (Q239, AX24): in the certificate and CA fields a block whose PEM label names a certificate and is not exactly
 `CERTIFICATE` is refused, so no certificate reaches the wire under a spelling the checks do not read.
-**Established.** Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box);
+And it is true by construction (Q241, AZ1, AZ3): `cert_files` writes each field's distinct certificates out again as plain PEM blocks, `validate_cert_material` loads and judges
+that text and the route writes that text. Nothing else of an upload reaches `certificate.crt`, `ca_bundle.crt` or `combined.crt`: not a line OpenSSL reads another way than Jen
+(a BEGIN line with a space before it was judged and not served) and not a private key pasted into a certificate field (it was written into three files of mode 0644).
+**Established.** Q241 (AZ1, AZ3: the written text is the judged text). Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box);
 Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the bounds first); Q238 (AW1 the scan, AW40 the key's identifier).
 **Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
 **Tests.**
@@ -1170,6 +1176,9 @@ Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the 
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestTheScanOfTheUploadOnlyMovesForward`
 - `tests/test_the_boxs_copy_is_the_boxs_own.py::TestWhatIsServedIsWhatWasJudged`
 - `tests/test_a_fix_reaches_both_ends.py::TestTheChainIsJudgedByAVerifier`
+- `tests/test_what_is_written_is_what_was_judged.py::TestTheRouteWritesWhatItJudged`
+- `tests/test_what_is_written_is_what_was_judged.py::TestCertFiles`
+- `tests/test_what_is_written_is_what_was_judged.py::TestTheRouteAndTheJudgeAskTheSameFunction`
 
 ## The browser surface (Q208)
 

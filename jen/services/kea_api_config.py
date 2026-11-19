@@ -390,12 +390,12 @@ def _leaf(value: object) -> str:
         return f"a list of {len(value)} {'entry' if len(value) == 1 else 'entries'}"
     if isinstance(value, str):
         from jen.services.secret_keys import (
-            without_userinfo,
+            without_credentials,
         )  # (lazy, pure) the one definition; this module never imports `auth`, which holds the SSH helpers
 
-        value = without_userinfo(
-            value
-        )  # (Q221, AE12) a key Kea does not call a secret may still hold an address with a password in it
+        # (Q221, AE12) a key Kea does not call a secret may still hold an address with a password in it. (Q241, AZ2) And a query value, a token after `#`
+        # and the password of an address that is not http(s): this was `without_userinfo`, so the sentence printed what Config history masks
+        value = without_credentials(value)
     text = json.dumps(value, sort_keys=True, default=str)
     return text if len(text) <= 60 else text[:59] + "…"
 
@@ -427,7 +427,7 @@ def difference_text(
     if shown_mine == shown_theirs:
         # (Q222, AG4) the two values differ and print alike: the user name or password inside an address, which `_leaf` removes (AE12), or anything past the 60th character. Printing one
         # value on both sides would read as no difference
-        return f"at {path}: the file and the daemon differ only in what is not shown ({shown_mine}): a user name or password inside an address, or past the 60th character"
+        return f"at {path}: the file and the daemon differ only in what is not shown ({shown_mine}): a user name or password inside an address, a query value or what follows its #, or past the 60th character"
     return f"at {path}: the file says {shown_mine}, the daemon {shown_theirs}"
 
 
@@ -1649,6 +1649,23 @@ def api_daemon_differs(server: dict, service: str, restore: bool = False, must_a
 
 
 PROBE_KEY = "config_transport_probe:{}"
+# (Q241, AZ2) which rule masked the values of a stored `agree_at`. A stored result without it was written by a release whose sentence printed a query value,
+# what follows a `#` and the password of an address that is not http(s); `stored_probe` withholds the values of such a sentence at every read
+AGREE_AT_RULE = 2
+AGREE_AT_WITHHELD = "the file and the daemon differ at an address (an earlier release of Jen checked this and printed more of an address than Jen shows now: run the readiness check on the server's Write mode card again to see the values)"
+
+
+def _agree_at_as_read(data: dict) -> dict:
+    """`data` with the values of an `agree_at` that an earlier rule masked withheld: the path is kept, the two values are not. Only a sentence that holds an
+    address (`://`) is touched, and the sentence put in its place holds none, so a result stored again from this answer reads the same."""
+    said = data.get("agree_at")
+    if not isinstance(said, str) or "://" not in said or data.get("agree_at_rule") == AGREE_AT_RULE:
+        return data
+    path = said.split(": the file", 1)[0] if ": the file" in said else ""
+    held = f"{path}: {AGREE_AT_WITHHELD}" if path and "://" not in path else AGREE_AT_WITHHELD
+    return dict(data, agree_at=held)
+
+
 PROBE_MAX_AGE_DAYS = 7
 PROBE_SENTENCE = "run the readiness check on the server's Write mode card first"
 
@@ -1671,7 +1688,7 @@ def stored_probe(server_id) -> dict | None:
         data = json.loads(raw) if raw else None
     except (TypeError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    return _agree_at_as_read(data) if isinstance(data, dict) else None
 
 
 def store_probe(server_id, data: dict) -> bool:
@@ -2012,6 +2029,7 @@ def probe(server: dict, service: str = "dhcp4", *, consent: bool = False, consen
             elif proof["how"] == "none":
                 out["agree"] = False
                 out["agree_at"] = proof["where"] or proof["why"]
+                out["agree_at_rule"] = AGREE_AT_RULE  # (Q241, AZ2) masked by the rule `stored_probe` shows whole
         if check.get("ok") and check.get("may_write"):
             refused = None  # evidence: the host says the daemon's account may write its file
     else:

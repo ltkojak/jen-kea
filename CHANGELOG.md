@@ -2,7 +2,23 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [7.1.0-beta.9] - 2026-11-16
+## [7.1.0-beta.10] - 2026-11-18
+
+*The tenth beta of 7.1.0, on the **beta** channel. It fixes the three P2 of the executing pass on v7.1.0-beta.9 (no P1). All three were already in 7.0.1. It adds no migration and no helper build. One thing to check after upgrading is named in item 2.*
+
+**What an operator does or notices.**
+
+1. **An uploaded certificate is written as Jen read it.** Jen judged the text that was pasted and wrote that same text to disk, and OpenSSL then read the file by its own rules. Where the two readings differed, a certificate was judged and not served: a CA bundle with a space, a tab or a word before a `-----BEGIN CERTIFICATE-----` line was accepted, installed and followed by a restart into an HTTPS that a client holding only the root refused. Four releases matched Jen's reading to OpenSSL's one property at a time. Jen now writes out again the certificates it read, each as a plain PEM block, and judges, loads and writes that one text. Such a bundle is accepted and served whole.
+2. **A private key pasted into the certificate or CA bundle field is no longer written into the certificate files.** A combined PEM (the chain and its key in one file) is an ordinary thing to upload. The loader skipped the key, and the whole field was written into `certificate.crt`, `ca_bundle.crt` and `combined.crt`, which are readable by any local account on the Jen box. Only the certificates are written to those three files now; the key goes to the key file alone, as before. **If you ever uploaded such a file, upload the certificate again after upgrading:** this release does not rewrite the files already on disk.
+3. **The readiness sentence masks what Config history masks.** Settings → Kea says where a server's file and its running daemon differ, and the support bundle's `servers.json` carries that sentence. It removed a user name and password from an http(s) address and nothing more, so it printed a query value, a token after `#` and the password of an `ldap://` or database address. It uses the one masking rule now. A sentence stored by an earlier release shows the place and no values until the readiness check runs again.
+
+**Corrections to the notes of 7.1.0-beta.9.** Item 2 there said the support bundle shows nothing after `#`: that was true of the Kea configurations in it and not of the readiness sentence (fixed here) or of `config.ini.redacted`, which keeps a fragment. It also said the text after a masked address is kept: text joined to the fragment with no space (a closing bracket, a comma, a second address) is masked with it. The heading dated that release 2026-11-16; it was tagged on 2026-11-17, and the heading says so now.
+
+**Threat model.** `docs/ARCHITECTURE.md` said `/etc/jen` is 0750 on a stock install. It is 0755, and so is `/etc/jen/ssl`; the sentence is corrected. The folder's mode is not changed in this release.
+
+**Registered, not fixed here.** The P3 rows, nits and observations of the pass on v7.1.0-beta.9, among them: two lines of the HA block that are still outside its error handler and are reached only by an answer a real Kea does not send; a warning that repeats for an HA record row nothing rewrites; "No difference from the previous revision." for a revision whose only change is masked; and the mode of `/etc/jen/ssl`.
+
+## [7.1.0-beta.9] - 2026-11-17
 
 *The ninth beta of 7.1.0, on the **beta** channel. It fixes the three P2 of the executing pass on v7.1.0-beta.8 (no P1) and five of its smaller rows. It adds no migration and no helper build, and nothing needs a manual step.*
 

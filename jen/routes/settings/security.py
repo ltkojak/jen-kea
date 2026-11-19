@@ -223,14 +223,22 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
     count = len(_distinct_pems(cert_data + "\n" + (ca_data or "")))
     if count > _MOST_CERTIFICATES:
         return f"the upload carries {count} certificates and a server presents at most {_MOST_CERTIFICATES}: upload the certificate and the chain above it, not a bundle of CAs"
+    # (Q241, AZ1, AZ3) from here on the upload IS what `cert_files` writes: the certificates Jen read, written out again. Everything below loads, serves and
+    # judges that text, and the route writes the same text, so the judge and the server cannot read two different sets of certificates
+    with_ca = bool(ca_data)
+    try:
+        cert_data, ca_data, combined = cert_files(cert_data, ca_data)
+    except Exception as e:
+        return f"a certificate of the upload could not be read ({type(e).__name__})"
+    if not cert_data:
+        return "the certificate file is not a PEM certificate"
+    if with_ca and not ca_data:
+        return "the CA bundle is not a PEM certificate bundle"
     with tempfile.TemporaryDirectory() as tmp:
         chain = os.path.join(tmp, "chain.pem")
         key = os.path.join(tmp, "key.pem")
         with open(chain, "w") as f:
-            f.write(cert_data)
-            if ca_data:
-                f.write("\n" if not cert_data.endswith("\n") else "")
-                f.write(ca_data)
+            f.write(combined)
         with open(key, "w") as f:
             f.write(key_data)
         try:
@@ -285,6 +293,27 @@ def _distinct_pems(text: str) -> list:
         seen.setdefault("".join(block.split()), block)
         at = text.find(begin, stop + len(end))
     return list(seen.values())
+
+
+def cert_files(cert_data: str, ca_data: str | None) -> tuple:
+    """`(certificate, CA bundle, combined chain)` as Jen WRITES an upload (Q241, AZ1, AZ3): every distinct certificate of each field, in the order pasted, parsed
+    and written out again as a plain PEM block; the combined chain is the first followed by the second. `validate_cert_material` judges this text and the route
+    writes it, so what is served is what was judged BY CONSTRUCTION. Four releases matched Jen's reading of the pasted text to OpenSSL's, one property at a time
+    (the label, a second label, the label's length), and a BEGIN line with a space before it was still read by Jen and not by OpenSSL: a CA bundle was judged
+    and not served. Nothing of the pasted text reaches the three files now but its certificates: not a comment, not a line OpenSSL would skip, and not a private
+    key pasted into the certificate field, which used to be written into three files any local account could read. Raises when a certificate block cannot be
+    parsed. The CA bundle is "" when there is none."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    def written(text: str) -> str:
+        return "".join(
+            x509.load_pem_x509_certificate(pem.encode("utf-8")).public_bytes(Encoding.PEM).decode("ascii")
+            for pem in _distinct_pems(text)
+        )
+
+    cert, ca = written(cert_data), written(ca_data or "")
+    return cert, ca, cert + ca
 
 
 def _load_box_store(client) -> None:
@@ -611,7 +640,8 @@ def upload_cert():
         if reason:
             flash(f"Certificate rejected — {reason}. Nothing was changed.", "error")
             return redirect(url_for("settings.settings_security"))
-        combined = cert_data + ("" if cert_data.endswith("\n") else "\n") + (ca_data or "")
+        # (Q241, AZ1, AZ3) what is written is what `validate_cert_material` just judged: the certificates, written out again, and nothing else of the upload
+        cert_data, ca_data, combined = cert_files(cert_data, ca_data)
         # v5.68.0-beta.16 (Q151): the whole set (certificate, key, CA bundle, combined chain) is installed ALL-OR-NOTHING - it used to be written one file
         # at a time, so a failure at any step left a new key beside an old certificate (gunicorn then refuses to start). A failure puts every file back.
         from jen.services.certs import commit_file_set
