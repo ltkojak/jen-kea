@@ -1185,11 +1185,17 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
         for tbl in core_selected:
             _import_rows(conn, tbl)
         conn.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
-        conn.commit()
     except Exception as e:
         conn.rollback()
         conn.close()
-        raise RuntimeError(f"Import failed and was rolled back: {e}") from e
+        raise ImportRolledBack(f"Import failed and was rolled back: {e}") from e
+    # (Q242) the commit is outside that `try`: a commit that raised was answered with a rollback and "was rolled back", and a rollback after a commit the
+    # server applied and could not confirm undoes nothing
+    try:
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        raise ImportOutcomeUnknown("Import", e) from e
 
     # ── (2) + (3) + (4): plugin tables, one plugin at a time ────────────────────────────
     try:
@@ -1231,7 +1237,6 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
                 for tbl in plugin_tables_to_import:
                     current_tbl = tbl
                     _import_rows(conn, tbl)
-                conn.commit()
             except Exception as e:
                 conn.rollback()
                 failures.append(
@@ -1242,6 +1247,13 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
                     )
                 )
                 results.append(f"❌ {pid}.{current_tbl}: row import failed and was rolled back ({e})")
+                continue
+            try:
+                conn.commit()  # (Q242) outside the `try` above, for the reason given at the core tables
+            except Exception as e:
+                logger.error(f"Import of plugin {pid}: the commit was not confirmed: {type(e).__name__}")
+                failures.append((pid, list(plugin_tables_to_import), COMMIT_NOT_CONFIRMED))
+                results.append(f"❌ {pid}: {COMMIT_NOT_CONFIRMED}")
     finally:
         conn.close()
 
@@ -1406,6 +1418,27 @@ def import_jen_guarded(file_bytes, tables_to_restore=None):
     return results
 
 
+#: what is said when a commit raised (Q242): no "rolled back", no "nothing was changed"
+COMMIT_NOT_CONFIRMED = (
+    "the database did not confirm the commit, so the outcome is not known: the rows may all be there or none of them. "
+    "Look at the data before importing again"
+)
+
+
+class ImportRolledBack(RuntimeError):
+    """An import failed BEFORE its commit was sent and the rollback returned (Q242): nothing was changed. A RuntimeError with the sentence it always had."""
+
+
+class ImportOutcomeUnknown(RuntimeError):
+    """The commit of an import raised (Q242, the independent review of 7.1.0-beta.10). The server may have applied it and lost the reply, or refused it: the
+    client cannot tell, and a rollback sent afterward returns without an error either way. So no rollback is claimed and none is sent. `public` is safe to
+    show an operator; the cause is named by its type only."""
+
+    def __init__(self, what, cause):
+        self.public = f"{what}: {COMMIT_NOT_CONFIRMED}."
+        super().__init__(f"{what}: {COMMIT_NOT_CONFIRMED} ({type(cause).__name__})")
+
+
 class ImportAborted(RuntimeError):
     """A Kea import hit something other than an allowed duplicate: the whole import was rolled back.
     `public` is safe to show an operator (table, row and the kind of failure — never a value)."""
@@ -1515,6 +1548,7 @@ def import_kea(file_bytes, duplicate_mode="skip"):
     fmt = meta.get("format", 1)
     results = []
     conn = _direct_kea_conn()
+    committing = False
     try:
         conn.begin()
         order = {t: i for i, t in enumerate(KEA_RESTORE_ORDER)}
@@ -1705,15 +1739,20 @@ def import_kea(file_bytes, duplicate_mode="skip"):
             if overwrite:
                 line += f", {updated} updated in place"
             results.append(line + f", {dup} duplicates skipped")
+        committing = True
         conn.commit()
     except ImportAborted:
         if not _rolled_back(conn):
             raise RuntimeError("Kea import failed and the rollback failed too: the outcome is not known") from None
         raise
     except Exception as e:
+        if committing:
+            # (Q242) the commit itself raised: it was answered with a rollback, which returns without an error after a commit the server applied and
+            # could not confirm, and the import was then reported as rolled back
+            raise ImportOutcomeUnknown("Kea import", e) from e
         if not _rolled_back(conn):
             raise RuntimeError(f"Kea import failed and the rollback failed too: the outcome is not known: {e}") from e
-        raise RuntimeError(f"Kea import failed and was rolled back: {e}") from e
+        raise ImportRolledBack(f"Kea import failed and was rolled back: {e}") from e
     finally:
         conn.close()
     return results

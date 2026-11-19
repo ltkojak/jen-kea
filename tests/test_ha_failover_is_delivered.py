@@ -392,6 +392,62 @@ class TestAFailedHaCheckEndsTheHaCheckAndNothingElse:
         assert callers == ["ha_state_alert_in_the_loop"]
 
 
+class TestKeaCommandAlwaysAnswersAnObject:
+    """(Q242, AZ12) `kea_command` says it always returns a dict. JSON that is not an object was returned as it came, to every caller. A real local
+    server answers; nothing of the client is faked."""
+
+    @pytest.fixture
+    def answers(self, monkeypatch):
+        import http.server
+        import threading
+
+        from jen import extensions
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            body = b"null"
+
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(type(self).body)))
+                self.end_headers()
+                self.wfile.write(type(self).body)
+
+        httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        monkeypatch.setattr(extensions, "KEA_API_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "u")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [], raising=False)
+        yield Handler
+        httpd.shutdown()
+
+    @pytest.mark.parametrize(
+        "body", [b"null", b"7", b'"hot-standby"', b"[7]", b'[["hot-standby"]]', b"[null]", b"true"]
+    )
+    def test_json_that_is_not_an_object_is_no_reply(self, answers, body):
+        from jen.services.kea import kea_command
+
+        answers.body = body
+        reply = kea_command("ha-heartbeat")
+        assert reply == {"result": 1, "text": "Kea answered with something that is not a reply.", "transport": "error"}
+
+    @pytest.mark.parametrize(
+        "body",
+        [b'{"result":0,"arguments":{"state":"hot-standby"}}', b'[{"result":0,"arguments":{"state":"hot-standby"}}]'],
+    )
+    def test_a_reply_is_returned_as_kea_sent_it(self, answers, body):
+        from jen.services.kea import kea_command
+
+        answers.body = body
+        assert kea_command("ha-heartbeat") == {"result": 0, "arguments": {"state": "hot-standby"}}
+
+
 class TestTheSmallRowsOfTheHaRecord:
     def test_a_row_that_is_not_a_pair_is_said(self, world, caplog):
         """(Q240, AY7)"""
@@ -400,6 +456,72 @@ class TestTheSmallRowsOfTheHaRecord:
         with caplog.at_level("WARNING"):
             assert _see("partner-down") == "first"
         assert "1 row(s) that cannot be read" in caplog.text
+
+    @pytest.mark.parametrize(
+        "answer,state",
+        [
+            ({"result": 0, "arguments": {"state": "partner-down"}}, "partner-down"),
+            ({"result": 0, "arguments": {"state": ""}}, ""),
+            ({"result": 0, "arguments": {}}, ""),
+            ({"result": 0, "arguments": None}, ""),
+            ({"result": 0}, ""),
+            ({"result": 2, "text": "'ha-heartbeat' command not supported."}, ""),
+            ({"result": 1, "arguments": {"state": "partner-down"}}, ""),
+            ({"result": 1, "arguments": ["x"]}, ""),
+        ],
+        ids=[
+            "a state",
+            "an empty state",
+            "no state",
+            "null arguments",
+            "no arguments",
+            "HA not configured",
+            "an error that names a state",
+            "an error",
+        ],
+    )
+    def test_what_kea_sends_is_read_as_before_and_says_nothing(self, answer, state, caplog):
+        """(Q242, AZ12) Every answer a Kea gives reads as it did at 7.1.0-beta.10 and logs nothing: a result that is not 0 is HA not configured here."""
+        from jen.services.alerts import heartbeat_state
+
+        with caplog.at_level("WARNING"):
+            assert heartbeat_state(SRV, answer) == state
+        assert caplog.text == ""
+
+    @pytest.mark.parametrize(
+        "answer,said",
+        [
+            (None, "the answer is a NoneType"),
+            (["x"], "the answer is a list"),
+            ("partner-down", "the answer is a str"),
+            (7, "the answer is a int"),
+            ({"result": 0, "arguments": [{"state": "partner-down"}]}, "its arguments are a list"),
+            ({"result": 0, "arguments": []}, "its arguments are a list"),
+            ({"result": 0, "arguments": "partner-down"}, "its arguments are a str"),
+            ({"result": 0, "arguments": {"state": 7}}, "its state is a int"),
+            ({"result": 0, "arguments": {"state": True}}, "its state is a bool"),
+            ({"result": 0, "arguments": {"state": ["partner-down"]}}, "its state is a list"),
+            ({"result": 0, "arguments": {"state": {"a": "partner-down"}}}, "its state is a dict"),
+        ],
+    )
+    def test_an_answer_of_another_shape_is_no_state_and_is_named_by_its_type_only(self, answer, said, caplog):
+        """(Q242, AZ12, AZ14) None of these raises, none is a state, and the line that says so carries the name of the type and nothing of the answer."""
+        from jen.services.alerts import heartbeat_state
+
+        with caplog.at_level("WARNING"):
+            assert heartbeat_state(SRV, answer) == ""
+        assert f"ha-heartbeat from kea-a: {said}, not what Kea sends" in caplog.text
+        assert "partner-down" not in caplog.text
+
+    def test_the_loop_reads_the_answer_through_it_and_nowhere_else(self):
+        """Source: `check_alerts` holds no `.get` on the heartbeat's answer; the one read is `heartbeat_state`, inside the `if ha_state:` shape below."""
+        import ast
+
+        source = (ROOT / "jen/services/alerts.py").read_text(encoding="utf-8")
+        loop = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == "check_alerts")
+        text = ast.get_source_segment(source, loop)
+        assert text.count('heartbeat_state(srv, __kea_command("ha-heartbeat", server=srv))') == 1
+        assert text.count("ha-heartbeat") == 1 and "ha.get(" not in text
 
     def test_a_heartbeat_with_no_state_is_not_handed_to_the_check(self):
         """(Q240, AY8) The source: in `check_alerts` the one call of the check sits under `if ha_state:`. The loop itself is run in

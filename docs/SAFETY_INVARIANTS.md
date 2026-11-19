@@ -513,6 +513,21 @@ later one fails; a revert that cannot finish is a persistent, named rollback fai
 - `tests/test_author_config_changeset.py::TestAnAuthoredChangeIsAllOrNothing`
 - `tests/test_a_secret_stays_with_its_destination.py::TestAFileRestoreThatRaisedIsNotKnown`
 
+### TXN-002 - A commit that raised is an outcome nobody knows, never a rollback
+**Rule.** A handler that says "rolled back" or "nothing was changed" does not run for a failure of the commit itself. The server may have applied a commit whose reply was lost, and a
+rollback sent afterward returns without an error either way. A commit of an import that raises is `dbexport.ImportOutcomeUnknown`: no rollback is sent, none is claimed, and the page, the
+log and the audit row say the outcome is not known. A failure before the commit whose rollback returned is `dbexport.ImportRolledBack`, and only that one is recorded as rolled back.
+Not covered, registered by Q242: `dbexport.migrate_kea`, whose handler compensates by primary key when a rollback is not confirmed and does not yet ask whether the commit was sent.
+**Established.** Q242 (finding 2 of the independent review of v7.1.0-beta.10). Q238 (AW9: a rollback that itself failed).
+**Enforced at.** `jen/services/dbexport.py::import_kea`, `::import_jen`; `jen/routes/database.py::import_confirm`.
+**Tests.**
+- `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestTheKeaImport`
+- `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestTheJenImport`
+- `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestThePageAndTheAuditRowSayWhichOfTheThreeItWas`
+- `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestNoHandlerOfACommitClaimsARollback`
+- `tests/test_plugin_restore_lifecycle.py::TestStrictAboutAPluginWhoseCodeIsPresent::test_a_plugins_commit_that_raised_is_not_called_a_rollback`
+- `tests/test_kea_binary_decode.py::TestARollbackThatFailsIsNotARollback`
+
 ### BG-001 - Health reports what is proven, never what was once attempted
 **Rule.** A background worker's health is its liveness, the age of its last dispatch and its job outcomes - never the fact that it was once started or once attempted.
 **Established.** Q154, Q155, Q156, Q157.
@@ -1158,9 +1173,12 @@ What OpenSSL loads and serves is what was counted and judged (Q239, AX24): in th
 And it is true by construction (Q241, AZ1, AZ3): `cert_files` writes each field's distinct certificates out again as plain PEM blocks, `validate_cert_material` loads and judges
 that text and the route writes that text. Nothing else of an upload reaches `certificate.crt`, `ca_bundle.crt` or `combined.crt`: not a line OpenSSL reads another way than Jen
 (a BEGIN line with a space before it was judged and not served) and not a private key pasted into a certificate field (it was written into three files of mode 0644).
-**Established.** Q241 (AZ1, AZ3: the written text is the judged text). Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box);
+And it is true of what an upload leaves BESIDE those files (Q242, BA1, BA17): after the set is installed, the `.prev` copy of each of the three holds only the certificates
+`cert_files` reads in it or is removed, and a `ca_bundle.crt` the upload did not write is removed. The copy `commit_file_set` makes is byte for byte, so an upload over files that
+held a key used to move the key into three `.prev` files of mode 0644. The upload's three fields are read up to the judge's bound and no further (Q242, AW15).
+**Established.** Q242 (BA1, BA17: the earlier copies; AW15: the bounded read). Q241 (AZ1, AZ3: the written text is the judged text). Q234 (AQ11, the verifier); Q213 (AS1, one anchor); Q235 (AT1 the box's store, AT2 the top by signature); Q236 (AU1, AU2: the box's answer is about the box);
 Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the bounds first); Q238 (AW1 the scan, AW40 the key's identifier).
-**Enforced at.** `jen/routes/settings/security.py::chain_refusal`.
+**Enforced at.** `jen/routes/settings/security.py::chain_refusal`, `::cert_files` (what is written), `::earlier_copies_not_cleaned` (what is left beside it).
 **Tests.**
 - `tests/test_a_chain_is_walked_to_its_top.py::TestTheWholePathIsJudged`
 - `tests/test_the_anchor_is_chosen_by_what_verifies.py::TestARootAndItsEarlierCopy`
@@ -1179,6 +1197,10 @@ Q237 (AV1 the top is a CA, AV2 the box lends its key and nothing else, AV31 the 
 - `tests/test_what_is_written_is_what_was_judged.py::TestTheRouteWritesWhatItJudged`
 - `tests/test_what_is_written_is_what_was_judged.py::TestCertFiles`
 - `tests/test_what_is_written_is_what_was_judged.py::TestTheRouteAndTheJudgeAskTheSameFunction`
+- `tests/test_an_upload_leaves_no_key_beside_it.py::TestEveryFileOfTheDirectoryAfterAnUpload`
+- `tests/test_an_upload_leaves_no_key_beside_it.py::TestACopyThatCannotBeCleanedIsSaid`
+- `tests/test_an_upload_leaves_no_key_beside_it.py::TestCertificatesOnly`
+- `tests/test_an_upload_leaves_no_key_beside_it.py::TestTheUploadIsNotReadPastItsBound`
 
 ## The browser surface (Q208)
 

@@ -197,5 +197,7 @@ class TestTheRouteAndTheJudgeAskTheSameFunction:
         assert source.count("cert_data, ca_data, combined = cert_files(cert_data, ca_data)") == 2, (
             "the judge and the route"
         )
-        assert source.count("cert_files(") == 3, "those two and the definition"
+        assert source.count("cert_files(") == 4, (
+            "those two, the definition, and `certificates_only` for an earlier copy (Q242)"
+        )
         assert source.count("combined = ") == 2 and "combined.append" not in source

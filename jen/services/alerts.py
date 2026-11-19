@@ -2122,6 +2122,30 @@ def ha_state_alert_in_the_loop(srv, new_state) -> str:
         return "failed"
 
 
+def heartbeat_state(srv, answer) -> str:
+    """The HA state an `ha-heartbeat` answer names, or "" (Q242, AZ12, AZ14). `check_alerts` read the answer with `.get` twice, outside the wrapper above: an
+    answer that was not an object, or `arguments` that were a list or a string, raised into the ONE `try` around the whole cycle and ended it on every pass
+    (the servers still to be checked, the lease passes, the certificate conditions). And a `state` that was a number, a list or an object was announced and
+    stored as a state. An answer of another shape is said once per pass, by the name of the type and never by its content, and is no state: the HA check does
+    not run for it and the stored record is not touched. A result other than 0 is Kea's ordinary answer where HA is not configured and is not logged."""
+    if isinstance(answer, dict) and answer.get("result") != 0:
+        return ""
+    arguments = answer.get("arguments") if isinstance(answer, dict) else None
+    state = arguments.get("state") if isinstance(arguments, dict) else None
+    if isinstance(state, str):
+        return state
+    if not isinstance(answer, dict):
+        odd = f"the answer is a {type(answer).__name__}"
+    elif arguments is not None and not isinstance(arguments, dict):
+        odd = f"its arguments are a {type(arguments).__name__}"
+    elif state is not None:
+        odd = f"its state is a {type(state).__name__}"
+    else:
+        return ""  # no arguments, or no state among them: the answer of a daemon that names none (Q240, AY8)
+    logger.warning(f"ha-heartbeat from {srv.get('name')}: {odd}, not what Kea sends: no HA state was read from it")
+    return ""
+
+
 def check_stale_reservation_alerts(cur) -> None:
     """`stale_reservation` for every device not seen for `stale_device_days` that has a reservation, once - recorded as told only when a channel TOOK it. The set of
     macs already told was `alerted_stale_macs`, local to `check_alerts`: a restart told every one of them again, and an alert nobody received was recorded as sent.
@@ -2265,12 +2289,10 @@ def check_alerts():
 
                     # ── HA state monitoring ──
                     if srv_up and len(extensions.KEA_SERVERS) > 1:
-                        ha = __kea_command("ha-heartbeat", server=srv)
-                        if ha.get("result") == 0:
-                            # (Q240, AY8) an answer with no `state` used to be the state "": announced as a change to nothing, stored, and announced back
-                            ha_state = (ha.get("arguments") or {}).get("state", "")
-                            if ha_state:
-                                ha_state_alert_in_the_loop(srv, ha_state)
+                        # (Q240, AY8) an answer with no `state` used to be the state "": announced as a change to nothing, stored, and announced back
+                        ha_state = heartbeat_state(srv, __kea_command("ha-heartbeat", server=srv))
+                        if ha_state:
+                            ha_state_alert_in_the_loop(srv, ha_state)
                 time.sleep(5)
             _clear_orphan_states("kea_down", [srv["id"] for srv in extensions.KEA_SERVERS or []])
             _clear_orphan_states("ha_failover", [srv["id"] for srv in extensions.KEA_SERVERS or []])

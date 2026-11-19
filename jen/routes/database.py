@@ -852,6 +852,16 @@ def import_confirm():
         logger.error(f"Kea import aborted: {e}")
         __user.audit("DB_IMPORT_FAILED", "kea", "rolled back; nothing was changed")
         flash(f"Import aborted and rolled back — {e.public}. Nothing was changed.", "error")
+    except dbexport.ImportOutcomeUnknown as e:
+        # (Q242) a commit that raised: the server may have applied it. It was logged as rolled back and the page said only "Import failed"
+        logger.error(f"DB import: {e}")
+        __user.audit("DB_IMPORT_FAILED", db, "the commit was not confirmed; the outcome is not known")
+        flash(e.public, "error")
+    except dbexport.ImportRolledBack as e:
+        # (Q242) failed before its commit and rolled back: the audit row said "the outcome is not known" of the one failure whose outcome is known
+        logger.error(f"DB import failed: {e}")
+        __user.audit("DB_IMPORT_FAILED", db, "rolled back; nothing was changed")
+        flash("Import failed and was rolled back. Nothing was changed. Check server logs for details.", "error")
     except Exception as e:
         logger.error(f"DB import failed: {e}")
         # (Q238, AW9, AW10) the one ending whose outcome is not known - a commit or a rollback that itself failed - is the one that left no record

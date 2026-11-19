@@ -326,6 +326,43 @@ class TestStrictAboutAPluginWhoseCodeIsPresent:
         results = dbexport.import_jen(blob, strict_plugins=True)
         assert not [r for r in results if r.startswith(("⚠️", "❌"))], results
 
+    def test_a_plugins_commit_that_raised_is_not_called_a_rollback(self, db, monkeypatch, tmp_path):
+        """(Q242) The real connection; the commit that follows wol's rows is applied and its reply is lost. The rows are there, and the line said
+        `row import failed and was rolled back`."""
+        import pymysql
+
+        blob = self._exported_and_wiped(db, tmp_path)
+        seen = []
+        real_rows, real_conn = dbexport._decode_import_rows, dbexport._direct_jen_conn
+
+        def rows(table, *a, **k):
+            seen.append(table)
+            return real_rows(table, *a, **k)
+
+        class ReplyLost(pymysql.connections.Connection):
+            def commit(self):
+                super().commit()
+                if seen and seen[-1] == "wol_hosts":
+                    seen.append("lost")
+                    raise pymysql.err.OperationalError(2013, "Lost connection to MySQL server during query")
+
+        def opened():
+            conn = real_conn()
+            conn.__class__ = ReplyLost
+            return conn
+
+        monkeypatch.setattr(dbexport, "_decode_import_rows", rows)
+        monkeypatch.setattr(dbexport, "_direct_jen_conn", opened)
+        with pytest.raises(dbexport.PluginRestoreError) as e:
+            dbexport.import_jen(blob, strict_plugins=True)
+        assert "lost" in seen
+        assert [f[0] for f in e.value.failures] == ["wol"] and e.value.failures[0][2] == dbexport.COMMIT_NOT_CONFIRMED
+        assert "rolled back" not in str(e.value) and "the outcome is not known" in str(e.value)
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM wol_hosts")
+            assert cur.fetchone()["cnt"] >= 1, "the commit was applied"
+
 
 class TestSelfHealPath:
     def test_missing_table_with_a_recorded_migration_is_recreated(self, db):

@@ -10,11 +10,21 @@ item below. The previous page, covering everything since 5.70.0 through
 the 7.0.0 baseline, is archived at
 [`docs/release-history/upgrading-5.70.0-to-7.0.0.md`](release-history/upgrading-5.70.0-to-7.0.0.md).
 
+## 7.1.0-beta.11: an upload leaves no private key beside the certificate
+
+One step (7.1.0-beta.11). It adds no migration and no helper build.
+
+**One thing to do.** If you ever uploaded a file that holds a private key in the *certificate* or *CA bundle* field under Settings → Security (a combined PEM, for example), upload the certificate once more after this upgrade. The upload now cleans the copies beside the certificate files (the ones that end in `.prev`) and removes a `ca_bundle.crt` it did not write. That key was readable by any local account on the Jen box: replace the key and its certificate when you can.
+
+**Databases → Import** says "the outcome is not known" when the database did not confirm the commit, on the page and in the audit log, and tells you to look at the data before importing again. It used to log that import as rolled back. An import that fails before its commit is recorded as "rolled back; nothing was changed".
+
+**Alerts.** A Kea `ha-heartbeat` answer of a shape Kea does not send is logged and skipped; it used to end the whole alert cycle on every pass.
+
 ## 7.1.0-beta.10: an uploaded certificate is written as Jen read it
 
 One step (7.1.0-beta.10). It adds no migration and no helper build.
 
-**One thing to check.** If you ever uploaded a file that holds a private key in the *certificate* or *CA bundle* field under Settings → Security (a combined PEM, for example), that key is in `certificate.crt`, `ca_bundle.crt` or `combined.crt` under `/etc/jen/ssl`, which any local account on the Jen box can read. Upload the certificate again after upgrading: Jen now writes only the certificates to those three files.
+**One thing to check.** If you ever uploaded a file that holds a private key in the *certificate* or *CA bundle* field under Settings → Security (a combined PEM, for example), that key is in `certificate.crt`, `ca_bundle.crt` or `combined.crt` under `/etc/jen/ssl`, which any local account on the Jen box can read. Jen now writes only the certificates to those three files. On 7.1.0-beta.10 itself, uploading again leaves the key in the `.prev` copies beside them: see 7.1.0-beta.11 above.
 
 **Settings → Security: the certificate upload** writes the certificates it read, each as a plain PEM block, and nothing else of the pasted text. A CA bundle with a space, a tab or a word before a `-----BEGIN CERTIFICATE-----` line used to be accepted and then not served.
 

@@ -405,6 +405,11 @@ def kea_command(
         resp.raise_for_status()
         data = resp.json()
         reply = data[0] if isinstance(data, list) else data
+        if not isinstance(reply, dict):
+            # (Q242, AZ12) "always returns a dict": JSON that is not an object (a number, a string, null, a list in a list) was returned as it came,
+            # and the first caller to read it with `.get` raised. It is no reply, like an answer that is not JSON at all
+            logger.error(f"kea_command({command!r}): the answer is a {type(reply).__name__}, not a reply")
+            return {"result": 1, "text": "Kea answered with something that is not a reply.", "transport": "error"}
         # v5.28.1 (Q26, D1) — in direct mode, a successful config-get that
         # answers as the WRONG daemon (most often the Control Agent,
         # still listening on :8000 because only its unix socket — not an

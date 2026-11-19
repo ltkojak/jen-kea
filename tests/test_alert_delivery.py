@@ -1299,6 +1299,70 @@ class TestEventStyleAlertsRemember:
             alerts.check_alerts()
         assert checked == [] and "ha_failover" not in sender.sent
 
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            None,
+            [{"result": 0, "arguments": {"state": "hot-standby"}}],
+            "hot-standby",
+            {"result": 0, "arguments": [{"state": "hot-standby"}]},
+            {"result": 0, "arguments": "hot-standby"},
+            {"result": 0, "arguments": {"state": 7}},
+            {"result": 0, "arguments": {"state": ["hot-standby"]}},
+            {"result": 0, "arguments": {"state": {"state": "hot-standby"}}},
+        ],
+        ids=[
+            "no answer",
+            "a list for an answer",
+            "a string for an answer",
+            "a list for the arguments",
+            "a string for the arguments",
+            "a number for the state",
+            "a list for the state",
+            "an object for the state",
+        ],
+    )
+    def test_a_heartbeat_of_another_shape_does_not_end_the_alert_cycle(self, answer, db, monkeypatch, send, caplog):
+        """(Q242, AZ12, AZ14) `check_alerts` itself, run, with the real `heartbeat_state`. At 7.1.0-beta.10 the first five raised into the one `try` around
+        the whole cycle, on every pass: the second server was never checked and nothing after the HA loop ran. The last three were handed to the HA check
+        and stored as a state."""
+        from jen import extensions as ext
+
+        class Stop(BaseException):
+            pass
+
+        naps, ups, reached, checked = [], [], [], []
+
+        def nap(seconds):
+            naps.append(seconds)
+            if len(naps) >= 8:
+                raise Stop
+
+        def up(server=None):
+            ups.append(server["id"])
+            if len(ups) > 400:
+                raise Stop  # a cycle that never sleeps must still end this test
+            return True
+
+        monkeypatch.setattr("time.sleep", nap)
+        monkeypatch.setitem(alerts.__dict__, "__kea_is_up", up)
+        monkeypatch.setitem(
+            alerts.__dict__,
+            "__kea_command",
+            lambda command, *a, **k: answer if command == "ha-heartbeat" else {"result": 1, "text": "not asked here"},
+        )
+        monkeypatch.setattr(alerts, "check_ha_state_alert", lambda srv, state: checked.append(state) or "first")
+        monkeypatch.setattr(alerts, "_clear_orphan_states", lambda alert_type, keys: reached.append(alert_type) or 0)
+        monkeypatch.setattr(ext, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b"}], raising=False)
+        sender = send(OK)
+        with caplog.at_level("WARNING"), pytest.raises(Stop):
+            alerts.check_alerts()
+        assert set(ups) == {1, 2}, "the second server is still checked"
+        assert "kea_down" in reached, "the cycle went on past the HA loop"
+        assert checked == [] and "ha_failover" not in sender.sent, "and what was read is no state"
+        assert "Alert thread error" not in caplog.text
+        assert "ha-heartbeat from kea-a: " in caplog.text and "hot-standby" not in caplog.text
+
     def test_a_failed_ha_check_does_not_end_the_alert_cycle(self, db, monkeypatch, send):
         """(Q240, AY1) `check_alerts` itself, run: the HA check raises a programming error for every server on every pass, and the cycle still reaches what
         comes after the HA loop. In 7.1.0-beta.8 the raise left through the one `try` around the whole cycle and nothing after it ran."""

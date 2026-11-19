@@ -316,6 +316,48 @@ def cert_files(cert_data: str, ca_data: str | None) -> tuple:
     return cert, ca, cert + ca
 
 
+def certificates_only(path: str) -> None:
+    """Make the file at `path` hold only the certificates Jen reads in it, as `cert_files` writes them, mode 0644 (Q242, BA1). A file in which Jen reads no
+    certificate, or one whose certificate cannot be parsed, is removed: what cannot be shown to be certificates does not stay beside the certificate. A
+    file that is not there is left alone, and one that already reads as `cert_files` would write it is not rewritten."""
+    from jen.services.certs import commit_file_set
+
+    if not os.path.lexists(path):
+        return
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    try:
+        clean = cert_files(text, None)[0]
+    except ValueError:
+        clean = ""
+    if not clean:
+        os.remove(path)
+    elif clean != text:
+        commit_file_set([(path, clean, 0o644)], keep_prev=False)
+
+
+def earlier_copies_not_cleaned(with_ca: bool) -> list:
+    """What an upload leaves BESIDE the three certificate files, run after the set is installed (Q242, BA1, BA17). `commit_file_set` keeps each file it
+    replaces as `<name>.prev`, byte for byte and with its mode, and an upload with no CA field left the CA bundle of the certificate before it in place. On a
+    box where an earlier release wrote a private key into those files, uploading again - what the notes of 7.1.0-beta.10 told the operator to do - left that
+    key in three `.prev` files of mode 0644, and in `ca_bundle.crt` for good. Now the `.prev` of each of the three holds only certificates
+    (`certificates_only`), and a `ca_bundle.crt` this upload did not write is removed: `combined.crt.prev` carries its certificates. The key's own copy,
+    `private.key.prev`, is not touched. Returns the names of the files that could not be cleaned, [] when all were: the set is installed by now, so nothing
+    is raised from here and the route says which files are left."""
+    stale = [extensions.SSL_CERT + ".prev", extensions.SSL_CA + ".prev", extensions.SSL_COMBINED + ".prev"]
+    left = []
+    for path in stale + ([] if with_ca else [extensions.SSL_CA]):
+        try:
+            if path.endswith(".prev"):
+                certificates_only(path)
+            elif os.path.lexists(path):
+                os.remove(path)
+        except Exception as e:
+            logger.error("upload_cert: %s could not be cleaned: %s", os.path.basename(path), type(e).__name__)
+            left.append(os.path.basename(path))
+    return left
+
+
 def _load_box_store(client) -> None:
     """The CA certificates this box itself trusts (its `ca-certificates`), into `client`. A seam: the tests give it a store of their own."""
     client.load_default_certs()
@@ -633,9 +675,21 @@ def upload_cert():
         return redirect(url_for("settings.settings_security"))
     os.makedirs(os.path.dirname(extensions.SSL_CERT), exist_ok=True)
     try:
-        cert_data = cert_file.read().decode("utf-8")
-        key_data = key_file.read().decode("utf-8")
-        ca_data = ca_file.read().decode("utf-8") if ca_file and ca_file.filename else None
+        # (Q242, AW15) no field is read past the bound: the three were read and decoded whole, up to the request limit of the backup import (512 MB by
+        # default), before `validate_cert_material` counted a character. A character is at most four bytes, so more bytes than this is more characters
+        # than the judge takes, and no upload it accepted is refused here
+        most = 4 * _MOST_CHARACTERS
+        parts = [f.read(most + 1) if f and f.filename else None for f in (cert_file, key_file, ca_file)]
+        if sum(len(p) for p in parts if p) > most:
+            flash(
+                f"Certificate rejected — the upload is more than {most:,} bytes and a certificate, its key and the chain above it are a few thousand: "
+                "upload those, not a bundle of CAs. Nothing was changed.",
+                "error",
+            )
+            return redirect(url_for("settings.settings_security"))
+        cert_data = (parts[0] or b"").decode("utf-8")
+        key_data = (parts[1] or b"").decode("utf-8")
+        ca_data = parts[2].decode("utf-8") if parts[2] is not None else None
         reason = validate_cert_material(cert_data, key_data, ca_data)
         if reason:
             flash(f"Certificate rejected — {reason}. Nothing was changed.", "error")
@@ -651,7 +705,19 @@ def upload_cert():
             members.append((extensions.SSL_CA, ca_data, 0o644))
         members.append((extensions.SSL_COMBINED, combined, 0o644))
         commit_file_set(members)
-        __user.audit("UPLOAD_CERT", "settings", "SSL certificate uploaded")
+        # (Q242, BA1, BA17) and what the set left beside it: no earlier copy of a certificate file keeps anything but certificates
+        left = earlier_copies_not_cleaned(with_ca=bool(ca_data))
+        __user.audit(
+            "UPLOAD_CERT",
+            "settings",
+            "SSL certificate uploaded" + (f"; not cleaned: {', '.join(left)}" if left else ""),
+        )
+        if left:
+            flash(
+                f"{', '.join(left)} in {os.path.dirname(extensions.SSL_CERT)} could not be cleaned and may hold a private key from an earlier upload: "
+                "remove what is named here by hand. Check server logs for details.",
+                "error",
+            )
         # v5.67.0-beta.10 (Q122) — restart by deployment (systemd or Docker); say so when neither.
         if __runtime.restart_service() == "none":
             flash("Certificate validated and installed. " + __runtime.RESTART_BY_HAND, "warning")
