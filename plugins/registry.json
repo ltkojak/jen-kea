@@ -237,7 +237,7 @@
   {
     "id": "dns-sync",
     "name": "Local DNS Sync",
-    "version": "1.1.3",
+    "version": "1.1.4",
     "description": "Pushes DHCP names into Pi-hole or AdGuard Home local DNS so hostnames like nas.lan resolve without Kea DDNS — Jen only ever touches records it created itself (a ledger), and an Unbound export is offered for setups with no API.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -266,8 +266,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS ds_records (id INT AUTO_INCREMENT PRIMARY KEY, target_id INT NOT NULL, name VARCHAR(63) NOT NULL, ip VARCHAR(15) NOT NULL, source ENUM('lease','reservation','ipam') NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY ux_target_name (target_id, name))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.1.3",
-    "sha256": "86fd272df633d655e1861ef4c9f6ef16c7c853b9f19c2e77f79e6e6794e49043",
+    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.1.4",
+    "sha256": "d50be48b39fe12f6371862829f64d86fe6f7587efbeb49349496768d8297c971",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-dns-sync/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-dns-sync",
     "plugin_api": 3
@@ -368,7 +368,7 @@
   {
     "id": "presence",
     "name": "Presence",
-    "version": "1.2.5",
+    "version": "1.2.6",
     "description": "Publishes tracked devices' online/offline state to Home Assistant (webhook), MQTT, or any HTTP endpoint, so the house can react to a phone joining or leaving. Opt-in per MAC — nothing is published for a device you haven't chosen to track.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -402,8 +402,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS pr_sinks (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, kind ENUM('ha_webhook','mqtt','http') NOT NULL, url VARCHAR(255) NOT NULL, credential TEXT, topic_prefix VARCHAR(100) NOT NULL DEFAULT 'jen/presence', retain TINYINT(1) NOT NULL DEFAULT 1, discovery TINYINT(1) NOT NULL DEFAULT 0, enabled TINYINT(1) NOT NULL DEFAULT 1, last_error VARCHAR(300) NULL)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.2.5",
-    "sha256": "aee5669eef59dc52a04dceddbafcca62e1b5d272731fcca6ff6db164c55089b6",
+    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.2.6",
+    "sha256": "194c177de5928e2667559ea915d6728155d4978b509d64eabafcf0dd61324cb4",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-presence/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-presence",
     "plugin_api": 3

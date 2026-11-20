@@ -1015,26 +1015,87 @@ def _missing_dependents(selected, in_file) -> dict[str, list[str]]:
     return out
 
 
-def _empty_dependents_the_file_lacks(conn, replaced, in_file, results) -> None:
-    """(Q244, BD1) A parent table was replaced from a file that does not carry one of its dependents: the dependent is emptied, in the import's own
-    transaction, and a line says so. A file made before a dependent table existed (`user_nav` before 7.2.0) replaced `users` and left the dependent's rows on
-    their user ids, so a person's saved navigation was shown to whoever held that id after the restore, and rows of people the file lacks stayed behind (foreign
-    key checks are off during an import, so the cascade does not run). `_missing_dependents` refuses a selection that leaves out a dependent the file HAS; this
-    is the dependent the file cannot have. Only in replace mode, only for a parent that was in fact replaced, only a table that exists here."""
+# (Q245, BE1 and BE2) what makes a parent row the SAME record after a restore: its key and the name it is known by. A row of a dependent table stays with a
+# parent row only when both are what they were before the restore.
+JEN_PARENT_IDENTITY = {"users": ("id", "username")}
+
+
+def _holders(conn, parent) -> dict:
+    """{key: name} of every row of a parent table of `JEN_PARENT_IDENTITY`, as the open transaction sees it."""
+    key, name = JEN_PARENT_IDENTITY[parent]
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT `{key}` AS k, `{name}` AS n FROM `{parent}`")  # nosec B608 - names from JEN_PARENT_IDENTITY, never a request value
+        return {r["k"]: r["n"] for r in cur.fetchall()}
+
+
+def _foreign_keys(conn, table, parent) -> list:
+    """[(column, delete rule)] of each foreign key `table` has to `parent`, as the live schema states it (`CASCADE`, `SET NULL`, ...)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT k.COLUMN_NAME AS col, r.DELETE_RULE AS rule FROM information_schema.KEY_COLUMN_USAGE k "
+            "JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA "
+            "AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME "
+            "WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = %s AND k.REFERENCED_TABLE_NAME = %s "
+            "ORDER BY k.COLUMN_NAME",
+            (table, parent),
+        )
+        return [(r["col"], r["rule"]) for r in cur.fetchall()]
+
+
+def _settle_dependents_the_file_lacks(conn, before, replaced, in_file, results) -> None:
+    """(Q245, BE1 and BE2; Q244, BD1) A parent table was replaced from a file that does not carry one of its dependents. Foreign key checks are off during an
+    import, so the database does nothing for that dependent; this does what the dependent's own foreign key says, and only for the rows whose parent is no
+    longer the same record. A parent row is the same record when its key holds the name it held before the restore (`JEN_PARENT_IDENTITY`; `before` is
+    `{parent: _holders(...)}` read inside this transaction before the first table was touched). The rows of those parents are kept as they are. A row whose
+    parent is gone, or whose key now holds a different name, gets the foreign key's own delete rule: `CASCADE` removes it, `SET NULL` clears the column and
+    keeps the row (an API key outlives its creator, migration 23). A line says what was done; nothing is said when nothing was.
+
+    v7.2.0-beta.2 emptied every such dependent whole: a restore of `users` alone, from an export of `users` alone, deleted every API key, MFA method and
+    passkey of accounts that were the same before and after. Only in replace mode, only for a parent that was in fact replaced (`replaced` holds the
+    tables `_import_rows` deleted and filled, never the ones it was asked for and left unchanged), only a table that exists here."""
     for parent, deps in JEN_DEPENDENTS.items():
-        if parent not in replaced:
+        if parent not in replaced or parent not in before:
             continue
+        after = _holders(conn, parent)
+        same = sorted(k for k, name in after.items() if before[parent].get(k) == name)
+        marks = ", ".join(["%s"] * len(same))
         for dep in deps:
             if dep in in_file or not _table_exists(conn, dep):
                 continue
-            with conn.cursor() as cur:
-                removed = cur.execute(f"DELETE FROM `{dep}`")  # nosec B608 - a name from JEN_DEPENDENTS, never a request value
-            if removed:
+            keys = _foreign_keys(conn, dep, parent)
+            if not keys:
                 results.append(
-                    f"⚠️ {dep}: this file carries no rows for it and {parent} was replaced, so its {removed} "
-                    f"row{'' if removed == 1 else 's'} here {'was' if removed == 1 else 'were'} removed: "
-                    f"{'it' if removed == 1 else 'they'} belonged to the {parent} that were replaced"
+                    f"⚠️ {dep}: this file carries no rows for it and no foreign key to {parent} was found — left unchanged"
                 )
+                continue
+            for col, rule in keys:
+                where = f"`{col}` IS NOT NULL" + (f" AND `{col}` NOT IN ({marks})" if same else "")
+                if rule == "CASCADE":
+                    sql = f"DELETE FROM `{dep}` WHERE {where}"  # nosec B608 - a table of JEN_DEPENDENTS and a column of the live schema; the keys are bound
+                elif rule == "SET NULL":
+                    sql = f"UPDATE `{dep}` SET `{col}` = NULL WHERE {where}"  # nosec B608 - a table of JEN_DEPENDENTS and a column of the live schema; the keys are bound
+                else:
+                    results.append(
+                        f"⚠️ {dep}: this file carries no rows for it and its foreign key to {parent} says {rule} — left unchanged"
+                    )
+                    continue
+                with conn.cursor() as cur:
+                    n = cur.execute(sql, same)
+                if not n:
+                    continue
+                single = n == 1
+                if rule == "CASCADE":
+                    results.append(
+                        f"⚠️ {dep}: this file carries no rows for it and {parent} was replaced. {n} row{'' if single else 's'} here "
+                        f"{'was' if single else 'were'} removed: {'it' if single else 'they'} belonged to {parent} that are gone or that now have "
+                        f"a different name. Rows of {parent} the file brought back under the same name were kept"
+                    )
+                else:
+                    results.append(
+                        f"⚠️ {dep}: this file carries no rows for it and {parent} was replaced. {n} row{'' if single else 's'} here "
+                        f"{'was' if single else 'were'} kept and no longer {'names' if single else 'name'} the {parent} {'it' if single else 'they'} "
+                        f"pointed at, which are gone or now have a different name"
+                    )
 
 
 class PluginRestoreError(RuntimeError):
@@ -1164,13 +1225,15 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
         # NOT NULL, foreign-key or conversion error into a warning with a coerced value and the row was still
         # counted as restored. The count reported is what the server says it inserted, and it must be the
         # file's. Merge mode keeps IGNORE (existing rows win) and reports what it really did.
+        # (Q245, BE3) returns True when the table was REPLACED (deleted and filled from the file), else None: the caller settles the dependents of the
+        # tables that were in fact replaced, never of the ones it asked for and this left unchanged
         if tbl not in data:
             _unrestorable(f"{tbl}: this file carries no rows for it — left unchanged")
-            return
+            return None
         rows = data[tbl]
         if not _table_exists(conn, tbl):
             _unrestorable(f"{tbl}: table does not exist in current schema — skipped")
-            return
+            return None
         cols = []
         if rows:
             real_cols = _get_table_columns(conn, tbl)
@@ -1178,7 +1241,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
             if not cols:
                 # checked BEFORE the DELETE: a table must never be emptied by a restore that then inserts nothing
                 _unrestorable(f"{tbl}: no recognized columns in import data — skipped, left unchanged")
-                return
+                return None
         inserted = 0
         with conn.cursor() as cur:
             if truncate:
@@ -1197,7 +1260,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
             if inserted != len(rows):
                 raise RuntimeError(f"{tbl}: the file has {len(rows)} rows but the server reports {inserted} inserted")
             results.append(f"✅ {tbl}: {inserted} rows restored")
-            return
+            return True
         skipped = len(rows) - inserted
         if skipped:
             _unrestorable(
@@ -1205,6 +1268,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
             )
         else:
             results.append(f"✅ {tbl}: {inserted} rows added")
+        return None
 
     # ── (1) core tables, EXCEPT plugin_schema_migrations ───────────────────────────────
     core_selected = [t for t in selected if t in JEN_TABLES and t != "plugin_schema_migrations"]
@@ -1212,10 +1276,12 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
     try:
         conn.begin()
         conn.cursor().execute("SET FOREIGN_KEY_CHECKS=0")
-        for tbl in core_selected:
-            _import_rows(conn, tbl)
+        before = {
+            p: _holders(conn, p) for p in JEN_DEPENDENTS if truncate and p in core_selected and _table_exists(conn, p)
+        }
+        replaced = {tbl for tbl in core_selected if _import_rows(conn, tbl)}
         if truncate:
-            _empty_dependents_the_file_lacks(conn, core_selected, set(data), results)
+            _settle_dependents_the_file_lacks(conn, before, replaced, set(data), results)
         conn.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
     except Exception as e:
         conn.rollback()

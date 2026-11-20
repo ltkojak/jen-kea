@@ -10,6 +10,18 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.3: a restore of the accounts keeps API keys and sign-in factors, and two plugin fixes
+
+One step (7.2.0-beta.3). No migration and no helper build.
+
+**If you ran a replace restore of `users` on 7.2.0-beta.2** from a file that does not carry the tables that hang on the accounts (an export made with only `users` ticked is one), that restore deleted every API key, MFA method, backup code, trusted device and passkey. This release does not bring them back. Check Settings → API keys, and have each person look at their MFA; the page of that restore listed what it removed.
+
+**Databases → Import, replace mode.** When a restore replaces the accounts from a file that lacks one of those tables, the rows of every account that is the same before and after are now kept. An account is the same when its id has the username it had. For an account that is gone, or an id that now has a different username, the MFA methods, passkeys, saved searches, dashboard and navigation choices are removed with it, and an API key it created is kept. The page says which tables changed and by how many rows. Merge mode changes nothing.
+
+**DNS Sync 1.1.4.** A record that is already on your DNS server with the name and address Jen wants, and that Jen did not create, is left alone and listed in Preview under "Already on the server, left alone". Before, Jen could take such a record into its ledger and delete it later (AdGuard Home), or report an error on every sync (Pi-hole).
+
+**Presence 1.2.6.** For a tracked device on a network the Jen host is on, Jen now sends one small UDP datagram to the device (port 9) when its five-minute check did not see it, and reads the answer nine seconds later. Before, a phone at home could be published offline after fifteen minutes and stay that way. If you filter traffic leaving the Jen host, this is new traffic to the devices you track.
+
 ## 7.2.0-beta.2: fixes to the navigation of beta.1, to restores and to the support bundle
 
 One step (7.2.0-beta.2). No migration and no helper build. Nothing to do.

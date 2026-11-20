@@ -82,7 +82,7 @@
                 <option value="replace">Replace — clear table then insert (recommended)</option>
                 <option value="merge">Merge — insert only, skip duplicates</option>
             </select>
-            <div class="form-hint" id="f-mode-hint">Replace clears each selected table and inserts exactly the rows in the file — a row the database refuses fails the whole import, and the database is then put back from a snapshot taken first. Merge adds only rows whose key is not already there, keeps what exists, and tells you how many it skipped.</div>
+            <div class="form-hint" id="f-mode-hint">Replace clears each selected table and inserts exactly the rows in the file — a row the database refuses fails the whole import, and the database is then put back from a snapshot taken first. When the accounts are replaced from a file that lacks a table of per-account data (MFA methods, passkeys, saved searches, dashboard and navigation choices), that data is kept for each account that is the same before and after, and removed for an account that is gone or whose id now has a different username; an API key is always kept. Merge adds only rows whose key is not already there, keeps what exists, and tells you how many it skipped.</div>
         </div>
     </div>
 

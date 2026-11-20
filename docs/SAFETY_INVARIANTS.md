@@ -530,17 +530,23 @@ BB3, BB4): they get a connection of their own, and the row is `DB_IMPORT_FAILED`
 - `tests/test_a_lost_plugin_commit_does_not_stop_the_plugins_after_it.py::TestTheRouteAndItsAuditRow`
 - `tests/test_migrate_contract.py::TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas`
 
-### TXN-003 - A table that hangs on a replaced table keeps no row the restore did not bring
-**Rule.** A restore in replace mode that replaces a parent table (`dbexport.JEN_DEPENDENTS`: today `users`) leaves no dependent table as it was. A dependent the file carries is restored
-from it; a selection that leaves out a dependent the file carries is refused before anything is touched (`_missing_dependents`, Q128); a dependent the file does NOT carry is emptied in the
-import's own transaction, with a line that names it and the number of rows. Foreign key checks are off during an import, so the database's cascade never does this. Without the last clause
-a file made before a dependent table existed left that table's rows on their ids: a person's saved navigation, API keys or MFA methods belonged to whoever held the id after the restore.
-Merge mode replaces nothing and removes nothing.
-**Established.** Q244 (BD1 of the pass on v7.2.0-beta.1). Q128 (the refused selection).
-**Enforced at.** `jen/services/dbexport.py::import_jen`, `::_empty_dependents_the_file_lacks`, `::_missing_dependents`.
+### TXN-003 - A row that hangs on a replaced table stays only with the record it was on
+**Rule.** A restore in replace mode that replaces a parent table (`dbexport.JEN_DEPENDENTS`: today `users`) leaves no row of a dependent table on a parent row that is not the record
+it was on. A dependent the file carries is restored from it; a selection that leaves out a dependent the file carries is refused before anything is touched (`_missing_dependents`, Q128).
+For a dependent the file does NOT carry, the import does, in its own transaction, what that table's own foreign key says, and only for the rows whose parent row is gone or whose key now
+holds a different name (`JEN_PARENT_IDENTITY`: an account is its id and its username): `CASCADE` removes the row, `SET NULL` keeps it and clears the column (an API key outlives its
+creator, migration 23). The rows of a parent that is the same before and after are kept, and a line names each table that changed and the number of rows. Foreign key checks are off
+during an import, so the database never does this itself. The rule acts for a parent that was in fact replaced, never for one the restore was asked for and left unchanged, and merge
+mode replaces nothing and changes nothing. Two earlier forms were wrong in opposite ways: v7.2.0-beta.1 left every such row on its id whoever held it afterward (BD1), and
+v7.2.0-beta.2 emptied every such table whole, which deleted the API keys, MFA methods and passkeys of accounts that had not changed (BE1, BE2).
+**Established.** Q245 (BE1, BE2, BE3 of the pass on v7.2.0-beta.2). Q244 (BD1 of the pass on v7.2.0-beta.1). Q128 (the refused selection).
+**Enforced at.** `jen/services/dbexport.py::import_jen`, `::_settle_dependents_the_file_lacks`, `::_missing_dependents`.
 **Tests.**
-- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestAFileFromBeforeTheTableExisted`
+- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestTheSameAccountsKeepEverything`
+- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestAnAccountTheFileDoesNotBring`
+- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestAnIdThatNowHoldsADifferentName`
 - `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestWhatIsLeftAlone`
+- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestTheSchemaSaysWhatHappensToARow`
 - `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestTheHelper`
 - `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestNoHandlerOfACommitClaimsARollback`
 - `tests/test_plugin_restore_lifecycle.py::TestStrictAboutAPluginWhoseCodeIsPresent::test_a_plugins_commit_that_raised_is_not_called_a_rollback`
