@@ -247,8 +247,10 @@ class TestThePageAndTheAuditRowSayWhichOfTheThreeItWas:
 
 #: a `try` that sends a commit and whose handler says "rolled back" or "nothing was changed", and is not changed by Q242. Each with why.
 REVIEWED = {
-    # its handler deletes what the run inserted, by primary key on a fresh connection, when the rollback is not confirmed. A commit that raised is not yet
-    # sent down that path, so its sentence can be wrong in the review's world. Registered by Q242 for 7.1.1, with the worlds that path needs
+    # its handler deletes what the run inserted, by primary key on a fresh connection, when the rollback is not confirmed: after a commit whose reply was
+    # lost the rollback fails on the dead connection, the delete runs and "the target was rolled back" is true. (Q244, BB8, BB30) The reason written here
+    # by Q242 said the sentence was wrong after a lost commit; it was wrong only when that DELETE failed, and that case now has a sentence of its own
+    # (`KEA_MIGRATION_NOT_UNDONE`; `tests/test_migrate_contract.py::TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas`)
     ("jen/services/dbexport.py", "migrate_kea"),
 }
 

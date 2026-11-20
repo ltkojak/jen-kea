@@ -564,6 +564,23 @@ def cached_kea_health(server: dict = None, max_age: float = _HEALTH_MAX_AGE_S) -
     }
 
 
+def ha_arguments(answer) -> dict | None:
+    """The `arguments` of an `ha-heartbeat` answer whose result is 0, as an object; None for any other answer (Q244, BB1). Three readers took
+    `(answer.get("arguments") or {}).get(...)`: with `arguments` a list, a string or a number that raised `AttributeError`, and the one in
+    `get_active_kea_server` is called from inside the alert cycle's one `try`, so the rest of that pass did not run. Arguments of another shape are an
+    object with nothing in it: the answer still says the daemon runs HA, and names no state."""
+    if not isinstance(answer, dict) or answer.get("result") != 0:
+        return None
+    arguments = answer.get("arguments")
+    return arguments if isinstance(arguments, dict) else {}
+
+
+def ha_text(arguments, name, default="") -> str:
+    """`arguments[name]` when it is text, else `default`: a state that is a number, a list or an object is no state (the rule of `alerts.heartbeat_state`)."""
+    value = arguments.get(name)
+    return value if isinstance(value, str) else default
+
+
 def get_all_server_status() -> list:
     """
     Return a list of status dicts for every configured server.
@@ -577,11 +594,10 @@ def get_all_server_status() -> list:
         ha_partner = None
         version = probe["version"] or ""
         if up and len(extensions.KEA_SERVERS) > 1:
-            ha_result = kea_command("ha-heartbeat", server=server)
-            if ha_result.get("result") == 0:
-                args = ha_result.get("arguments") or {}
-                ha_state = args.get("state", "unknown")
-                ha_partner = args.get("partner-state", "")
+            args = ha_arguments(kea_command("ha-heartbeat", server=server))
+            if args is not None:
+                ha_state = ha_text(args, "state", "unknown")
+                ha_partner = ha_text(args, "partner-state", "")
         statuses.append(
             {
                 "server": server,
@@ -617,9 +633,9 @@ def get_active_kea_server() -> dict | None:
     for server in extensions.KEA_SERVERS:
         if not kea_is_up(server=server):
             continue
-        ha = kea_command("ha-heartbeat", server=server)
-        if ha.get("result") == 0:
-            state = (ha.get("arguments") or {}).get("state", "")
+        args = ha_arguments(kea_command("ha-heartbeat", server=server))
+        if args is not None:
+            state = ha_text(args, "state", "")
             role = server.get("role", "primary")
             if state in active_states and role == "primary":
                 cache["server"] = server

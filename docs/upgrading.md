@@ -10,6 +10,22 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.2: fixes to the navigation of beta.1, to restores and to the support bundle
+
+One step (7.2.0-beta.2). No migration and no helper build. Nothing to do.
+
+**A favorite in the top row** is drawn like the items beside it: muted until it is the page you are on or the pointer is over it.
+
+**Customize navigation** offers Reset to default whenever anything is saved, and says how many saved pages cannot be shown now (a plugin that is off, a page your account no longer opens). Those pages come back with the plugin; Reset removes them.
+
+**Databases → Import, replace mode.** When a restore replaces the accounts from a file that does not carry one of the tables that hang on them (an export made before 7.2.0 has no saved navigation), that table is emptied and the page says how many rows were removed. Before, each saved navigation stayed on its user id and was shown to whoever held that id after the restore. Merge mode removes nothing.
+
+**A restore whose plugin commit was not confirmed** now goes on to the plugins after it, and the audit log records `DB_IMPORT_FAILED` for it. A Kea data migration that fails and cannot remove what it copied says so; it used to say the target was rolled back.
+
+**The support bundle** masks the query values and the fragment of an address, as Config history does. Before, `api_url = https://host:8000/?token=...` kept its token in the bundle. If you sent a bundle from a box whose `jen.config` or Kea addresses carry a secret in a query string, treat that secret as shared.
+
+**For plugin authors:** `jen.plugin_api.safe_text(value)` escapes one value before it goes into an alert.
+
 ## 7.2.0-beta.1: your own navigation, and a sign-in page that was open too long
 
 One step (7.2.0-beta.1). It adds one migration (40, a new table `user_nav`; it runs by itself and touches no existing row) and no helper build. Nothing to do.

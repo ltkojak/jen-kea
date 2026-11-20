@@ -205,6 +205,12 @@ def _validate_tables(requested, known):
     return [t for t in dict.fromkeys(requested) if t in known_set]
 
 
+#: what a failed Kea migration says when neither the rollback nor the delete of its own rows was confirmed (Q244, BB30): never "rolled back"
+KEA_MIGRATION_NOT_UNDONE = (
+    "the target did not confirm the rollback and the rows this run had copied could not be removed, so some of them may be there. "
+    "Nothing that was there before was touched. Look at the target before migrating again."
+)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1009,6 +1015,28 @@ def _missing_dependents(selected, in_file) -> dict[str, list[str]]:
     return out
 
 
+def _empty_dependents_the_file_lacks(conn, replaced, in_file, results) -> None:
+    """(Q244, BD1) A parent table was replaced from a file that does not carry one of its dependents: the dependent is emptied, in the import's own
+    transaction, and a line says so. A file made before a dependent table existed (`user_nav` before 7.2.0) replaced `users` and left the dependent's rows on
+    their user ids, so a person's saved navigation was shown to whoever held that id after the restore, and rows of people the file lacks stayed behind (foreign
+    key checks are off during an import, so the cascade does not run). `_missing_dependents` refuses a selection that leaves out a dependent the file HAS; this
+    is the dependent the file cannot have. Only in replace mode, only for a parent that was in fact replaced, only a table that exists here."""
+    for parent, deps in JEN_DEPENDENTS.items():
+        if parent not in replaced:
+            continue
+        for dep in deps:
+            if dep in in_file or not _table_exists(conn, dep):
+                continue
+            with conn.cursor() as cur:
+                removed = cur.execute(f"DELETE FROM `{dep}`")  # nosec B608 - a name from JEN_DEPENDENTS, never a request value
+            if removed:
+                results.append(
+                    f"⚠️ {dep}: this file carries no rows for it and {parent} was replaced, so its {removed} "
+                    f"row{'' if removed == 1 else 's'} here {'was' if removed == 1 else 'were'} removed: "
+                    f"{'it' if removed == 1 else 'they'} belonged to the {parent} that were replaced"
+                )
+
+
 class PluginRestoreError(RuntimeError):
     """A plugin whose CODE IS PRESENT on this machine lost data in a restore (v5.67.0-beta.11, Q123, item d).
     Raised by import_jen(strict_plugins=True) after every plugin has been tried, so the message names ALL of
@@ -1186,6 +1214,8 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
         conn.cursor().execute("SET FOREIGN_KEY_CHECKS=0")
         for tbl in core_selected:
             _import_rows(conn, tbl)
+        if truncate:
+            _empty_dependents_the_file_lacks(conn, core_selected, set(data), results)
         conn.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
     except Exception as e:
         conn.rollback()
@@ -1256,8 +1286,15 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
                 logger.error(f"Import of plugin {pid}: the commit was not confirmed: {type(e).__name__}")
                 failures.append((pid, list(plugin_tables_to_import), COMMIT_NOT_CONFIRMED))
                 results.append(f"❌ {pid}: {COMMIT_NOT_CONFIRMED}")
+                # (Q244, BB3) the connection a commit was lost on is closed: the next plugin's `begin()` and its handler's `rollback()` raised on it, a
+                # raw driver error left this function, the line above never reached the page and no later plugin was restored. The plugins still to come
+                # get a connection of their own. When the database cannot be reached again either, that error leaves this function as it did before
+                with contextlib.suppress(Exception):
+                    conn.close()
+                conn = _direct_jen_conn()
     finally:
-        conn.close()
+        with contextlib.suppress(Exception):
+            conn.close()
 
     conn2 = _direct_jen_conn()
     try:
@@ -2163,18 +2200,25 @@ def migrate_kea(
             dst.rollback()
         except Exception:
             rolled_back = False
+        undone = rolled_back
         if not rolled_back:
             # the rollback could not be confirmed (the connection is gone): delete exactly what this run
             # inserted, by primary key, on a fresh connection
-            with contextlib.suppress(Exception):
+            try:
                 fresh = _direct_conn(target_host, target_port, target_user, target_password, target_db, target_ssl_ca)
                 try:
                     _delete_tracked(fresh, tables, pk_by_table, inserted)
                 finally:
                     fresh.close()
+                undone = True
+            except Exception as gone:
+                # (Q244, BB30) this delete ran under `contextlib.suppress`, and "the target was rolled back" was said after a delete that had failed
+                logger.error(f"Kea migration: the rows this run copied could not be removed: {type(gone).__name__}")
         with contextlib.suppress(Exception):
             dst.close()
         src.close()
+        if not undone:
+            raise RuntimeError(f"Kea migration failed — {KEA_MIGRATION_NOT_UNDONE} Error: {e}") from e
         raise RuntimeError(
             f"Kea migration failed — the target was rolled back and nothing that was there was touched. Error: {e}"
         ) from e

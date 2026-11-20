@@ -517,13 +517,31 @@ later one fails; a revert that cannot finish is a persistent, named rollback fai
 **Rule.** A handler that says "rolled back" or "nothing was changed" does not run for a failure of the commit itself. The server may have applied a commit whose reply was lost, and a
 rollback sent afterward returns without an error either way. A commit of an import that raises is `dbexport.ImportOutcomeUnknown`: no rollback is sent, none is claimed, and the page, the
 log and the audit row say the outcome is not known. A failure before the commit whose rollback returned is `dbexport.ImportRolledBack`, and only that one is recorded as rolled back.
-Not covered, registered by Q242: `dbexport.migrate_kea`, whose handler compensates by primary key when a rollback is not confirmed and does not yet ask whether the commit was sent.
-**Established.** Q242 (finding 2 of the independent review of v7.1.0-beta.10). Q238 (AW9: a rollback that itself failed).
+`dbexport.migrate_kea` compensates by primary key on a fresh connection when its rollback is not confirmed, and says the target was rolled back only when that delete ran (Q244, BB30): when
+neither is confirmed it says so (`KEA_MIGRATION_NOT_UNDONE`). And a plugin commit that was not confirmed ends neither the restore of the plugins after it nor the audit row's truth (Q244,
+BB3, BB4): they get a connection of their own, and the row is `DB_IMPORT_FAILED`.
+**Established.** Q242 (finding 2 of the independent review of v7.1.0-beta.10). Q238 (AW9: a rollback that itself failed). Q244 (BB3, BB4, BB30).
 **Enforced at.** `jen/services/dbexport.py::import_kea`, `::import_jen`; `jen/routes/database.py::import_confirm`.
 **Tests.**
 - `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestTheKeaImport`
 - `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestTheJenImport`
 - `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestThePageAndTheAuditRowSayWhichOfTheThreeItWas`
+- `tests/test_a_lost_plugin_commit_does_not_stop_the_plugins_after_it.py::TestTheFunction`
+- `tests/test_a_lost_plugin_commit_does_not_stop_the_plugins_after_it.py::TestTheRouteAndItsAuditRow`
+- `tests/test_migrate_contract.py::TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas`
+
+### TXN-003 - A table that hangs on a replaced table keeps no row the restore did not bring
+**Rule.** A restore in replace mode that replaces a parent table (`dbexport.JEN_DEPENDENTS`: today `users`) leaves no dependent table as it was. A dependent the file carries is restored
+from it; a selection that leaves out a dependent the file carries is refused before anything is touched (`_missing_dependents`, Q128); a dependent the file does NOT carry is emptied in the
+import's own transaction, with a line that names it and the number of rows. Foreign key checks are off during an import, so the database's cascade never does this. Without the last clause
+a file made before a dependent table existed left that table's rows on their ids: a person's saved navigation, API keys or MFA methods belonged to whoever held the id after the restore.
+Merge mode replaces nothing and removes nothing.
+**Established.** Q244 (BD1 of the pass on v7.2.0-beta.1). Q128 (the refused selection).
+**Enforced at.** `jen/services/dbexport.py::import_jen`, `::_empty_dependents_the_file_lacks`, `::_missing_dependents`.
+**Tests.**
+- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestAFileFromBeforeTheTableExisted`
+- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestWhatIsLeftAlone`
+- `tests/test_a_replaced_parent_keeps_no_row_the_file_lacks.py::TestTheHelper`
 - `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestNoHandlerOfACommitClaimsARollback`
 - `tests/test_plugin_restore_lifecycle.py::TestStrictAboutAPluginWhoseCodeIsPresent::test_a_plugins_commit_that_raised_is_not_called_a_rollback`
 - `tests/test_kea_binary_decode.py::TestARollbackThatFailsIsNotARollback`

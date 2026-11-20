@@ -465,11 +465,13 @@ def api_stats():
         for srv in server_statuses:
             if srv["up"]:
                 if len(extensions.KEA_SERVERS) > 1:
-                    ha = __kea.kea_command(
-                        "ha-heartbeat", server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"])
+                    ha = __kea.ha_arguments(
+                        __kea.kea_command(
+                            "ha-heartbeat", server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"])
+                        )
                     )
-                    if ha.get("result") == 0:
-                        srv["ha_state"] = (ha.get("arguments") or {}).get("state", "")
+                    if ha is not None:
+                        srv["ha_state"] = __kea.ha_text(ha, "state", "")
                 ver = __kea.kea_command(
                     "version-get", server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"])
                 )

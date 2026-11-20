@@ -210,7 +210,6 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         /* v7.2.0-beta.1 (Q243) - the person's own favorites after the fixed items: a hairline, then links that keep their icon and drop their word when the row is short of room */
         .nav-links { min-width: 0; }
         .nav-fav-sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
-        .nav a.nav-fav { color: var(--text); }
         @media screen and (max-width: 1500px) { .nav-fav-label { display: none; } }
         .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
         .kea-status { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }

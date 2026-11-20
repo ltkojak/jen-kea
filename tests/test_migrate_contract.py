@@ -528,3 +528,71 @@ class TestTheCopyHelpers:
         tgt = _conn(scratch)
         assert dbexport._kea_schema_version(tgt) is None
         tgt.close()
+
+
+class _TargetLost(pymysql.connections.Connection):
+    """The target applies the commit, the server then ends this connection, and the client gets the error of a lost one. Nothing stands in for the
+    connection's state: the rollback the handler sends next really fails."""
+
+    def commit(self):
+        super().commit()
+        other = pymysql.connect(host=self.host, port=self.port, user=self.user, password=self.password, autocommit=True)
+        try:
+            with other.cursor() as cur:
+                cur.execute(f"KILL {int(self.thread_id())}")
+        finally:
+            other.close()
+        raise pymysql.err.OperationalError(2013, "Lost connection to MySQL server during query")
+
+
+class TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas:
+    """Q244 (BB30, BB8 of the pass on v7.1.0-beta.11). When the rollback is not confirmed, `migrate_kea` deletes what the run copied, by primary key, on a
+    fresh connection. That delete ran under `contextlib.suppress`, and "the target was rolled back" was said whether it had worked or not."""
+
+    def _lose(self, monkeypatch, second_connection_fails):
+        real = dbexport._direct_conn
+        opened = []
+
+        def direct(host, port, user, password, database, ssl_ca=""):
+            if database == SCRATCH:
+                opened.append(1)
+                if len(opened) == 2 and second_connection_fails:
+                    raise pymysql.err.OperationalError(2003, "Can't connect to MySQL server")
+            conn = real(host, port, user, password, database, ssl_ca)
+            if database == SCRATCH and len(opened) == 1:
+                conn.__class__ = _TargetLost
+            return conn
+
+        monkeypatch.setattr(dbexport, "_direct_conn", direct)
+        return opened
+
+    def _target_hosts(self):
+        tgt = _conn(SCRATCH)
+        try:
+            return snapshot(tgt, ["hosts"])["hosts"]
+        finally:
+            tgt.close()
+
+    def test_the_delete_that_could_not_run_is_not_called_a_rollback(self, db, scratch, kea_source, monkeypatch):
+        initialize_kea_target(db).close()
+        opened = self._lose(monkeypatch, second_connection_fails=True)
+        with pytest.raises(RuntimeError) as e:
+            migrate_kea()
+        said = str(e.value)
+        assert dbexport.KEA_MIGRATION_NOT_UNDONE in said, said
+        assert "was rolled back" not in said and "nothing that was there was touched" not in said
+        assert len(opened) == 2, "the target was asked for a second connection, and refused it"
+        assert len(self._target_hosts()) == 3, "the commit was applied: the rows are there, as the sentence allows"
+
+    def test_the_delete_that_ran_is_still_called_one(self, db, scratch, kea_source, monkeypatch):
+        initialize_kea_target(db).close()
+        opened = self._lose(monkeypatch, second_connection_fails=False)
+        with pytest.raises(RuntimeError) as e:
+            migrate_kea()
+        assert "the target was rolled back" in str(e.value) and dbexport.KEA_MIGRATION_NOT_UNDONE not in str(e.value)
+        assert len(opened) == 2
+        assert self._target_hosts() == [], "what the run copied was removed, so the sentence is true"
+
+    def test_the_sentence_claims_no_rollback(self):
+        assert "rolled back" not in dbexport.KEA_MIGRATION_NOT_UNDONE
+        assert "Look at the target before migrating again." in dbexport.KEA_MIGRATION_NOT_UNDONE

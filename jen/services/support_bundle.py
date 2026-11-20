@@ -40,7 +40,7 @@ from jen.services import runtime
 from jen.services.secret_keys import (
     is_secret_key,
     scrub_urls,
-    without_userinfo,
+    without_credentials,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,9 +98,9 @@ def redact_ini_text(text: str) -> str:
             if is_secret_key(key) and value:
                 value = MASK  # (Q222, AG1) by NAME only: a password that begins with `/` is a password
             else:
-                value = without_userinfo(
-                    value
-                )  # (Q221, AE7; CRED-005) a legacy address keeps its host and port and never its user name or password
+                # (Q221, AE7; CRED-005) a legacy address keeps its host and port and never its user name or password. (Q244, AZ6, BA4, BB10) And never
+                # a query value or a fragment: this was `without_userinfo`, so the bundle kept what Config history and the readiness sentence mask
+                value = without_credentials(value)
             out.append(f"{key} = {value}")
         out.append("")
     return "\n".join(out)
@@ -123,7 +123,7 @@ def _is_secret_shape(value) -> bool:
 
 def _scrubbed(data, key=None):
     """`data` with no user-info left in any address, at any depth (Q221, AE7): THE pass every JSON member of the bundle goes through (`_json`), so a section added later is covered by being a
-    member. A string under an address key is a value (`secret_keys.without_userinfo`); any other string is text (`secret_keys.scrub_urls`). Keys, numbers, booleans and None are untouched."""
+    member. A string under an address key is a value (`secret_keys.without_credentials`: its user-info, its query values and its fragment go); any other string is text (`secret_keys.scrub_urls`). Keys, numbers, booleans and None are untouched."""
     if isinstance(data, dict):
         return {
             (scrub_urls(k) if isinstance(k, str) else k): (
@@ -134,7 +134,9 @@ def _scrubbed(data, key=None):
     if isinstance(data, (list, tuple)):
         return [_scrubbed(v, key) for v in data]
     if isinstance(data, str):
-        return without_userinfo(data) if _address_key(key) else scrub_urls(data)
+        return (
+            without_credentials(data) if _address_key(key) else scrub_urls(data)
+        )  # (Q244) `without_userinfo` until 7.2.0-beta.2
     if isinstance(data, (int, float, bool)) or data is None:
         return data
     return scrub_urls(

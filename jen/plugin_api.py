@@ -52,7 +52,8 @@ from jen.services.access import (  # noqa: E402
 )
 
 # ── Alerts (register_alert_type added v5.57.0, Q73) ──────────────────────────
-from jen.services.alerts import register_alert_type, send_alert  # noqa: E402
+# `safe_text` (v7.2.0, Q244): escape one device- or operator-supplied value before it goes into an alert's subject or body
+from jen.services.alerts import register_alert_type, safe_text, send_alert  # noqa: E402
 
 # ── API-key auth for plugin routes (v5.57.0, Q73) ────────────────────────────
 from jen.services.api_auth import (  # noqa: E402
@@ -225,6 +226,7 @@ __all__ = [
     "require_write",
     "safe_cell",
     "safe_row",
+    "safe_text",
     "search_scope",
     "send_alert",
     "set_global_setting",

@@ -460,3 +460,64 @@ class TestServersJsonNamesTheWriteMode:
     def test_the_readme_says_so(self):
         text = sb.readme_text("7.0.0", "beta", "host", "2026-11-05 10:00 UTC", [])
         assert "write mode and readiness facts" in text
+
+
+class TestAnAddressKeepsNoQueryValueAndNoFragment:
+    """Q244 (AZ6, BA4, BB10 of the passes on v7.1.0-beta.9 to beta.11). The bundle masked the user-info of an address and kept its query values and its
+    fragment: `api_url = https://kea.example:8000/?token=...` went into a file that is sent to someone. Config history and the readiness sentence have
+    masked both since Q237 and Q240 (`secret_keys.without_credentials`); the bundle's two readers of a VALUE now use the same definition."""
+
+    SECRET = "s3cr3t-Value-9f"
+    INI = (
+        "[kea]\n"
+        f"api_url = https://reader:{SECRET}1@kea.example:8000/path?token={SECRET}2&x={SECRET}3#{SECRET}4\n"
+        "plain = http://10.0.0.5:8000\n"
+        f"note = see https://docs.example/page?sig={SECRET}5 for it\n"
+    )
+
+    def test_the_ini_member(self):
+        out = sb.redact_ini_text(self.INI)
+        assert self.SECRET not in out, out
+        assert "api_url = https://kea.example:8000/path?token=" in out, (
+            "the host, the port, the path and the parameter's name are kept"
+        )
+        assert "plain = http://10.0.0.5:8000" in out, "an address with nothing to mask is as it was written"
+
+    def test_a_json_member_under_an_address_key(self):
+        data = {
+            "servers": [
+                {
+                    "api_url": f"https://u:{self.SECRET}1@kea.example:8000/?token={self.SECRET}2#{self.SECRET}3",
+                    "url": f"http://kea.example:8000/?k={self.SECRET}4",
+                    "name": "kea-1",
+                }
+            ]
+        }
+        out = sb._scrubbed(data)
+        assert self.SECRET not in json.dumps(out), out
+        assert out["servers"][0]["api_url"].startswith("https://kea.example:8000/?token=")
+        assert out["servers"][0]["name"] == "kea-1"
+
+    def test_nothing_the_earlier_reader_removed_is_kept_by_this_one(self):
+        """`without_credentials` is at least `without_userinfo`: for each value, what the earlier definition masked is still gone."""
+        from jen.services.secret_keys import without_credentials, without_userinfo
+
+        for value in (
+            "http://user:pw@host:8000",
+            "https://user:p w@host/path",
+            "http://host:8000/",
+            "user:pw@host",
+            "/etc/jen/ssl/kea-client.key",
+            "ldap://cn=x:pw@dir.example",
+            "",
+        ):
+            earlier, now = without_userinfo(value), without_credentials(value)
+            for word in ("pw", "p w"):
+                if word in value and word not in earlier:
+                    assert word not in now, (value, now)
+
+    def test_no_value_in_the_bundle_goes_through_the_earlier_reader(self):
+        import pathlib
+
+        source = (pathlib.Path(sb.__file__)).read_text(encoding="utf-8")
+        assert "without_userinfo(" not in source, "a reader of a VALUE that keeps the query: use without_credentials"

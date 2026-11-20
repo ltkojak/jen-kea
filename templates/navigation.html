@@ -64,9 +64,12 @@
         <button type="submit" class="btn btn-primary">{{ icon("plus") }} Add</button>
     </form>
     {% endif %}
+    {% if l.hidden %}
+    <p class="navc-group navc-hidden">{{ l.hidden }} saved page{{ "" if l.hidden == 1 else "s" }} cannot be shown now: a plugin that is off or removed, or a page your account no longer opens. {{ "It comes" if l.hidden == 1 else "They come" }} back with the page. Reset to default removes {{ "it" if l.hidden == 1 else "them" }}.</p>
+    {% endif %}
     <div class="navc-foot">
         <span>{% if l.chosen|length >= l.limit %}This list is full. Remove a page to add another.{% endif %}</span>
-        {% if l.chosen %}
+        {% if l.stored %}
         <form method="POST" action="{{ url_for('navigation.edit') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="place" value="{{ place }}">

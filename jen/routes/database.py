@@ -827,7 +827,16 @@ def import_confirm():
                 results = dbexport.import_jen_guarded(file_bytes, tables)
             else:
                 results = dbexport.import_jen(file_bytes, tables, truncate=False)
-            __user.audit("DB_IMPORT", "jen", f"tables={tables or 'all'} mode={mode}")
+            if any(dbexport.COMMIT_NOT_CONFIRMED in r for r in results):
+                # (Q244, BB4) a plugin's commit that was not confirmed comes back as a line, not an exception: the row said DB_IMPORT, the action of an
+                # import that worked, under a page that said its outcome is not known
+                __user.audit(
+                    "DB_IMPORT_FAILED",
+                    "jen",
+                    f"tables={tables or 'all'} mode={mode}; a plugin's commit was not confirmed; the outcome is not known",
+                )
+            else:
+                __user.audit("DB_IMPORT", "jen", f"tables={tables or 'all'} mode={mode}")
         elif db == "kea":
             results = dbexport.import_kea(file_bytes, duplicate_mode=dup)
             __user.audit("DB_IMPORT", "kea", f"duplicate_mode={dup}")

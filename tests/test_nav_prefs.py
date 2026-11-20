@@ -382,3 +382,70 @@ class TestThePinButton:
 
         monkeypatch.setattr(dbmod, "jen_db", broken)
         assert nav_prefs.load(1) == {"top": [], "tabbar": []}
+
+
+class TestAListOfPagesThatAreGoneCanBeCleared:
+    """Q244 (BD2, BD11 of the pass on v7.2.0-beta.1). An id that stops resolving stays stored, by decision: the page comes back with its plugin. With every
+    stored id gone the card listed nothing and offered no Reset, so the person could not clear the list from the page."""
+
+    def _store(self, db, top):
+        with db.cursor() as cur:
+            cur.execute("REPLACE INTO user_nav (user_id, top_row) VALUES (1, %s)", (json.dumps(top),))
+        db.commit()
+
+    def _card(self, client):
+        body = client.get("/navigation").get_data(as_text=True)
+        return body.split('id="navc-top"')[1].split('id="navc-tabbar"')[0]
+
+    def test_reset_is_offered_when_nothing_stored_resolves(self, logged_in_client, clean_nav, db):
+        """v7.2.0-beta.1 shows no Reset here."""
+        self._store(db, ["plugin:gone.index"])
+        card = self._card(logged_in_client)
+        assert "Top row favorites (0 of 5)" in card and "No favorites yet." in card
+        assert "Reset to default" in card
+        assert "1 saved page cannot be shown now" in card and "Reset to default removes it." in card
+
+    def test_reset_then_clears_it(self, logged_in_client, clean_nav, db):
+        self._store(db, ["plugin:gone.index", "plugin:gone.too"])
+        assert "2 saved pages cannot be shown now" in self._card(logged_in_client)
+        logged_in_client.post("/navigation/edit", data={"place": "top", "action": "reset"})
+        assert _stored(db, 1)["top"] == []
+        card = self._card(logged_in_client)
+        assert "cannot be shown now" not in card and "Reset to default" not in card
+
+    def test_the_count_is_of_the_ones_that_do_not_resolve(self, logged_in_client, clean_nav, db):
+        self._store(db, ["/reports", "plugin:gone.index", "/reports"])
+        card = self._card(logged_in_client)
+        assert "Top row favorites (1 of 5)" in card and "1 saved page cannot be shown now" in card
+
+    def test_nothing_is_said_when_every_stored_page_resolves(self, logged_in_client, clean_nav, db):
+        self._store(db, ["/reports"])
+        card = self._card(logged_in_client)
+        assert "cannot be shown now" not in card and "Reset to default" in card
+
+    def test_the_phone_bar_card_says_nothing_of_the_top_rows_pages(self, logged_in_client, clean_nav, db):
+        self._store(db, ["plugin:gone.index"])
+        body = logged_in_client.get("/navigation").get_data(as_text=True)
+        bar = body.split('id="navc-tabbar"')[1]
+        assert "cannot be shown now" not in bar and "Reset to default" not in bar
+
+
+class TestAFavoriteIsDrawnAsTheFixedItemsAre:
+    """Q244 (the maintainer, 2026-11-19, on v7.2.0-beta.1). A favorite that is not the page being shown was drawn in the bright text color, beside five fixed
+    items that are muted until they are the page being shown or the pointer is on them."""
+
+    def test_no_rule_gives_an_idle_favorite_a_color_of_its_own(self):
+        import pathlib
+        import re
+
+        css = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "base.html").read_text(encoding="utf-8")
+        own = [m for m in re.findall(r"[^{}\n]*\.nav-fav\b[^{}\n]*\{[^}]*\}", css) if "color" in m.split("{", 1)[1]]
+        assert own == [], own
+        assert ".nav a.nav-link { color: var(--text-muted);" in css
+        assert ".nav a.nav-link:hover, .nav a.nav-link.active { background: var(--surface2); color: var(--text);" in css
+
+    def test_a_favorite_carries_the_class_those_rules_are_written_for(self):
+        import pathlib
+
+        html = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "base.html").read_text(encoding="utf-8")
+        assert 'class="nav-link nav-fav {% if f.active %}active{% endif %}"' in html

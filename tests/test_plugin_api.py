@@ -65,6 +65,7 @@ class TestSurface:
             "unregister_periodic": background.unregister_periodic,
             "periodic_jobs": background.periodic_jobs,
             "safe_row": csv_safe.safe_row,
+            "safe_text": alerts.safe_text,
             "safe_cell": csv_safe.safe_cell,
             "classify_device": fingerprint.classify_device,
             "event_kinds": events.KINDS,

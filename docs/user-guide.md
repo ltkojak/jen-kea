@@ -654,7 +654,7 @@ To upload a custom icon, enter an icon name (e.g. `amazon`, `mydevice`) and sele
 
 ## Customize navigation (v7.2.0)
 
-The top row always holds Dashboard, Management, Network, Settings and About. After them you can keep up to five **favorites**: pages you want one click away, such as a plugin's page that otherwise sits under Network.
+The top row holds Dashboard, Management, Network, Settings and About (a viewer has no Settings). Those are fixed. After them you can keep up to five **favorites**: pages you want one click away, such as a plugin's page that otherwise sits under Network.
 
 - **From the page itself.** At the right end of a section's tabs is a button that reads **Add to top row**. Click it and the page you are on appears in the top row. On a page that is already a favorite the button reads **Remove from top row**.
 - **From one place.** Open your account menu (your avatar, top right) and choose **Customize navigation**. The page has two lists, *Top row favorites* and *Phone bar*. Each has the same controls: pick a page and **Add**, move an entry up or down, remove it, or **Reset to default**.

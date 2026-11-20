@@ -137,7 +137,7 @@ nothing new lives behind it, and importing it does no work:
 | Diagnostic surface (v5.65.2) | decorator `diagnostic_surface(subject="client")` — mark a route that looks up one client (see below) |
 | Client | `client_subnet_for_mac(mac)` → the subnet a client is in now, by Jen's ONE precedence (current lease, then reservation, then the device's last known subnet), or `None` — treat `None` as unrestricted-only via `can_access_subnet` (v5.65.6) |
 | Subnets | `subnet_map()` (all IPv4 subnets), `subnet_context(subnet_id)`, `classify_address(ctx, ip)`, `in_pool(ctx, ip)`, `dhcp4_config()` |
-| Alerts | `send_alert(alert_type, subnet_id=…, subject=…, body=…)` |
+| Alerts | `send_alert(alert_type, subnet_id=…, subject=…, body=…)`; `safe_text(value)` (v7.2.0) escapes ONE value that came from a device or was typed by an operator (a hostname, a vendor, a label) before it goes into a subject or a body. Telegram and Pushover read the message as HTML and refuse the whole message when it does not parse, so a label like `AT&T <gateway>` sent as it is means that alert never arrives. Escape each such value; never the whole body, which carries your own `<b>` |
 | Background | `register_periodic(plugin_id, name, fn, every_minutes)`, `unregister_periodic`, `periodic_jobs()` |
 | Events (v5.42.0; `emit` added v5.57.0) | `subscribe(kind_or_"*", fn)`, `unsubscribe(fn)`, `emit(kind, **fields)`, `event_kinds` (the pinned kind vocabulary) |
 | CSV | `safe_cell(value)`, `safe_row(values)` |

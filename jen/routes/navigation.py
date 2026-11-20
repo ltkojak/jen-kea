@@ -71,6 +71,10 @@ def customize():
             "chosen": chosen,
             "available": [d for d in offered[place] if d["id"] not in chosen_ids],
             "limit": _limit(place),
+            # (Q244, BD2, BD11) what is stored and resolves to nothing today is counted, and Reset is offered for it: with every stored page gone the card
+            # listed nothing and had no Reset, so the person could not clear a list from the page
+            "stored": bool(stored[place]),
+            "hidden": sum(1 for i in dict.fromkeys(stored[place]) if i not in by_id),
         }
     return render_template("navigation.html", lists=lists)
 
