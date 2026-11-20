@@ -16,6 +16,7 @@ are the same rows afterward.
 import pytest
 
 from jen.services import dbexport
+from tests.test_a_lost_plugin_commit_does_not_stop_the_plugins_after_it import _installed, _put_back
 
 OTHERS = [d for d in dbexport.JEN_DEPENDENTS["users"] if d != "user_nav"]
 LINE = (
@@ -29,6 +30,14 @@ def _nav(db):
     with db.cursor() as cur:
         cur.execute("SELECT user_id, top_row FROM user_nav ORDER BY user_id")
         return [(r["user_id"], r["top_row"]) for r in cur.fetchall()]
+
+
+@pytest.fixture(autouse=True)
+def the_plugins_are_left_as_they_were(db):
+    """A restore of a whole file runs every plugin's migrations again and leaves their tables: put back, so the next file finds what this one found."""
+    before = _installed(db)
+    yield
+    _put_back(db, before)
 
 
 @pytest.fixture

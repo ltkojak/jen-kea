@@ -51,10 +51,52 @@ class LostAt(pymysql.connections.Connection):
         raise pymysql.err.OperationalError(2013, "Lost connection to MySQL server during query")
 
 
+#: Jen's own three records of a plugin, each with the column that names the plugin
+RECORDS = (("plugins", "id"), ("plugin_schema_migrations", "plugin_id"), ("plugin_tables", "plugin_id"))
+
+
+def _installed(db):
+    """What the database says of the bundled plugins before a test touches them: Jen's three records of them, and which of their tables exist."""
+    db.commit()
+    marks = ", ".join(["%s"] * len(L.BUNDLED_IDS))
+    kept = {}
+    with db.cursor() as cur:
+        for table, column in RECORDS:
+            cur.execute(f"SELECT * FROM `{table}` WHERE `{column}` IN ({marks})", L.BUNDLED_IDS)
+            kept[table] = cur.fetchall()
+        cur.execute("SHOW TABLES")
+        tables = {next(iter(r.values())) for r in cur.fetchall()} & set(L.ALL_20)
+    return kept, tables
+
+
+def _put_back(db, before):
+    """The suite's next file finds what this one found. A restore of a whole file runs every plugin's migrations again, so it leaves the plugins' tables
+    behind, and every page that asks "is there plugin data here?" then answers yes for the rest of the run:
+    `tests/test_database.py::TestBundleDownloadsAreNoStore::test_no_plugin_backup_notice_with_no_plugins_installed` failed on all three legs of CI."""
+    kept, tables = before
+    marks = ", ".join(["%s"] * len(L.BUNDLED_IDS))
+    db.commit()
+    with db.cursor() as cur:
+        cur.execute("SET FOREIGN_KEY_CHECKS=0")
+        for t in L.ALL_20:
+            if t not in tables:
+                cur.execute(f"DROP TABLE IF EXISTS `{t}`")
+        cur.execute("SET FOREIGN_KEY_CHECKS=1")
+        for table, column in RECORDS:
+            cur.execute(f"DELETE FROM `{table}` WHERE `{column}` IN ({marks})", L.BUNDLED_IDS)
+            for r in kept[table]:
+                cur.execute(
+                    f"INSERT INTO `{table}` ({', '.join(f'`{k}`' for k in r)}) VALUES ({', '.join(['%s'] * len(r))})",
+                    list(r.values()),
+                )
+    db.commit()
+
+
 @pytest.fixture
 def world(db, monkeypatch, tmp_path):
     """Every bundled plugin installed with one row per table, exported, and its tables dropped: the state a restore target is in. The yield is the file."""
     monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", os.path.join(extensions.JEN_ROOT, "plugins"))
+    before = _installed(db)
     L._install_and_migrate_all(db)
     L._seed_all_20_tables(db)
     path = tmp_path / "full.json.gz"
@@ -71,6 +113,7 @@ def world(db, monkeypatch, tmp_path):
     LostAt.seen = LostAt.lose = 0
     yield path.read_bytes()
     LostAt.seen = LostAt.lose = 0
+    _put_back(db, before)
 
 
 def _rows(db):
