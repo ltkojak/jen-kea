@@ -118,6 +118,9 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             --sticky-top: 56px;
         }
         body.has-strip { --sticky-top: 96px; }
+        /* Q247 (U12) - a form control takes the page's font, not the browser's own: with a monospace interface (Phosphor, or a custom palette that asks for it) the selects, the buttons
+           and the Search field stayed in the system face. A .mono input keeps its own (a class outranks this), and a textarea keeps the browser's monospace: config and JSON are typed in them. */
+        input, select, button { font-family: inherit; }
         a { color: var(--primary); text-decoration: none; }
         a:hover { text-decoration: underline; }
 
@@ -223,7 +226,9 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .section-tab:hover { color: var(--text); text-decoration: none; }
         .section-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
         /* v7.2.0-beta.1 (Q243) - the pin button at the end of the strip (the page being shown, into or out of the top row); a phone has no top row, so it is not shown there */
-        .section-pin { margin: 0 12px 0 auto; padding-left: 12px; flex-shrink: 0; }
+        /* v7.2.0-beta.5 (Q247, U1) - the button stays at the strip's right edge while the tabs scroll under it: with seven plugins the Network strip is wider than a
+           1440 px window, and the button, which was the strip's last item, was scrolled out of view with nothing to say it was there */
+        .section-pin { margin: 0 0 0 auto; padding: 0 12px; flex-shrink: 0; position: sticky; right: 0; z-index: 1; align-self: stretch; display: flex; align-items: center; background: var(--surface); box-shadow: -12px 0 10px -6px var(--surface); }
         .section-pin-btn { display: inline-flex; align-items: center; gap: 5px; background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
         .section-pin-btn:hover, .section-pin-btn.pinned { color: var(--text); border-color: var(--primary); }
         @media screen and (max-width: 768px) { .section-pin { display: none; } }
@@ -257,6 +262,10 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .settings-cols { columns: 2; column-gap: var(--sp-5); }
             .settings-cols .card { break-inside: avoid; }
             .settings-cols .card--wide { column-span: all; }
+            /* Q247 (U6) - a column's last card loses its bottom margin where a spanning card follows (the columns are balanced to the cards' borders), so the wide card touched the
+               one above it. The wide card brings the gap itself; two wide cards in a row keep the one gap the first one's bottom margin already makes. */
+            .settings-cols .card--wide:not(:first-child) { margin-top: 16px; }
+            .settings-cols .card--wide + .card--wide { margin-top: 0; }
         }
         .settings-hint-bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 27%, transparent); }
         .subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -392,6 +401,13 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         input:focus, select:focus, textarea:focus { border-color: var(--primary); }
         .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
         input[type=checkbox] { width: auto; margin-right: 6px; }
+        /* one checkbox and its sentence: the text is ONE flex item (a <span>), in sentence case, not the uppercase field-label style (Q247, U10) */
+        .form-group label.check-label { display: flex; align-items: flex-start; gap: 4px; font-size: 13px; font-weight: 400; color: var(--text); text-transform: none; letter-spacing: 0; cursor: pointer; }
+        .form-group label.check-label input[type=checkbox] { flex: none; margin-top: 2px; }
+        /* a list of checkboxes that post one field name, in a box that scrolls (Q247, U9: the API key's subnets were a multi-select a phone cannot extend) */
+        .check-list { max-height: 180px; overflow-y: auto; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 12px; }
+        .check-list[aria-invalid="true"] { border-color: var(--danger); }
+        .form-group .check-list label { display: flex; align-items: center; gap: 2px; margin: 0; padding: 7px 0; font-size: 13px; font-weight: 400; color: var(--text); text-transform: none; letter-spacing: 0; cursor: pointer; }
 
         /* Badges */
         .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
@@ -531,6 +547,9 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 
         /* Stat cards */
         .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        /* Q247 (U6) - a stat card carries no bottom margin, so a grid of them touched the card after it (Reports, Servers). Not on a grid that ends its container: the dashboard's
+           widgets are spaced by their flex gap. */
+        .stat-grid:not(:last-child) { margin-bottom: 16px; }
         
         
         .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
@@ -649,6 +668,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .badge-duid { font-size: 10px; padding: 1px 6px; background: var(--surface2); color: var(--text-muted); }
         .filter-bar input.w-70 { width: 70px; min-width: 0; }
         @media screen and (min-width: 769px) { .nw-d { white-space: nowrap; } }
+        .nowrap { white-space: nowrap; }
         /* ── accordion rows (v5.53.0, Q60): the alert message templates ── */
         .al-tpl-tools { display: flex; gap: var(--sp-2); justify-content: flex-end; margin-bottom: var(--sp-2); }
         .al-tpl-list { display: flex; flex-direction: column; gap: var(--sp-2); }

@@ -1027,11 +1027,8 @@ PLUGIN_ROUTE_ALLOWLIST = {
         )
     },
     **{f"watchdog:{fn}": _PLUGIN_OWN for fn in ("index", "add_target")},
-    **{
-        f"wol:{fn}": _PLUGIN_CLIENT_FACING
-        for fn in ("delete_favourite", "wake_favourite", "wake_from_row", "_api_wake")
-    },
-    **{f"wol:{fn}": _PLUGIN_OWN for fn in ("index", "add_favourite")},
+    **{f"wol:{fn}": _PLUGIN_CLIENT_FACING for fn in ("delete_favorite", "wake_favorite", "wake_from_row", "_api_wake")},
+    **{f"wol:{fn}": _PLUGIN_OWN for fn in ("index", "add_favorite")},
     **{f"presence:{fn}": _PLUGIN_CLIENT_FACING for fn in ("track", "untrack", "track_from_row", "move_subnet")},
     **{f"presence:{fn}": _PLUGIN_OWN for fn in ("index", "add_sink", "toggle_sink", "delete_sink", "test_sink")},
     **{f"switchport:{fn}": _PLUGIN_CLIENT_FACING for fn in ("index", "_api_locate")},

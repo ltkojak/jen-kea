@@ -5,15 +5,15 @@
 {% from '_copy.html' import copy_cell %}
 {% for l in recent %}
 <tr>
-    <td class="mono">{{ copy_cell(l.ip) }}</td>
-    <td class="u-86abda">
+    <td class="mono" data-m="secondary">{{ copy_cell(l.ip) }}</td>
+    <td class="u-86abda" data-m="primary">
         {{ hostname_or_none(l.hostname) }}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
     </td>
-    <td class="mono">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
-    <td>{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
-    <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
+    <td class="mono" data-m="secondary">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
+    <td data-m="secondary">{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
+    <td class="mono u-5872de" data-m="secondary">{{ l.obtained|utctime }}</td>
 </tr>
 {% else %}
-<tr><td colspan="5" class="u-c92bea">No leases issued in this time window.</td></tr>
+<tr><td colspan="5" class="u-c92bea" data-m="full">No leases issued in this time window.</td></tr>
 {% endfor %}

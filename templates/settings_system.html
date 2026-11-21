@@ -106,9 +106,9 @@
         <tbody>
         {% for p in plugins %}
         <tr>
-            <td data-m="primary"><strong>{{ p.name }}</strong><div class="u-865c33">{{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}</div></td>
+            <td data-m="primary"><strong>{{ p.name }}</strong><div class="u-865c33">{{ p.description }}</div></td>
             <td data-m="secondary" class="u-86abda">v{{ p.version }}</td>
-            <td data-m="badge">
+            <td data-m="badge" class="nowrap">
                 {% if not p.version_ok %}<span class="u-0051c0">{{ icon("triangle-alert") }} Jen version mismatch</span>
                 {% elif p.enabled %}<span class="u-d5881b">● Enabled</span>
                 {% else %}<span class="u-2bb516">○ Disabled</span>{% endif %}

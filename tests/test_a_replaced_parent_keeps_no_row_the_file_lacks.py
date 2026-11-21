@@ -167,9 +167,11 @@ class TestAnAccountTheFileDoesNotBring:
             "gone or now has a different name. Rows that belong to users the file brought back under the same name were kept"
         ) in results, results
         assert (
-            "⚠️ api_keys: this file carries no rows for it and users was replaced. 1 row here was kept and no longer names the users it pointed at, "
-            "which are gone or now have a different name"
+            "⚠️ api_keys: this file carries no rows for it and users was replaced. 1 row here was kept and no longer names the users row it pointed at, "
+            "which is gone or now has a different name"
         ) in results, results
+        # Q247 (BG10): one row names one users row; the line said "the users it pointed at, which are gone" for a single row
+        assert not [r for r in results if "1 row here was kept" in r and "which are gone" in r], results
         assert sorted(r.split(":")[0] for r in _settled(results)) == sorted(f"⚠️ {d}" for d in DEPS)
 
     def test_a_file_that_brings_no_account_back_does_not_say_rows_were_kept(self, db, two, monkeypatch):

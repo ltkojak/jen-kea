@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Explain a client{% endblock %}
 {% block content %}
+{# Q247 (U8) - the form's columns are wide enough for the Subnet choice and the placeholders to be read whole; the relay's three inputs take two columns, and stack on a phone #}
+<style>
+.explain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px; }
+.explain-relay { display: flex; gap: 6px; }
+.explain-relay input { min-width: 0; }
+@media screen and (min-width: 769px) { .explain-relay-group { grid-column: span 2; } }
+@media screen and (max-width: 768px) { .explain-relay { flex-direction: column; } }
+</style>
 
 <div class="page-header">
     <h1>{{ icon("compass", "ico-lg") }} Why did this client get this?</h1>
@@ -9,7 +17,7 @@
 
 <div class="card">
     <form method="GET" action="/tools/explain" autocomplete="off">
-        <div class="form-row u-f0e9d3">
+        <div class="form-row explain-grid">
             <div class="form-group u-116966">
                 <label for="f-mac">MAC address <span class="u-497726">*</span></label>
                 <input id="f-mac" type="text" name="mac" class="mono" value="{{ client.mac }}" placeholder="aa:bb:cc:dd:ee:ff" required>
@@ -30,7 +38,7 @@
             <div class="form-group u-116966">
                 <label for="f-user_class">User class (option 77)</label>
                 <input id="f-user_class" type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE" aria-describedby="f-user_class-hint">
-                <input type="text" name="user_class_bytes" class="mono" value="{{ client.user_class_bytes }}" placeholder="as sent, hex (08:69:50:58:45) - optional">
+                <input type="text" name="user_class_bytes" class="mono" value="{{ client.user_class_bytes }}" placeholder="hex as sent: 08:69:50:58:45" aria-label="User class as the client sent it, hex bytes (optional)">
                 <div class="form-hint" id="f-user_class-hint">Kea compares the bytes the client sent. A client sends the bare string or, like Windows, one length byte then the string; give the bytes when you know them.</div>
             </div>
             <div class="form-group u-116966">
@@ -41,12 +49,12 @@
                 <label for="f-client_id">Client id (option 61)</label>
                 <input id="f-client_id" type="text" name="client_id" class="mono" value="{{ client.client_id }}" placeholder="01:aa:bb:cc:dd:ee:ff">
             </div>
-            <div class="form-group u-116966">
+            <div class="form-group u-116966 explain-relay-group">
                 <label>Relay circuit id / remote id</label>
-                <div class="u-49cd09">
-                    <input type="text" name="circuit_id" class="mono" value="{{ client.circuit_id }}" placeholder="circuit id">
-                    <input type="text" name="circuit_id_hex" class="mono" value="{{ client.circuit_id_hex }}" placeholder="circuit id bytes (hex)">
-                    <input type="text" name="remote_id" class="mono" value="{{ client.remote_id }}" placeholder="remote id (hex)">
+                <div class="explain-relay">
+                    <input type="text" name="circuit_id" class="mono" value="{{ client.circuit_id }}" placeholder="circuit id (text)" aria-label="Relay circuit id, as text">
+                    <input type="text" name="circuit_id_hex" class="mono" value="{{ client.circuit_id_hex }}" placeholder="circuit id (hex)" aria-label="Relay circuit id, as hex bytes">
+                    <input type="text" name="remote_id" class="mono" value="{{ client.remote_id }}" placeholder="remote id (hex)" aria-label="Relay remote id, as hex bytes">
                 </div>
             </div>
             <div class="form-group u-116966">

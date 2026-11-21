@@ -31,10 +31,11 @@
            guards it). #}
         {% if current_user.is_admin_or_above %}
         <tr><td class="stat-label u-d8c022">HTTP Port</td>
-            <td>{{ http_port }} <span class="u-5694e6">(redirects to HTTPS)</span></td></tr>
+            {# Q247 (U15) - the port redirects only when a certificate is installed; without one this line said it did while Health and Getting Started said HTTPS was not set up #}
+            <td>{{ http_port }}{% if ssl_on %} <span class="u-5694e6">(redirects to HTTPS)</span>{% endif %}</td></tr>
         <tr><td class="stat-label u-d8c022">HTTPS Port</td>
             <td>{{ https_port }}
-                {% if ssl_on %}<span class="u-d5881b"> ✓ Active</span>{% endif %}
+                {% if ssl_on %}<span class="u-d5881b"> ✓ Active</span>{% else %}<span class="u-5694e6"> (not in use: no certificate is installed)</span>{% endif %}
             </td></tr>
         <tr><td class="stat-label u-d8c022">Config File</td>
             <td class="mono u-6cb285">{{ jen_layout.config_file }}</td></tr>

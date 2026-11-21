@@ -243,7 +243,7 @@
         <div id="recent-leases-body">
         {% if recent %}
         <div class="table-wrap">
-        <table class="sortable">
+        <table class="sortable rowlist">
             <thead><tr>
                 <th data-sort>IP Address</th>
                 <th data-sort>Hostname</th>
@@ -254,14 +254,14 @@
             <tbody>
             {% for l in recent %}
             <tr>
-                <td class="mono">{{ copy_cell(l.ip) }}</td>
-                <td class="u-86abda">
+                <td class="mono" data-m="secondary">{{ copy_cell(l.ip) }}</td>
+                <td class="u-86abda" data-m="primary">
                     {{ hostname_or_none(l.hostname) }}
                     {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
                 </td>
-                <td class="mono">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
-                <td>{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
-                <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
+                <td class="mono" data-m="secondary">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
+                <td data-m="secondary">{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
+                <td class="mono u-5872de" data-m="secondary">{{ l.obtained|utctime }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -319,7 +319,7 @@ body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
             <a href="/servers" class="btn btn-sm btn-secondary">View Details</a>
         </div>
         {% if server_statuses %}
-        <table class="u-046678">
+        <table class="u-046678 rowlist">
             <thead><tr>
                 <th class="u-6be0d8">Server</th>
                 <th class="u-6be0d8">Status</th>
@@ -329,8 +329,8 @@ body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
             <tbody>
             {% for s in server_statuses %}
             <tr>
-                <td class="mono">{{ s.server.get('name', s.server.get('url','?')) }}</td>
-                <td id="srv-status-{{ s.server.get('id', loop.index) }}">
+                <td class="mono" data-m="primary">{{ s.server.get('name', s.server.get('url','?')) }}</td>
+                <td id="srv-status-{{ s.server.get('id', loop.index) }}" data-m="trailing">
                     {% if s.up is none %}
                     <span class="u-5872de">● Checking...</span>
                     {% elif s.up %}
@@ -339,10 +339,10 @@ body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
                     <span class="u-497726">● Offline</span>
                     {% endif %}
                 </td>
-                <td class="u-2bb516" id="srv-ha-{{ s.server.get('id', loop.index) }}">
+                <td class="u-2bb516" id="srv-ha-{{ s.server.get('id', loop.index) }}" data-m="secondary">
                     {% if s.ha_state %}{{ s.ha_state }}{% elif s.up is not none and s.up %}primary{% else %}—{% endif %}
                 </td>
-                <td class="u-2bb516" id="srv-ver-{{ s.server.get('id', loop.index) }}" title="{{ s.version or '' }}">{{ (s.version or '—').split()[0] }}</td>
+                <td class="u-2bb516" id="srv-ver-{{ s.server.get('id', loop.index) }}" data-m="secondary" title="{{ s.version or '' }}">{{ (s.version or '—').split()[0] }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -718,6 +718,8 @@ function loadRecentLeases() {
         .then(function(r) { return r.text(); })
         .then(function(html) {
             body.innerHTML = html;
+            // the phone row list marks its cells (Q247, U7)
+            if (window.jenUi) window.jenUi.enhance(body);
             body.style.opacity = '1';
         })
         .catch(function() { body.style.opacity = '1'; });
@@ -1009,6 +1011,8 @@ function updateStats() {
                     if (haEl)  haEl.textContent = srv.ha_state || (srv.up ? srv.role || '—' : '—');
                     if (verEl) { verEl.textContent = (srv.version || '—').split(' ')[0]; verEl.title = srv.version || ''; }
                 });
+                // a cell that was a dash when the page was made and has a value now is shown again on a phone (Q247, U7)
+                if (window.jenUi) window.jenUi.enhance(document.getElementById('dash-server_status'));
             }
         })
         .catch(function() { if (dot) dot.style.background = 'var(--danger)'; });

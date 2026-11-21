@@ -210,6 +210,15 @@ Generated through **Settings → Kea → SSH**, stored in the
 `jen-config` volume at `/etc/jen/ssh/`. Add the public key to the Kea
 server's `authorized_keys`, same as a bare-metal install.
 
+## Wake-on-LAN
+
+A wake packet is a broadcast. On Docker's default bridge network, which the shipped compose files use, a
+broadcast from the container reaches the Docker bridge and not your LAN, so the Wake & Actions plugin sends its
+packet and nothing wakes. From Wake & Actions 1.2.0 the page says so when it sends ("arrives only if a router
+forwards directed broadcasts"). To make Wake work, give the container an address on the LAN: run it with host
+networking (`network_mode: host` in place of the `ports:` list) or attach it to a macvlan network on the LAN's
+interface. Nothing else in Jen needs either.
+
 ## Kea host helper updates (v5.66.0+)
 
 A Docker image is built from source, so it never has a local

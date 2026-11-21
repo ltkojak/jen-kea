@@ -46,20 +46,21 @@
             <div class="form-hint">Off = read-only. On = may create/delete reservations, edit device names and owners, and set subnet notes — within its subnet scope.</div>
         </div>
         <div class="form-group u-9e0402">
-            <label for="f-subnet_ids">Subnet Access</label>
-            <select id="f-subnet_ids" name="subnet_ids" multiple class="u-ff2ba4" aria-describedby="f-subnet_ids-hint">
+            <label id="f-subnet_ids-label">Subnet Access</label>
+            {# Q247 (U9) - a list of checkboxes, not a multi-select a phone cannot extend: the same field name and values, so the route reads what it always read #}
+            <div id="f-subnet_ids" class="check-list" role="group" tabindex="-1" aria-labelledby="f-subnet_ids-label" aria-describedby="f-subnet_ids-hint">
                 {% if can_grant_all_subnets %}
-                <option value="all" selected>All Subnets</option>
+                <label><input type="checkbox" name="subnet_ids" value="all" checked> All Subnets</label>
                 {% endif %}
                 {% for sid, info in subnet_map.items() %}
-                <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
+                <label><input type="checkbox" name="subnet_ids" value="{{ sid }}"> {{ info.name }} ({{ info.cidr }})</label>
                 {% endfor %}
-            </select>
+            </div>
             <div class="form-hint" id="f-subnet_ids-hint">
                 {% if can_grant_all_subnets %}
-                Ctrl/Cmd+click for multiple. "All Subnets" = unrestricted. A key's access is set here, independent of who creates it.
+                Tick the subnets this key may use. "All Subnets" = unrestricted. A key's access is set here, independent of who creates it.
                 {% else %}
-                Ctrl/Cmd+click for multiple. Limited to the subnets your own account can access.
+                Tick one or more. Limited to the subnets your own account can access.
                 {% endif %}
             </div>
         </div>
@@ -149,4 +150,25 @@
         You can see and manage only the API keys you've created yourself. A superadmin can see and manage every key.{% endif %}
     </p>
 </div>
+{% endblock %}
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+// Q247 (U9) - "All Subnets" and a named subnet are one or the other: ticking a subnet unticks All (the route reads "all" beside
+// anything as unrestricted), and ticking All unticks the rest.
+(function() {
+    var box = document.getElementById('f-subnet_ids');
+    if (!box) return;
+    box.addEventListener('change', function(e) {
+        var t = e.target;
+        if (t === box || t.name !== 'subnet_ids') return;
+        if (t.checked) {
+            box.querySelectorAll('input[name="subnet_ids"]').forEach(function(c) {
+                if (c !== t && (t.value === 'all' || c.value === 'all')) c.checked = false;
+            });
+        }
+        // a field error is printed under the list itself: a change to any box in it ends the error the way a change to an input does
+        if (box.getAttribute('aria-invalid') === 'true') box.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+})();
+</script>
 {% endblock %}

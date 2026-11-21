@@ -414,7 +414,6 @@ AMERICAN_TOO = [
 # a persisted or external contract, never prose: a stored key, a library's own name,
 # a field name as it shipped, the name an EXCLUDED component (a plugin, the helper)
 # gives a thing that this tree reads or dials.
-_WOL = "the wol plugin's own name for it (plugins/ is excluded: the plugin's pass is its own release, and until then the tree dials and reads what it ships)"
 _HELPER = "a field of jen-kea-helper's JSON reply (build 17, `_restore_state`); the helper is excluded and its field is a contract"
 ALLOWLIST: list[tuple[str, str, str]] = [
     (
@@ -433,21 +432,22 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "pool_utilisation",
         "the API field's name as it shipped in that release; the entry records what a script against it used, and a record is not re-spelled",
     ),
+    (
+        "docs/upgrading.md",
+        "WOL_ADD_FAVOURITE",
+        "the audit action's name as the wol plugin wrote it until 1.2.0: the page tells a script that reads the Audit log which name its older rows carry",
+    ),
+    (
+        "docs/upgrading.md",
+        "WOL_DELETE_FAVOURITE",
+        "the same, for the second audit action that 1.2.0 renamed",
+    ),
     ("jen/services/investigation_logging.py", '"signalled"', _HELPER),
     ("tests/test_kea_helper_investigation.py", '"signalled"', _HELPER),
     (
         "tests/_investigation_world.py",
         '"signalled"',
         _HELPER + "; the fake models how the helper is observed, field for field",
-    ),
-    ("tests/", "/favourites/", _WOL + " - the route path"),
-    ("tests/test_authz_matrix.py", "delete_favourite", _WOL + " - a view function"),
-    ("tests/test_authz_matrix.py", "wake_favourite", _WOL + " - a view function"),
-    ("tests/test_authz_matrix.py", "add_favourite", _WOL + " - a view function"),
-    (
-        "tests/test_stored_objects_wol.py",
-        "That favourite is not yours to change.",
-        _WOL + " - its flash sentence, asserted as the plugin prints it",
     ),
 ]
 
@@ -804,22 +804,20 @@ class TestTheAllowlistIsLive:
 
     def test_the_allowlist_names_only_contracts(self):
         """The reviewed list: a stored key, a library's name, a field name as it shipped,
-        and what the excluded wol plugin and Kea helper call the things this tree dials
-        and reads. Q207 expected it empty and found these twelve; a new entry is a
+        and what the excluded Kea helper calls the things this tree reads (the wol plugin had five until its own pass, 1.2.0, in Q247;
+        the two it has now are the old names of its audit actions, on the page that tells a script about the rename).
+        Q207 expected it empty and found twelve; a new entry is a
         contract with its reason, never a sentence someone would rather not re-spell."""
         assert sorted((p, lit) for p, lit, _r in ALLOWLIST) == [
             ("CHANGELOG.md", "pool_utilisation"),
+            ("docs/upgrading.md", "WOL_ADD_FAVOURITE"),
+            ("docs/upgrading.md", "WOL_DELETE_FAVOURITE"),
             ("jen/services/credentials.py", "credentials_materialised"),
             ("jen/services/investigation_logging.py", '"signalled"'),
             ("jen/services/provider_budget.py", "CancelledError"),
-            ("tests/", "/favourites/"),
             ("tests/_investigation_world.py", '"signalled"'),
-            ("tests/test_authz_matrix.py", "add_favourite"),
-            ("tests/test_authz_matrix.py", "delete_favourite"),
-            ("tests/test_authz_matrix.py", "wake_favourite"),
             ("tests/test_credentials.py", "credentials_materialised"),
             ("tests/test_kea_helper_investigation.py", '"signalled"'),
-            ("tests/test_stored_objects_wol.py", "That favourite is not yours to change."),
         ]
 
     def test_an_excused_line_keeps_the_contract_and_loses_the_prose(self):
@@ -829,11 +827,10 @@ class TestTheAllowlistIsLive:
             == 'reply["signalled"]  # the daemon was signaled'
         )
         assert fixed_text("tests/test_other.py", line) == 'reply["signaled"]  # the daemon was signaled'
+        # Q247: the wol plugin's own pass (1.2.0) renamed its routes, views and sentences, so its five entries are gone and a British path is re-spelled wherever it is written
         url = 'pclient.post(WOL + "/favourites/add")  # a favourite'
-        assert (
-            fixed_text("tests/system/test_boundaries.py", url) == 'pclient.post(WOL + "/favourites/add")  # a favorite'
-        )
-        assert fixed_text("jen/routes/x.py", url) == 'pclient.post(WOL + "/favorites/add")  # a favorite'
+        for path in ("tests/system/test_boundaries.py", "jen/routes/x.py"):
+            assert fixed_text(path, url) == 'pclient.post(WOL + "/favorites/add")  # a favorite'
 
 
 class TestTheTree:

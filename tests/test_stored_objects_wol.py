@@ -73,19 +73,19 @@ class TestDirection1StoredInBClientNowInA:
 
     def test_add_over_an_existing_favorite_cannot_rewrite_it(self, pclient, db, stored_objects):
         login(pclient, db, "admin_A")
-        pclient.post(WOL + "/favourites/add", data={"mac": A_MAC, "label": "hijacked", "secureon": ""})
+        pclient.post(WOL + "/favorites/add", data={"mac": A_MAC, "label": "hijacked", "secureon": ""})
         assert _favorite(db, A_MAC)["label"] == S1 + "-wol"
 
     def test_delete_cannot_remove_it(self, pclient, db, stored_objects):
         fav = _favorite(db, A_MAC)
         login(pclient, db, "admin_A")
-        pclient.post(f"{WOL}/favourites/{fav['id']}/delete")
+        pclient.post(f"{WOL}/favorites/{fav['id']}/delete")
         assert _favorite(db, A_MAC) is not None
 
     def test_waking_it_from_the_list_is_not_found_and_sends_nothing(self, pclient, db, stored_objects, packets):
         fav = _favorite(db, A_MAC)
         login(pclient, db, "admin_A")
-        pclient.post(f"{WOL}/favourites/{fav['id']}/wake")
+        pclient.post(f"{WOL}/favorites/{fav['id']}/wake")
         assert packets == []
 
     def test_a_wake_of_the_host_itself_goes_ahead_without_the_hidden_favorites_password(
@@ -120,10 +120,10 @@ class TestDirection2StoredInAClientNowInB:
 
     def test_it_can_be_relabeled_and_deleted_by_its_owner(self, pclient, db, stored_objects):
         login(pclient, db, "admin_A")
-        pclient.post(WOL + "/favourites/add", data={"mac": D_MAC, "label": "renamed", "secureon": ""})
+        pclient.post(WOL + "/favorites/add", data={"mac": D_MAC, "label": "renamed", "secureon": ""})
         fav = _favorite(db, D_MAC)
         assert fav["label"] == "renamed" and fav["subnet_id"] == 1, "relabeled, and still filed under A"
-        pclient.post(f"{WOL}/favourites/{fav['id']}/delete")
+        pclient.post(f"{WOL}/favorites/{fav['id']}/delete")
         assert _favorite(db, D_MAC) is None
 
     def test_it_cannot_be_woken_because_the_host_is_now_on_a_network_the_caller_cannot_see(
@@ -131,7 +131,7 @@ class TestDirection2StoredInAClientNowInB:
     ):
         fav = _favorite(db, D_MAC)
         login(pclient, db, "admin_A")
-        pclient.post(f"{WOL}/favourites/{fav['id']}/wake")
+        pclient.post(f"{WOL}/favorites/{fav['id']}/wake")
         pclient.post(f"{WOL}/wake?mac={D_MAC}")
         assert packets == []
 
@@ -178,12 +178,12 @@ class TestQ171AWakeStampsOnlyAFavoriteTheCallerMaySee:
     ):
         login(pclient, db, "admin_A")
         r = pclient.post(
-            WOL + "/favourites/add",
+            WOL + "/favorites/add",
             data={"mac": A_MAC, "label": "hijacked", "secureon": ""},
             follow_redirects=True,
         )
         body = r.get_data(as_text=True)
-        assert "That favourite is not yours to change." in body
+        assert "That favorite is not yours to change." in body
         assert "subnet you can access" not in body
         assert_no_marker(body)
 
@@ -194,11 +194,11 @@ class TestQ171FixupOneRefusalForAFavoriteThatIsNotTheCallers:
 
     def _flashed(self, pclient, db, mac):
         r = pclient.post(
-            WOL + "/favourites/add", data={"mac": mac, "label": "probe", "secureon": ""}, follow_redirects=True
+            WOL + "/favorites/add", data={"mac": mac, "label": "probe", "secureon": ""}, follow_redirects=True
         )
         body = r.get_data(as_text=True)
         assert_no_marker(body, ignore=(mac,))
-        return "That favourite is not yours to change." in body, "subnet you can access" in body
+        return "That favorite is not yours to change." in body, "subnet you can access" in body
 
     def test_a_hidden_favorite_and_a_hidden_mac_get_the_same_answer(self, pclient, db, stored_objects):
         from tests.test_authz_matrix import B2_MAC

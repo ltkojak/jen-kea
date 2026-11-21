@@ -1439,7 +1439,7 @@ def _s15_seed_all_plugins(web):
 
     # ── wol: wol_hosts (real route) ──
     web.post(
-        "/management/wol/favourites/add",
+        "/management/wol/favorites/add",
         data={"mac": S15_WOL_MAC, "label": "s15 host"},
         page="/management/wol/",
     )

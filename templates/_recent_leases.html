@@ -5,7 +5,7 @@
 {% from '_copy.html' import copy_cell %}
 {% if recent %}
 <div class="table-wrap">
-<table class="sortable">
+<table class="sortable rowlist">
     <thead><tr>
         <th data-sort>IP Address</th>
         <th data-sort>Hostname</th>
@@ -16,14 +16,14 @@
     <tbody>
     {% for l in recent %}
     <tr>
-        <td class="mono">{{ copy_cell(l.ip) }}</td>
-        <td class="u-86abda">
+        <td class="mono" data-m="secondary">{{ copy_cell(l.ip) }}</td>
+        <td class="u-86abda" data-m="primary">
             {{ hostname_or_none(l.hostname) }}
             {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
         </td>
-        <td class="mono">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
-        <td>{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
-        <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
+        <td class="mono" data-m="secondary">{{ copy_cell(l.mac) }} {{ investigate_link(l.mac, "icon") }}</td>
+        <td data-m="secondary">{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
+        <td class="mono u-5872de" data-m="secondary">{{ l.obtained|utctime }}</td>
     </tr>
     {% endfor %}
     </tbody>

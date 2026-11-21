@@ -380,12 +380,12 @@
                     <div class="wm-consents"><label><input type="checkbox" name="discard_file_edit" value="{{ c.consent_value }}" form="wm-form-{{ c.id }}" {% if m.value != c.transport %}disabled{% endif %}> {{ c.consent_texts.discard_file_edit }}</label></div>
                     {% endif %}
                     <div class="wm-switch">
-                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-secondary" data-wm-switch="{{ c.id }}" data-wm-target="file" {% if m.value == c.transport or not c.ssh %}disabled{% endif %}>Switch to file over SSH</button>
+                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-secondary{% if m.value == c.transport %} wm-hidden{% endif %}" data-wm-switch="{{ c.id }}" data-wm-target="file" {% if m.value == c.transport or not c.ssh %}disabled{% endif %}>Switch to file over SSH</button>
                         <span class="form-hint">{% if m.value == c.transport %}This is the current mode.{% elif not c.ssh %}Waiting on step 1: SSH host: none{% endif %}</span>
                     </div>
                     {% else %}
                     <div class="wm-switch">
-                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-secondary" data-wm-switch="{{ c.id }}" data-wm-target="off" {% if m.value == c.transport %}disabled{% endif %}>Make read-only</button>
+                        <button type="submit" form="wm-form-{{ c.id }}" class="btn btn-sm btn-secondary{% if m.value == c.transport %} wm-hidden{% endif %}" data-wm-switch="{{ c.id }}" data-wm-target="off" {% if m.value == c.transport %}disabled{% endif %}>Make read-only</button>
                         <span class="form-hint">{% if m.value == c.transport %}This is the current mode.{% else %}The daemon keeps serving; Jen stops writing to it.{% endif %}</span>
                     </div>
                     {% endif %}

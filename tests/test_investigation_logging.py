@@ -729,7 +729,7 @@ class TestTheHealthRow:
 
     def test_nothing_on_is_ok(self, world):
         c = self._check()
-        assert c.status == "ok" and c.id == "debug_logging_left_on" and c.title == "DEBUG logging left on"
+        assert c.status == "ok" and c.id == "debug_logging_left_on" and c.title == "No DEBUG logging left on"
 
     def test_on_and_in_time_is_ok_and_names_the_deadline(self, world):
         inv.turn_on(world.servers[0], 5)
@@ -750,7 +750,7 @@ class TestTheHealthRow:
     def test_it_is_registered_in_the_kea_group_in_step_with_the_runner(self):
         from jen.services import health
 
-        assert health._CHECK_META["debug_logging_left_on"] == ("DEBUG logging left on", "kea")
+        assert health._CHECK_META["debug_logging_left_on"] == ("No DEBUG logging left on", "kea")
         names = [fn.__name__.lstrip("_") for fn in health._CHECKS]
         assert names == health.CHECK_IDS, "the runner zips _CHECKS with CHECK_IDS: the two lists must stay in step"
 
@@ -2225,7 +2225,7 @@ class TestRemovalIsRefusedWhileTheRecordIsDamaged:
         text = inv.removal_refusal([1], actor="alice")
         assert "cannot be read, so it cannot tell whether this server is at investigation DEBUG" in text
         assert (
-            "Repair the record first (Health → DEBUG logging left on)" in text
+            "Repair the record first (Health → No DEBUG logging left on)" in text
             and "no way for Jen to put it back" in text
         )
         (row,) = self._audits(world, "INVESTIGATION_LOGGING_REMOVAL_REFUSED")

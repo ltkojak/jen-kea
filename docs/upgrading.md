@@ -10,6 +10,24 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.5: Presence and Wake in the desktop navigation, four plugin updates and page fixes
+
+One step (7.2.0-beta.5). No migration and no helper build. Nothing to do; these behave differently and are worth knowing.
+
+**Navigation.** Presence and Wake are now tabs of the Management section, on a desktop and in the phone's More menu (they were under Plugins there). The button that adds the page being shown to the top row stays in view on a window narrower than the section's tabs.
+
+**Wake & Actions 1.2.0.** A wake aimed at a subnet the Jen host has no address in now answers with a warning that the packet arrives only if a router forwards directed broadcasts; the packet is sent as before. Under Docker's default network a wake does not reach the LAN: see "Wake-on-LAN" in `docs/docker.md`. A script that reads the Audit log: the actions `WOL_ADD_FAVOURITE` and `WOL_DELETE_FAVOURITE` are written as `WOL_ADD_FAVORITE` and `WOL_DELETE_FAVORITE` from this release on (rows already written keep the old name), and the detail of `WOL_SENT` is now `via=... subnet_id=... on_link=...`. The API's answer to a wake gains `on_link` and `targets`, and answers 503 when the saved wake settings could not be read.
+
+**Presence 1.2.8.** While Kea's lease database cannot be read, no tracked device is counted as missed, so none is published offline for that reason; a device that left in that time is called offline once the leases can be read again.
+
+**IPAM Lite 1.8.4.** A conflict alert is now delivered on Telegram and Pushover whatever the device's hostname or the subnet's name contains. When IPAM's own table cannot be read, the subnet page says so and shows no Next free button.
+
+**Network Discovery 1.3.6.** A scan that cannot read Jen's devices or the Jen host's neighbor table ends as an error before nmap runs.
+
+**Health.** The check "DEBUG logging left on" is titled "No DEBUG logging left on". Its id in the JSON answer, `debug_logging_left_on`, is unchanged.
+
+**API keys.** Subnet access is a list of checkboxes. A key is created with the access it always was.
+
 ## 7.2.0-beta.4: five plugin updates
 
 One step (7.2.0-beta.4). No migration and no helper build. Nothing to do; five things behave differently and are worth knowing.
@@ -20,7 +38,7 @@ One step (7.2.0-beta.4). No migration and no helper build. Nothing to do; five t
 
 **IPAM Lite 1.8.3.** When Kea's leases cannot be read, a save, a range action and an import are refused with one sentence, the JSON API answers 503 and the subnet page shows a notice and no Next free button; before, an address a lease held could be handed out or marked static. The conflict check no longer announces every standing conflict again after one run with the Kea database away. A link to an address in a collapsed run opens 256 addresses around it; the rest stays collapsed and opens 256 at a time.
 
-**Presence 1.2.7.** Only if you track more than 64 devices on the Jen host's own networks: every unseen device is now asked in turn, 64 a pass. Before, the same 64 were asked every pass and the others were published offline. A device that has left is called offline later when many devices are unseen at once.
+**Presence 1.2.7.** Only if more than 64 tracked devices on the Jen host's own networks are unseen at once: every unseen device is now asked in turn, 64 a pass. Before, the same 64 were asked every pass and the others were published offline. A device that has left is called offline later when many devices are unseen at once.
 
 **DNS Sync 1.1.5.** Preview shows the address of each record it will remove, and lists an AdGuard Home rewrite that is switched off on the server on its own. Also worth knowing since 1.1.4: after a restore of Jen's database from an older backup, records Jen made since that backup stay on the DNS server for good. Compare Preview's "Already on the server, left alone" with the server and remove what is stale.
 

@@ -30,6 +30,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 DESKTOP_DIR = ROOT / "artifacts" / "desktop"
 MOBILE_DIR = ROOT / "artifacts" / "mobile"
 WIDE = {"width": 1680, "height": 900}
+#: the common laptop width, where the Network strip with the bundled plugins does not fit (Q247)
+LAPTOP = {"width": 1440, "height": 900}
 PHONE = {"width": 390, "height": 844}
 
 
@@ -86,6 +88,54 @@ class TestTopRowFavorites:
         page.locator(".section-pin-btn").click()
         page.wait_for_url(f"{base_url}/health-center")
         expect(page.locator(".nav-links .nav-fav")).to_have_count(0)
+
+    def test_the_pin_button_is_in_view_when_the_strip_is_wider_than_the_window(self, page, base_url):
+        """Q247 (U1). With the bundled plugins the Network strip is wider than a 1440 px window. The button was the strip's last item, so it was scrolled out of view and
+        nothing said it was there; the test above never saw it because it runs at 1680. It now stays at the strip's right edge wherever the strip is scrolled to."""
+        page.set_viewport_size(LAPTOP)
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        page.goto(f"{base_url}/health-center")
+        strip = page.locator(".section-tabs")
+        assert strip.evaluate("e => e.scrollWidth > e.clientWidth"), (
+            "the Network strip fits a 1440 px window now, so this test no longer looks at a strip that scrolls"
+        )
+        button = page.locator(".section-pin-btn")
+        for left in ("0", "e.scrollWidth"):
+            strip.evaluate(f"e => {{ e.scrollLeft = {left}; }}")
+            box = button.bounding_box()
+            assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= LAPTOP["width"], (left, box)
+        DESKTOP_DIR.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(DESKTOP_DIR / "navigation-pin-at-1440.png"))
+        # scrolled to its end, the last tab is beside the button and not under it
+        last = page.locator(".section-tab").last.bounding_box()
+        assert last["x"] + last["width"] <= button.bounding_box()["x"], (last, button.bounding_box())
+        button.click()
+        page.wait_for_url(f"{base_url}/health-center")
+        expect(page.locator(".section-pin-btn")).to_have_text("Remove from top row")
+        page.locator(".section-pin-btn").click()
+        page.wait_for_url(f"{base_url}/health-center")
+        expect(page.locator(".nav-links .nav-fav")).to_have_count(0)
+
+    def test_wake_and_presence_are_on_the_management_strip(self, page, base_url):
+        """Q247 (U2). Their manifests name `management` and the user guide says Management -> Wake; their pages lit Network and no strip linked to them."""
+        page.set_viewport_size(LAPTOP)
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        page.goto(f"{base_url}/leases")
+        for label in ("Wake", "Presence"):
+            page.locator(".section-tab", has_text=label).click()
+            expect(page.locator(".section-tab.active")).to_have_text(label)
+            expect(page.locator(".nav-links a.nav-link.active")).to_have_text("Management")
+            expect(page.locator(".section-pin-btn")).to_have_text("Add to top row")
+        DESKTOP_DIR.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(DESKTOP_DIR / "navigation-management-plugin.png"))
+
+    def test_doctor_lights_network(self, page, base_url):
+        """Q247 (U3). The strip marked Doctor and the top row lit nothing."""
+        page.set_viewport_size(LAPTOP)
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        page.goto(f"{base_url}/tools/doctor")
+        expect(page.locator(".section-tab.active")).to_have_text("Doctor")
+        expect(page.locator(".nav-links a.nav-link.active")).to_have_text("Network")
 
     def test_the_customize_page_adds_orders_and_removes(self, page, base_url):
         page.set_viewport_size(WIDE)

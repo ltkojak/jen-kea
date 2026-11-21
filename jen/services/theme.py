@@ -102,6 +102,30 @@ _RETRO_EXTRA_CSS = (
     ':root[data-theme="retro"] .nav-dropdown-content button.linkish{'
     "color:var(--text);"
     "}"
+    # Q247 (U12) - four things the navy bar and the teal page still hid. The Kea status dot is the theme's --success / --danger
+    # (#004d00 and #8b0000: 1.6:1 on #000080) - a bright green or red in the bar only (#33ff66 11.9:1, #ff6060 5.4:1). The avatar is a
+    # gradient of --primary, which IS the bar's navy - the classic gray face with black text (#c0c0c0 on #000080 8.8:1, the letter
+    # 11.5:1). The keyboard button carries its color and border inline (--text-muted, --border: 1.5:1), which no rule without
+    # !important reaches - white like the theme button beside it (16:1), and that button's border with it. And muted text in a page
+    # header sits on the teal background, not on a card: #3c3c3c is 3.5:1 there, #1a1a1a 5.5:1.
+    ':root[data-theme="retro"] .nav .kea-status.kea-up{'
+    "background:#33ff66;box-shadow:0 0 6px #33ff66;"
+    "}"
+    ':root[data-theme="retro"] .nav .kea-status.kea-down{'
+    "background:#ff6060;box-shadow:0 0 6px #ff6060;"
+    "}"
+    ':root[data-theme="retro"] .nav .nav-avatar{'
+    "background:#c0c0c0;color:#000000;"
+    "}"
+    ':root[data-theme="retro"] #kb-hint-btn{'
+    "color:#ffffff !important;border-color:#ffffff !important;"
+    "}"
+    ':root[data-theme="retro"] .nav .theme-toggle{'
+    "border-color:#ffffff;"
+    "}"
+    ':root[data-theme="retro"] .page-header{'
+    "--text-muted:#1a1a1a;"
+    "}"
 )
 
 PRESETS = {

@@ -1105,8 +1105,9 @@ def _settle_dependents_the_file_lacks(conn, before, replaced, in_file, results) 
                 else:
                     results.append(
                         f"⚠️ {dep}: this file carries no rows for it and {parent} was replaced. {n} row{'' if single else 's'} here "
-                        f"{'was' if single else 'were'} kept and no longer {'names' if single else 'name'} the {parent} {'it' if single else 'they'} "
-                        f"pointed at, which are gone or now have a different name"
+                        f"{'was' if single else 'were'} kept and no longer {'names' if single else 'name'} the {parent} "
+                        f"{'row it' if single else 'rows they'} pointed at, which {'is' if single else 'are'} gone or now "
+                        f"{'has' if single else 'have'} a different name"
                     )
 
 

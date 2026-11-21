@@ -173,7 +173,8 @@ class TestNavContext:
         assert self._ctx(endpoint="users.about")["pin"] is None
 
     def test_a_plugin_page_outside_the_network_section_has_the_button_too(self):
-        """Every plugin page is shown under the Network strip (nav_context has done that since v5.9.0), so every plugin page can be pinned from where it is."""
+        """A plugin page that names no section with a strip is shown under the Network strip (nav_context has done that since v5.9.0), and one that names `management` is on
+        the Management strip (Q247), so every plugin page can be pinned from where it is."""
         assert self._ctx(endpoint="wol.index")["pin"] == {
             "id": "plugin:wol.index",
             "label": "Wake-on-LAN",

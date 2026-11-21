@@ -459,7 +459,7 @@ ROWS = [
     (
         "wol delete B's favorite",
         "POST",
-        f"/management/wol/favourites/{WOL_B}/delete",
+        f"/management/wol/favorites/{WOL_B}/delete",
         None,
         UI,
         _DENY,
@@ -470,7 +470,7 @@ ROWS = [
     (
         "wol wake B's favorite",
         "POST",
-        f"/management/wol/favourites/{WOL_B}/wake",
+        f"/management/wol/favorites/{WOL_B}/wake",
         None,
         UI,
         _DENY,
@@ -484,7 +484,7 @@ ROWS = [
         # live host and goes where the host is now, a network the caller cannot see.
         "wol wake a favorite whose host moved out of the caller's subnet (stored A, current B)",
         "POST",
-        f"/management/wol/favourites/{WOL_MOVED}/wake",
+        f"/management/wol/favorites/{WOL_MOVED}/wake",
         None,
         UI,
         _DENY,
@@ -713,7 +713,7 @@ ROWS = [
     (
         "wol add a favorite for a subnet-B MAC",
         "POST",
-        "/management/wol/favourites/add",
+        "/management/wol/favorites/add",
         FormBody(mac=B_MAC, label="created-by-matrix", ip="10.98.1.5", secureon=""),
         UI,
         _DENY,

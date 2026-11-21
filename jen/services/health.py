@@ -291,7 +291,7 @@ def _debug_logging_left_on(ctx) -> Check:
     whose marker Jen has not seen is found by the sweep's ten-minute full scan and then shows here."""
     c = Check(
         "debug_logging_left_on",
-        "DEBUG logging left on",
+        "No DEBUG logging left on",
         "kea",
         fix_url="/tools/trace",
         fix_hint="Turn investigation logging off from Trace or Servers.",
@@ -2057,7 +2057,7 @@ _CHECK_META = {
     "kea_ha_state": ("HA state healthy", "kea"),
     "kea_hooks": ("Kea hooks loaded", "kea"),
     "kea_time_sync": ("Kea clock in sync", "kea"),
-    "debug_logging_left_on": ("DEBUG logging left on", "kea"),
+    "debug_logging_left_on": ("No DEBUG logging left on", "kea"),
     "problems_sweep": ("Problems inbox sweep", "kea"),
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_write_gate": ("Live API changes are open", "kea"),

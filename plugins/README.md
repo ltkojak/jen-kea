@@ -368,10 +368,10 @@ register_investigation_provider("switchport", title="Switch Port Locator", fn=_i
 
 ### Stored data — judge it by its own subnet (v5.68.0-beta.11)
 
-A plugin that keeps a row about a client (a favourite, a tracked device, a port a MAC was seen on, a scan result) holds a **stored
+A plugin that keeps a row about a client (a favorite, a tracked device, a port a MAC was seen on, a scan result) holds a **stored
 object**, and a stored object belongs to the subnet it was stored in — the subnet of the row, or of the thing the row is about (a
 switch's subnet is the one its management address is in). That is the subnet a caller must be allowed to see to be shown it.
-**Where the client is now never widens that.** A favourite saved in subnet B is not shown to a caller scoped to A because the
+**Where the client is now never widens that.** A favorite saved in subnet B is not shown to a caller scoped to A because the
 client's lease has since moved to A; the client's current subnet is a fact you may print beside the row ("now in ..."), and only
 when the caller may see that subnet too, because naming a subnet is access to it. A row with no subnet is for an unrestricted caller
 only, and so is a switch addressed by a hostname or by an address in no Kea subnet.
@@ -380,15 +380,15 @@ only, and so is a switch addressed by a hostname or by an address in no Kea subn
 delete, a move, the search provider, the JSON API and the row action all judge a stored object on its own subnet. If one function answers
 "may this caller see the row?", every surface calls it; a page that judges by the client's current subnet while the card judges by the stored
 one is two plugins in one. A search row's `subnet_id` is the subnet of the object whose information the row prints (the switch's, the
-favourite's), never the client's. A plugin that keeps a subnet column and lets an event rewrite it to follow the client has no stored subnet
+favorite's), never the client's. A plugin that keeps a subnet column and lets an event rewrite it to follow the client has no stored subnet
 at all: say what the column means (Presence's `pr_tracked.subnet_id` is the **owner** subnet, set when the device is tracked and changed only
 by an explicit move by a caller who can see both subnets, audited) and derive the current location at read time.
 
 **A live act is the other kind of thing, and it is kept apart.** A wake packet, a probe, a poll or a publish acts on a device, so it is
 judged on where the device is now, because that is where the act lands. It never borrows what a stored object holds for it: if the caller may
-not see the favourite, the favourite contributes nothing to the act - not its SecureOn password, not its stored subnet as a fallback - and
+not see the favorite, the favorite contributes nothing to the act - not its SecureOn password, not its stored subnet as a fallback - and
 the act goes ahead without it (a NIC that wants the password simply ignores the packet), with no word that a hidden object exists. Wake &
-Actions' `wake_inputs(favourite, current_subnet, can)` is the model: the same function serves the page, the row action and the API, with the
+Actions' `wake_inputs(favorite, current_subnet, can)` is the model: the same function serves the page, the row action and the API, with the
 session's or the key's own predicate. A test proves it by recording what reaches the packet builder. Wake & Actions 1.1.2, Switch Port Locator
 1.1.2 and Presence 1.2.0 are the reference, after 1.1.1 started them on the card: the pure `in_scope(subnet_id, accessible, all)` on the
 stored subnet, a harness test for the client that moved from B to A, and a position-by-position filter for rows (switch positions)
@@ -533,7 +533,7 @@ def _search(query, accessible_subnet_ids, all_subnets):
 ```
 
 **A per-MAC row's stored `subnet_id` is a cache, not the truth.** A plugin that keeps a row per client (a
-tracked device, a favourite, a switch-port sighting) stores the subnet it was in when the row was written,
+tracked device, a favorite, a switch-port sighting) stores the subnet it was in when the row was written,
 and a client moves. To decide who may act on the row, judge `client_subnet_for_mac(mac)` first (Jen's one
 precedence: current lease, then reservation, then the device's last known subnet) and use the stored value
 only when that returns `None`. Presence judges it this way; a plugin that judged the stored value alone left

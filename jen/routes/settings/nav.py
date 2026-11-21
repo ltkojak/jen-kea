@@ -173,6 +173,14 @@ TOP_FAVORITES_MAX = 5
 TABBAR_SLOTS = 4
 
 
+def _plugin_strip(p):
+    """v7.2.0-beta.5 (Q247, U2) - the section a plugin's page is shown under: the one its manifest names when that section has a strip (`management` or `network`), else
+    Network, which is where every plugin page was shown before. Presence and Wake name `management`, and until this release their pages lit Network, showed the Network strip
+    with no tab marked, and had no link anywhere in the desktop navigation."""
+    section = p.get("section")
+    return section if section in SECTION_STRIPS else "network"
+
+
 def _matches(endpoint, patterns):
     if not endpoint:
         return False
@@ -261,7 +269,11 @@ def _sheet_groups(endpoint, role, section_strips, plugin_nav_items):
     plugins = []
     for p in plugin_nav_items:
         it = item(p, p.get("endpoint") == endpoint)
-        (network if p.get("section") == "network" else plugins).append(it)
+        # a plugin is listed where its strip lists it (Q247, U2): the group of the section it names, or Plugins when it names none that has a strip
+        if p.get("section") == "management":
+            groups[0]["items"].append(it)
+        else:
+            (network if p.get("section") == "network" else plugins).append(it)
     groups.append({"id": "network", "label": "Network", "items": network})
     if role in ADMIN_ROLES:
         groups.append(
@@ -365,10 +377,14 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
             continue
         if item["id"] == "settings":
             active = in_settings
-        elif item["id"] == "network":
-            active = _matches(endpoint, item["match"]) or any(p.get("endpoint") == endpoint for p in plugin_nav_items)
         else:
-            active = _matches(endpoint, item["match"])
+            # Q247 (U3): a section is lit for every page its own strip marks (Investigate, Problems, Explain and Doctor lit nothing: the top item kept a list of its own that
+            # they were never added to), and for a plugin page shown under it (U2)
+            active = (
+                _matches(endpoint, item["match"])
+                or any(_matches(endpoint, t["match"]) for t in SECTION_STRIPS.get(item["id"], ()))
+                or any(p.get("endpoint") == endpoint and _plugin_strip(p) == item["id"] for p in plugin_nav_items)
+            )
         top.append({**item, "active": active})
 
     strip = []
@@ -378,22 +394,21 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
                 strip.append({**g, "active": group is not None and g["id"] == group["id"]})
     else:
         for section, tabs in section_strips.items():
-            if any(_matches(endpoint, t["match"]) for t in tabs) or (
-                section == "network" and any(p.get("endpoint") == endpoint for p in plugin_nav_items)
+            if any(_matches(endpoint, t["match"]) for t in tabs) or any(
+                p.get("endpoint") == endpoint and _plugin_strip(p) == section for p in plugin_nav_items
             ):
                 for t in tabs:
                     strip.append({**t, "active": _matches(endpoint, t["match"])})
-                if section == "network":
-                    for p in plugin_nav_items:
-                        if p.get("section") == "network":
-                            strip.append(
-                                {
-                                    "icon": p.get("icon", ""),
-                                    "label": p.get("label", ""),
-                                    "endpoint": p.get("endpoint"),
-                                    "active": p.get("endpoint") == endpoint,
-                                }
-                            )
+                for p in plugin_nav_items:
+                    if p.get("section") == section:
+                        strip.append(
+                            {
+                                "icon": p.get("icon", ""),
+                                "label": p.get("label", ""),
+                                "endpoint": p.get("endpoint"),
+                                "active": p.get("endpoint") == endpoint,
+                            }
+                        )
                 break
 
     sheet = _sheet_groups(endpoint, role, section_strips, plugin_nav_items)

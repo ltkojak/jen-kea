@@ -48,6 +48,53 @@ class TestNavModel:
         assert [i for i in ctx["top"] if i["active"]][0]["id"] == "network"
         assert ctx["strip"][-1]["label"] == "IPAM" and ctx["strip"][-1]["active"]
 
+    def test_a_plugin_that_names_management_is_on_the_management_strip(self):
+        """Q247 (U2). Presence and Wake name `management` in their manifests and the user guide says Management -> Wake; their pages lit Network, showed the Network strip
+        with no tab marked, and no strip on the desktop linked to them."""
+        wake = {"section": "management", "label": "Wake", "icon": "zap", "endpoint": "wol.index"}
+        ipam = {"section": "network", "label": "IPAM", "icon": "table", "endpoint": "ipam.index"}
+        ctx = navmod.nav_context("wol.index", "admin", [ipam, wake])
+        assert [i["id"] for i in ctx["top"] if i["active"]] == ["management"]
+        assert [t["label"] for t in ctx["strip"]] == ["Leases", "Reservations", "Devices", "Reports", "Wake"]
+        assert [t["label"] for t in ctx["strip"] if t["active"]] == ["Wake"]
+        assert ctx["pin"] == {"id": "plugin:wol.index", "label": "Wake", "pinned": False}
+        # it is linked from every Management page, and it is not on the Network strip
+        assert "Wake" in [t["label"] for t in navmod.nav_context("leases.leases", "admin", [ipam, wake])["strip"]]
+        assert "Wake" not in [t["label"] for t in navmod.nav_context("subnets.subnets", "admin", [ipam, wake])["strip"]]
+        sheet = {g["id"]: [i["label"] for i in g["items"]] for g in ctx["sheet"]}
+        assert sheet["management"][-1] == "Wake" and "plugins" not in sheet
+
+    def test_a_plugin_that_names_no_strip_is_shown_under_network_as_before(self):
+        extras = {"section": "tools", "label": "Extras", "icon": "", "endpoint": "extras.index"}
+        ctx = navmod.nav_context("extras.index", "admin", [extras])
+        assert [i["id"] for i in ctx["top"] if i["active"]] == ["network"]
+        assert ctx["strip"][0]["label"] == "Subnets" and "Extras" not in [t["label"] for t in ctx["strip"]]
+        assert {g["id"]: [i["label"] for i in g["items"]] for g in ctx["sheet"]}["plugins"] == ["Extras"]
+
+    @pytest.mark.parametrize(
+        "endpoint,tab",
+        [
+            ("client.client", "Investigate"),
+            ("problems.problems", "Problems"),
+            ("explain.explain", "Explain"),
+            ("doctor.doctor", "Doctor"),
+            ("timeline.timeline", "Timeline"),
+            ("subnets.subnets", "Subnets"),
+        ],
+    )
+    def test_every_page_a_strip_marks_lights_its_section(self, endpoint, tab):
+        """Q247 (U3). The top item kept its own list of blueprints, and Investigate, Problems, Explain and Doctor were never added to it: the strip marked the tab and the
+        top row lit nothing."""
+        ctx = navmod.nav_context(endpoint, "admin")
+        assert [t["label"] for t in ctx["strip"] if t["active"]] == [tab]
+        assert [i["id"] for i in ctx["top"] if i["active"]] == ["network"]
+
+    def test_exactly_one_section_is_lit_on_every_strip_page(self):
+        for section, tabs in navmod.SECTION_STRIPS.items():
+            for t in tabs:
+                ctx = navmod.nav_context(t["match"][0] + "x", "admin")
+                assert [i["id"] for i in ctx["top"] if i["active"]] == [section], t["label"]
+
     @pytest.mark.parametrize(
         "endpoint,group",
         [

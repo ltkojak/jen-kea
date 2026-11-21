@@ -984,7 +984,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 "lines": [
                     SETTINGS_UNAVAILABLE + "; investigation logging is refused until they can be read"
                     if record.get("unavailable")
-                    else "Jen's record of investigation logging cannot be read; see Health → DEBUG logging left on"
+                    else "Jen's record of investigation logging cannot be read; see Health → No DEBUG logging left on"
                 ],
                 "until": "",
             }
@@ -1024,7 +1024,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 "ok": False,
                 "mode": "",
                 "lines": [
-                    f"The earlier investigation logging on {name} is not finished (Health → DEBUG logging left on says what is left): finish it - Turn it off, or "
+                    f"The earlier investigation logging on {name} is not finished (Health → No DEBUG logging left on says what is left): finish it - Turn it off, or "
                     "restore it by hand and press Forget - before turning it on again."
                 ],
                 "until": "",
@@ -1470,7 +1470,7 @@ def turn_off(server: dict, actor: str = "", reason: str = "investigation logging
                 "ok": False,
                 "mode": "",
                 "lines": [
-                    "Jen's record of investigation logging cannot be read; the scan rebuilds it from the servers within a minute (see Health → DEBUG logging left on)"
+                    "Jen's record of investigation logging cannot be read; the scan rebuilds it from the servers within a minute (see Health → No DEBUG logging left on)"
                 ],
             }
         held = record["servers"].get(str(server.get("id")))
@@ -1519,7 +1519,7 @@ def removal_refusal(server_ids, actor: str = "") -> str:
         )
         return (
             "Jen's record of investigation logging cannot be read, so it cannot tell whether this server is at investigation DEBUG. Repair the record "
-            "first (Health → DEBUG logging left on) — removing the server now could leave its Kea at DEBUG with no way for Jen to put it back."
+            "first (Health → No DEBUG logging left on) — removing the server now could leave its Kea at DEBUG with no way for Jen to put it back."
         )
     names = ", ".join(b.get("name") or f"Server {b['server_id']}" for b in blocked)
     _audit(
@@ -1549,7 +1549,7 @@ _MODE = _config.MODE_KEY
 IDENTITY_ACTION = "INVESTIGATION_LOGGING_IDENTITY_CHANGE_REFUSED"
 UNREADABLE_IDENTITY_SENTENCE = (
     "Jen's record of investigation logging cannot be read, so it cannot tell whether this server is at investigation DEBUG; repair the record first "
-    "(Health → DEBUG logging left on) — changing where Jen reaches this Kea could leave the old one at DEBUG with no way back."
+    "(Health → No DEBUG logging left on) — changing where Jen reaches this Kea could leave the old one at DEBUG with no way back."
 )
 UNAVAILABLE_IDENTITY_SENTENCE = (
     "Jen's settings could not be read (its database is unavailable), so it cannot tell whether a server is at investigation DEBUG; changes to where Jen "
@@ -1779,7 +1779,7 @@ def file_write_refusal(server: dict, cfg) -> str:
             )
         return (
             "Jen's record of investigation logging cannot be read, so it cannot tell whether this Kea is at investigation DEBUG; repair the record first "
-            "(Health → DEBUG logging left on) - this write could remove the marker that tells Jen what to put back."
+            "(Health → No DEBUG logging left on) - this write could remove the marker that tells Jen what to put back."
         )
     # (v5.68.0-beta.29, Q165; found by the walk) the entry is about a KEA, not a server number: a server removed by hand and another pointed at the same Kea (or the same
     # Kea reached under a second server id) writes to the file that carries the marker with no entry under ITS id. The entry under this server's own id counts when it is live;
