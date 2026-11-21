@@ -210,3 +210,22 @@ class TestASignInPageThatWasOpenTooLong:
         page.click(".btn-login")
         page.wait_for_url(f"{base_url}/")
         assert page.locator("h1", has_text="Dashboard").count() > 0
+
+
+class TestApiKeySubnetBoxes:
+    def test_ticking_a_subnet_unticks_all_and_the_page_has_no_script_error(self, page, base_url):
+        """Q247 (U9, fixup 1). The checkboxes' script was written inside a second <script> tag in a block that is already a script, so the page's whole script failed to parse.
+        A subnet and All Subnets are one or the other, and the page raises nothing."""
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.set_viewport_size(LAPTOP)
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        page.goto(f"{base_url}/settings/api-keys")
+        every = page.locator('#f-subnet_ids input[value="all"]')
+        one = page.locator('#f-subnet_ids input[name="subnet_ids"]:not([value="all"])').first
+        expect(every).to_be_checked()
+        one.check()
+        expect(every).not_to_be_checked()
+        every.check()
+        expect(one).not_to_be_checked()
+        assert not errors, errors

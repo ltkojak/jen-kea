@@ -64,6 +64,32 @@ class TestApiKeySubnetsAreCheckboxes:
                 cur.execute("DELETE FROM api_keys WHERE name=%s", ("q247-ticked-subnets",))
 
 
+class TestTheScriptsBlockIsAlreadyAScript:
+    def test_no_template_opens_a_script_tag_inside_the_scripts_block(self):
+        """Q247 (fixup 1). base.html prints `{% block scripts %}` INSIDE its own <script> element, so a template that opens a <script> tag there puts markup into JavaScript:
+        the browser stops at "Unexpected token '<'" and none of the page's script runs, base.html's included. The API keys page of the release commit did, and the GUI tour
+        found it (the unit suite and the browser journeys did not open that page with an error listener)."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        base = (root / "templates" / "base.html").read_text(encoding="utf-8")
+        before = base[: base.index("{% block scripts %}")]
+        assert before.rfind("<script") > before.rfind("</script>"), (
+            "base.html no longer prints the scripts block inside a script element: this test's premise moved"
+        )
+        bad = []
+        for path in sorted(root.glob("templates/**/*.html")) + sorted(root.glob("plugins/*/templates/**/*.html")):
+            text = path.read_text(encoding="utf-8")
+            for block in re.findall(r"{%-?\s*block scripts\s*-?%}(.*?){%-?\s*endblock", text, flags=re.S):
+                # the first script tag of the block must CLOSE base.html's element (Reports and Kea servers do that to load a library, then open their own);
+                # a line that is a JavaScript comment may name the tag
+                code = "\n".join(line for line in block.splitlines() if not line.strip().startswith("//"))
+                first = re.search(r"<(/?)script\b", code)
+                if path.name != "base.html" and first is not None and first.group(1) != "/":
+                    bad.append(str(path.relative_to(root)).replace("\\", "/"))
+        assert not bad, bad
+
+
 class TestSentences:
     def test_the_open_access_checkbox_is_one_sentence(self, logged_in_client):
         html = logged_in_client.get("/settings/alerts").get_data(as_text=True)

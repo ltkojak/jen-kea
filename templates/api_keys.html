@@ -152,7 +152,6 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script nonce="{{ csp_nonce }}">
 // Q247 (U9) - "All Subnets" and a named subnet are one or the other: ticking a subnet unticks All (the route reads "all" beside
 // anything as unrestricted), and ticking All unticks the rest.
 (function() {
@@ -170,5 +169,4 @@
         if (box.getAttribute('aria-invalid') === 'true') box.dispatchEvent(new Event('change', { bubbles: true }));
     });
 })();
-</script>
 {% endblock %}
