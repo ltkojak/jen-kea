@@ -2,7 +2,7 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [7.2.0-beta.4] - 2026-11-20
+## [7.2.0-beta.4] - 2026-11-21
 
 **Five plugin releases from the plugin audit and from the executing pass on v7.2.0-beta.3: Host Watchdog checks a 5-minute target every five minutes and no longer calls a host down when the probe could not run, Network Discovery stops a scan it cannot judge instead of sending rogue-device alerts, IPAM Lite decides nothing from a lookup that failed, Presence asks every unseen device in turn, and DNS Sync's Preview says which record goes.** One step. No migration, no helper build, no sudoers line. The pass on beta.3 found no P1 and no P2; its rows are items 4 to 6. The plugin fixes are the next part of the audit of all seven plugins (4 P1, 31 P2, 67 P3 by its readers' tiers), which ships a few plugins at a time. Every plugin here keeps `requires_jen` 5.68.0 and has no migration, so a box on 7.1.0 is offered the same five updates under Settings → Plugins.
 
