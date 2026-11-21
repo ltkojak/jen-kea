@@ -42,6 +42,8 @@ Every decision goes through `plugin_api.can_access_subnet` /
 Jen's own pages.
 """
 
+import errno
+import html
 import ipaddress
 import logging
 import os as _os
@@ -87,6 +89,13 @@ _PING_TIMEOUT_S = 3
 _TCP_CONNECT_TIMEOUT_S = 2
 _POOL_WORKERS = 8
 _RUN_BUDGET_S = 30
+# v1.1.4 (WD-1) - how much younger than its interval a target's last check may be and still be due. The tick runs every five
+# minutes; a minute is far more than two ticks' starts can differ by and far less than the gap between ticks.
+_DUE_SLACK_S = 60
+# v1.1.4 (WD-2) - how a probe that could not be made starts its sentence (stored in wd_state.last_error, shown on the page),
+# and the socket errors that are this process's own and say nothing about the target.
+COULD_NOT_PROBE = "could not probe"
+_LOCAL_ERRNOS = frozenset({errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM})
 
 # History retention.
 _KEEP_CHECKS_DAYS = 7
@@ -161,13 +170,20 @@ def should_alert(previous_state, new_state, transitioned):
 def due_targets(targets, last_checked, now):
     """Pure: ids of `targets` (each {id, interval_min, enabled}) whose
     last check (from `last_checked`, {id: datetime or None}) is at
-    least interval_min old, or that have never been checked."""
+    least interval_min old, or that have never been checked.
+
+    v1.1.4 (WD-1) - "at least interval_min old" less `_DUE_SLACK_S`. The
+    tick runs every five minutes and a check is stamped with the start of
+    the tick that made it (see `_tick`), so two ticks are five minutes
+    apart give or take the moment each one's thread started. Without the
+    slack a tick that started a few milliseconds sooner than the one
+    before it found a 5-minute target 299.99 seconds old and skipped it."""
     due = []
     for t in targets:
         if not t.get("enabled"):
             continue
         last = last_checked.get(t["id"])
-        if last is None or (now - last) >= timedelta(minutes=t["interval_min"]):
+        if last is None or (now - last) >= timedelta(minutes=t["interval_min"]) - timedelta(seconds=_DUE_SLACK_S):
             due.append(t["id"])
     return due
 
@@ -357,8 +373,21 @@ def _candidate_hosts():
 # ── Probing (impure: subprocess / socket) ──────────────────────────────────────
 
 
+def _could_not_probe(reason):
+    """v1.1.4 (WD-2) - the third answer of a probe: it could not be made. `ok` is None, which `_record_results` neither counts
+    toward `fails_to_down` nor stores as a check; the sentence goes to `wd_state.last_error` and the page."""
+    return None, None, (COULD_NOT_PROBE + ": " + " ".join(str(reason).split()))[:200]
+
+
 def _probe_target(target):
-    """One target's probe -> (ok, rtt_ms, error)."""
+    """One target's probe -> (ok, rtt_ms, error). `ok` is True (it answered), False (it was asked and did not answer) or None
+    (v1.1.4, WD-2: the question could not be asked from this host).
+
+    Until 1.1.3 there were two answers, and a probe that could not RUN was a host that did not answer: on a Jen host with no
+    `ping` (a minimal image), or with a `ping` that may not open its socket, every ping target went down after `fails_to_down`
+    ticks and a down alert was sent for each. `ping` exits 0 for a reply, 1 for none and 2 for an error of its own (no
+    permission, no route from this host); a missing or unrunnable binary raises `OSError`. On the TCP path the errors below are
+    this process running out of descriptors or memory, which says nothing about the target."""
     kind, spec = parse_probe(target["probe"])
     if kind == "ping":
         try:
@@ -368,10 +397,15 @@ def _probe_target(target):
                 text=True,
                 timeout=_PING_TIMEOUT_S,
             )
-            ok, rtt = parse_ping(proc.returncode, proc.stdout)
-            return ok, rtt, "" if ok else "no reply"
+        except OSError as e:
+            return _could_not_probe(f"ping could not be run ({e.strerror or e})")
         except Exception as e:
             return False, None, str(e)[:200]
+        if proc.returncode not in (0, 1):
+            said = (proc.stderr or "").strip().splitlines()
+            return _could_not_probe(said[0] if said else f"ping exited with {proc.returncode}")
+        ok, rtt = parse_ping(proc.returncode, proc.stdout)
+        return ok, rtt, "" if ok else "no reply"
     if kind == "tcp":
         last_err = ""
         for port in spec:
@@ -379,6 +413,11 @@ def _probe_target(target):
                 start = time.monotonic()
                 with socket.create_connection((target["ip"], port), timeout=_TCP_CONNECT_TIMEOUT_S):
                     return True, round((time.monotonic() - start) * 1000), ""
+            except OSError as e:
+                if e.errno in _LOCAL_ERRNOS:
+                    return _could_not_probe(e.strerror or e)
+                last_err = str(e)[:150]
+                continue
             except Exception as e:
                 last_err = str(e)[:150]
                 continue
@@ -395,6 +434,12 @@ def _tick():
     if not _run_lock.acquire(blocking=False):
         return
     try:
+        # v1.1.4 (WD-1) - the tick's own start, read before anything else, is the time every check of this run is stored
+        # with. `checked_at` used to be the database's clock at the moment the run's results were written, which is after
+        # the slowest probe of the run: the next tick, five minutes after this one STARTED, found a 5-minute target less
+        # than five minutes old and skipped it, so a host that did not answer was checked every ten minutes and called
+        # down after twenty where the page says ten.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         db = None
         try:
             db = _get_db()
@@ -411,7 +456,6 @@ def _tick():
                 db.close()
         if not targets:
             return
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
         due_ids = set(due_targets(targets, last_checked, now))
         due = [t for t in targets if t["id"] in due_ids]
         if not due:
@@ -426,16 +470,17 @@ def _tick():
                 try:
                     results[t["id"]] = fut.result()
                 except Exception as e:
-                    results[t["id"]] = (False, None, str(e)[:200])
+                    results[t["id"]] = _could_not_probe(e)  # the probe itself broke: that is not the host's answer
         except FuturesTimeoutError:
             pass  # whatever finished in budget gets recorded; stragglers wait for the next tick
 
-        _record_results({t["id"]: t for t in due}, results)
+        _record_results({t["id"]: t for t in due}, results, now)
     finally:
         _run_lock.release()
 
 
-def _record_results(by_id, results):
+def _record_results(by_id, results, checked_at):
+    """Store one run. `checked_at` is the start of the tick that made it (a naive UTC datetime), see `_tick`."""
     if not results:
         return
     db = None
@@ -445,10 +490,25 @@ def _record_results(by_id, results):
         db = _get_db()
         with db.cursor() as cur:
             for target_id, (ok, rtt, error) in results.items():
+                if ok is None:
+                    # v1.1.4 (WD-2) - the probe could not be made. No check is stored (the 7-day uptime counts answers) and
+                    # the state and its failure count stay as they were; only the sentence is kept, for the page. The
+                    # target has no check for this tick, so the next tick asks again.
+                    cur.execute("SELECT state FROM wd_state WHERE target_id=%s", (target_id,))
+                    if cur.fetchone():
+                        cur.execute(
+                            "UPDATE wd_state SET last_error=%s WHERE target_id=%s", ((error or "")[:200], target_id)
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO wd_state (target_id, state, consecutive_fails, since, last_error) "
+                            "VALUES (%s, 'unknown', 0, UTC_TIMESTAMP(), %s)",
+                            (target_id, (error or "")[:200]),
+                        )
+                    continue
                 cur.execute(
-                    "INSERT INTO wd_checks (target_id, checked_at, ok, rtt_ms, error) "
-                    "VALUES (%s, UTC_TIMESTAMP(), %s, %s, %s)",
-                    (target_id, 1 if ok else 0, rtt, (error or "")[:200]),
+                    "INSERT INTO wd_checks (target_id, checked_at, ok, rtt_ms, error) VALUES (%s, %s, %s, %s, %s)",
+                    (target_id, checked_at, 1 if ok else 0, rtt, (error or "")[:200]),
                 )
                 cur.execute(
                     "SELECT state, consecutive_fails FROM wd_state WHERE target_id=%s",
@@ -510,6 +570,18 @@ def _record_results(by_id, results):
 ADDRESS_REFUSAL = "That address is not in a subnet you can access."
 
 
+def _alert_text(value):
+    """v1.1.4 (WD-3) - one operator- or device-supplied value, escaped for an alert. The default templates wrap the label in
+    `<b>`, and Telegram and Pushover refuse a whole message that does not parse as HTML, so a target labeled `AT&T <gateway>`
+    never sent its down alert on those channels. `jen.plugin_api.safe_text` does this from Jen 7.2.0; an older Jen has no
+    such name and gets the same escape from the standard library."""
+    try:
+        from jen.plugin_api import safe_text
+    except ImportError:
+        return html.escape(str(value), quote=False)
+    return safe_text(value)
+
+
 def _alert_transition(target, new_state):
     alert_type = "watchdog_down" if new_state == "down" else "watchdog_up"
     label = target.get("label") or target["ip"]
@@ -525,9 +597,9 @@ def _alert_transition(target, new_state):
         send_alert(
             alert_type,
             subnet_id=target.get("subnet_id"),
-            label=label,
+            label=_alert_text(label),
             ip=target["ip"],
-            subnet=subnet_name or "no Kea subnet",
+            subnet=_alert_text(subnet_name or "no Kea subnet"),
             **extra,
         )
     except Exception as e:

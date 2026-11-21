@@ -167,6 +167,11 @@ def test_every_bundled_plugins_periodic_job_runs_and_writes(app, monkeypatch, tm
 
         nd_mod = sys.modules["jen_plugin_network-discovery"]
         nd_mod._nmap_available = lambda: True
+        # v7.2.0-beta.4 (Q246, Network Discovery 1.3.5): a scan is not judged, and is not run, when Kea's configuration cannot
+        # be read. There is no Kea behind this test, so Jen's answer is stood in: a configuration with no subnets, which is
+        # what makes the scan's gateway and DNS lookup an answer and not a failure. Without it the test passed or failed by
+        # whether an earlier test had left a configuration in `subnet_context`'s cache.
+        monkeypatch.setattr("jen.plugin_api.dhcp4_config", lambda: {"subnet4": []})
         nd_mod._scan_subnet = lambda cidr: {
             "hosts": [{"ip": "10.99.0.75", "mac": "aa:bb:cc:dd:ee:75", "hostname": "q111-scanned"}]
         }

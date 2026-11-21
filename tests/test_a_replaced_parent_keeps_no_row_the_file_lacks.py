@@ -163,14 +163,34 @@ class TestAnAccountTheFileDoesNotBring:
     def test_the_page_is_told_which_and_how_many(self, db, two, tmp_path):
         results = dbexport.import_jen(_file(tmp_path, ["users"], _without(LEAVES)), ["users"])
         assert (
-            "⚠️ mfa_methods: this file carries no rows for it and users was replaced. 1 row here was removed: it belonged to users that are gone "
-            "or that now have a different name. Rows of users the file brought back under the same name were kept"
+            "⚠️ mfa_methods: this file carries no rows for it and users was replaced. 1 row here was removed: the users row it belonged to is "
+            "gone or now has a different name. Rows that belong to users the file brought back under the same name were kept"
         ) in results, results
         assert (
             "⚠️ api_keys: this file carries no rows for it and users was replaced. 1 row here was kept and no longer names the users it pointed at, "
             "which are gone or now have a different name"
         ) in results, results
         assert sorted(r.split(":")[0] for r in _settled(results)) == sorted(f"⚠️ {d}" for d in DEPS)
+
+    def test_a_file_that_brings_no_account_back_does_not_say_rows_were_kept(self, db, two, monkeypatch):
+        """BF4: when no account is the same before and after, nothing was kept, and the line no longer says something was.
+        The settle step is called on the real connection with an empty `users` after the restore, and rolled back: a restore
+        that really emptied `users` would take the suite's own accounts with it."""
+        monkeypatch.setattr(dbexport, "_holders", lambda conn, parent: {})
+        results = []
+        db.commit()
+        try:
+            dbexport._settle_dependents_the_file_lacks(
+                db, {"users": {two[0]: STAYS, two[1]: LEAVES}}, {"users"}, set(), results
+            )
+        finally:
+            db.rollback()
+        line = next(r for r in results if r.startswith("⚠️ mfa_methods:"))
+        assert line == (
+            "⚠️ mfa_methods: this file carries no rows for it and users was replaced. 2 rows here were removed: the users rows they belonged to "
+            "are gone or now have a different name"
+        ), line
+        assert not any("brought back under the same name were kept" in r for r in results), results
 
 
 class TestAnIdThatNowHoldsADifferentName:

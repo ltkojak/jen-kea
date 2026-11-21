@@ -1,5 +1,33 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.1.4] - 2026-11-20
+
+Four fixes from the audit of 1.1.3 (WD-1 to WD-4). `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged, and there is no migration.
+
+### Fixed: a 5-minute target is checked every five minutes (WD-1)
+
+The page says a target on the 5-minute interval that fails three times in a row is called down after about ten minutes. It took twenty. A check was stored with the database's clock at the moment the whole run's results were written, which is after the slowest probe of that run. The next tick starts five minutes after the one before it started, so it found the check a second or so younger than five minutes and skipped the target. A host that does not answer takes a second to say so, which is exactly the case the plugin is for: it was probed every other tick, and so was every other 5-minute target recorded in the same run. Targets on 15, 30 and 60 minutes slipped one tick the same way.
+
+A check is now stored with the start of the tick that made it, read in Python before anything else happens, and a target is due once its last check is within a minute of its interval. The minute covers the few milliseconds by which two ticks' starts differ. Measured through the real tick with a simulated clock and a host that takes 1.2 seconds to fail: 1.1.3 checks at 1, 601, 1201 and 1801 seconds and alerts at 1201; 1.1.4 checks at 0, 300, 600 and alerts at 601.
+
+The times shown on the page for one check can now be up to half a minute earlier than before (the tick's start, not its end).
+
+### Fixed: a probe that could not be made is not a host that is down (WD-2)
+
+A probe had two answers, and one that could not run at all was recorded as a host that did not answer. On a Jen host with no `ping` (a minimal image; Settings → Plugins offers to install it and does not insist), every ping target went down after its failure count and a down alert was sent for each. The same happened when `ping` itself reported an error (exit code 2: it may not open its socket, or this host has no route), and on the TCP path when the Jen process had run out of file descriptors or memory.
+
+There is now a third answer, *could not probe*. It stores no check, so it does not lower the 7-day uptime. It does not count toward the failures that make a target down, and it does not reset them. The sentence is kept and shown under the target's state on the page, for example *could not probe: ping could not be run (No such file or directory)*. The next tick asks again. A reply and no reply (`ping` exit codes 0 and 1), a refused or silent TCP port, and a probe that timed out are judged as before.
+
+One consequence to know: if the Jen host itself loses its route to a target's network, `ping` reports that as its own error, so the target shows *could not probe* and is not announced as down.
+
+### Fixed: a label with `&` or `<` in it no longer stops its own alert (WD-3)
+
+The alert templates put the target's label in bold, and Telegram and Pushover refuse a whole message that is not well-formed HTML. A target labeled `AT&T <gateway>`, or a reservation hostname like it added through *Watch this host*, never sent its down or up alert on those channels. The label and the subnet name are now escaped before they are handed to Jen: with `jen.plugin_api.safe_text` where Jen has it (7.2.0 and later), and with the same escape from the standard library on an older Jen.
+
+### Fixed: the empty-ports message is a note under the field, as in the copy Jen bundles (WD-4)
+
+Jen's bundled copy of the page replaced a browser `alert()` with a note under the port field some releases ago, and that change was never carried into this repository, so an install from the registry still got the `alert()`. The two are the same file again.
+
 ## [1.1.3] - 2026-10-12
 
 Cleanup and one clearer refusal; no change to what a probe does or to any stored data. `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged: the helpers this release imports (`require_write`, `is_admin_or_above`) have been in `jen.plugin_api` since 5.65.10.

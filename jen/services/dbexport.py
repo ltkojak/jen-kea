@@ -1085,10 +1085,22 @@ def _settle_dependents_the_file_lacks(conn, before, replaced, in_file, results) 
                     continue
                 single = n == 1
                 if rule == "CASCADE":
+                    # v7.2.0-beta.4 (BF4) - the sentence about what was kept is said only when the file brought an account
+                    # back under the same name: a file whose accounts are all gone or renamed kept nothing, and the line said
+                    # it had. The singular no longer reads "it belonged to users that are gone".
+                    gone = (
+                        f"the {parent} row it belonged to is gone or now has a different name"
+                        if single
+                        else f"the {parent} rows they belonged to are gone or now have a different name"
+                    )
+                    kept = (
+                        f". Rows that belong to {parent} the file brought back under the same name were kept"
+                        if same
+                        else ""
+                    )
                     results.append(
                         f"⚠️ {dep}: this file carries no rows for it and {parent} was replaced. {n} row{'' if single else 's'} here "
-                        f"{'was' if single else 'were'} removed: {'it' if single else 'they'} belonged to {parent} that are gone or that now have "
-                        f"a different name. Rows of {parent} the file brought back under the same name were kept"
+                        f"{'was' if single else 'were'} removed: {gone}{kept}"
                     )
                 else:
                     results.append(

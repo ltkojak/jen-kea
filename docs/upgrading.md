@@ -10,6 +10,20 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.4: five plugin updates
+
+One step (7.2.0-beta.4). No migration and no helper build. Nothing to do; five things behave differently and are worth knowing.
+
+**Host Watchdog 1.1.4.** A target on the 5-minute interval is now checked on every tick; before, a host that did not answer was checked every ten minutes and called down after twenty. A probe that could not be made (no `ping` on the Jen host, or `ping` reporting an error of its own) shows *could not probe* under the target and is no longer counted as a failure. If the Jen host itself loses its route to a target's network, that target shows *could not probe* and is not announced as down.
+
+**Network Discovery 1.3.5.** A scan that cannot read Kea's leases, Kea's configuration, the known-hosts list, IPAM Lite, Jen's devices or the neighbor table now ends as an error that names what it could not read, and sends no Rogue Device alert. Before, such a scan stored leased hosts, the gateway or known hosts as unknown and alerted for them. While Kea's API does not answer, scans end in that error. A host you marked known before its MAC was visible now shows as known on every page.
+
+**IPAM Lite 1.8.3.** When Kea's leases cannot be read, a save, a range action and an import are refused with one sentence, the JSON API answers 503 and the subnet page shows a notice and no Next free button; before, an address a lease held could be handed out or marked static. The conflict check no longer announces every standing conflict again after one run with the Kea database away. A link to an address in a collapsed run opens 256 addresses around it; the rest stays collapsed and opens 256 at a time.
+
+**Presence 1.2.7.** Only if you track more than 64 devices on the Jen host's own networks: every unseen device is now asked in turn, 64 a pass. Before, the same 64 were asked every pass and the others were published offline. A device that has left is called offline later when many devices are unseen at once.
+
+**DNS Sync 1.1.5.** Preview shows the address of each record it will remove, and lists an AdGuard Home rewrite that is switched off on the server on its own. Also worth knowing since 1.1.4: after a restore of Jen's database from an older backup, records Jen made since that backup stay on the DNS server for good. Compare Preview's "Already on the server, left alone" with the server and remove what is stale.
+
 ## 7.2.0-beta.3: a restore of the accounts keeps API keys and sign-in factors, and two plugin fixes
 
 One step (7.2.0-beta.3). No migration and no helper build.
