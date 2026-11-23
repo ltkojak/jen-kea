@@ -51,9 +51,13 @@ def _whole_day(text):
     if len(text) != 10 or text[4] != "-" or text[7] != "-":
         return None  # the one shape a date field sends; a newer Python's `fromisoformat` reads others too
     try:
-        return date.fromisoformat(text)
-    except ValueError:
+        day = date.fromisoformat(text)
+        (
+            day + timedelta(days=1)
+        )  # (Q249) the filter reads up to the next day's first second: the last day a date can hold has none, and is no filter either
+    except (ValueError, OverflowError):
         return None
+    return day
 
 
 @bp.route("/settings/logs")
@@ -318,13 +322,9 @@ def users():
                 # (Q224, AJ15) the minutes the server APPLIES for this account (Q215 Z18's rule, one column over): a stored row outside 0..1440 - a hand edit, an earlier release - reads as
                 # the global, and the page says so instead of printing the row
                 u["own_minutes"] = __session_timeout.parse_minutes(u.get("session_timeout")) or None
-                # Parse subnet_access for display
-                try:
-                    import json as _json
-
-                    u["subnet_ids"] = _json.loads(u["subnet_access"]) if u["subnet_access"] else None
-                except Exception:
-                    u["subnet_ids"] = None
+                # (Q249) the stored scope through the reader the account itself is read with (`read_subnet_scope`): NULL is every subnet, and a scope that cannot
+                # be read is no subnets - the list shows the dash and the Edit dialog ticks nothing. This page read it its own way, as every subnet.
+                u["subnet_ids"] = __user.read_subnet_scope(u["subnet_access"])
     except Exception as e:
         logger.error(f"Could not load users: {e}")
         flash("Could not load users. Check server logs for details.", "error")
@@ -366,6 +366,12 @@ def _keep_user_form(which, user_id=None):
 
 SUBNETS_NONE_TICKED = "Tick All Subnets or at least one subnet. Nothing was changed."
 SUBNETS_ALL_AND_NAMED = "Tick All Subnets or named subnets, not both. Nothing was changed."
+
+
+def _stored_no_subnets(stored) -> bool:
+    """(Q249) Is this account's stored scope "no subnets" - an empty list, or a value that cannot be read (`read_subnet_scope`)? The single-sign-on mapping stores
+    `[]` for a sign-in whose groups match nothing."""
+    return stored is not None and __user.read_subnet_scope(stored) == []
 
 
 def _subnet_access_from_form(subnet_ids_raw, role):
@@ -641,18 +647,20 @@ def set_user_subnets(user_id):
 
     subnet_ids_raw = request.form.getlist("subnet_ids")
     # "all" ALONE means unrestricted (NULL). (Q224, AJ5) a value that is not a whole number refuses the form whole; (Q248) so does nothing ticked, and "all" beside an id:
-    # nothing here ever falls back to None (an UNRESTRICTED account) or drops one id from a selection. The role is not this form's, so no role is exempt here.
-    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, None)
-    if not ok:
-        flash(subnet_access, "error")
-        return redirect(url_for("users.users"))
+    # nothing here ever falls back to None (an UNRESTRICTED account) or drops one id from a selection. The role is not this form's: it is read from the row.
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
+                cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
+                    return redirect(url_for("users.users"))
+                # (Q249) a Superadmin is never restricted: its row stores NULL whatever the list says, as `add_user` and `edit_user` store it. The list used to
+                # be stored, and the Users page showed a scope the account does not have.
+                ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, row["role"])
+                if not ok:
+                    flash(subnet_access, "error")
                     return redirect(url_for("users.users"))
                 cur.execute(
                     "UPDATE users SET subnet_access=%s, token_version=token_version+1 WHERE id=%s",
@@ -724,14 +732,17 @@ def link_user_to_sso(user_id):
 def edit_user(user_id):
     """Unified edit endpoint — handles role, subnets, timeout, and optional password reset."""
 
-    role = request.form.get("role", "viewer")
+    # (Q249) a form that carries no role keeps the role the row has. The dialog disables its role select for the account's own row (and for a single-sign-on
+    # account), a disabled field is not posted, and the missing role used to read as "viewer": a superadmin could not save their own timeout or password
+    # ("You cannot demote your own Superadmin account."). None here is "the row's own", resolved once the row is read.
+    role = request.form.get("role")
     timeout_raw = request.form.get("timeout", "").strip()
     new_pw = request.form.get("new_password", "").strip()
     confirm_pw = request.form.get("confirm_password", "").strip()
     subnet_ids_raw = request.form.getlist("subnet_ids")
 
     # Validate role
-    if role not in ("superadmin", "admin", "viewer"):
+    if role is not None and role not in ("superadmin", "admin", "viewer"):
         flash("Invalid role.", "error")
         return redirect(url_for("users.users"))
 
@@ -754,20 +765,27 @@ def edit_user(user_id):
             flash_field("edit-confirm_password", "New passwords do not match.")
             return _keep_user_form("edit", user_id)
 
-    # Subnet access. (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short; (Q248) nothing ticked is refused too
-    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, role)
-    if not ok:
-        flash_field("edit-subnet_ids", subnet_access)
-        return _keep_user_form("edit", user_id)
-
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT username, role, auth_provider FROM users WHERE id=%s", (user_id,))
+                cur.execute("SELECT username, role, auth_provider, subnet_access FROM users WHERE id=%s", (user_id,))
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
                     return redirect(url_for("users.users"))
+                if role is None:
+                    role = row["role"]
+
+                # Subnet access. (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short; (Q248) nothing ticked is
+                # refused too. (Q249) with ONE exception: an account whose stored scope is already no subnets (what single sign-on stores for a sign-in whose
+                # groups match nothing, and what the dialog then shows: nothing ticked) keeps it. Its timeout could not be saved without granting it subnets.
+                if not subnet_ids_raw and role != "superadmin" and _stored_no_subnets(row["subnet_access"]):
+                    ok, subnet_access = True, "[]"
+                else:
+                    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, role)
+                if not ok:
+                    flash_field("edit-subnet_ids", subnet_access)
+                    return _keep_user_form("edit", user_id)
 
                 # v5.25.0 (Q21) — an OIDC-linked account's role is
                 # IdP-managed (recomputed on every login) and it has no

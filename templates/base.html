@@ -270,8 +270,8 @@ window.jenDialog = (function() {
         }
 
         /* Nav */
-        /* Q248 (V54) - the bar's background runs edge to edge; its CONTENTS sit in .nav-inner, a column with the page's own width and side padding (1,400 px, or 1,800 px on
-           a table page: .content--wide, below), so on a wide monitor the logo lines up with the page title and the search box with the content's right edge. It was the bar
+        /* Q248 (V54) - the bar's background runs edge to edge; its CONTENTS sit in .nav-inner, a column 1,400 px wide with the page's side padding on EVERY page
+           (Q249: a table page's wider content no longer widens it), so on a wide monitor the logo lines up with a form page's title and never moves. It was the bar
            itself that held the links, so at 2560 px the logo sat 580 px to the left of the title under it. */
         .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 6px 0; padding-top: calc(6px + env(safe-area-inset-top)); display: flex; align-items: center; min-height: 56px; position: sticky; top: 0; z-index: 100; }
         .nav-inner { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 0 20px; padding-left: calc(20px + env(safe-area-inset-left)); padding-right: calc(20px + env(safe-area-inset-right)); }
@@ -288,7 +288,8 @@ window.jenDialog = (function() {
         /* Q248 (V10, V37) - the top row never overlaps. The link group is the one part that may shrink (min-width: 0) and it CLIPS what does not fit (the 3 px of padding,
            taken back by the margin, keep a link's focus ring inside the clip); the right-hand group, the keyboard button and the search box never shrink. The script at the
            foot of this file (jenNavFit) measures the row and steps through the levels below until it fits: 1 favorites show their icon only, 2 About leaves the row (it is
-           always in the Account menu), 3 Getting started shows its icon only. With no script the row is level 0 and clips. This replaced a fixed rule that took the
+           always in the Account menu), 3 Getting started shows its icon only, 4 (Q249, BI2) favorites leave the row from the right, one by one, until it fits (each is
+           still in the menu it came from). With no script the row is level 0 and clips. This replaced a fixed rule that took the
            favorites' names away below 1500 px, though a 1440 px window with three favorites has room for them. */
         .nav-links { min-width: 0; overflow: hidden; padding: 3px; margin: -3px; }
         .nav-links > * { flex-shrink: 0; }
@@ -296,6 +297,7 @@ window.jenDialog = (function() {
         .nav.nav-fit-1 .nav-fav-label, .nav.nav-fit-2 .nav-fav-label, .nav.nav-fit-3 .nav-fav-label { display: none; }
         .nav.nav-fit-2 .nav-top-about, .nav.nav-fit-3 .nav-top-about { display: none; }
         .nav.nav-fit-3 .gs-pill-label { display: none; }
+        .nav .nav-links .nav-fav-off { display: none; }
         .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
         .nav-kb, .nav-search { flex-shrink: 0; }
         /* Q248 (V8) - the two top-row controls that were 22 px tall */
@@ -334,9 +336,10 @@ window.jenDialog = (function() {
         .section-tabs-wrap.is-scrolled::before { opacity: 1; }
         /* Q248 (V54) - the strip's background and its bottom line run edge to edge (they are the wrap's); the strip itself is a column with the page's own width and side
            padding, centered, so the first tab lines up with the page title and the pin button sits at the content's right edge. The two fades follow the column's edges.
-           --page-w is the page's column: 1,400 px, or 1,800 px on a table page (the wrap's --wide class, set where the page asks for .content--wide). */
+           --page-w is that column: 1,400 px on every page. */
         .section-tabs-wrap { --page-w: 1400px; background: var(--surface); border-bottom: 1px solid var(--border); }
-        .section-tabs-wrap--wide { --page-w: 1800px; }
+        /* Q249 - the two bars keep ONE column on every page. Q248 widened them with a table page's content, so the logo and every menu moved sideways by up to 200 px
+           between Leases and the dashboard on a wide monitor. Only the content under them widens now. */
         .section-tabs-wrap > .section-tabs { max-width: var(--page-w); margin: 0 auto; border-bottom: 0; min-height: 39px; }   /* 39 + the wrap's line = the 40 px --sticky-top counts */
         .section-tabs-wrap::before { left: max(0px, calc((100% - var(--page-w)) / 2)); bottom: 0; }
         .section-tabs-wrap::after { right: max(0px, calc((100% - var(--page-w)) / 2)); bottom: 0; }
@@ -398,8 +401,8 @@ window.jenDialog = (function() {
         /* Layout */
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
         /* Q248 (V54) - forms, settings and About stay 1,400 px wide; a TABLE page may use up to 1,800 px. A page asks for it by filling the content_class block with
-           content--wide; the content column, the top row's inner wrapper and the strip all take the same width. After the rules it widens (.container, .nav-inner),
-           so it wins at equal weight. */
+           content--wide; ONLY the content column takes it (Q249: the top row and the strip stay 1,400 px on every page, so nothing in them moves from page to page).
+           After the rule it widens (.container), so it wins at equal weight. */
         .content--wide { max-width: 1800px; }
         /* Q248 (addition 4) - a detail page's one way back, the first element of its content */
         .back-link { display: inline-block; margin-bottom: 8px; font-size: 13px; }
@@ -668,6 +671,12 @@ window.jenDialog = (function() {
         .wm-found, .wm-consents { flex-basis: 100%; margin-left: 28px; }
         .wm-consents label { display: block; margin: 2px 0; font-size: 13px; }
         .wm-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; }
+        /* Q249: the Kea logging card's three read-only lines */
+        .kl-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 6px 0 12px; font-size: 13px; }
+        .kl-facts dt { color: var(--text-muted); }
+        .kl-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+        @media screen and (max-width: 600px) { .kl-facts { grid-template-columns: 1fr; gap: 0; } .kl-facts dd { margin-bottom: 6px; } }
+        @media screen and (min-width: 769px) { .form-row.kl-fields { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); } }  /* the file, and its two numbers beside it */
         /* v5.70.0-beta.2 (Q206, AV1/AV2): a flash can be dismissed; a toast is the same alert made small and fixed. Both leave through `.leaving`; with prefers-reduced-motion the script removes them at once. */
         .alert-flash { display: flex; align-items: flex-start; gap: 12px; }
         .alert-flash[hidden] { display: none; }
@@ -730,6 +739,7 @@ window.jenDialog = (function() {
         mark { background: color-mix(in srgb, var(--warning) 35%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
         /* AX4: an error printed under its field */
         .field-error { color: var(--danger-ink); font-size: 12px; margin-top: 4px; }
+        .field-error .ico { margin-right: 4px; }
         input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); }
         /* AX2: the idle-session notice shares the prompt dialog's overlay and card; it sits above the confirmation dialog */
         #jen-session-overlay { z-index: 10001; }
@@ -1222,11 +1232,11 @@ window.jenDialog = (function() {
     {{ display_pick(sheet, "density-pick", "data-density", "compact", "Compact") }}
 </div>
 {% endmacro %}
-{# Q248 (V54) - a table page asks for the wide column by filling the content_class block with content--wide. The block is read ONCE, here, and the same class goes on the
-   content column and the top row's inner wrapper (and the strip's wrap gets its --wide class), so the three always agree. #}
+{# Q248 (V54) - a table page asks for the wide column by filling the content_class block with content--wide. The block is read ONCE, here, and the class goes on the
+   content column only (Q249): the top row and the strip keep one width on every page. #}
 {% set page_class %}{% block content_class %}{% endblock %}{% endset %}{% set page_class = page_class|trim %}
 <nav class="nav"{% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
-<div class="nav-inner{{ ' ' ~ page_class if page_class }}">
+<div class="nav-inner">
     <a href="/" class="nav-brand">
         <span class="nav-brand-logo-wrap">
             <img src="{{ branding_nav_logo or '/static/icons/jen-logo-navbar.png' }}" alt="Jen" class="nav-brand-logo">
@@ -1329,7 +1339,7 @@ window.jenDialog = (function() {
      nav.strip (jen/routes/settings/nav.py, v5.9.0). Scrolls horizontally on
      narrow screens rather than wrapping. -->
 {% if current_user.is_authenticated and nav.strip %}
-<div class="section-tabs-wrap{% if nav.landing %} section-tabs-wrap--landing{% endif %}{% if 'content--wide' in page_class %} section-tabs-wrap--wide{% endif %}">
+<div class="section-tabs-wrap{% if nav.landing %} section-tabs-wrap--landing{% endif %}">
 <div class="section-tabs{% if nav.pin %} section-tabs--pin{% endif %}">
     {% for t in nav.strip %}
     <a href="{{ t.url if t.url is defined else url_for(t.endpoint) }}" class="section-tab {% if t.active %}active{% endif %}">{{ nav_icon(t.icon) }} {{ t.label }}</a>
@@ -1407,7 +1417,7 @@ window.jenDialog = (function() {
     {# Q208 (AX4): an error that names ONE field is printed as an alert carrying data-field; the script at the foot of the page moves it under its input, and without script it IS a flash. They come first.
        Q210 (AZ5): data-form is the path of the page the form was on ("" when unknown); the script moves the error only on that page. #}
     {% for field, message, form_path in (take_field_errors() if take_field_errors is defined else []) %}
-    <div class="alert alert-error alert-flash" role="alert" data-field="{{ field }}" data-form="{{ form_path }}"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+    <div class="alert alert-error alert-flash" role="alert" data-field="{{ field }}" data-form="{{ form_path }}">{{ icon("circle-x") }}<span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
     {% endfor %}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -2392,8 +2402,21 @@ function sortTable(table, col, th) {
         function spills() {
             return fitLinks.scrollWidth > fitLinks.clientWidth + 1 || fitNav.scrollWidth > fitNav.clientWidth + 1 || (!!fitRow && fitRow.scrollWidth > fitRow.clientWidth + 1);
         }
+        var favs = fitLinks.querySelectorAll('.nav-fav');
+        var favSep = fitLinks.querySelector('.nav-fav-sep');
+        for (var f = 0; f < favs.length; f++) favs[f].classList.remove('nav-fav-off');
+        if (favSep) favSep.classList.remove('nav-fav-off');
         set(0);
         while (level < 3 && spills()) { level += 1; set(level); }
+        // Q249 (BI2) - level 4: five favorites at 1024 px still spill at level 3, and the ones clipped at the right could be neither seen nor clicked. They leave the
+        // row from the right, one by one, until nothing spills; with none left their hairline goes too. Each stays in the menu it came from.
+        var kept = favs.length;
+        while (kept > 0 && spills()) {
+            kept -= 1;
+            favs[kept].classList.add('nav-fav-off');
+            level = 4;
+        }
+        if (favs.length && kept === 0 && favSep) favSep.classList.add('nav-fav-off');
         fitNav.setAttribute('data-fit', String(level));
     }
     if (fitLinks) {
@@ -2875,12 +2898,15 @@ function sortTable(table, col, th) {
             var text = textEl ? textEl.textContent : alertEl.textContent;
             var id = input.id + '-error';
             var err = document.getElementById(id);
-            if (err) { err.textContent += ' ' + text; }
+            if (err) { err.appendChild(document.createTextNode(' ' + text)); }
             else {
                 err = document.createElement('div');
                 err.className = 'field-error';
                 err.id = id;
-                err.textContent = text;
+                // Q249 (C2) - the message keeps the icon its flash carries when it moves under its field
+                var errIcon = alertEl.querySelector('svg');
+                if (errIcon) err.appendChild(errIcon.cloneNode(true));
+                err.appendChild(document.createTextNode(text));
                 var after = input;
                 var hint = document.getElementById(input.id + '-hint');
                 if (hint && (input.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING)) after = hint;

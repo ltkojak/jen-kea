@@ -514,15 +514,20 @@ def clean_nav():
 class TestWideMonitors:
     @pytest.mark.parametrize("width", [2560, 1920])
     @pytest.mark.parametrize("path", ["/reservations", "/devices", "/settings/logs"])
-    def test_a_table_pages_bars_line_up_with_its_wider_content(self, page, base_url, clean_nav, path, width):
+    def test_a_table_pages_content_is_wider_and_its_bars_are_where_every_pages_are(
+        self, page, base_url, clean_nav, path, width
+    ):
+        # Q249: the bars do not follow the wider content. They are measured against a form page at the same width: the logo, the first tab and the search box
+        # are at the same x on both, so nothing in the two bars moves when a person goes from one page to the next.
         errors = _at(page, base_url, width)
+        page.goto(f"{base_url}/settings/kea")
+        form = page.evaluate(BARS_JS)
         page.goto(f"{base_url}{path}")
         m = page.evaluate(BARS_JS)
         assert 1400 < m["content_width"] <= 1800, m
-        assert abs(m["tab_left"] - m["title_left"]) <= 2, m
-        assert abs(m["pin_right"] - m["content_right"]) <= 2, m
-        # the top row's contents are the same column
-        assert abs(m["brand_left"] - m["content_left"]) <= 2 and abs(m["search_right"] - m["content_right"]) <= 2, m
+        assert m["title_left"] < m["tab_left"], m  # the content is wider than the bars
+        for key in ("brand_left", "search_right", "tab_left"):
+            assert abs(m[key] - form[key]) <= 1, (key, m, form)
         # and both bars' backgrounds still run edge to edge
         assert m["nav_width"] == m["window"] and m["strip_width"] == m["window"] and m["sideways"] <= 0, m
         assert not m["links_cut"] and m["fit"] == "0", m
@@ -534,7 +539,7 @@ class TestWideMonitors:
         page.goto(f"{base_url}/leases")
         m = page.evaluate(BARS_JS)
         assert 1400 < m["content_width"] <= 1800 and m["pin_right"] is None, m
-        assert abs(m["tab_left"] - m["title_left"]) <= 2, m
+        assert m["title_left"] < m["tab_left"], m  # Q249: the bars keep their one column; only the content is wider
 
     @pytest.mark.parametrize("width", [2560, 1920])
     @pytest.mark.parametrize("path", ["/settings/kea", "/reports"])
@@ -552,10 +557,16 @@ class TestWideMonitors:
         self, page, base_url, clean_nav, width
     ):
         _at(page, base_url, width)
+        page.goto(f"{base_url}/settings/kea")
+        form = page.evaluate(BARS_JS)
         page.goto(f"{base_url}/reservations")
         m = page.evaluate(BARS_JS)
-        assert abs(m["tab_left"] - m["title_left"]) <= 2 and abs(m["pin_right"] - m["content_right"]) <= 2, m
-        assert abs(m["brand_left"] - m["content_left"]) <= 2, m
+        # Q249: the bars are a form page's bars at every width; a table page's content may start up to the 20 px of the centered column's margin to their left
+        # (at 1440 px the bars' column is 1,400 px and the table uses the whole window), and at 1024 px the two are one column
+        assert abs(m["brand_left"] - form["brand_left"]) <= 1 and abs(m["tab_left"] - form["tab_left"]) <= 1, (m, form)
+        slack = 22 if width > 1400 else 2
+        assert -2 <= m["tab_left"] - m["title_left"] <= slack and -2 <= m["content_right"] - m["pin_right"] <= slack, m
+        assert -2 <= m["brand_left"] - m["content_left"] <= slack, m
 
     def test_abouts_release_notes_are_about_80_characters_a_line(self, page, base_url):
         _at(page, base_url, 2560)

@@ -71,7 +71,8 @@ class TestBoundedAccessibility:
     @pytest.mark.parametrize("name", ["settings_kea", "settings_alerts", "settings_security", "ddns", "database"])
     def test_a_label_that_is_bound_names_a_control_that_exists(self, name):
         text = pathlib.Path(f"templates/{name}.html").read_text(encoding="utf-8")
-        ids = re.findall(r'\bid="([^"{]+)"', text)
+        # (Q249) an id written with a template expression (`f-log_file_{{ k.id }}`, one per server) is an id too: its label's `for` carries the same text
+        ids = re.findall(r'\bid="([^"]+)"', text)
         for target in re.findall(r'<label[^>]*\bfor="(f-[^"]+)"', text):
             assert ids.count(target) == 1, (name, target)
 

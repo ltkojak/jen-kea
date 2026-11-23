@@ -100,8 +100,8 @@ its bar and each row checkbox names it with `form="bulk-form"`.
 The `hostname_clip` macro (`_hostname.html`) writes a hostname this way; a cell that holds a clip and something after it (a vendor badge, the Investigate button)
 wraps them in `<div class="clip-row">`. A date, a time and a `.badge` in a `table.rowlist` never wrap. A list that has more columns than a window holds drops
 some with `.hide-tablet` (1024 px and under), `.hide-below-1280` or `.hide-below-1440` on the header AND on its cells, never on the column it is sorted by by
-default nor on the row menu's. A table page fills `{% block content_class %}content--wide{% endblock %}`: its content column, the top row's inner wrapper
-(`.nav-inner`) and the section strip are then 1,800 px wide at most instead of 1,400, and the bars' backgrounds still run edge to edge. A detail page (one
+default nor on the row menu's. A table page fills `{% block content_class %}content--wide{% endblock %}`: its content column is then 1,800 px wide at most instead of 1,400. The top row's inner wrapper
+(`.nav-inner`) and the section strip stay 1,400 px on every page, so nothing in them moves from one page to the next, and the bars' backgrounds still run edge to edge. A detail page (one
 reached from a row or a card of another page) is listed on its parent's tab in `jen/routes/settings/nav.py`, so it keeps the parent's strip, and starts its
 content with `<a class="back-link" href="...">&larr; Parent's title</a>`, its only way back; every page of a plugin's blueprint is shown under the plugin's tab.
 

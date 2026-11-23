@@ -33,6 +33,7 @@ from jen.services.access import diagnostic_surface
 from jen.services.access import is_admin_or_above as _is_admin_or_above
 from jen.services.access import is_superadmin as _is_superadmin
 from jen.services.access import recent_auth_required as _recent_auth_required
+from jen.services.access import refusal_sentence as _refusal_sentence
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.crypto import SecretDecryptError
 
@@ -567,11 +568,8 @@ def ha_action(server_id, action):
     if not spec:
         abort(404)
     if _ha_role_denied(spec["role"]):
-        message = (
-            "Superadmin access required for this HA action."
-            if spec["role"] == "superadmin"
-            else "Admin access required."
-        )
+        # (Q249) the sentence the decorators answer with: who is needed, and the fixed part of the address that refused
+        message = _refusal_sentence("Superadmin" if spec["role"] == "superadmin" else "Admin")
         return render_template("error.html", code=403, message=message), 403
 
     server = _find_server(server_id)

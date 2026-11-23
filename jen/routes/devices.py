@@ -154,7 +154,8 @@ def devices():
                 with kdb.cursor() as kcur:
                     kcur.execute(
                         f"SELECT host_id, HEX(dhcp_identifier) AS mac_hex, inet_ntoa(ipv4_address) AS ip, dhcp4_subnet_id AS subnet_id "  # nosec B608 - %s placeholders only
-                        f"FROM hosts WHERE HEX(dhcp_identifier) IN ({marks}) ORDER BY host_id",
+                        # (Q249) an IPv4 reservation, the rule of the Leases list (`leases.V4_RESERVATION`): an IPv6 reservation's row has no IPv4 subnet id, a global one has 0
+                        f"FROM hosts WHERE HEX(dhcp_identifier) IN ({marks}) AND dhcp4_subnet_id IS NOT NULL ORDER BY host_id",
                         mac_hexes,
                     )
                     for h in kcur.fetchall():

@@ -89,7 +89,7 @@ The dashboard is the first page you see after logging in. It gives you a live ov
 
 ### Needs attention
 
-When something needs you, a **Needs attention** card is the first thing on the page; when nothing does, the card is not drawn at all. It lists a Kea server that does not answer, each Health check that fails, and each pool that is near exhaustion or over the alert threshold. Every line is a link to the page where the thing is handled: Kea servers, the check's own row on the Health page, or the subnet's leases. The card shows only what your account may see: a subnet you have no access to is never named or counted, and the Health lines are the rows the Health page shows you. It is read again every five minutes while the page is open and auto-refresh is on. It is not one of the widgets you arrange or switch off.
+When something needs you, a **Needs attention** card is the first thing on the page; when nothing does, the card is not drawn at all. It lists a Kea server that does not answer, each Health check that fails, and each pool that is near exhaustion or over the alert threshold. Every line is a link to the page where the thing is handled: Kea servers, the check's own row on the Health page, or the subnet's leases. The card shows only what your account may see: a subnet you have no access to is never named or counted, and the Health lines are the rows the Health page shows you. When Health's pool check judges a subnet that the card's own pool lines do not cover, Health's line is shown as well, at Health's level. It is read again every five minutes while the page is open and auto-refresh is on. It is not one of the widgets you arrange or switch off.
 
 ### Subnet Utilization Cards
 
@@ -164,7 +164,7 @@ The Leases page shows all active dynamic leases — devices that received an IP 
 
 **Expires** — the column says how long a lease has left ("in 22 h", "in 6 d"). Hover over it for the exact time, in your browser's time zone or in UTC as you chose in the Display menu.
 
-**Long names and narrow windows** — a hostname, a device name, an owner or a note that does not fit its column is cut with an ellipsis; hover over it for the whole text, or open the row's Investigate page. A list never scrolls sideways: in a narrower window it shows fewer columns, and always keeps the column it is sorted by and the row's menu. Leases shows Obtained from 1280 px up; Devices shows Type from 1280 px and First Seen, Owner and the IPv6 addresses from 1440 px. On a wide monitor the four list pages (Leases, Reservations, Devices, Logs) use up to 1,800 px; forms and settings stay 1,400 px wide.
+**Long names and narrow windows** — a hostname, a device name, an owner or a note that does not fit its column is cut with an ellipsis; hover over it for the whole text, or open the row's Investigate page. A list never scrolls sideways: in a narrower window it shows fewer columns, and keeps the column it is sorted by when you first open it, and the row's menu. Leases shows Obtained from 1280 px up; Devices shows Type from 1280 px and First Seen, Owner and the IPv6 addresses from 1440 px. On a wide monitor the four list pages (Leases, Reservations, Devices, Logs) use up to 1,800 px; forms and settings stay 1,400 px wide. The top row and the section tabs stay in one place on every page.
 
 **Sorting and paging** — click a column heading to sort, or a page number to move on: the table changes where it is, without reloading the page, and Back returns to the previous sort. The heading the list is sorted by is announced to screen readers; Ctrl-click (or Cmd-click) a heading to open that sort in a new tab. Devices and Reservations work the same way.
 
@@ -700,7 +700,7 @@ The top row holds Dashboard, Management, Network, Settings and About (a viewer h
 
 The **phone bar** is the row of buttons along the bottom of the screen on a phone. Choose up to four pages for it; **More** is always the last button, so every page stays reachable. With nothing chosen the bar shows its default pages. On a phone your favorites are the first group in the More menu, and **Customize navigation** is among your account links there.
 
-The top row is fitted to the window. When there is not room for everything, favorites show their icon alone first (hover one to read its name), then About leaves the row (it is always in your account menu), then Getting started shows its icon alone. Nothing is ever drawn over anything else.
+The top row is fitted to the window. When there is not room for everything, favorites show their icon alone first (hover one to read its name), then About leaves the row (it is always in your account menu), then Getting started shows its icon alone, and last the favorites at the right end leave the row, one at a time (each is still in the menu it came from, and comes back in a wider window). Nothing is ever drawn over anything else.
 
 On a phone, the magnifier in the top bar opens the search field; **Esc** or the magnifier again puts it away. Under **Settings**, the **Find a setting** box filters the groups as you type ("SMTP", "certificate", "backup"); **Esc** clears it.
 

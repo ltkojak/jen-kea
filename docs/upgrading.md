@@ -10,6 +10,26 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.7: Kea logging from Jen, Edit Subnet without timers, and the fixes of the pass on 7.2.0-beta.6
+
+One step (7.2.0-beta.7). No migration, no helper build and no new setting. Nothing to do; these behave differently and are worth knowing.
+
+**Kea logging.** Settings → Kea has a new card, Kea logging. Nothing changes until you save it. If Health says the Problems inbox sweep cannot read Kea's log, open the card and choose "A file Jen can read" or "The system journal and a file": Kea then writes `/var/log/kea/kea-dhcp4.log` itself and rotates it at the size you set. Jen checks that Kea really writes to the file and puts the previous logging back when it does not. To go back, choose "The system journal (Kea's default)". On a server in File over SSH mode the change restarts Kea, as every change there does; in Live API mode Kea applies it at once. The card is refused while investigation logging is on for that server. The audit log records a change as `KEA_LOG_OUTPUT`.
+
+**Words a script may match.** A refusal names the page's fixed address only: "Superadmin access required for /database/backup/download." where 7.2.0-beta.6 printed the whole path asked for. The HA action's refusal reads the same way. The sweep row of Health's JSON says "choose a file under Settings → Kea → Kea logging" and its `fix_url` is `/settings/kea#kea-logging`.
+
+**Health's JSON for a viewer or an admin.** `fix_url`, `fix_hint`, `link` and `link_label` are empty for a row whose page the signed-in role may not open. A superadmin's rows are unchanged.
+
+**Reserved.** A lease is marked Reserved, and counted, when a reservation with an IPv4 subnet exists for its hardware address (a global reservation included). A DHCPv6-only reservation for the same address no longer marks it.
+
+**Users.** A form post to Edit User with no `role` field keeps the account's role (it was read as Viewer). An account whose stored subnet list cannot be read is shown with no subnets.
+
+**The top row.** On a wide monitor the top row and the section tabs are in the same place on every page; on the four list pages only the table under them is wider. In a narrow window with many favorites, the favorites at the right end leave the top row when it does not fit; each is still in the menu it came from.
+
+**Presence 1.2.10.** A device whose own probe could not be sent is not counted as missed on that pass. A log line says how many addresses could not be asked.
+
+**IPAM Lite 1.8.6.** A long host or device name on a subnet's page is cut to its cell, with the whole name in a tooltip; a device's maker is on the same line as its name.
+
 ## 7.2.0-beta.6: the look over every page, seven plugin updates, and an API key or account that is never wider than the boxes ticked
 
 One step (7.2.0-beta.6). No migration, no helper build and no new setting. Nothing to do; these behave differently and are worth knowing.

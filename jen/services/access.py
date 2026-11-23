@@ -17,7 +17,7 @@ Import decorators from here rather than defining them per-route-file.
 
 from functools import wraps
 
-from flask import abort, flash, redirect, request, session, url_for
+from flask import abort, current_app, flash, redirect, request, session, url_for
 from flask_login import current_user
 
 # ── Role check helpers ────────────────────────────────────────────────────────
@@ -40,8 +40,57 @@ def is_any_role():
 
 def refusal_sentence(who):
     """Q248 (V47): a refusal names the page that refused. The person lands on the dashboard with this flash, and "Admin access required." alone did not say what
-    they had asked for. The path is the request's own (no query), cut to a length a banner can hold; the template that prints a flash escapes it."""
-    return f"{who} access required for {request.path[:200]}."
+    they had asked for.
+
+    Q249: it names only the FIXED part of the route that matched - the text of the rule before its first variable, without a trailing slash - and nothing of the
+    address that was typed. `/database/backup/download/<path:filename>` took any words after its last slash, and a crafted link put them in Jen's own red banner.
+    With no matched route, or a route that is a variable from its first character, the sentence names no page."""
+    rule = getattr(getattr(request, "url_rule", None), "rule", "") or ""
+    fixed = rule.split("<", 1)[0].rstrip("/")
+    return f"{who} access required for {fixed}." if fixed else f"{who} access required."
+
+
+# Q249 - the lowest role a view lets in, written on the view by the three decorators below (`_jen_min_role`) and read by `role_may_open`. A view wrapped twice keeps
+# the stricter mark, whatever the order of the decorators.
+_ROLE_RANK = {"viewer": 0, "admin": 1, "superadmin": 2}
+
+
+def _mark_min_role(decorated, f, role):
+    held = getattr(f, "_jen_min_role", None)
+    decorated._jen_min_role = held if _ROLE_RANK.get(held, -1) > _ROLE_RANK[role] else role
+    return decorated
+
+
+def role_may_open(path, role) -> bool:
+    """Q249 - may an account of `role` open the page at `path` (a path of Jen; its query and fragment are not read)? The answer is the mark of the view the path
+    matches: a view the decorators did not mark is open to every signed-in role, and a path that matches no route is False. The one rule a link shown to a person
+    is held to (Health's rows); it reads the role only, never the account's subnets."""
+    from urllib.parse import urlsplit
+
+    from werkzeug.exceptions import HTTPException
+    from werkzeug.routing import RequestRedirect
+
+    path = str(path or "").split("#", 1)[0].split("?", 1)[0]
+    if not path.startswith("/"):
+        return False
+    adapter = current_app.url_map.bind("localhost")
+    endpoint = None
+    for _ in range(
+        2
+    ):  # a route written with a trailing slash answers a path without one by a redirect to itself: follow it once
+        try:
+            endpoint, _args = adapter.match(path, method="GET")
+            break
+        except RequestRedirect as moved:
+            path = urlsplit(moved.new_url).path
+        except HTTPException:
+            return False
+    if endpoint is None:
+        return False
+    need = getattr(current_app.view_functions.get(endpoint), "_jen_min_role", None)
+    if need is None:
+        return True
+    return _ROLE_RANK.get(role, -1) >= _ROLE_RANK.get(need, 99)
 
 
 def superadmin_required(f):
@@ -56,7 +105,7 @@ def superadmin_required(f):
             return redirect(url_for("dashboard.dashboard"))
         return f(*args, **kwargs)
 
-    return decorated
+    return _mark_min_role(decorated, f, "superadmin")
 
 
 def admin_required(f):
@@ -71,7 +120,7 @@ def admin_required(f):
             return redirect(url_for("dashboard.dashboard"))
         return f(*args, **kwargs)
 
-    return decorated
+    return _mark_min_role(decorated, f, "admin")
 
 
 def viewer_or_above(f):
@@ -83,7 +132,7 @@ def viewer_or_above(f):
             return redirect(url_for("auth.login"))
         return f(*args, **kwargs)
 
-    return decorated
+    return _mark_min_role(decorated, f, "viewer")
 
 
 # ── Step-up (recent-auth) gate — v5.17.0 (Q6 6A) ─────────────────────────────

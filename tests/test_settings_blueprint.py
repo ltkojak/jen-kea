@@ -39,6 +39,7 @@ EXPECTED_ENDPOINTS = {
     "settings.deny_config_write",
     "settings.config_write_fixed",
     "settings.settle_pending_change",
+    "settings.save_kea_logging",  # Q249: the Kea logging card's one route
     "settings.setup_direct_socket",  # v5.29.0 (Q29)
     "settings.remove_direct_socket",  # v5.29.0 (Q29)
     "settings.rotate_kea_ca",  # v5.29.0 (Q29)

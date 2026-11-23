@@ -1204,6 +1204,24 @@ The **Switch to live API** button sits at the bottom and is enabled when steps 1
 
 **Recovery bundles.** A recovery bundle exported on 5.x restores on 7.0 (the major-version check accepts it); export a fresh one after upgrading.
 
+### Kea logging
+
+Settings → Kea → *Kea logging* (a superadmin's card, after *SSH to the Kea server*) shows, for each Kea server, what the running daemon itself answers: where kea-dhcp4 writes its log, which file Jen reads and whether that came from Kea's logger or from the **Kea log path** setting, and the logger's severity. Jen reads a log file over SSH for the Problems inbox, Trace and Explain; a package install of Kea logs to stdout (the system journal), which gives Jen nothing to read, and the Health row **Problems inbox sweep** then fails and points here.
+
+One form per server changes it. **Write the log to** has three choices, and each stores exactly this as the `kea-dhcp4` logger's `output-options` (nothing else of the logger is touched - not its severity, not its debuglevel):
+
+- **The system journal (Kea's default)** - `[{"output": "stdout", "pattern": "%-5p %m\n"}]`, what the package ships.
+- **A file Jen can read** - `[{"output": "<File>", "flush": true, "maxsize": <Rotate at, in bytes>, "maxver": <Old files kept>}]`.
+- **The system journal and a file** - the first entry followed by the second.
+
+**File** is a `.log` file directly in `/var/log/kea` (default `/var/log/kea/kea-dhcp4.log`), **Rotate at (MB)** a whole number from 1 to 1024 (default 10) and **Old files kept** a whole number from 1 to 50 (default 4). Kea rotates the file itself; no logrotate file is needed. A folder outside `/var/log/kea` is Kea's own refusal ("supported path is '/var/log/kea'"), so the form does not offer one. **Kea makes the file**, as the account it runs as; you do not create it.
+
+The change goes the way every configuration change to that server goes (its Write mode: live over the API, or the file over SSH and a restart), is kept in Config history and is audited as `KEA_LOG_OUTPUT`. A choice equal to what the daemon runs answers "Nothing to change."
+
+**The proof, and the put-back.** Kea accepts a file it may not write and then logs nothing anywhere, so Jen does not take Kea's "Configuration successful." as the answer. For the two file choices Jen reads the end of the file over SSH before the change, applies it, asks the daemon a harmless command so it logs a line, and reads the end of the file again (up to five times, one second apart). When the file has not grown, the previous logging is put back and the message says so: "Kea accepted the change but wrote nothing to … so the previous logging was put back. Check that … is writable by the account kea-dhcp4 runs as." A logger whose severity is WARN, ERROR or FATAL writes no line for a command, so there Jen cannot check: the change stands and the message says the file will fill when Kea next logs at that level. This is why a file choice needs a server Jen reaches over SSH with the Kea host helper; without it the choice is refused before anything is sent. The journal choice needs neither.
+
+**While investigation logging is on, the card refuses.** Investigation logging's restore can remove the whole logger entry, and the new output with it. Turn investigation logging off (or resolve its last session) on the Kea Servers page first.
+
 ## SSH Setup (the host's own work, and the file path)
 
 SSH is for the host: logs, Trace, TLS material, the helper, and the file path (config pushes and restarts). It is not needed to change a server over its API.

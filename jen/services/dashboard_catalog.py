@@ -268,8 +268,13 @@ def attention_widget(checks, server_statuses, accessible_subnets) -> list[dict]:
     from nothing else, so a subnet the account may not see has no line, no name and no part in any count. Every link is to a page any signed-in account may open
     (Kea servers, Health, the subnet's leases).
 
-    A server that is down and a pool that is full are each said once: where a server line or a pool line is drawn, the Health row for the same fact
-    (`kea_reachable`, `pool_utilization`) is not drawn beside it."""
+    A server that is down and a pool that is full are each said once: where a server line is drawn, the Health row for the same fact (`kea_reachable`) is not
+    drawn beside it, and the Pool utilization row is left out when the pool lines say all of it.
+
+    Q249: "all of it" is every subnet that row judged failing or warning (`Check.flagged_subnets`). The row reads every subnet with a snapshot that the caller may
+    see; the pool lines read the caller's subnet MAP. A subnet Kea serves that Jen's map does not name was near exhaustion, Health said FAIL, and the card showed
+    one amber line about another subnet. When the row holds a subnet no pool line names, it is drawn too, at its own level (a warning as a warning), and the
+    card's edge takes the worst level of its lines. The row is the one Health made for this caller, so it names no subnet the account may not see."""
     lines = []
     down = [s for s in (server_statuses or []) if not s.get("up")]
     for s in down:
@@ -286,13 +291,21 @@ def attention_widget(checks, server_statuses, accessible_subnets) -> list[dict]:
     said = set()
     if down:
         said.add("kea_reachable")
-    if pools:
-        said.add("pool_utilization")
+    own = {p["subnet_id"] for p in pools}
     for c in checks or []:
-        if c.status != "fail" or c.id in said:
+        if c.id != "pool_utilization":
+            continue
+        flagged = set(getattr(c, "flagged_subnets", None) or ())
+        if c.status not in ("fail", "warn") or (flagged and flagged <= own):
+            said.add("pool_utilization")
+    for c in checks or []:
+        if c.id in said:
+            continue
+        # a failing row, and the Pool utilization row at its own level when the pool lines do not say all of it
+        if c.status != "fail" and c.id != "pool_utilization":
             continue
         text = f"{c.title}: {c.detail}" if c.detail else c.title
-        lines.append({"kind": "health", "level": "fail", "text": text, "url": f"/health-center#check-{c.id}"})
+        lines.append({"kind": "health", "level": c.status, "text": text, "url": f"/health-center#check-{c.id}"})
     for p in pools:
         info = accessible_subnets[p["subnet_id"]]
         where = f"{info['name']} ({info['cidr']})"

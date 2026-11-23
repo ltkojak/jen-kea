@@ -1420,7 +1420,9 @@ class TestTheSweepReadsTheFileTheServersLoggerWrites:
             cp.sweep(NOW, servers=[SERVER_A])
         row = health._problems_sweep({})
         assert row.status == "fail"
-        assert "/var/log/kea/kea-dhcp4.log" in row.detail and "file output" in row.detail
+        assert (
+            "/var/log/kea/kea-dhcp4.log" in row.detail and "Kea logging" in row.detail
+        )  # (Q249) the card that changes it
         assert "SSH" not in row.detail and "SSH" not in row.fix_hint
 
     def test_a_good_read_records_the_path_that_worked(self, db, stack, monkeypatch):

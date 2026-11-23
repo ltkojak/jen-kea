@@ -205,8 +205,14 @@ class TestNeedsAttentionSaysEachThingOnce:
 
     def test_a_pool_line_stands_in_for_the_pool_row_of_health(self, db, two_subnets, pools_over):
         failing = health.Check("pool_utilization", "Pool utilization", "capacity", "fail", "near exhaustion: x 99%")
+        failing.flagged_subnets.append(
+            2
+        )  # (Q249) the row says which subnets it judged: it is left out when the pool lines name every one of them
         lines = dcatalog.attention_widget([failing], [], {2: dict(HIDDEN)})
         assert [line["kind"] for line in lines] == ["pool"]
+        failing.flagged_subnets.append(7)  # a subnet no pool line names: the row is drawn too
+        lines = dcatalog.attention_widget([failing], [], {2: dict(HIDDEN)})
+        assert [line["kind"] for line in lines] == ["health", "pool"]
 
     def test_nothing_wrong_is_an_empty_list(self, logged_in_client, db, mock_kea, monkeypatch):
         with db.cursor() as cur:
@@ -718,8 +724,6 @@ class TestTrackingCodesAreLeftOut:
             "(RFC5280)",
             "(1.2.9)",
             "(not in use: no certificate is installed)",
-            "(BG3; BG5 written down)",
-            "(4 P1, 31 P2, 67 P3 by its readers' tiers)",
         ],
     )
     def test_what_is_not_a_group_of_codes_survives(self, kept):
@@ -738,6 +742,9 @@ class TestTrackingCodesAreLeftOut:
             ("its two rows (BE1, BE2) are", "its two rows are"),
             ("masks (AZ6, BA4, and BB10) the bundle", "masks the bundle"),
             ("a row (BD1 and BD2; BH3) here", "a row here"),
+            # Q249 (BI5): a group that holds a code goes whole, words and all (Q248 kept these two)
+            ("a rule (BG3; BG5 written down) here", "a rule here"),
+            ("102 rows (4 P1, 31 P2, 67 P3 by its readers' tiers) in all", "102 rows in all"),
         ],
     )
     def test_a_group_of_codes_goes_with_the_space_before_it(self, before, after):

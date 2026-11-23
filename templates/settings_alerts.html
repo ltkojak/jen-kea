@@ -4,7 +4,7 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_dots, icon_test %}
 <div class="page-header">
     <h1>{{ icon("bell", "ico-lg") }} Alerts &amp; Integrations</h1>
-    <p>Notification channels, thresholds and templates — plus the Prometheus hook. Delivery history is under <a href="/settings/logs?tab=alerts">Logs → Alert log</a>.</p>
+    <p>Notification channels, thresholds and templates — plus the Prometheus hook.{# Q249: the link is drawn for an account the Logs route lets in - the tab list nav.py made for this account #}{% if nav.subtabs['logs']|selectattr('id', 'equalto', 'alerts')|list %} Delivery history is under <a href="/settings/logs?tab=alerts">Logs → Alert log</a>.{% endif %}</p>
 </div>
 
 {% set toc = [('al-global', 'Global Alert Settings'), ('al-channels', 'Alert Channels'), ('al-templates', 'Message Templates'), ('al-metrics', 'Prometheus Metrics')] %}

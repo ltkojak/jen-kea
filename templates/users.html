@@ -39,7 +39,7 @@
         </td>
         <td data-m="badge">
             {% if u.role == 'superadmin' %}
-            <span style="color:var(--warning);font-weight:600;font-size:12px;">{{ icon("star") }} Superadmin</span>
+            <span style="color:var(--warning-ink);font-weight:600;font-size:12px;">{{ icon("star") }} Superadmin</span>
             {% elif u.role == 'admin' %}
             <span style="color:var(--primary);font-weight:600;font-size:12px;">{{ icon("wrench") }} Admin</span>
             {% else %}
@@ -161,7 +161,7 @@
                 <option value="admin">Admin — manage assigned subnets</option>
                 <option value="superadmin">Superadmin — full access, all subnets</option>
             </select>
-            <div class="form-hint warn" id="edit-role-oidc-hint" hidden>Role is managed by the identity provider — it's recomputed from group membership on every SSO login.</div>
+            <div class="form-hint warn" id="edit-role-oidc-hint" hidden>Role is managed by the identity provider — it's recomputed from group membership on every SSO sign-in.</div>
         </div>
 
         <!-- Subnet Access -->
@@ -299,7 +299,7 @@ function openEditModal(u, opener) {
     ssoLinked.hidden = !u.is_oidc;
     document.getElementById('link-sso-form').hidden = !!u.is_oidc;
 
-    // the account's stored subnets (All Subnets when it stores none) and its timeout
+    // the account's stored subnets and its timeout: All Subnets when the row stores no list at all, nothing ticked for a stored scope of no subnets (Q249)
     tickSubnets('f-edit-subnet_ids', u.subnet_ids);
     document.getElementById('f-edit-timeout').value = u.timeout || '';
 

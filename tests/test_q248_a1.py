@@ -156,12 +156,15 @@ class TestSetUserSubnetsReadsTheTickedSubnets:
         self._set(logged_in_client, uid, ["1"])
         assert json.loads(_row(db, "q248_s_one")["subnet_access"]) == [1]
 
-    def test_a_superadmin_row_with_nothing_ticked_is_refused_here(self, logged_in_client, db):
-        """This form carries no role, so no role is exempt on it: the superadmin exemption is Add User's and Edit User's, where the role is on the form."""
+    def test_a_superadmin_row_stores_no_list_whatever_is_ticked(self, logged_in_client, db):
+        """(Q249) This form carries no role, so the role is read from the row: a Superadmin is never restricted, and its row stores NULL as Add User and Edit User
+        store it. Until Q249 no role was exempt here, and a ticked subnet was stored on a row whose role ignores it."""
         uid = _user(db, "q248_s_super", role="superadmin", access="[1]")
         r = self._set(logged_in_client, uid, None)
-        assert SUBNETS_NONE_TICKED in r.get_data(as_text=True)
-        assert _row(db, "q248_s_super")["subnet_access"] == "[1]"
+        assert SUBNETS_NONE_TICKED not in r.get_data(as_text=True)
+        assert _row(db, "q248_s_super")["subnet_access"] is None
+        self._set(logged_in_client, uid, ["1"])
+        assert _row(db, "q248_s_super")["subnet_access"] is None
 
 
 # ───────────────────────────── V3 and V41: the Users page ─────────────────────────────

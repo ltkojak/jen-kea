@@ -187,10 +187,10 @@ document.getElementById('confirm-cancel-btn').addEventListener('click', hideConf
 {% if family == 'v6' %}
 var _orig = {
     pool:               {{ kea.pool_str | tojson }},
-    preferred_lifetime: {{ kea.preferred_lifetime | tojson if kea.preferred_lifetime else '""' }},
-    valid_lifetime:     {{ kea.valid_lifetime | tojson if kea.valid_lifetime else '""' }},
-    renew_timer:        {{ kea.renew_timer | tojson if kea.renew_timer else '""' }},
-    rebind_timer:       {{ kea.rebind_timer | tojson if kea.rebind_timer else '""' }},
+    preferred_lifetime: {{ (kea.preferred_lifetime if kea.preferred_lifetime is not none else "") | tojson }},
+    valid_lifetime:     {{ (kea.valid_lifetime if kea.valid_lifetime is not none else "") | tojson }},
+    renew_timer:        {{ (kea.renew_timer if kea.renew_timer is not none else "") | tojson }},
+    rebind_timer:       {{ (kea.rebind_timer if kea.rebind_timer is not none else "") | tojson }},
     dns_servers:        {{ kea.dns_servers | tojson }},
 };
 
@@ -214,9 +214,9 @@ var _fields = {
 {% else %}
 var _orig = {
     pool:           {{ kea.pool_str | tojson }},
-    valid_lifetime: {{ kea.valid_lifetime | tojson if kea.valid_lifetime else '""' }},
-    renew_timer:    {{ kea.renew_timer | tojson if kea.renew_timer else '""' }},
-    rebind_timer:   {{ kea.rebind_timer | tojson if kea.rebind_timer else '""' }},
+    valid_lifetime: {{ (kea.valid_lifetime if kea.valid_lifetime is not none else "") | tojson }},
+    renew_timer:    {{ (kea.renew_timer if kea.renew_timer is not none else "") | tojson }},
+    rebind_timer:   {{ (kea.rebind_timer if kea.rebind_timer is not none else "") | tojson }},
     routers:        {{ kea.routers | tojson }},
     dns_servers:    {{ kea.dns_servers | tojson }},
 };

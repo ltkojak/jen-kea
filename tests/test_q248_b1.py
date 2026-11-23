@@ -394,8 +394,11 @@ class TestAHealthCheckCarriesALink:
         monkeypatch.setattr(health, "run_checks", lambda ctx=None: seen.append(dict(ctx)) or [])
         _viewer(client, db, "q248_health_viewer").get("/health-center/data")
         assert seen and seen[-1]["admin"] is False
-        client.get("/dashboard/catalog-data?widgets=readiness")
-        assert seen[-1]["admin"] is False
+        # Q249 (BI15): the route is under /api (this asked a path that answered 404, and the line after it read the Health call again)
+        seen.clear()
+        resp = client.get("/api/dashboard/catalog-data?widgets=readiness")
+        assert resp.status_code == 200
+        assert seen and seen[-1]["admin"] is False
 
 
 # ── V29, V31 ─────────────────────────────────────────────────────────────────

@@ -239,7 +239,7 @@
                 <label for="f-audit_retention_days">Keep audit log entries for (days)</label>
                 <input id="f-audit_retention_days" type="number" name="audit_retention_days"
                        value="{{ audit_retention_days }}" min="0" max="3650" aria-describedby="f-audit_retention_days-hint">
-                <div class="form-hint" id="f-audit_retention_days-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count|number }}</strong> {% if audit_log_count == 1 %}entry{% else %}entries{% endif %} — <a href="/settings/logs">view</a>.</div>
+                <div class="form-hint" id="f-audit_retention_days-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count|number }}</strong> {% if audit_log_count == 1 %}entry{% else %}entries{% endif %}{# Q249: the link is drawn for an account the Logs route lets in #}{% if nav.subtabs['logs']|selectattr('id', 'equalto', 'audit')|list %} — <a href="/settings/logs">view</a>{% endif %}.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("save") }} Save Audit Retention</button>

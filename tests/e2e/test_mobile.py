@@ -292,6 +292,10 @@ class TestSettingsCardsCollapsibleOnPhone:
     # gained it as a one-line hint under the field. The page measured 2563 px on the test machine (tree q248a2e) against a ceiling of 2562.7, so the baseline gains 30 px
     # (3661 -> 3691, ceiling 2583.7): the ceiling clears the measured height by 20.7 px, per the rule above. Remeasure from the artifact of the release commit.
     PROBE_HINT_Q248 = 30
+    # Q249: the Kea logging card (a superadmin's card after the SSH card: three read-only lines, three radios, three fields and a button per server). The page measured 2760 px on
+    # the test machine (tree q249ag, one server) against a ceiling of 2583.7, so the baseline gains 282 px (3691 -> 3973, ceiling 2781.1): the ceiling clears the measured height by
+    # 21.1 px, per the rule above. Remeasure from the artifact of the release commit.
+    KEA_LOGGING_CARD_Q249 = 282
 
     def test_settings_kea_is_at_least_30_percent_shorter_than_5_56_3(self, desktop, base_url):
         _visit(desktop, base_url, "/settings/kea")
@@ -304,6 +308,7 @@ class TestSettingsCardsCollapsibleOnPhone:
             + self.WRITE_MODE_CARD_Q217
             + self.WRITE_MODE_CARD_Q218
             + self.PROBE_HINT_Q248
+            + self.KEA_LOGGING_CARD_Q249
         )
         ceiling = baseline * 0.7
         assert height <= ceiling, f"settings-kea is {height}px tall now, needed <= {ceiling:.0f}px (was {baseline}px)"

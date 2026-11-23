@@ -604,11 +604,13 @@ class TestTheWideColumn:
     @pytest.mark.parametrize(
         "path", ["/leases", "/reservations", "/devices", "/settings/logs", "/settings/logs?tab=alerts"]
     )
-    def test_a_table_page_asks_for_it_and_the_bars_follow(self, logged_in_client, path):
+    def test_a_table_page_asks_for_it_and_the_bars_keep_their_one_width(self, logged_in_client, path):
+        # Q249: only the content widens. The top row and the strip took the wide class too, so the logo and every menu moved sideways between pages
         body = _body(logged_in_client, path)
         assert '<div class="container content--wide">' in body
-        assert '<div class="nav-inner content--wide">' in body
-        assert re.search(r'<div class="section-tabs-wrap section-tabs-wrap--wide">\s*<div class="section-tabs', body)
+        assert '<div class="nav-inner">' in body and "nav-inner content--wide" not in body
+        assert re.search(r'<div class="section-tabs-wrap">\s*<div class="section-tabs', body)
+        assert "section-tabs-wrap--wide" not in body
 
     @pytest.mark.parametrize("path", ["/about", "/settings/kea", "/reservations/add", "/saved-searches", "/reports"])
     def test_a_form_a_settings_page_and_about_stay_as_they_were(self, logged_in_client, mock_kea, path):
@@ -622,7 +624,7 @@ class TestTheWideColumn:
         assert "background: var(--surface)" in nav and "max-width" not in nav
         wrap = re.search(r"\.section-tabs-wrap \{ --page-w: 1400px;([^}]*)\}", BASE).group(1)
         assert "background: var(--surface)" in wrap and "border-bottom: 1px solid var(--border)" in wrap
-        assert ".section-tabs-wrap--wide { --page-w: 1800px; }" in BASE
+        assert "section-tabs-wrap--wide" not in BASE  # Q249: the strip keeps one width on every page
         assert re.search(r"\.section-tabs-wrap > \.section-tabs \{ max-width: var\(--page-w\); margin: 0 auto;", BASE)
 
     def test_abouts_release_notes_are_capped_near_80_characters(self):

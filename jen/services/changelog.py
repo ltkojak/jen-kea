@@ -41,12 +41,13 @@ _CODE_RE = re.compile(r"`([^`]+)`")
 # is not edited: `whats_new()` leaves these out of what it renders, and `parse_changelog()` renders the file as it is.
 #   a code:   one to six capitals, an optional hyphen, one to four digits ("U1", "BG27", "WOL-16", "DEF-003"). "RFC 5280" has a space, "v5.65.10" and "7.2.0-beta.4"
 #             start otherwise, "Ubuntu 22.04" has small letters: none of them is one.
-#   a group:  a pair of parentheses holding codes and nothing else, joined by a comma, a semicolon, a slash, "and" or "to". The space before it goes with it.
+#   a group:  a pair of parentheses that holds at least one code. It goes WHOLE, words and all ("(V12, V13; additions 4, 5)", "(BG3; BG5 written down)"), with the
+#             space before it (Q249, BI5: Q248 dropped a group only when it held codes and nothing else, and seventeen codes stayed behind "More"). A pair with no
+#             code in it is kept.
 #   kept:     names that only look like a code (a hash, a cipher, a curve, a protocol version, Kea's D2 daemon).
 _TRACKING_CODE = r"[A-Z]{1,6}-?\d{1,4}"
-_TRACKING_JOIN = r"(?:\s*[,;/]\s*(?:and\s+)?|\s+(?:and|to)\s+)"
-_TRACKING_GROUP_RE = re.compile(rf"[ \t]*\((\s*{_TRACKING_CODE}(?:{_TRACKING_JOIN}{_TRACKING_CODE})*\s*)\)")
-_TRACKING_TOKEN_RE = re.compile(_TRACKING_CODE)
+_TRACKING_GROUP_RE = re.compile(r"[ \t]*\(([^()]*)\)")
+_TRACKING_TOKEN_RE = re.compile(rf"(?<![A-Za-z0-9.-]){_TRACKING_CODE}(?![A-Za-z0-9]|[.-][A-Za-z0-9])")
 _NOT_A_CODE_PREFIX = frozenset(
     {
         "RFC",
@@ -78,11 +79,12 @@ def _is_tracking_code(token: str) -> bool:
 
 
 def strip_tracking_codes(text: str) -> str:
-    """`text` without the parenthesized groups that hold tracking codes and nothing else (Q248, V33). Everything else is returned as it was."""
+    """`text` without the parenthesized groups that hold a tracking code (Q248, V33; Q249, BI5: the whole group, whatever else it holds). Everything else is
+    returned as it was."""
 
     def _drop(m):
         tokens = _TRACKING_TOKEN_RE.findall(m.group(1))
-        return "" if all(_is_tracking_code(t) for t in tokens) else m.group(0)
+        return "" if any(_is_tracking_code(t) for t in tokens) else m.group(0)
 
     return _TRACKING_GROUP_RE.sub(_drop, text)
 

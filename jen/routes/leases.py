@@ -30,8 +30,16 @@ bp = Blueprint("leases", __name__)
 # Q248 (addition 5) - the two conditions the summary line's counts link to, each ONE MORE condition of the list's own query (fixed text; the one value is a parameter).
 #: "expires within the hour": the condition the summary has counted with since Q206, on the one clock every connection runs in (UTC)
 EXPIRING_SOON = "l.expire <= NOW() + INTERVAL 1 HOUR"
+#: Q249 - "this lease has a reservation" reads only a host row that is an IPv4 reservation: one whose `dhcp4_subnet_id` is not NULL. Kea keeps an IPv6
+#: reservation in the same table with `dhcp4_subnet_id` NULL, and one identified by the same hardware address marked the client's IPv4 lease Reserved (and broke
+#: the page for a subnet-restricted account). Subnet 0 is Kea's GLOBAL IPv4 reservation and is one: it marks the lease for an account that sees every subnet,
+#: and, being in no account's list, for no subnet-restricted one - as it always did.
+#: `{h}` is the alias of the hosts table, with its dot, or nothing.
+V4_RESERVATION = "{h}dhcp4_subnet_id IS NOT NULL"
 #: "reserved": the lease's client has a reservation - what the summary's "N reserved" has counted since Q206 ...
-RESERVED_ANY = "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr)"
+RESERVED_ANY = (
+    "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND " + V4_RESERVATION.format(h="h.") + ")"
+)
 #: ... in a subnet the caller may see (Q206, SP-1: a hidden subnet's reservation never changes a visible answer). The parameter is the caller's own subnet ids, "1,3".
 RESERVED_VISIBLE = (
     "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND FIND_IN_SET(h.dhcp4_subnet_id, %s))"
@@ -189,7 +197,9 @@ def leases():
                     placeholders = ",".join(["%s"] * len(mac_hexes))
                     with db.cursor() as res_cur:
                         res_cur.execute(
-                            f"SELECT HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
+                            # (Q249) only a reservation with an IPv4 subnet: V4_RESERVATION
+                            f"SELECT HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders}) "
+                            f"AND {V4_RESERVATION.format(h='')}",
                             mac_hexes,
                         )
                         host_rows = res_cur.fetchall()
@@ -233,7 +243,9 @@ def leases():
         # not see, so a hidden subnet's name never reaches the page.
         "subnet_filter_name": __view_prefs.subnet_filter_name(subnet_filter, accessible_subnet_map),
         "expiring_soon": expiring_soon,
-        "reserved_count": len(reserved_visible),
+        # Q249: the lease ROWS shown that carry the mark - what the link beside the number (?reserved=1) lists. It counted hardware addresses, so one reserved
+        # client holding two leases read "1 reserved" above a filter that lists two.
+        "reserved_count": sum(1 for lease in leases_list if lease.get("reserved")),
         "minutes_applied": minutes_applied,
         "reserved_only": reserved_only,
         "expiring_only": expiring_only,

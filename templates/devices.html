@@ -281,7 +281,9 @@ function openEditModal(id, mac, name, owner, notes, typeOverride, iconOverride) 
 }
 
 function closeEditModal() {
-    document.getElementById('editModal').style.display = 'none';
+    // Q249 (BI11) - the IPv6 view draws no edit dialog: Escape there has nothing to close
+    const modal = document.getElementById('editModal');
+    if (modal) modal.style.display = 'none';
     editingId = null;
 }
 
@@ -325,7 +327,9 @@ document.addEventListener('click', function(e) {
         btn.dataset.icon || null
     );
 });
-document.getElementById('editModal').addEventListener('click', function(e) {
+// Q249 (BI11) - bound only where the dialog is drawn. The IPv6 view has none, and this line threw there, so nothing below it in this block ran.
+var editModalEl = document.getElementById('editModal');
+if (editModalEl) editModalEl.addEventListener('click', function(e) {
     if (e.target === this) closeEditModal();
 });
 var editModalCancelBtn = document.getElementById('edit-modal-cancel-btn');

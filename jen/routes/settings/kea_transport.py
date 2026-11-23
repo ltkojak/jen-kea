@@ -4,6 +4,8 @@ jen/routes/settings/kea_transport.py
 Q212 - the per-server card's five routes: how a change reaches a Kea server (the probe, the switch, the helper's grant and its inverse, and the operator's "I have fixed it"). Thin: parse the
 request, call `kea_api_config` / `kea_transport_switch` / `kea_host`, flash, audit. Every one is a SUPERADMIN's: it changes who may write a root-owned file or which path a configuration
 takes to a daemon. The switch, the two helper ops and "I have fixed it" also ask for a recent confirmation of the password.
+
+Q249 - and the Kea logging card's one route (`save_kea_logging`): where a server's kea-dhcp4 writes its log. It asks for the recent confirmation too.
 """
 
 import logging
@@ -13,10 +15,13 @@ from flask_login import current_user, login_required
 
 import jen.models.user as __user
 import jen.services.capabilities as __caps
+import jen.services.forms as __forms
 import jen.services.kea_api_config as __api
 import jen.services.kea_changeset as __cs
 import jen.services.kea_host as __host
+import jen.services.kea_log_trace as __klt
 import jen.services.kea_transport_switch as __switch
+import jen.services.text as __text
 import jen.services.write_mode as __write_mode
 from jen import extensions
 from jen.routes.settings import bp
@@ -225,3 +230,62 @@ def config_write_fixed(server_id):
         "success",
     )
     return _back()
+
+
+# ── the Kea logging card (Q249) ───────────────────────────────────────────────────────────────────────────────────────
+
+_MB = 1024 * 1024
+
+
+def _back_to_logging():
+    return redirect(url_for("settings.settings_kea") + "#kea-logging")
+
+
+@bp.route("/settings/infrastructure/kea-logging/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def save_kea_logging(server_id):
+    """Where ONE server's kea-dhcp4 writes its log: the journal, a file Jen can read, or both (Settings → Kea → Kea logging). Thin: the fields are read and judged here so an
+    error lands under its field; everything that touches a Kea - the refusals, the change, the proof and the put-back - is `kea_log_trace.change_log_output` (INV-017)."""
+    server = _server(server_id)
+    if server is None:
+        return _gone()
+    name = server.get("name") or str(server_id)
+    choice = request.form.get("output", "").strip()
+    path = request.form.get("log_file", "").strip()
+    size, kept = request.form.get("rotate_mb", "").strip(), request.form.get("old_files", "").strip()
+    maxsize = maxver = 0
+    if choice in ("file", "both"):
+        refused = False
+        if not (__klt.LOG_OUTPUT_PATH.fullmatch(path) and __klt.host_log_path(path)):
+            __forms.flash_field(
+                f"log_file_{server_id}",
+                "The file must be a .log file directly in /var/log/kea, for example /var/log/kea/kea-dhcp4.log.",
+            )
+            refused = True
+        low, high = __klt.LOG_OUTPUT_MB
+        if not (__text.is_whole(size) and low <= int(size) <= high):
+            __forms.flash_field(f"rotate_mb_{server_id}", f"Rotate at (MB) is a whole number from {low} to {high}.")
+            refused = True
+        low, high = __klt.LOG_OUTPUT_KEPT
+        if not (__text.is_whole(kept) and low <= int(kept) <= high):
+            __forms.flash_field(f"old_files_{server_id}", f"Old files kept is a whole number from {low} to {high}.")
+            refused = True
+        if refused:
+            return _back_to_logging()
+        maxsize, maxver = int(size) * _MB, int(kept)
+    result = __klt.change_log_output(server, choice, path, maxsize, maxver)
+    for line in result["lines"]:
+        flash(line, result["level"])
+    if result["ok"]:
+        __user.audit("KEA_LOG_OUTPUT", name, f"{name}: {result['old']} -> {result['new']}{result.get('note', '')}")
+    elif result["code"] == "put-back-failed":
+        __user.audit(
+            "KEA_LOG_OUTPUT",
+            name,
+            f"{name}: {result['old']} -> {result['now']} (the change was not proven and could not be put back)",
+        )
+    if result["code"] not in ("bad-choice", "nochange"):
+        __caps.invalidate(server_id)
+    return _back()  # the top of the page, where the message is; a field error goes back to the card, where the field is

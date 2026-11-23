@@ -279,8 +279,12 @@ function buildCharts() {
         // that range; when it is not, the card says the pool's size in words. Scale to Pool is the view this page always had: the pool's line is drawn and
         // the axis runs up to it.
         const toPool = scaleToPool();
-        const axis = niceAxis(largestOf([total, reserved, active, projection]));
-        const poolInRange = largestOf([poolSize]) > 0 && (toPool || largestOf([poolSize]) <= axis.max);
+        // Q249 (BI18): a pool just above the fitted axis (at most 1.25 times its top: lines at 88 to 90 fit an axis of 100, the pool is 101) is the case where the
+        // pool's line says the most, and it was the case that lost it. There the pool is one of the values the axis holds; above that the card says it in words.
+        let axis = niceAxis(largestOf([total, reserved, active, projection]));
+        const pool = largestOf([poolSize]);
+        if (!toPool && pool > axis.max && pool <= axis.max * 1.25) axis = niceAxis(pool);
+        const poolInRange = pool > 0 && (toPool || pool <= axis.max);
         const poolNote = document.getElementById('chart-pool-' + subnetId);
         if (poolNote) poolNote.hidden = poolInRange;
         const datasets = [

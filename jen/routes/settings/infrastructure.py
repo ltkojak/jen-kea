@@ -26,6 +26,7 @@ import jen.services.host_match as __host_match
 import jen.services.investigation_logging as __inv
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_log_trace as __klt
 import jen.services.runtime as __runtime
 from jen import extensions
 from jen.routes.settings import bp
@@ -655,6 +656,12 @@ def settings_kea():
         direct_socket_supported=direct_socket_supported,
         kea_ca=_kea_ca_summary(),
         config_cards=_config_cards(),
+        # Q249: the Kea logging card - one block per server, from what each RUNNING daemon says (`config-get`); a superadmin's card, so nobody else pays for the reads
+        kea_logging=(
+            [__klt.log_output_card(s) for s in extensions.KEA_SERVERS or []]
+            if current_user.role == "superadmin"
+            else []
+        ),
         config_write_min_build=CONFIG_WRITE_MIN_HELPER_BUILD,
         # v5.10.3 — id + name only; the real server dicts carry passwords.
         # v5.11.0 — plus ssh_host + the persisted jen-kea-helper status

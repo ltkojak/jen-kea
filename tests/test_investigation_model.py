@@ -46,6 +46,7 @@ from jen.services import kea_api_config as _api
 from jen.services import kea_changeset as _changeset_mod
 from jen.services import kea_config_edit as ed
 from jen.services import kea_host
+from jen.services import kea_log_trace as _klt
 from tests import _kea_api_world as _api_world
 from tests._investigation_world import FUTURE, NOW, FakeKea, _cfg, helper
 
@@ -141,6 +142,9 @@ class Walk:
     #: Q214: how often the step is followed by `op_turn_on_of_an_api_server` - logging turned on for a server whose transport is the API, with the fault `hand_set`. Its own random source.
     API_ON_SHARE = float(os.environ.get("JEN_MODEL_API_ON_SHARE", "0.05"))  # 0 takes it out of every walk
 
+    #: Q249: how often the step is followed by `op_log_output` - the Kea logging card's change of where a server writes its log. Its own random source.
+    LOG_OUTPUT_SHARE = float(os.environ.get("JEN_MODEL_LOG_OUTPUT_SHARE", "0.05"))  # 0 takes it out of every walk
+
     #: Q165: the HostTimer actor. False is the mutation check of I10 - the walk must go red without the host's timer.
     HOST_TIMER = True
 
@@ -157,6 +161,8 @@ class Walk:
         )  # Q216: the same for the turn-on inside the finished session's window
         self.extend_rng = random.Random(f"extend-{seed}")  # Q217: and for the extension of a live session
         self.api_on_rng = random.Random(f"api-on-{seed}")  # Q214: and for turning logging on over an API server
+        self.log_rng = random.Random(f"log-output-{seed}")  # Q249: and for the Kea logging card's change
+        self.log_reads = 0
         self.stale_next: dict = {}  # host -> the earlier marker the NEXT file write must leave behind (the fault `first_marker_left_behind`)
         self.stale_marker: dict = {}  # host -> that marker's `until`, once a write has left it: I12 tolerates exactly it, and nothing else, below the extended deadline
         self.world, self.tmp_path = world, tmp_path
@@ -285,6 +291,8 @@ class Walk:
         monkeypatch.setattr(kea_host, "investigation_status", self._host_status)
         monkeypatch.setattr(kea_host, "investigation_timer", self._host_timer_ensure)
         monkeypatch.setattr(kea_host, "test_config", lambda server, service, cfg, **kw: {"ok": True, "code": "ok"})
+        monkeypatch.setattr(kea_host, "tail_log", self._tail_log)  # Q249: the log read of the Kea logging card's proof
+        monkeypatch.setattr(_klt, "_proof_sleep", lambda seconds: None)
         monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a, **k: None)
         monkeypatch.setattr(kea_host, "_record_revision_after_apply", lambda *a, **k: None)
         monkeypatch.setattr(kea_host, "_conf_path", lambda server, service: DEFAULT_CONF)
@@ -358,6 +366,13 @@ class Walk:
         else:
             fake._restart_failed = False
         return out
+
+    def _tail_log(self, server, path, lines=200, timeout=None, helper_only=False):
+        """The host's log read: a file that has one line more on every read (Kea is writing to it)."""
+        if self.ssh_fake(server) is None:
+            return {"ok": False, "code": "error", "detail": "ssh: no route to host", "transport": True}
+        self.log_reads += 1
+        return {"ok": True, "code": "ok", "lines": [f"line {n}" for n in range(self.log_reads)], "via": "helper"}
 
     def _read_config(self, server, service, *, errors=None, **kw):
         fake = self.ssh_fake(server)
@@ -591,6 +606,11 @@ class Walk:
                     self.op_extend()
                 elif self.op != "idle" and self.api_on_rng.random() < self.API_ON_SHARE:
                     self.op_turn_on_of_an_api_server()
+                elif (
+                    self.op not in ("idle", "sweep", "sweep_full", "job")
+                    and self.log_rng.random() < self.LOG_OUTPUT_SHARE
+                ):  # (not after a sweep: I3 counts the restarts of a sweep's step as the sweep's own)
+                    self.op_log_output()
             except InvariantViolated:
                 raise
             except Exception as e:  # an operation must never raise: it is the page's route and the scheduler's job
@@ -1449,6 +1469,48 @@ class Walk:
             fake.include_hash = False
             fake.before_command.pop("config-set", None)
 
+    def op_log_output(self):
+        """Q249 (INV-017): the Kea logging card changes where a server's kea-dhcp4 writes its log (`kea_log_trace.change_log_output`). The restore of a session that CREATED the logger
+        entry removes the whole entry, so the change is refused while the config carries a marker or a session for that server is not finished - Jen's record or the Kea host's. I15: in
+        such a state it never succeeds and nothing reaches the wire; in ANY state the stored investigation record is exactly what it was. The choice is `journal` or the journal and a
+        file whose tail the walk answers (a line more on every read), so the proof passes and no put-back runs: what the walk composes is the refusal against every state."""
+        rng = self.log_rng
+        candidates = [s for s in self.world.servers if s.get("ssh_host")]
+        if not candidates:
+            return
+        server = rng.choice(candidates)
+        choice = rng.choice(["journal", "both"])
+        fake, api = self.ssh_fake(server), self.api_fake(server)
+        if fake is None:
+            return
+        state, everything = self.raw_state()
+        host_session = (
+            not fake.host_down
+            and fake.build >= 16
+            and (fake.state_bad or (fake.helper_state is not None and not fake.helper_state["restored_at"]))
+        )
+        must_refuse = (
+            state != "ok"
+            or str(server["id"]) in everything
+            or has_marker(fake.file)
+            or (api is not None and has_marker(api.loaded))
+            or host_session
+        )
+        raw_before = self.world.store.get(inv.RECORD_KEY, "")
+        applies_before = len(self.applies)
+        out = _klt.change_log_output(server, choice, "/var/log/kea/kea-dhcp4.log", 10 * 1024 * 1024, 4)
+        self.say(f"log_output {choice} on {server['id']}: code={out['code']} must_refuse={must_refuse}")
+        if must_refuse and (out["ok"] or len(self.applies) != applies_before):
+            self.fail(
+                "I15",
+                f"the log output of server {server['id']} was changed (ok={out['ok']}, code={out['code']}, writes on the wire={self.applies[applies_before:]}) while investigation "
+                f"logging is on or unresolved there (record {state}, entry={str(server['id']) in everything}, file marker={has_marker(fake.file)}, host session={host_session})",
+            )
+        if self.world.store.get(inv.RECORD_KEY, "") != raw_before:
+            self.fail(
+                "I15", f"changing the log output of server {server['id']} changed the stored investigation record"
+            )
+
     def op_turn_on_of_an_api_server(self):
         """Q214: investigation logging turned ON for a server whose configuration transport is the API. The write stays on the file path (INV-001) and is followed by a reload of that
         file, so the fault only this has is `hand_set`: the daemon runs a change its file does not carry (a `config-set` by hand, an apply whose `config-write` did not land). A turn-on
@@ -1900,6 +1962,7 @@ class TestTheWalk:
         "turn_on": "op:turn_on",
         "turn_off": "op:turn_off",
         "helper_gate": "through turn_on (the build check and the unresolved-session check before anything is written)",
+        "host_session_refusal": "through helper_gate (turn_on), and op:log_output asks it through kea_log_trace.change_log_output (Q249)",
         "conflict_sentence": "through helper_gate and the sweep's host phase (op:sweep, the foreign_session fault)",
         "enabled": "through turn_on (the opt-in); tests/test_investigation_host.py::TestInvestigationLoggingIsOptIn",
         "kea_log_path": "through turn_on (the file the host verifies its restore from)",
@@ -1987,6 +2050,55 @@ class TestTheKeaHostKeepsTheDeadline:
 
     def test_the_grace_is_two_timer_periods_not_a_loophole(self):
         assert Walk.I10_GRACE_S == 120 and Walk.HOST_TIMER is True
+
+
+class TestTheLogOutputChangeIsRefusedWhileASessionIsOpen:
+    """I15 (Q249, INV-017): the Kea logging card never changes a logger's output while investigation logging is on or unresolved for that server, and never touches the stored record.
+    The mutation check is the first test: take the refusal away and the same walks go red on I15."""
+
+    STEPS = 300
+    RED = []
+
+    @pytest.mark.parametrize("seed", range(30))
+    def test_i15_is_red_when_the_refusal_is_taken_away(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(_klt, "investigation_blocks_log_output", lambda server, cfg: False)
+        monkeypatch.setattr(Walk, "LOG_OUTPUT_SHARE", 0.5)
+        try:
+            walk_world(seed, self.STEPS).run()
+        except InvariantViolated as red:
+            if "I15 violated" in str(red):
+                TestTheLogOutputChangeIsRefusedWhileASessionIsOpen.RED.append(seed)
+
+    def test_without_the_refusal_i15_goes_red_often_enough_to_mean_something(self):
+        red = TestTheLogOutputChangeIsRefusedWhileASessionIsOpen.RED
+        print(f"MODEL I15 MUTATION: {len(red)} of 30 seeds red without the refusal: {red}")
+        assert len(red) >= 15, red
+
+    @pytest.mark.parametrize("seed", range(12))
+    def test_with_the_refusal_the_same_walks_are_green_at_ten_times_the_share(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(Walk, "LOG_OUTPUT_SHARE", 0.5)
+        walk_world(seed, self.STEPS).run()
+
+    def test_a_session_refuses_the_change_and_the_record_is_what_it_was(self, world):
+        server = world.servers[0]
+        fake = world.daemons[1]
+        entry = {"name": "kea-dhcp4", "severity": "INFO", "output-options": [{"output": "/var/log/kea/kea-dhcp4.log"}]}
+        fake.file = _cfg([copy.deepcopy(entry)])
+        fake.loaded = copy.deepcopy(fake.file)
+        assert inv.turn_on(server, 5, actor="alice")["ok"]
+        stored = world.store[inv.RECORD_KEY]
+        writes = fake.writes
+        out = _klt.change_log_output(server, "journal")
+        assert (out["ok"], out["code"]) == (False, "investigation")
+        assert out["lines"] == [_klt.investigation_sentence("kea-a")]
+        assert fake.writes == writes and world.store[inv.RECORD_KEY] == stored
+        # ... and once the session is over the same change goes through, and the record is still not its business
+        assert inv.turn_off(server, actor="alice")["ok"]
+        stored = world.store.get(inv.RECORD_KEY, "")
+        out = _klt.change_log_output(server, "journal")
+        assert (out["ok"], out["code"]) == (True, "ok"), out
+        assert ed.describe_logger_output(fake.file)["choice"] == "journal"
+        assert world.store.get(inv.RECORD_KEY, "") == stored
 
 
 class TestTheApiWriteCannotLandOverTheHostsRestore:

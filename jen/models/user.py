@@ -7,6 +7,7 @@ Flask-Login User model, password hashing, and global settings helpers.
 import hashlib
 import json
 import logging
+import math
 import secrets
 import threading
 
@@ -14,6 +15,28 @@ from flask_login import UserMixin
 from werkzeug.security import check_password_hash, generate_password_hash
 
 logger = logging.getLogger(__name__)
+
+
+def read_subnet_scope(stored):
+    """What a stored `users.subnet_access` means: None for every subnet (the column is NULL), else the list of subnet ids - and `[]`, no subnets, for anything that
+    is not a list of whole numbers. The ONE reader (Q249): the `User` model and the Users page both read a row through it, so the page cannot show a scope the
+    account does not have (it read `null`, `"abc"` and text that is not JSON as All Subnets, and its Edit dialog then ticked All Subnets for the next save).
+
+    (Q225, AK21) a stored scope that is not a LIST OF IDS is NO subnets, never every subnet: the three forms write only a JSON list or NULL (Q171, Q224 AJ5), so a
+    row that is not JSON, or is JSON that is not a list (`"abc"`, `5`, `{}` - what a JSON column lets through), was not written by them, and an account whose scope
+    cannot be read fails closed the way an unreadable record does everywhere else (FAIL-001). (Q226, AL20) and a LIST is a scope only when every element is an
+    id: `[1, "abc"]` raised on the first access check, `[true]` read as subnet 1."""
+    if stored is None:
+        return None
+    parsed = stored
+    if isinstance(stored, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(stored)
+        except Exception:
+            parsed = []
+    if isinstance(parsed, list) and all(isinstance(s, int) and not isinstance(s, bool) for s in parsed):
+        return parsed
+    return []
 
 
 class User(UserMixin):
@@ -24,24 +47,7 @@ class User(UserMixin):
         self.session_timeout = session_timeout
         self.must_change_password = bool(must_change_password)
         # subnet_access: None = all subnets; list of int subnet_ids = restricted
-        if subnet_access is None:
-            self._subnet_access = None
-        else:
-            # (Q225, AK21) a stored scope that is not a LIST OF IDS is NO subnets, never every subnet: the three forms write only a JSON list or NULL (Q171, Q224 AJ5), so a row that is not
-            # JSON, or is JSON that is not a list (`"abc"`, `5`, `{}` - what a JSON column lets through), was not written by them, and an account whose scope cannot be read fails closed the
-            # way an unreadable record does everywhere else (FAIL-001). It used to be read as None - every subnet - or to raise on the first page
-            parsed = subnet_access
-            if isinstance(subnet_access, str):
-                try:
-                    parsed = json.loads(subnet_access)
-                except Exception:
-                    parsed = []
-            # (Q226, AL20) and a LIST is a scope only when every element is an id: `[1, "abc"]` raised on the first access check, `[true]` read as subnet 1
-            self._subnet_access = (
-                parsed
-                if isinstance(parsed, list) and all(isinstance(s, int) and not isinstance(s, bool) for s in parsed)
-                else []
-            )
+        self._subnet_access = read_subnet_scope(subnet_access)
 
     def get_id(self):
         return str(self.id)
@@ -72,7 +78,21 @@ class User(UserMixin):
         """Return True if this user has access to the given subnet_id."""
         if self.all_subnets:
             return True
-        return int(subnet_id) in [int(s) for s in (self._subnet_access or [])]
+        # Q249: an id that is not a whole number is in nobody's list, and the question never raises. A reservation row with no IPv4 subnet (`dhcp4_subnet_id` NULL,
+        # what Kea stores for an IPv6 reservation) was asked about here and `int(None)` took the Leases page down for every subnet-restricted account.
+        from decimal import Decimal
+
+        from jen.services.text import whole
+
+        if isinstance(subnet_id, str):
+            subnet_id = whole(subnet_id.strip())  # the one whole-number test (DEF-003); None for anything else
+        elif isinstance(subnet_id, (float, Decimal)):
+            # a whole number of another numeric type (what a driver may hand back): 5.0 is subnet 5; 5.5, an infinity and a NaN are no subnet
+            finite = subnet_id.is_finite() if isinstance(subnet_id, Decimal) else math.isfinite(subnet_id)
+            subnet_id = int(subnet_id) if finite and subnet_id == subnet_id // 1 else None
+        if isinstance(subnet_id, bool) or not isinstance(subnet_id, int):
+            return False
+        return subnet_id in (self._subnet_access or [])
 
     def filter_subnet_map(self, subnet_map: dict) -> dict:
         """Return a filtered copy of SUBNET_MAP containing only accessible subnets."""

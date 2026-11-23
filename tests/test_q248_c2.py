@@ -686,11 +686,12 @@ class TestReports:
 
     def test_the_axis_fits_the_lines_unless_scale_to_pool_is_on(self):
         src = (TEMPLATES / "reports.html").read_text(encoding="utf-8")
-        assert "const axis = niceAxis(largestOf([total, reserved, active, projection]));" in src, (
+        # Q249 (BI18): `let`, because a pool at most a quarter above the fitted axis is taken into it on the next line (tests/test_q249_c.py)
+        assert "let axis = niceAxis(largestOf([total, reserved, active, projection]));" in src, (
             "the pool is not one of the values"
         )
         assert "...(toPool ? {} : { max: axis.max })," in src and "...(toPool ? {} : { stepSize: axis.step })" in src
-        assert "const poolInRange = largestOf([poolSize]) > 0 && (toPool || largestOf([poolSize]) <= axis.max);" in src
+        assert "const poolInRange = pool > 0 && (toPool || pool <= axis.max);" in src
         assert "if (poolNote) poolNote.hidden = poolInRange;" in src
         pool = src[src.index("if (poolInRange) {") :]
         pool = pool[: pool.index("if (proj.length) {")]

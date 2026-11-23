@@ -175,6 +175,25 @@ difference". For every other write a daemon that cannot be read is still not a d
 - `tests/test_kea_changeset_transports.py::TestSecondPassRowsOfTheChangeSet::test_every_write_that_is_not_a_turn_on_still_goes_ahead_over_a_silent_daemon`
 - `tests/system/test_boundaries.py::test_26_turning_logging_on_never_takes_a_change_out_of_a_daemon_whose_transport_is_the_api`
 
+### INV-017 - A change of Kea's log output is proven by the log itself or put back
+**Rule.** Kea accepts a logger whose file it may not write ("Configuration successful.") and then logs nothing anywhere (measured on kea-dhcp4 3.0.5), so an accepted change proves
+nothing. When Settings → Kea → Kea logging moves a server's `kea-dhcp4` logger to a file (alone, or beside the journal), the tail of that file is read through the Kea host's helper
+before the change and again after the daemon was asked a harmless command, up to five times one second apart: the change stands only when the tail is not empty and differs from the one
+before. A logger whose severity is WARN, ERROR or FATAL writes no line for a command, so there an unchanged tail is not judged: the change stands and the operator is told it was not
+checked. Otherwise the previous `output-options` are put back through the same change path, and when that fails too the operator is told so and what the daemon runs now. A file choice
+for a server Jen cannot read a log from (no SSH host, no helper) is refused before anything is sent, and so is ANY choice while investigation logging is on or unresolved for that
+server - a marker in the running config or in the file (readable or damaged), an entry in Jen's record, or a session the Kea host holds: the restore of a session that created the logger
+entry removes the whole entry, and the new output with it. Only the `kea-dhcp4` logger's `output-options` are ever written; its severity, debuglevel and user-context are not touched.
+**Established.** Q249.
+**Enforced at.** `jen/services/kea_log_trace.py` (`change_log_output`, the one function that applies and proves; `investigation_blocks_log_output`), over the pure edit
+`kea_config_edit.set_logger_output` / `restore_logger_output` and the one predicate for a session on the host, `investigation_logging.host_session_refusal`.
+**Tests.**
+- `tests/test_q249_a.py::TestTheProof`
+- `tests/test_q249_a.py::TestTheRouteRefuses`
+- `tests/test_q249_a.py::TestThePureEdit`
+- `tests/test_investigation_model.py::TestTheWalk` (the operation `op_log_output`, I15)
+- `tests/test_investigation_model.py::TestTheLogOutputChangeIsRefusedWhileASessionIsOpen`
+
 ## Access control and shared definitions
 
 ### RBAC-001 - Stored data is judged by its own subnet; a hidden object never influences a visible answer

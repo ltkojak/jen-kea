@@ -536,9 +536,11 @@ class TestTheCallersDoNotChange:
                         sites.append((path.relative_to(ROOT).as_posix(), node))
         return sites
 
-    def test_thirteen_call_sites_exactly_five_pass_transport_file_and_none_passes_api(self):
+    def test_fifteen_call_sites_exactly_five_pass_transport_file_and_none_passes_api(self):
         sites = self._calls()
-        assert len(sites) == 13, [(p, n.lineno) for p, n in sites]
+        # (Q249) thirteen, and the two of the Kea logging card: the change and its put-back (`kea_log_trace.change_log_output`), each on the server's own transport
+        assert len(sites) == 15, [(p, n.lineno) for p, n in sites]
+        assert [p for p, _n in sites].count("jen/services/kea_log_trace.py") == 2
         file_path, other = [], []
         for path, node in sites:
             kw = {k.arg: k.value for k in node.keywords}

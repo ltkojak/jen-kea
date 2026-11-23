@@ -504,6 +504,10 @@ S10_MODULES = (
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
+    ("jen/services/access.py", "role_may_open", "HTTPException", "return False"): (
+        "False is 'this role may not open that page': a path that matches no route (or only another method) is a link nobody is shown (Q249). Nothing is opened "
+        "on a False; the route's own decorator is what lets a request in"
+    ),
     ("jen/routes/settings/security.py", "_authority_key_id", "(x509.ExtensionNotFound, ValueError)", "return None"): (
         "None is 'the top names no key by an identifier', which is the common case; one that cannot be read is one no comparison can be made with. It is reached "
         "only after a certificate this box trusts was shown to have SIGNED the top and a client that trusts the top completed the handshake, so nothing is accepted "

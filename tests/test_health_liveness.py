@@ -657,10 +657,10 @@ class TestTheSweepRowSaysWhatTheErrorMeans:
     def test_missing_names_the_path_and_the_file_output_and_never_says_ssh(self, monkeypatch):
         c = self._blind(monkeypatch, "missing")
         assert c.status == "fail"
-        assert "/var/log/kea/kea-dhcp4.log" in c.detail and "file output" in c.detail
+        assert "/var/log/kea/kea-dhcp4.log" in c.detail and "Kea logging" in c.detail  # (Q249) the card that changes it
         assert "1447 sweeps" in c.detail
         assert "SSH" not in c.detail and "SSH" not in c.fix_hint
-        assert "file output" in c.fix_hint and "dhcp4_log_path" not in c.fix_hint.replace(
+        assert "Kea logging" in c.fix_hint and "dhcp4_log_path" not in c.fix_hint.replace(
             "log path", ""
         )  # the field is named by what it is on the page
 
@@ -719,7 +719,7 @@ class TestTheSweepRowSaysWhatTheErrorMeans:
             },
         )
         c = health._problems_sweep({})
-        assert "file output" in c.fix_hint and "SSH" in c.fix_hint
+        assert "Kea logging" in c.fix_hint and "SSH" in c.fix_hint
         assert "kea-a" in c.detail and "kea-b" in c.detail
 
     def test_a_status_with_no_last_path_key_still_renders(self, monkeypatch):

@@ -79,7 +79,7 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. {% if current_user.role == 'superadmin' %}<form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form>{% else %}A superadmin restarts Jen.{% endif %}</div>
 {% endif %}
 
-{% set toc = [('kea-api', 'Kea Control Plane'), ('kea-config-transport', 'Write mode'), ('kea-ssh', 'SSH to the Kea server'), ('kea-servers', 'Kea servers & high availability'), ('kea-ddns', "DDNS - Kea's D2 daemon and the DNS provider")] %}
+{% set toc = [('kea-api', 'Kea Control Plane'), ('kea-config-transport', 'Write mode'), ('kea-ssh', 'SSH to the Kea server')] + ([('kea-logging', 'Kea logging')] if current_user.role == 'superadmin' else []) + [('kea-servers', 'Kea servers & high availability'), ('kea-ddns', "DDNS - Kea's D2 daemon and the DNS provider")] %}
 {% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'Kea6 Control Plane'), ('kea-investigation-logging', 'Investigation logging'), ('kea-packages', 'Kea Package Status'), ('kea-drift', 'Config Drift Check')] %}{% endif %}
 {% include '_card_toc.html' %}
 
@@ -531,6 +531,57 @@
     </div>
     {% endif %}
 </div>
+
+{% if current_user.role == 'superadmin' %}
+<!-- Kea logging (Q249): where each kea-dhcp4 writes its log, read from the running daemon, and the one form that changes it -->
+<div class="card" id="kea-logging">
+    <div class="card-header"><span class="card-title">{{ icon("scroll-text") }} Kea logging</span></div>
+    <p class="form-hint u-da12f2">Where each Kea server writes its log. Jen reads a log file over SSH for Problems, Trace and Explain; the system journal alone gives it nothing to read. Kea creates the file itself, and Jen checks that Kea really writes to it before the change stands.</p>
+    {% for k in kea_logging %}
+    <hr>
+    <div class="wm-card mt-3" id="kea-logging-{{ k.id }}" data-kea-logging="{{ k.id }}">
+        <div class="wm-head"><strong>{{ k.name }}</strong></div>
+        {% if not k.readable %}
+        <div class="alert alert-warning" data-kl-unreadable>{{ icon("triangle-alert") }} Kea's configuration could not be read: {{ k.reason }}</div>
+        {% else %}
+        <dl class="kl-facts">
+            <dt>Kea writes its log to</dt><dd data-kl-writes>{{ k.writes }}</dd>
+            <dt>Jen reads</dt><dd data-kl-reads>{% if k.reads %}<span class="mono">{{ k.reads }}</span> ({{ k.reads_from }}){% else %}nothing: there is no file Jen may read{% endif %}</dd>
+            <dt>Severity</dt><dd data-kl-severity>{{ k.severity }}{% if k.investigation %} (investigation logging is on){% endif %}</dd>
+        </dl>
+        <form method="POST" action="/settings/infrastructure/kea-logging/{{ k.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="wm-modes" role="radiogroup" aria-label="Write the log of {{ k.name }} to">
+                <div class="stat-label">Write the log to</div>
+                <label class="wm-mode-label"><input type="radio" name="output" value="journal" {% if k.checked == 'journal' %}checked{% endif %}> <strong>The system journal (Kea's default)</strong><span class="form-hint">Kea logs to stdout and systemd keeps it. Jen cannot read it.</span></label>
+                <label class="wm-mode-label"><input type="radio" name="output" value="file" {% if k.checked == 'file' %}checked{% endif %}> <strong>A file Jen can read</strong><span class="form-hint">Kea writes the file below and rotates it itself.</span></label>
+                <label class="wm-mode-label"><input type="radio" name="output" value="both" {% if k.checked == 'both' %}checked{% endif %}> <strong>The system journal and a file</strong><span class="form-hint">Both of the above.</span></label>
+            </div>
+            <div class="form-row kl-fields mt-3">
+                <div class="form-group">
+                    <label for="f-log_file_{{ k.id }}">File</label>
+                    <input id="f-log_file_{{ k.id }}" type="text" name="log_file" value="{{ k.file }}" class="mono" autocapitalize="off" spellcheck="false" aria-describedby="f-log_file_{{ k.id }}-hint">
+                    <div class="form-hint" id="f-log_file_{{ k.id }}-hint">A .log file directly in /var/log/kea. Kea refuses any other folder.</div>
+                </div>
+                <div class="form-group">
+                    <label for="f-rotate_mb_{{ k.id }}">Rotate at (MB)</label>
+                    <input id="f-rotate_mb_{{ k.id }}" type="number" name="rotate_mb" value="{{ k.mb }}" min="1" max="1024" step="1" inputmode="numeric">
+                </div>
+                <div class="form-group">
+                    <label for="f-old_files_{{ k.id }}">Old files kept</label>
+                    <input id="f-old_files_{{ k.id }}" type="number" name="old_files" value="{{ k.kept }}" min="1" max="50" step="1" inputmode="numeric">
+                </div>
+            </div>
+            <div class="form-hint">The three fields apply to the two file choices.{% if not k.has_ssh %} This server has no SSH configured, so a file choice is refused: Jen could not read the file.{% endif %}</div>
+            <button type="submit" class="btn btn-primary mt-3" data-confirm="{{ k.confirm }}" data-confirm-label="Change Logging">Save Kea Logging</button>
+        </form>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="form-hint">No Kea server is configured.</p>
+    {% endfor %}
+</div>
+{% endif %}
 
 <!-- Servers & HA -->
 <div class="card" id="kea-servers">

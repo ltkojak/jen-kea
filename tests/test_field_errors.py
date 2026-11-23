@@ -113,7 +113,12 @@ class TestTheMarkupEscapes:
         base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
         block = base[base.index("AX4 - an error that names one field is moved under it") :]
         block = block[: block.index("function clearField")]
-        assert "err.textContent = text" in block and "innerHTML" not in block
+        # Q249 (C2): the message is a text node beside the error icon the alert carried (it was `err.textContent = text`, which would drop the icon); still never markup
+        assert "err.appendChild(document.createTextNode(text));" in block and "innerHTML" not in block
+        assert (
+            "textContent = "
+            not in block.split("err = document.createElement('div');", 1)[1].split("input.setAttribute", 1)[0]
+        )
         assert "document.getElementById('f-' + " in block
 
 

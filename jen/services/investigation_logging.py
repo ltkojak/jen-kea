@@ -767,6 +767,14 @@ def helper_gate(server: dict, held: dict | None = None) -> str:
             f"The Kea host helper on {name} must be build {need} or later so the host can put the logger back by itself (it is build {build if build is not None else 'unknown'}): "
             "Settings → Kea → SSH → Update helper, then try again. Nothing was changed."
         )
+    return host_session_refusal(server, held)
+
+
+def host_session_refusal(server: dict, held: dict | None = None) -> str:
+    """ "" when the Kea host holds no unresolved investigation session that is not `held`'s own, else the sentence that refuses (INV-008: the host's record is authoritative).
+    The ONE predicate for "the host has a session": `helper_gate` asks it before a turn-on arms, and the Kea logging card asks it (with no `held`) before it changes the
+    logger's output (Q249) - a restore of that session could remove the logger entry, and the new output with it."""
+    name = _name(server)
     status = _host.investigation_status(server)
     if status.get("code") == "bad-state":
         return f"{name}: {conflict_sentence({'unreadable': True})}. Nothing was changed."

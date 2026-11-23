@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import jen.models.db as __db
@@ -62,6 +62,9 @@ class Check:
     # as text (it told the reader to see a path); the Health page and the dashboard draw this pair as a link, and the JSON answers carry it as two more fields.
     link: str = ""
     link_label: str = ""
+    # Q249: the subnet ids a check judged failing or warning (the Pool utilization row fills it). For the dashboard's "Needs attention" card, which leaves the row
+    # out only when its own pool lines say all of it. Not part of the JSON answer.
+    flagged_subnets: list = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -436,10 +439,8 @@ def _debug_logging_left_on(ctx) -> Check:
 
 _SWEEP_SSH_HINT = "Check that Jen can still reach the server over SSH (Settings → Kea → SSH) and that the Kea log path is set; the sweep retries every five minutes."
 _SWEEP_ERROR_HINT = "The error above is what the sweep last got back from the Kea server; the connection and the log path are under Settings → Kea, and the sweep retries every five minutes."
-_SWEEP_MISSING_HINT = (
-    "Give kea-dhcp4's logger a file output under /var/log/kea (Tools → Doctor shows the lines to paste), or set the log path under Settings → Kea if it logs to a different "
-    "file; the sweep retries every five minutes."
-)
+_SWEEP_MISSING_HINT = "Choose a file under Settings → Kea → Kea logging, or set the log path there if Kea already writes one; the sweep retries every five minutes."
+_SWEEP_MISSING_URL = "/settings/kea#kea-logging"  # (Q249) the card that changes where Kea writes its log
 
 
 def _problems_sweep(ctx) -> Check:
@@ -488,9 +489,10 @@ def _problems_sweep(ctx) -> Check:
                     lead = f"{s['name']}: its log file is not on {s['name']} - kea-dhcp4 logs to stdout, the system journal or a file Jen may not read"
                 parts.append(
                     lead
-                    + f"; give its logger a file output under /var/log/kea, or set the log path under Settings → Kea ({s['misses']} sweeps without a read, last read {fmt(s['last_read'])})"
+                    + f"; choose a file under Settings → Kea → Kea logging, or set the log path there if Kea already writes one ({s['misses']} sweeps without a read, last read {fmt(s['last_read'])})"
                 )
                 hints.append(_SWEEP_MISSING_HINT)
+                c.fix_url = _SWEEP_MISSING_URL
             else:
                 parts.append(
                     f"{s['name']}: its log has not been read for {s['misses']} sweeps (last read {fmt(s['last_read'])}"
@@ -958,6 +960,8 @@ def _pool_utilization(ctx) -> Check:
             crit.append(label)
         elif level == "warn":
             warn.append(label)
+        if level:
+            c.flagged_subnets.append(r["subnet_id"])
     if crit:
         c.status, c.detail = "fail", "near exhaustion: " + ", ".join(crit)
     elif warn:
@@ -2170,7 +2174,43 @@ def run_checks(ctx: dict | None = None) -> list[Check]:
             c = Check(cid, title, group, "fail", CHECK_ERRORED_DETAIL)
         c.elapsed_ms = int((time.monotonic() - t0) * 1000)
         out.append(c)
-    return out
+    return _links_for_caller(out, ctx)
+
+
+def _caller_role(ctx) -> str:
+    """The role the rows are finished for. `ctx["role"]` when the caller names it; a viewer when the caller said `admin` is False (Q248, V28); else the signed-in
+    account's own role, and "superadmin" - every link stays - for a caller that is not a signed-in session (an API key, a background run)."""
+    role = ctx.get("role")
+    if role:
+        return str(role)
+    if not ctx.get("admin", True):
+        return "viewer"
+    from flask import has_request_context
+    from flask_login import current_user
+
+    if has_request_context() and getattr(current_user, "is_authenticated", False):
+        return str(getattr(current_user, "role", "") or "viewer")
+    return "superadmin"
+
+
+def _links_for_caller(checks: list[Check], ctx) -> list[Check]:
+    """Q249 - the one place a row's links are held to the caller's role: `fix_url` and `link` are emptied when the page they name refuses that role
+    (`access.role_may_open`). A viewer's failing row drew "Fix" to Settings -> Kea and to Doctor, which sent them back to the dashboard with a refusal. The
+    template and the dashboard draw what is left and carry no rule of their own. Outside an application (a script that imports this module) there is no route
+    table to ask and the rows are returned as they are."""
+    from flask import has_app_context
+
+    if not has_app_context():
+        return checks
+    from jen.services.access import role_may_open
+
+    role = _caller_role(ctx)
+    for c in checks:
+        if c.fix_url and not role_may_open(c.fix_url, role):
+            c.fix_url, c.fix_hint = "", ""
+        if c.link and not role_may_open(c.link, role):
+            c.link, c.link_label = "", ""
+    return checks
 
 
 def summarize(checks: list[Check]) -> dict:

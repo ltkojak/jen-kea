@@ -658,7 +658,11 @@ def api_top_devices():
             with kdb.cursor() as kcur:
                 for row in rows:
                     mac_hex = row["mac"].replace(":", "")
-                    kcur.execute("SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
+                    # (Q249) an IPv4 reservation, the rule of the Leases list (`leases.V4_RESERVATION`): a global one (subnet 0) counts, an IPv6 one (NULL) does not
+                    kcur.execute(
+                        "SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s AND dhcp4_subnet_id IS NOT NULL",
+                        (mac_hex,),
+                    )
                     has_reservation = bool(kcur.fetchone())
                     subnet_name = accessible.get(row["last_subnet_id"], {}).get("name", "")
                     devices.append(

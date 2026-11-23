@@ -895,3 +895,217 @@ def clear_investigation_logging(cfg: dict, now=None):
     if not context:
         del entry["user-context"]
     return cfg, "ok"
+
+
+# ── Where Kea writes its log (Q249) ───────────────────────────────────────────────────────────────────────────────────
+#
+# Measured on kea-dhcp4 3.0.5: `config-set` changes the logger's output live and Kea creates the file itself (its own account, mode 0640); with no `pattern` key the lines
+# start with the date and time Jen's parser needs. The Settings -> Kea -> Kea logging card offers three shapes of the `kea-dhcp4` logger's `output-options` and nothing else
+# of the entry is ever touched here. What the daemon answers on `config-get` carries its defaults written out (`"flush": true`, `"pattern": ""`), so a comparison is made on
+# the normalized option, never on the dict as given.
+
+#: what the package ships: the journal, with the short pattern
+LOGGER_OUTPUT_JOURNAL = {"output": "stdout", "pattern": "%-5p %m\n"}
+#: the file Jen reads, with Kea's own rotation (no logrotate file is shipped)
+LOGGER_OUTPUT_FILE_DEFAULT = {"output": "/var/log/kea/kea-dhcp4.log", "flush": True, "maxsize": 10485760, "maxver": 4}
+LOGGER_OUTPUT_CHOICES = ("journal", "file", "both")
+_LOGGER_FILE_KEYS = {"output", "flush", "maxsize", "maxver", "pattern"}
+
+
+def _normal_option(option):
+    """One `output-options` entry without the defaults Kea writes out (`flush: true`, an empty `pattern`); None when it is not an object."""
+    if not isinstance(option, dict):
+        return None
+    out = dict(option)
+    if out.get("flush") is True:
+        del out["flush"]
+    if out.get("pattern") == "":
+        del out["pattern"]
+    return out
+
+
+def _is_journal_option(option) -> bool:
+    return _normal_option(option) == LOGGER_OUTPUT_JOURNAL
+
+
+def _is_file_option(option) -> bool:
+    """A file output this card can describe: a path, Kea's rotation numbers when present, no pattern of its own."""
+    normal = _normal_option(option)
+    if normal is None or not isinstance(normal.get("output"), str) or not normal["output"].startswith("/"):
+        return False
+    if set(normal) - _LOGGER_FILE_KEYS or "pattern" in normal or "flush" in normal:
+        return False
+    return all(
+        key not in normal or (isinstance(normal[key], int) and not isinstance(normal[key], bool))
+        for key in ("maxsize", "maxver")
+    )
+
+
+def logger_output_options(choice: str, path: str, maxsize: int, maxver: int) -> list:
+    """Exactly what a choice stores as the `kea-dhcp4` logger's `output-options`."""
+    file_option = {"output": path, "flush": True, "maxsize": maxsize, "maxver": maxver}
+    if choice == "journal":
+        return [dict(LOGGER_OUTPUT_JOURNAL)]
+    if choice == "file":
+        return [file_option]
+    return [dict(LOGGER_OUTPUT_JOURNAL), file_option]
+
+
+def describe_logger_output(cfg) -> dict:
+    """Where the `kea-dhcp4` logger of `cfg` (a whole `{"Dhcp4": ...}` config) writes: `{"present", "options", "choice", "file", "maxsize", "maxver"}`.
+    `present` is whether the config has that logger entry; `options` its `output-options` as given (a list, [] when there is none); `choice` is `journal`, `file` or `both`
+    when the options are what that choice stores (Kea's written-out defaults aside), `none` when the entry or its options are absent (Kea then logs to stdout) and `custom`
+    for anything else; `file`, `maxsize` and `maxver` describe the file output of a `file` or `both` choice (None otherwise, or when Kea did not say)."""
+    _section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
+    entry = _logger_entry(loggers or [])
+    out = {"present": entry is not None, "options": [], "choice": "none", "file": None, "maxsize": None, "maxver": None}
+    options = entry.get("output-options") if entry is not None else None
+    if options is None or options == []:
+        return out
+    if not isinstance(options, list):
+        out["options"], out["choice"] = [options], "custom"
+        return out
+    out["options"] = copy.deepcopy(options)
+    file_option = None
+    if len(options) == 1 and _is_journal_option(options[0]):
+        out["choice"] = "journal"
+    elif len(options) == 1 and _is_file_option(options[0]):
+        out["choice"], file_option = "file", options[0]
+    elif len(options) == 2 and _is_journal_option(options[0]) and _is_file_option(options[1]):
+        out["choice"], file_option = "both", options[1]
+    else:
+        out["choice"] = "custom"
+    if file_option is not None:
+        out.update(file=file_option["output"], maxsize=file_option.get("maxsize"), maxver=file_option.get("maxver"))
+    return out
+
+
+def _output_name(option) -> str:
+    """One output as a short printable word: the `output` string only, never anything else of the entry."""
+    value = option.get("output") if isinstance(option, dict) else None
+    if not isinstance(value, str) or not value:
+        return "?"
+    return "".join(ch if ch.isprintable() else "?" for ch in value)[:120]
+
+
+def logger_output_words(described: dict) -> str:
+    """`describe_logger_output`'s answer in words, for the card, the flash and the audit row: only the outputs' names are printed."""
+    names = [_output_name(o) for o in described.get("options") or []]
+    files = [n for n in names if n.startswith("/")]
+    rest = [n for n in names if not n.startswith("/")]
+    if not names or (not files and all(n == "stdout" for n in rest)):
+        return "the system journal (stdout)"
+    if len(files) == 1 and not rest:
+        return f"the file {files[0]}"
+    if len(files) == 1 and all(n == "stdout" for n in rest):
+        return f"the system journal and the file {files[0]}"
+    if not files and all(n == "syslog" for n in rest):
+        return "syslog"
+    return ", ".join(names)
+
+
+def _carries_marker(entry) -> bool:
+    context = entry.get("user-context") if isinstance(entry, dict) else None
+    return isinstance(context, dict) and INVESTIGATION_KEY in context
+
+
+def logger_marker_present(cfg) -> bool:
+    """Does the `kea-dhcp4` logger of `cfg` carry a `jen-investigation` marker, readable or damaged?"""
+    _section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
+    return _carries_marker(_logger_entry(loggers or []))
+
+
+def logger_severity_words(cfg) -> str:
+    """The `kea-dhcp4` logger's severity as the config says it, for a read-only line: `INFO`, `DEBUG (debuglevel 55)`, or that it is not set."""
+    _section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
+    entry = _logger_entry(loggers or [])
+    severity = entry.get("severity") if entry is not None else None
+    if not isinstance(severity, str) or not severity.strip():
+        return "not set (Kea's default is INFO)"
+    text = "".join(ch if ch.isprintable() else "?" for ch in severity.strip())[:20]
+    level = entry.get("debuglevel")
+    if text.upper() == "DEBUG" and isinstance(level, int) and not isinstance(level, bool):
+        return f"{text} (debuglevel {level})"
+    return text
+
+
+#: severities at which Kea writes no line for a command it receives (COMMAND_RECEIVED is INFO): a change of output cannot be proven by asking the daemon something
+LOGGER_SEVERITIES_ABOVE_INFO = ("WARN", "ERROR", "FATAL")
+
+
+def logger_severity_above_info(cfg) -> str:
+    """`WARN`, `ERROR` or `FATAL` when the `kea-dhcp4` logger of `cfg` is set to one of them (compared without case), else "" - absent, INFO, DEBUG and anything else."""
+    _section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
+    entry = _logger_entry(loggers or [])
+    severity = entry.get("severity") if entry is not None else None
+    text = severity.strip().upper() if isinstance(severity, str) else ""
+    return text if text in LOGGER_SEVERITIES_ABOVE_INFO else ""
+
+
+def logger_output_snapshot(cfg) -> dict:
+    """What `restore_logger_output` needs to put the `kea-dhcp4` logger's output back exactly: whether the config had a `loggers` list at all, whether the entry was there,
+    and its `output-options` (None when it had none)."""
+    section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
+    entry = _logger_entry(loggers or [])
+    return {
+        "loggers": isinstance(section, dict) and "loggers" in section,
+        "entry": entry is not None,
+        "options": copy.deepcopy(entry["output-options"]) if entry is not None and "output-options" in entry else None,
+    }
+
+
+def set_logger_output(cfg: dict, choice: str, path: str, maxsize: int, maxver: int):
+    """Make the `kea-dhcp4` logger write to the journal, a file, or both (`LOGGER_OUTPUT_CHOICES`). Returns (cfg, code): "ok", "nochange" (it already writes exactly
+    that - and a config with no logger, or a logger with no output, already logs to stdout, so `journal` there is "nochange"), "unsupported" (no `Dhcp4`, `loggers` is not a
+    list, or a choice this function does not know), "investigation" (the logger carries a `jen-investigation` marker, readable or damaged: the restore of a session that
+    created the entry removes the whole entry, and the new output with it). Only `output-options` is touched; the entry is created - as
+    `{"name": "kea-dhcp4", "output-options": [...], "severity": "INFO", "debuglevel": 0}` - only when the config has none."""
+    cfg = copy.deepcopy(cfg)
+    if choice not in LOGGER_OUTPUT_CHOICES or not isinstance(cfg, dict):
+        return cfg, "unsupported"
+    section, loggers = _dhcp4_loggers(cfg, create=False)
+    if section is None:
+        return cfg, "unsupported"
+    entry = _logger_entry(loggers)
+    if _carries_marker(entry):
+        return cfg, "investigation"
+    wanted = logger_output_options(choice, path, maxsize, maxver)
+    current = entry.get("output-options") if entry is not None else None
+    if current is None or current == []:
+        if choice == "journal":
+            return cfg, "nochange"
+    elif isinstance(current, list) and [_normal_option(o) for o in current] == [_normal_option(o) for o in wanted]:
+        return cfg, "nochange"
+    if entry is None:
+        _section, loggers = _dhcp4_loggers(cfg, create=True)
+        loggers.append({"name": INVESTIGATION_LOGGER, "output-options": wanted, "severity": "INFO", "debuglevel": 0})
+    else:
+        entry["output-options"] = wanted
+    return cfg, "ok"
+
+
+def restore_logger_output(cfg: dict, snapshot: dict):
+    """Put the `kea-dhcp4` logger's output back as `logger_output_snapshot` found it: the old `output-options`, the key removed when there was none, the entry removed when
+    this change created it. Returns (cfg, code): "ok", "nochange", "unsupported", "investigation" - as `set_logger_output`."""
+    cfg = copy.deepcopy(cfg)
+    section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
+    if section is None:
+        return cfg, "unsupported"
+    entry = _logger_entry(loggers)
+    if _carries_marker(entry):
+        return cfg, "investigation"
+    if logger_output_snapshot(cfg) == snapshot:
+        return cfg, "nochange"
+    if not snapshot.get("entry"):
+        if entry is not None:
+            loggers.remove(entry)
+        if not loggers and not snapshot.get("loggers", True):
+            section.pop("loggers", None)  # the change created the list too
+        return cfg, "ok"
+    if entry is None:
+        return cfg, "unsupported"
+    if snapshot.get("options") is None:
+        entry.pop("output-options", None)
+    else:
+        entry["output-options"] = copy.deepcopy(snapshot["options"])
+    return cfg, "ok"

@@ -20,11 +20,13 @@ about.
 from __future__ import annotations
 
 import ipaddress
+import json
 
 from jen.services import ddns_writers as _writers
 from jen.services import dhcp_explain as _explain
 from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
+from jen.services import kea_config_edit as _edit
 from jen.services import kea_config_view as _view
 from jen.services import kea_log_trace as _klt
 from jen.services import kea_readiness as _readiness
@@ -646,11 +648,10 @@ def _check_removed_keys(dhcp4_cfg) -> list[Finding]:
 
 
 LOGGER_NAME = "kea-dhcp4"
-LOGGER_FILE = "/var/log/kea/kea-dhcp4.log"
+# (Q249) ONE definition, shared with the Kea logging card: `kea_config_edit.LOGGER_OUTPUT_FILE_DEFAULT` is what its "A file Jen can read" choice stores by default
+LOGGER_FILE = _edit.LOGGER_OUTPUT_FILE_DEFAULT["output"]
 # The block Jen asks for (v5.69.0-beta.6, Q175): a file under /var/log/kea, flushed as it is written, rotated at 10 MB with four old files kept.
-LOGGER_OUTPUT_JSON = (
-    '"output-options": [{"output": "' + LOGGER_FILE + '", "flush": true, "maxsize": 10485760, "maxver": 4}]'
-)
+LOGGER_OUTPUT_JSON = '"output-options": ' + json.dumps([_edit.LOGGER_OUTPUT_FILE_DEFAULT])
 # Kea's own default line pattern: the date-time Jen's line parser needs first, then the level and the logger name and process id
 LOGGER_PATTERN = "%D{%Y-%m-%d %H:%M:%S.%q} %-5p [%c/%i.%t] %m\\n"
 
@@ -718,10 +719,11 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
                 "Kea's log is not written to a file Jen can read",
                 "The kea-dhcp4 logger writes to "
                 + (", ".join(str(o.get("output")) for o in options if o.get("output")) or "no output at all")
-                + ', not to a *.log file under /var/log. Paste this into that logger\'s entry under "loggers" in kea-dhcp4.conf, then reload Kea: '
+                + ", not to a *.log file under /var/log. Choose a file under Settings → Kea → Kea logging, or paste this into that logger's entry under "
+                + '"loggers" in kea-dhcp4.conf, then reload Kea: '
                 + LOGGER_OUTPUT_JSON,
                 "loggers[" + LOGGER_NAME + "]",
-                "/settings/kea",
+                "/settings/kea#kea-logging",
                 "The Problems inbox, Trace and the host-side restore evidence read a file; give the logger a file output under /var/log/kea. A logger that writes to stdout "
                 "keeps its lines in the system journal, which none of them can read, so the inbox stays empty - and a quiet inbox looks exactly like a quiet network.",
             )

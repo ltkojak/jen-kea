@@ -166,9 +166,23 @@ SUBTABS = {
         {"id": "migrate", "label": "Migrate", "url": "/settings/databases?tab=migrate", "roles": ("superadmin",)},
         {"id": "recovery", "label": "Recovery", "url": "/settings/databases?tab=recovery", "roles": ("superadmin",)},
     ],
+    # Q249: both tabs are one route (`users.audit_log`), and it refuses an account that may not see every subnet before it reads the tab: the rows name subnets,
+    # clients and servers. `requires_all_subnets` (the strips' own flag) hides a tab from such an account, and a group whose tabs are all hidden goes with them.
     "logs": [
-        {"id": "audit", "label": "Audit Log", "url": "/settings/logs?tab=audit", "roles": ADMIN_ROLES},
-        {"id": "alerts", "label": "Alert Log", "url": "/settings/logs?tab=alerts", "roles": ADMIN_ROLES},
+        {
+            "id": "audit",
+            "label": "Audit Log",
+            "url": "/settings/logs?tab=audit",
+            "roles": ADMIN_ROLES,
+            "requires_all_subnets": True,
+        },
+        {
+            "id": "alerts",
+            "label": "Alert Log",
+            "url": "/settings/logs?tab=alerts",
+            "roles": ADMIN_ROLES,
+            "requires_all_subnets": True,
+        },
     ],
     "system": [
         {"id": "system", "label": "Updates & System", "url": "/settings/system", "roles": ADMIN_ROLES},
@@ -223,6 +237,20 @@ def _allowed(item, role):
     return not roles or role in roles
 
 
+def _tab_open(tab, role, all_subnets):
+    """A sub-tab is listed for the roles its route lets in (Q248, V38) and, when its route needs every subnet, only for an account that has them (Q249)."""
+    return (all_subnets or not tab.get("requires_all_subnets")) and _allowed(tab, role)
+
+
+def _group_open(group, role, all_subnets):
+    """A Settings group is listed (the strip, the landing tile, the More sheet, a favorite) unless every one of its tabs needs every subnet and the account does not
+    have them (Q249): the Logs tile and tab sent a subnet-restricted admin to a page that sent them back."""
+    if not _allowed(group, role):
+        return False
+    tabs = SUBTABS.get(group["id"])
+    return all_subnets or not tabs or any(not t.get("requires_all_subnets") for t in tabs)
+
+
 def settings_group_for(endpoint):
     for g in SETTINGS_GROUPS:
         if _matches(endpoint, g["match"]):
@@ -266,7 +294,7 @@ def _tabbar(endpoint, role, in_settings):
     return out
 
 
-def _sheet_groups(endpoint, role, section_strips, plugin_nav_items):
+def _sheet_groups(endpoint, role, section_strips, plugin_nav_items, all_subnets=True):
     """Every destination, grouped as the desktop nav is (Management / Network
     / Settings / Plugins / About), for the More sheet. Same role and
     subnet-scope filtering as the strips and the settings groups; plugin
@@ -310,7 +338,7 @@ def _sheet_groups(endpoint, role, section_strips, plugin_nav_items):
                 "items": [
                     item(g, settings_group_for(endpoint) is not None and settings_group_for(endpoint)["id"] == g["id"])
                     for g in SETTINGS_GROUPS
-                    if _allowed(g, role)
+                    if _group_open(g, role, all_subnets)
                 ],
             }
         )
@@ -422,7 +450,7 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
     strip = []
     if in_settings:
         for g in SETTINGS_GROUPS:
-            if _allowed(g, role):
+            if _group_open(g, role, all_subnets):
                 strip.append({**g, "active": group is not None and g["id"] == group["id"]})
     else:
         for section, tabs in section_strips.items():
@@ -443,7 +471,7 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
                         )
                 break
 
-    sheet = _sheet_groups(endpoint, role, section_strips, plugin_nav_items)
+    sheet = _sheet_groups(endpoint, role, section_strips, plugin_nav_items, all_subnets)
     destinations = _destinations(endpoint, role, in_settings, sheet)
     by_id = {d["id"]: d for d in destinations}
     favorites = _resolve(prefs.get("top"), by_id, TOP_FAVORITES_MAX, skip=_FIXED_TOP_URLS)
@@ -479,6 +507,6 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
         # hardcoded endpoint string.
         "landing": in_settings and group is None,
         "group": group,
-        "settings_groups": [g for g in SETTINGS_GROUPS if _allowed(g, role)],
-        "subtabs": {k: [t for t in v if _allowed(t, role)] for k, v in SUBTABS.items()},
+        "settings_groups": [g for g in SETTINGS_GROUPS if _group_open(g, role, all_subnets)],
+        "subtabs": {k: [t for t in v if _tab_open(t, role, all_subnets)] for k, v in SUBTABS.items()},
     }

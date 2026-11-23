@@ -356,7 +356,7 @@
                 <button type="submit" class="btn btn-sm btn-secondary">{{ icon("x") }} Cancel Handover</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='reset') }}"
-                  data-confirm="{{ ha_actions['reset'].confirm }}" title="{{ ha_actions['reset'].help }}">
+                  data-confirm="{{ ha_actions['reset'].confirm }}" data-confirm-label="Reset" title="{{ ha_actions['reset'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">{{ icon("rotate-ccw") }} Reset</button>
             </form>
