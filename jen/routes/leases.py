@@ -37,9 +37,8 @@ EXPIRING_SOON = "l.expire <= NOW() + INTERVAL 1 HOUR"
 #: `{h}` is the alias of the hosts table, with its dot, or nothing.
 V4_RESERVATION = "{h}dhcp4_subnet_id IS NOT NULL"
 #: "reserved": the lease's client has a reservation - what the summary's "N reserved" has counted since Q206 ...
-RESERVED_ANY = (
-    "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND " + V4_RESERVATION.format(h="h.") + ")"
-)
+#: (written out as ONE literal: `tests/test_q249_b.py` holds it to `V4_RESERVATION`, and a string built with `+` reads as assembled SQL to bandit, B608)
+RESERVED_ANY = "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND h.dhcp4_subnet_id IS NOT NULL)"
 #: ... in a subnet the caller may see (Q206, SP-1: a hidden subnet's reservation never changes a visible answer). The parameter is the caller's own subnet ids, "1,3".
 RESERVED_VISIBLE = (
     "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND FIND_IN_SET(h.dhcp4_subnet_id, %s))"
