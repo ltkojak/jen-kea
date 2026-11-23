@@ -111,7 +111,7 @@ class TestAnOldSignInPage:
 
     def test_a_message_the_old_page_showed_is_not_shown_twice(self, client, csrf_on):
         with client.session_transaction() as sess:
-            sess["_flashes"] = [("error", "Session expired. Please log in again.")]
+            sess["_flashes"] = [("error", "Session expired. Please sign in again.")]
         r = client.post("/login?local=1", data={"username": "admin", "password": "x"})
         body = r.get_data(as_text=True)
         assert SIGN_IN_AGAIN in body

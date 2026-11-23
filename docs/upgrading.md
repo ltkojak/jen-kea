@@ -10,6 +10,34 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.6: the look over every page, seven plugin updates, and an API key or account that is never wider than the boxes ticked
+
+One step (7.2.0-beta.6). No migration, no helper build and no new setting. Nothing to do; these behave differently and are worth knowing.
+
+**API keys and accounts: the subnet boxes.** An unrestricted API key is created only when All Subnets is ticked and no subnet is. With nothing ticked, or with All Subnets ticked beside a subnet, the form is refused with a sentence and no key is created; before this release nothing ticked made an unrestricted key. Add User and Edit User follow the same rule, and their subnet lists are checkboxes now. A script that posts either form with no `subnet_ids` field and expected an unrestricted key or account has to send `subnet_ids=all`. This corrects the note under 7.2.0-beta.5 below ("A key is created with the access it always was"): with the page's script not running, a subnet ticked beside All Subnets made an unrestricted key. A key or an account that exists is not changed by the upgrade: look over API Keys and Users for one that is wider than you meant. An alert channel's subnet list is unchanged: nothing selected there still means every subnet.
+
+**Words a script may match.** A refusal names the page: "Admin access required for /settings/kea." where it was "Admin access required.". The role is written Superadmin. The audit log's details say "signed in" and "signed out" where they said "logged in" and "logged out"; the action names `LOGIN` and `LOGOUT` are unchanged, and rows already written keep their words. The Health JSON answers gain two fields per check, `link` and `link_label`.
+
+**Where things moved.** About is in the Account menu on every window width. The palette button's menu is named Display; its times section reads Display Times with Local Browser Time and UTC Time, the install's default theme is listed once as "(default)", and a Table Rows section offers Compact. Subnets is a list of rows that open in place; Expand All opens every row. The pages of a Settings group are tabs on every page of the group. The Devices setting "stale after N days" sits beside the filter bar. Settings, System lists plugins by name with a link to the Plugin Manager, which holds the descriptions. A page that does not exist is answered inside Jen with its navigation, still with status 404.
+
+**Dashboard and Health.** The dashboard shows a Needs attention card when a Kea server is down, a Health check fails or a pool is near its end; the card asks Health when the dashboard opens and every five minutes after. Health lists failures and warnings first and folds the checks that do not apply behind one line. Getting Started no longer ticks a step whose check Health shows as a warning.
+
+**Colors.** Muted text is lighter in Dark and darker in Light and Retro; the warning color of Phosphor and of Ember is no longer the accent color; a button's text is black or white by what reads on its color. A custom palette keeps the colors you chose; the text on its main button is chosen the same way.
+
+**Alert email.** The plain-text part and the subject show what was typed (`Lab & <one>`) where they showed `Lab &amp; &lt;one&gt;`. A mail filter written against the escaped form has to be changed.
+
+**Docker.** The image installs `iproute2`. Rebuild or pull the image for Wake & Actions to tell whether Jen is in a wake's subnet: on an image built before this release Wake & Actions 1.2.1 gives no warning on Docker's default network, where 1.2.0's warning was true. See "Wake-on-LAN" in `docs/docker.md`.
+
+**Presence 1.2.9.** On a pass where the probe could not be sent, or the Jen host's neighbor table could not be read after it, no device is counted as missed. While the probe cannot be sent at all, the neighbor pass calls no device offline. Sinks are called destinations, under Publish To.
+
+**Wake & Actions 1.2.1.** On a host with no `ip` command a wake no longer carries the warning that Jen has no address in the subnet; the audit detail says `on_link=unknown`. A wake for a subnet Jen is not configured for answers "Wake packet sent on Jen's own network only". Favorites are called saved hosts on the page; the routes and the audit actions of 1.2.0 are unchanged. A search of the audit log: rows written before 1.2.0 keep the old action names, so `WOL_` finds both and `FAVORITE` finds only rows written since.
+
+**IPAM Lite 1.8.5.** On an unmanaged subnet a save is refused with "Could not read IPAM's own entries" when that table cannot be read (1.8.4 did so on a Kea subnet only). Eight buttons are renamed to say what they do.
+
+**DNS Sync 1.1.6.** What it writes records to is called a DNS server. The default text of the sync-failed alert changes to "DNS Sync: the sync to DNS server name (kind) failed: error"; a template you edited is kept. Route paths, table names and audit action names are unchanged.
+
+**Network Discovery 1.3.7, Host Watchdog 1.1.5, Switch Port Locator 1.1.6.** The page only: a Getting started card where a table was empty, and Scan Now and View Results in each Network Discovery card's header.
+
 ## 7.2.0-beta.5: Presence and Wake in the desktop navigation, four plugin updates and page fixes
 
 One step (7.2.0-beta.5). No migration and no helper build. Nothing to do; these behave differently and are worth knowing.
@@ -26,7 +54,7 @@ One step (7.2.0-beta.5). No migration and no helper build. Nothing to do; these 
 
 **Health.** The check "DEBUG logging left on" is titled "No DEBUG logging left on". Its id in the JSON answer, `debug_logging_left_on`, is unchanged.
 
-**API keys.** Subnet access is a list of checkboxes. A key is created with the access it always was.
+**API keys.** Subnet access is a list of checkboxes. A key is created with the access it always was while the page's script runs; without it a subnet ticked beside All Subnets made an unrestricted key, which 7.2.0-beta.6 refuses (see above).
 
 ## 7.2.0-beta.4: five plugin updates
 

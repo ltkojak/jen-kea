@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Kea reservation identifiers{% endblock %}
 {% block content %}
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
     <h1>{{ icon("wrench", "ico-lg") }} Kea reservation identifiers</h1>
     <p>Finds and repairs reservations whose identifier was stored as text by an older Jen restore or migration. Nothing changes until you press Repair.</p>
 </div>
+
+{# Q248 (V38): the tabs of Databases, with Import current - this page is reached from the Import tab and had no way back #}
+{{ subtabs(nav.subtabs['databases'], 'import') }}
 
 <div class="card">
     <div class="card-header"><h3>What this looks for</h3></div>

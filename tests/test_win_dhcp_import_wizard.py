@@ -99,7 +99,9 @@ class TestWinDhcpImportWizard:
         c, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="win_import_admin1")
         r = c.get("/subnets/import-windows", follow_redirects=True)
         assert r.status_code == 200
-        assert b"SuperAdmin access required." in r.data
+        assert (
+            b"Superadmin access required for /subnets/import-windows." in r.data
+        )  # Q248 (V47): a refusal names the page
 
     # ── upload (step 1) ─────────────────────────────────────────────────
 

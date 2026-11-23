@@ -95,5 +95,12 @@ def edit():
 def pin():
     """The section strip's button: add the page being shown to the top row, or take it out, and come back to that page."""
     action = "remove" if request.form.get("pinned") == "1" else "add"
-    _edit("top", action, request.form.get("dest", ""))
+    dest = request.form.get("dest", "")
+    # Q248 (V37): a pin said nothing; the only sign was a new icon in the top row. The page is named from the list this person is offered (never from the form), so a
+    # stale or made-up id is answered with no message of this kind.
+    label = next((d["label"] for d in _offered()["top"] if d["id"] == dest), "")
+    if _edit("top", action, dest) and label:
+        flash(
+            f"Removed {label} from the top row." if action == "remove" else f"Added {label} to the top row.", "success"
+        )
     return redirect(_safe_next(request.form.get("next", "")) or url_for("navigation.customize"))

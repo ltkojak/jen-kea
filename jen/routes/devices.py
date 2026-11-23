@@ -20,6 +20,7 @@ import jen.services.view_prefs as __view_prefs
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("devices", __name__)
@@ -490,7 +491,7 @@ def bulk_delete_devices():
         return redirect(url_for("devices.devices"))
 
     flash(
-        f"Removed {deleted} device(s) from inventory." + (f" {errors} failed or skipped." if errors else ""),
+        f"Removed {_plural(deleted, 'device')} from inventory." + (f" {errors} failed or skipped." if errors else ""),
         "success" if errors == 0 else "warning",
     )
     __user.audit("BULK_DELETE_DEVICES", "devices", f"Deleted={deleted} Errors={errors} by {current_user.username}")

@@ -54,6 +54,7 @@ from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
 from jen.services import kea_config_view as _view
 from jen.services import pools as _pools_mod
+from jen.services.reltime import plural as _plural
 
 # ── Expression grammar ────────────────────────────────────────────────────────
 
@@ -455,6 +456,14 @@ def _merge_options(levels: list[tuple[str, list[dict]]]) -> list[dict]:
     return [row for _k, row in sorted(winners.items(), key=_sort)]
 
 
+def _whole(value) -> int | None:
+    """A subnet id as a whole number, or None for anything that is not one."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def explain(
     dhcp4_cfg: dict,
     client: dict,
@@ -465,6 +474,7 @@ def explain(
     assigned_classes: dict | None = None,
     pool_used=None,
     holder_of=None,
+    lease_subnet_name: str | None = None,
 ) -> dict:
     """The decision path for `client` if it asked in `subnet_id`.
     `client`: {mac, client_id?, vendor_class?, user_class?, hostname?,
@@ -477,7 +487,10 @@ def explain(
     v5.68.0-beta.2 (Q135), all optional: `assigned_classes` = {"classes": [names], "at": when} - the classes Kea itself
     logged for this client, taken as members (and labeled with when); `pool_used(subnet_id, pool_text)` -> active leases
     inside that pool, or None; `holder_of(ip, mac)` -> {"mac", "expire", "linkable"} for an active lease on `ip` held by a
-    DIFFERENT client, or None. Both callables are read-only lookups; one that raises is treated as "unknown"."""
+    DIFFERENT client, or None. Both callables are read-only lookups; one that raises is treated as "unknown".
+
+    Q248 (V20): `lease_subnet_name` is the name of the subnet the current lease is in, given by the caller ONLY for a subnet the
+    signed-in account may see. Step 1 names it when the subnet evaluated is not the lease's; without it that half is not said."""
     steps: list[dict] = []
     found = _view.subnet4_by_id(dhcp4_cfg, subnet_id)
     if found is None:
@@ -492,7 +505,15 @@ def explain(
     subnet_element = f"subnet {subnet.get('id')} ({subnet.get('subnet')})"
 
     # 1. subnet selection
-    how = "the subnet you chose" if not lease else "the subnet of the current lease"
+    # Q248 (V20): "the subnet of the current lease" only when the subnet evaluated IS the lease's. The test was whether a lease existed, so a subnet picked by hand
+    # for a client whose lease sits in a different subnet was explained with a reason that was not true.
+    lease_subnet = _whole((lease or {}).get("subnet_id"))
+    if lease and lease_subnet is not None and lease_subnet == _whole(subnet_id):
+        how = "the subnet of the current lease"
+    else:
+        how = "the subnet you chose"
+        if lease and lease_subnet is not None and lease_subnet_name:
+            how += f" (the client's current lease is in {lease_subnet_name})"
     giaddr = str(client.get("giaddr") or "").strip()
     relay_note = ""
     relay_mismatch = False
@@ -520,7 +541,11 @@ def explain(
             "Everything below assumes it was."
             if relay_mismatch
             else f"Subnet {subnet.get('id')} ({subnet.get('subnet')}) — {how}"
-            + (f", in shared network {sn_name!r} with {len(candidates) - 1} sibling subnet(s)" if sn_name else "")
+            + (
+                f", in shared network {sn_name!r} with {_plural(len(candidates) - 1, 'sibling subnet')}"
+                if sn_name
+                else ""
+            )
             + ". Kea picks the subnet from the receiving interface or the relay's giaddr; Jen can't see the interface."
         ),
         "evidence": [relay_note] if relay_note else [],
@@ -883,7 +908,7 @@ def explain(
     steps.append(
         {
             "stage": "options",
-            "verdict": f"{len(options)} option(s)",
+            "verdict": f"{_plural(len(options), 'option')}",
             "detail": f"valid-lifetime {lifetime}s from {lifetime_from}. Precedence: reservation > pool > subnet > shared network > class > global.",
             "evidence": [
                 f"{o['name']} ({o['code']}) = {o['data']} — from {o['source']}"

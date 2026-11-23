@@ -20,7 +20,7 @@
         <div class="form-row explain-grid">
             <div class="form-group u-116966">
                 <label for="f-mac">MAC address <span class="u-497726">*</span></label>
-                <input id="f-mac" type="text" name="mac" class="mono" value="{{ client.mac }}" placeholder="aa:bb:cc:dd:ee:ff" required>
+                <input id="f-mac" type="text" name="mac" class="mono" value="{{ client.mac }}" placeholder="aa:bb:cc:dd:ee:ff" required autocapitalize="off" autocomplete="off" spellcheck="false">
             </div>
             <div class="form-group u-116966">
                 <label for="f-subnet">Subnet</label>
@@ -33,21 +33,22 @@
             </div>
             <div class="form-group u-116966">
                 <label for="f-vendor_class">Vendor class (option 60)</label>
-                <input id="f-vendor_class" type="text" name="vendor_class" value="{{ client.vendor_class }}" placeholder="MSFT 5.0, android-dhcp-14, PXEClient…">
+                <input id="f-vendor_class" type="text" name="vendor_class" value="{{ client.vendor_class }}" placeholder="MSFT 5.0" aria-describedby="f-vendor_class-hint">
+                <div class="form-hint" id="f-vendor_class-hint">What the client sends, for example MSFT 5.0, android-dhcp-14 or PXEClient.</div>
             </div>
             <div class="form-group u-116966">
                 <label for="f-user_class">User class (option 77)</label>
                 <input id="f-user_class" type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE" aria-describedby="f-user_class-hint">
-                <input type="text" name="user_class_bytes" class="mono" value="{{ client.user_class_bytes }}" placeholder="hex as sent: 08:69:50:58:45" aria-label="User class as the client sent it, hex bytes (optional)">
+                <input type="text" name="user_class_bytes" class="mono" value="{{ client.user_class_bytes }}" placeholder="hex as sent: 08:69:50:58:45" aria-label="User class as the client sent it, hex bytes (optional)" autocapitalize="off" autocomplete="off" spellcheck="false">
                 <div class="form-hint" id="f-user_class-hint">Kea compares the bytes the client sent. A client sends the bare string or, like Windows, one length byte then the string; give the bytes when you know them.</div>
             </div>
             <div class="form-group u-116966">
                 <label for="f-hostname">Hostname (option 12)</label>
-                <input id="f-hostname" type="text" name="hostname" value="{{ client.hostname }}">
+                <input id="f-hostname" type="text" name="hostname" value="{{ client.hostname }}" autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group u-116966">
                 <label for="f-client_id">Client id (option 61)</label>
-                <input id="f-client_id" type="text" name="client_id" class="mono" value="{{ client.client_id }}" placeholder="01:aa:bb:cc:dd:ee:ff">
+                <input id="f-client_id" type="text" name="client_id" class="mono" value="{{ client.client_id }}" placeholder="01:aa:bb:cc:dd:ee:ff" autocapitalize="off" autocomplete="off" spellcheck="false">
             </div>
             <div class="form-group u-116966 explain-relay-group">
                 <label>Relay circuit id / remote id</label>
@@ -59,7 +60,7 @@
             </div>
             <div class="form-group u-116966">
                 <label for="f-giaddr">giaddr (relay agent address)</label>
-                <input id="f-giaddr" type="text" name="giaddr" class="mono" value="{{ client.giaddr }}" placeholder="10.0.1.1">
+                <input id="f-giaddr" type="text" name="giaddr" class="mono" value="{{ client.giaddr }}" placeholder="10.0.1.1" autocapitalize="off" spellcheck="false">
             </div>
         </div>
         <div class="u-012c80">

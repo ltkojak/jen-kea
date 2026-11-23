@@ -1,0 +1,23 @@
+/* Q248 (V34) - a phone row of facts never starts a wrapped line with its separator.
+
+   A `table.rowlist` row on a phone is one flex line of facts joined by a middle dot (base.html draws the dot
+   as the `::before` of every fact but the first). When the facts did not fit, the one that wrapped took its
+   dot with it, and the new line began "· Lab hypervisor host".
+
+   Here the dot is taken out of the flow and drawn in the gap to the LEFT of its fact, and the row clips at the
+   left edge of its text column: a fact that starts a line has its dot outside that edge, so it is not drawn.
+   The row keeps its 12 px inset as 4 px of transparent border plus 8 px of padding, which puts the clip edge
+   (the padding box) exactly where the dot of a line-starting fact ends. The spacing between two facts on one
+   line is what it was: 8 px, the dot, 8 px.
+
+   Linked once, by base.html, so every page with a row list has it (plugin pages included). */
+@media screen and (max-width: 768px) {
+    table.rowlist.rowlist tbody tr { overflow: hidden; padding-left: var(--sp-2); border-left: var(--sp-1) solid transparent; }
+    table.rowlist.rowlist tbody td[data-m="secondary"],
+    table.rowlist.rowlist tbody td:not([data-m]):not(.rl-select) { position: relative; margin-right: var(--sp-3); }
+    table.rowlist.rowlist tbody td[data-m="secondary"]:not(.rl-s1)::before,
+    table.rowlist.rowlist tbody td:not([data-m]):not(.rl-select):not(.rl-s1)::before {
+        position: absolute; right: calc(100% + var(--sp-2)); top: 50%; transform: translateY(-50%);
+        width: var(--sp-1); margin-right: 0; text-align: center; line-height: 1;
+    }
+}

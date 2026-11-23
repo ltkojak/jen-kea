@@ -17,7 +17,7 @@
 {%- elif kind == "button" -%}
 <a href="/client?q={{ who|urlencode }}" class="btn btn-sm btn-secondary">{{ icon("search") }} Investigate</a>
 {%- else -%}
-<a href="/client?q={{ who|urlencode }}" class="action-menu-item">{{ icon("search") }} Investigate</a>
+<a href="/client?q={{ who|urlencode }}" class="action-menu-item" role="menuitem">{{ icon("search") }} Investigate</a>
 {%- endif -%}
 {%- endif -%}
 {%- endmacro %}

@@ -53,7 +53,8 @@ TOP_NAV = [
 # ── Section tab strips (Management / Network) ────────────────────────────────
 SECTION_STRIPS = {
     "management": [
-        {"icon": "list", "label": "Leases", "url": "/leases", "match": ("leases.",)},
+        # Q248 (addition 4): Saved searches is a detail page of Leases (the filter bar that saves them is there); it showed no strip and lit nothing
+        {"icon": "list", "label": "Leases", "url": "/leases", "match": ("leases.", "search.saved_searches")},
         {"icon": "pin", "label": "Reservations", "url": "/reservations", "match": ("reservations.",)},
         {"icon": "monitor-smartphone", "label": "Devices", "url": "/devices", "match": ("devices.",)},
         {"icon": "chart-line", "label": "Reports", "url": "/reports", "match": ("reports.",)},
@@ -63,7 +64,8 @@ SECTION_STRIPS = {
         {"icon": "server", "label": "Kea servers", "url": "/servers", "match": ("servers.",)},
         {"icon": "link", "label": "DDNS", "url": "/ddns", "match": ("ddns.",)},
         {"icon": "stethoscope", "label": "Health", "url": "/health-center", "match": ("health.",)},
-        {"icon": "search", "label": "Investigate", "url": "/client", "match": ("client.",)},
+        # Q248 (addition 4): Trace is a detail page of Investigate (the client page loads it as its own Trace tab, and Explain links to it)
+        {"icon": "search", "label": "Investigate", "url": "/client", "match": ("client.", "trace.")},
         {"icon": "triangle-alert", "label": "Problems", "url": "/problems", "match": ("problems.",)},
         {"icon": "compass", "label": "Explain", "url": "/tools/explain", "match": ("explain.",)},
         {
@@ -141,15 +143,22 @@ SETTINGS_GROUPS = [
 ]
 
 # ── Sub-tabs inside a group (rendered by the page itself, not base.html) ────
+# Q248 (V38): a tab is listed for the roles its page's route lets in, so nobody is shown a tab that bounces them. API Docs is the one page of a
+# group a viewer may open; with these rules a viewer's row there is that single tab, and a row of one tab is not drawn (_settings_subtabs.html).
 SUBTABS = {
     "security": [
-        {"id": "policies", "label": "Policies", "url": "/settings/security"},
+        {"id": "policies", "label": "Policies", "url": "/settings/security", "roles": ADMIN_ROLES},
         {"id": "users", "label": "Users", "url": "/settings/users", "roles": ("superadmin",)},
-        {"id": "api-keys", "label": "API Keys", "url": "/settings/api-keys"},
+        {"id": "api-keys", "label": "API Keys", "url": "/settings/api-keys", "roles": ADMIN_ROLES},
         {"id": "api-docs", "label": "API Docs", "url": "/settings/api-docs"},
     ],
     "databases": [
-        {"id": "connections", "label": "Connections", "url": "/settings/databases?tab=connections"},
+        {
+            "id": "connections",
+            "label": "Connections",
+            "url": "/settings/databases?tab=connections",
+            "roles": ADMIN_ROLES,
+        },
         {"id": "export", "label": "Export", "url": "/settings/databases?tab=export", "roles": ("superadmin",)},
         {"id": "import", "label": "Import", "url": "/settings/databases?tab=import", "roles": ("superadmin",)},
         {"id": "backups", "label": "Backups", "url": "/settings/databases?tab=backups", "roles": ("superadmin",)},
@@ -158,11 +167,11 @@ SUBTABS = {
         {"id": "recovery", "label": "Recovery", "url": "/settings/databases?tab=recovery", "roles": ("superadmin",)},
     ],
     "logs": [
-        {"id": "audit", "label": "Audit Log", "url": "/settings/logs?tab=audit"},
-        {"id": "alerts", "label": "Alert Log", "url": "/settings/logs?tab=alerts"},
+        {"id": "audit", "label": "Audit Log", "url": "/settings/logs?tab=audit", "roles": ADMIN_ROLES},
+        {"id": "alerts", "label": "Alert Log", "url": "/settings/logs?tab=alerts", "roles": ADMIN_ROLES},
     ],
     "system": [
-        {"id": "system", "label": "Updates & System", "url": "/settings/system"},
+        {"id": "system", "label": "Updates & System", "url": "/settings/system", "roles": ADMIN_ROLES},
         {"id": "plugins", "label": "Plugin Manager", "url": "/settings/plugins", "roles": ("superadmin",)},
     ],
 }
@@ -179,6 +188,23 @@ def _plugin_strip(p):
     with no tab marked, and had no link anywhere in the desktop navigation."""
     section = p.get("section")
     return section if section in SECTION_STRIPS else "network"
+
+
+def _plugin_owner(endpoint, plugin_nav_items):
+    """Q248 (addition 4) - the plugin navigation item a page belongs to, or None. The item whose endpoint IS the page; else the first item of the same blueprint, so
+    every page of a plugin (an IPAM subnet, a Discovery results page) is shown under the plugin's strip with the plugin's tab lit. They used to show no strip and
+    light nothing: only the plugin's index matched. One owner at most, so a plugin that lists two pages never lights both."""
+    if not endpoint:
+        return None
+    for p in plugin_nav_items:
+        if p.get("endpoint") == endpoint:
+            return p
+    blueprint = endpoint.split(".", 1)[0]
+    for p in plugin_nav_items:
+        target = p.get("endpoint") or ""
+        if "." in target and target.split(".", 1)[0] == blueprint:
+            return p
+    return None
 
 
 def _matches(endpoint, patterns):
@@ -229,7 +255,7 @@ def _tabbar(endpoint, role, in_settings):
         tabs.append({"id": "devices", "label": "Devices", "icon": "monitor-smartphone", "url": "/devices"})
     matches = {
         "dashboard": ("dashboard.dashboard",),
-        "leases": ("leases.",),
+        "leases": ("leases.", "search.saved_searches"),  # the strip's own rule for the Leases tab (Q248, addition 4)
         "reservations": ("reservations.",),
         "devices": ("devices.",),
     }
@@ -267,8 +293,9 @@ def _sheet_groups(endpoint, role, section_strips, plugin_nav_items):
     )
     network = [item(t, _matches(endpoint, t["match"])) for t in section_strips["network"]]
     plugins = []
+    owner = _plugin_owner(endpoint, plugin_nav_items)
     for p in plugin_nav_items:
-        it = item(p, p.get("endpoint") == endpoint)
+        it = item(p, p is owner)
         # a plugin is listed where its strip lists it (Q247, U2): the group of the section it names, or Plugins when it names none that has a strip
         if p.get("section") == "management":
             groups[0]["items"].append(it)
@@ -369,7 +396,12 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
         for k, v in SECTION_STRIPS.items()
     }
     group = settings_group_for(endpoint)
-    in_settings = endpoint == "settings.settings" or group is not None
+    # Q248 (V25): a page is "in Settings" only for an account that has a Settings (the roles of the top item). The API documentation is in the Access & Security
+    # group and opens for a viewer, who was shown the Settings strip - seven tabs that each refuse a viewer - and the "All settings" link above the page.
+    may_open_settings = any(_allowed(t, role) for t in TOP_NAV if t["id"] == "settings")
+    in_settings = may_open_settings and (endpoint == "settings.settings" or group is not None)
+    # the plugin whose page this is (Q248, addition 4): any page of its blueprint, not only the one its navigation item names
+    owner = _plugin_owner(endpoint, plugin_nav_items)
 
     top = []
     for item in TOP_NAV:
@@ -383,7 +415,7 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
             active = (
                 _matches(endpoint, item["match"])
                 or any(_matches(endpoint, t["match"]) for t in SECTION_STRIPS.get(item["id"], ()))
-                or any(p.get("endpoint") == endpoint and _plugin_strip(p) == item["id"] for p in plugin_nav_items)
+                or (owner is not None and _plugin_strip(owner) == item["id"])
             )
         top.append({**item, "active": active})
 
@@ -394,8 +426,8 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
                 strip.append({**g, "active": group is not None and g["id"] == group["id"]})
     else:
         for section, tabs in section_strips.items():
-            if any(_matches(endpoint, t["match"]) for t in tabs) or any(
-                p.get("endpoint") == endpoint and _plugin_strip(p) == section for p in plugin_nav_items
+            if any(_matches(endpoint, t["match"]) for t in tabs) or (
+                owner is not None and _plugin_strip(owner) == section
             ):
                 for t in tabs:
                     strip.append({**t, "active": _matches(endpoint, t["match"])})
@@ -406,7 +438,7 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True, prefs=N
                                 "icon": p.get("icon", ""),
                                 "label": p.get("label", ""),
                                 "endpoint": p.get("endpoint"),
-                                "active": p.get("endpoint") == endpoint,
+                                "active": p is owner,
                             }
                         )
                 break

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from '_device_badge.html' import device_badge %}
 {% block title %}Reservations{% endblock %}
+{% block content_class %}content--wide{% endblock %}
 {% block scripts %}
 function toggleAll(cb) {
     document.querySelectorAll('.row-checkbox').forEach(c => c.checked = cb.checked);
@@ -44,7 +45,7 @@ function confirmBulk(action) {
         jenConfirm(`Delete ${n} ${n === 1 ? 'reservation' : 'reservations'}? This cannot be undone.`, function() {
             form.action = '/reservations/bulk-delete';
             form.submit();
-        });
+        }, 'Delete');
         return false;
     }
     if (action === 'export') {
@@ -80,7 +81,7 @@ function confirmBulk(action) {
             <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="search" value="{{ search }}" placeholder="Search address, hostname, DUID..." class="search-w" data-m="primary">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search" title="Search by address, hostname or DUID" aria-label="Search by address, hostname or DUID" class="search-w" data-m="primary">
         <button type="submit" class="btn btn-secondary">Filter</button>
         <a href="/reservations?view=v6" class="btn btn-secondary">Clear</a>
     {% if current_user.role in ('superadmin','admin') %}
@@ -125,7 +126,9 @@ function confirmBulk(action) {
             <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="search" value="{{ search }}" placeholder="Search IP, hostname, MAC..." class="search-w" data-m="primary">
+        {# Q248 (V48): the placeholder is one word that fits the field ("Search reservations" is 19 characters, and a phone's field beside "Filters (1)" and Select holds
+           about 16); what it used to list is the field's title and its accessible name #}
+        <input type="text" name="search" value="{{ search }}" placeholder="Search" title="Search by IP address, hostname or MAC address" aria-label="Search by IP address, hostname or MAC address" class="search-w" data-m="primary">
         <select name="status" title="Whether the reserved IP currently has a live lease" aria-label="Status">
             <option value="all"      {% if status_filter == 'all'      %}selected{% endif %}>All statuses</option>
             <option value="active"   {% if status_filter == 'active'   %}selected{% endif %}>Active only</option>
@@ -144,7 +147,7 @@ function confirmBulk(action) {
     </form>
     <!-- Saved filters -->
     <div class="flex items-center gap-2">
-        <button class="btn btn-secondary btn-sm" id="save-filter-btn">{{ icon("bookmark") }} Save Filter</button>
+        <button class="btn btn-secondary" id="save-filter-btn">{{ icon("bookmark") }} Save Filter</button>
         <select id="saved-filter-select" class="sel-sm" aria-label="Saved filters">
             <option value="">Saved filters...</option>
         </select>

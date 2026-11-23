@@ -2,6 +2,24 @@
 {% block title %}Plugins{% endblock %}
 {% block content %}
 {% from '_icons.html' import icon_trash %}
+{# Q248 (V42): a plugin's whole description, wrapped, in the Installed table; what the host is missing is a sentence under the status with its command in a box; the
+   registry's cards are as wide as a phone at most #}
+<style>
+.plugin-desc { margin-top: 2px; max-width: 78ch; font-size: 12px; font-weight: 400; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
+.plugin-needs { margin-top: 6px; font-size: 12px; color: var(--warning-ink); }
+.plugin-cmd { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.plugin-cmd code { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface2); color: var(--text); font-size: 12px; overflow-wrap: anywhere; user-select: all; }
+.plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 16px; }
+.plugin-card { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface2); }
+.plugin-card-head { margin-bottom: 6px; }
+@media screen and (max-width: 768px) {
+    /* a phone's row, top to bottom: the name and what the plugin does, its versions, its status (and what the host is missing), its actions */
+    table.rowlist.plugin-table tbody td[data-m="primary"], table.rowlist.plugin-table tbody td[data-m="badge"] { flex: 1 1 100%; }
+    table.rowlist.plugin-table tbody td[data-m="secondary"] { order: 1; }
+    table.rowlist.plugin-table tbody td[data-m="trailing"] { margin-left: 0; }
+    table.rowlist.plugin-table tbody tr { row-gap: 6px; padding-top: var(--sp-3); padding-bottom: var(--sp-3); }
+}
+</style>
 
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
@@ -23,7 +41,7 @@
         <span class="card-title">Installed ({{ installed|length }})</span>
     </div>
     <div class="table-wrap">
-    <table class="rowlist">
+    <table class="rowlist plugin-table">
         <thead><tr>
             <th>Plugin</th>
             <th>Installed</th>
@@ -36,9 +54,7 @@
         <tr>
             <td data-m="primary">
                 <strong>{{ p.name }}</strong>
-                <div class="u-1f394a">
-                    {{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}
-                </div>
+                <div class="plugin-desc">{{ p.description }}</div>
                 {% if p.changelog_url %}
                 <div class="u-c00d39">
                     <a href="{{ p.changelog_url }}" target="_blank" rel="noopener noreferrer"
@@ -73,17 +89,24 @@
                 <span class="u-2bb516">○ Disabled</span>
                 {% endif %}
                 {% if p.migration_failed %}
-                <div style="margin-top:4px;font-size:10px;color:var(--danger);">migration failed — not enabled: {{ p.migration_failed[:120] }}</div>
+                <div style="margin-top:4px;font-size:10px;color:var(--danger-ink);">migration failed — not enabled: {{ p.migration_failed[:120] }}</div>
                 {% endif %}
                 {% if p.load_failed %}
                 <div class="u-15f77e" title="Jen could not start this plugin; its pages are not available. The server log has the reason.">{{ icon("triangle-alert") }} Failed to load ({{ p.load_failed }})</div>
                 {% endif %}
                 {% if p.missing_os_packages %}
-                <div class="u-15f77e">needs on the Jen host: {{ p.missing_os_packages|join(', ') }}</div>
+                {# on a systemd host the Install button in Actions fetches the package through the root-run plugin service; anywhere else the operator runs the command #}
+                <div class="plugin-needs">Needs {{ p.missing_os_packages|join(', ') }} on the Jen host{% if is_systemd_host %}.{% else %}:{% endif %}</div>
+                {% if not is_systemd_host %}
+                <div class="plugin-cmd">
+                    <code id="plugin-cmd-{{ p.id }}">sudo apt install {{ p.missing_os_packages|join(' ') }}</code>
+                    <button type="button" class="btn btn-sm btn-secondary" data-copy-target="plugin-cmd-{{ p.id }}">{{ icon("copy") }} Copy</button>
+                </div>
+                {% endif %}
                 {% endif %}
                 {% if is_systemd_host and not p.bundled %}
                 {% if p.root_owned %}
-                <div style="margin-top:4px;font-size:10px;color:var(--success);">{{ icon("lock") }} root-owned</div>
+                <div style="margin-top:4px;font-size:10px;color:var(--success-ink);">{{ icon("lock") }} root-owned</div>
                 {% else %}
                 <div class="u-15f77e">writable — reinstall to harden</div>
                 {% endif %}
@@ -99,14 +122,10 @@
                     {% elif p.update_blocked %}
                     <span class="u-865c33">Update needs Jen v{{ p.update_needs }} &mdash; upgrade Jen first</span>
                     {% endif %}
-                    {% if p.missing_os_packages %}
-                    {% if is_systemd_host %}
+                    {% if p.missing_os_packages and is_systemd_host %}
                     <form method="POST" action="/settings/plugins/deps/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-primary" title="Installs {{ p.missing_os_packages|join(', ') }} on the Jen host through the root-run plugin service">{{ icon("download") }} Install {{ p.missing_os_packages|join(', ') }}</button>
                     </form>
-                    {% else %}
-                    <code class="u-11a508">sudo apt install {{ p.missing_os_packages|join(' ') }}</code>
-                    {% endif %}
                     {% endif %}
                     {% if is_systemd_host and not p.bundled and not p.root_owned %}
                     <form method="POST" action="/settings/plugins/install/{{ p.id }}">
@@ -124,7 +143,7 @@
                     </form>
                     {% endif %}
                     <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
-                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Its database tables and data are kept in the database and in every backup, and shown again when the plugin is reinstalled."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Its database tables and data are kept in the database and in every backup, and shown again when the plugin is reinstalled." data-confirm-label="Uninstall"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin" aria-label="Uninstall plugin">{{ icon_trash() }}</button>
                     </form>
                 </div>
@@ -161,24 +180,17 @@
     </div>
     {% endif %}
 
-    {% if registry %}
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;">
-    {% for entry in registry %}
-    <div style="background:var(--surface2);border:1px solid
-         {% if entry.update_available %}var(--warning){% else %}var(--border){% endif %};
-         border-radius:var(--radius);padding:18px;position:relative;">
-
-        {% if entry.update_available %}
-        <div style="position:absolute;top:12px;right:12px;background:var(--warning);
-                    color:black;font-size:10px;font-weight:700;border-radius:4px;
-                    padding:2px 7px;">UPDATE AVAILABLE</div>
-        {% endif %}
-
-        <div style="margin-bottom:6px;padding-right:{% if entry.update_available %}110px{% else %}0{% endif %};">
+    {# Q248 (V42): only what is NOT installed is offered here - an installed plugin, its version and its update are in the table above and nowhere else #}
+    {% set available = registry|rejectattr('installed')|list %}
+    {% if available %}
+    <div class="plugin-grid">
+    {% for entry in available %}
+    <div class="plugin-card">
+        <div class="plugin-card-head">
             <strong class="u-433de3">{{ entry.name }}</strong>
             <span class="u-954646">v{{ entry.version }}</span>
             {% if not entry.version_ok %}
-            <span style="font-size:10px;background:var(--surface);color:var(--warning);
+            <span style="font-size:10px;background:var(--surface);color:var(--warning-ink);
                          border:1px solid var(--warning);border-radius:3px;
                          padding:1px 6px;margin-left:6px;">Requires Jen {{ entry.requires_jen }}</span>
             {% endif %}
@@ -205,15 +217,7 @@
             {% endif %}
         </div>
 
-        {% if entry.installed and entry.update_blocked %}
-        <span class="u-865c33">Update needs Jen v{{ entry.requires_jen }} &mdash; upgrade Jen first</span>
-        {% elif entry.installed and not entry.update_available %}
-        <span class="u-d92d40">✓ Installed &amp; up to date</span>
-        {% elif entry.installed and entry.update_available %}
-        <form method="POST" action="/settings/plugins/update/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-primary">{{ icon("upload") }} Update to v{{ entry.version }}</button>
-        </form>
-        {% elif entry.version_ok %}
+        {% if entry.version_ok %}
         <form method="POST" action="/settings/plugins/install/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-primary">{{ icon("download") }} Install</button>
         </form>
@@ -223,6 +227,8 @@
     </div>
     {% endfor %}
     </div>
+    {% elif registry %}
+    <p class="u-aad8e6">Every available plugin is installed.</p>
     {% elif not fetch_error %}
     <p class="u-aad8e6">No plugins in the registry.</p>
     {% endif %}
@@ -272,18 +278,18 @@
                 if (s && s.result) {
                     clearInterval(poll);
                     if (s.result === 'ok') {
-                        box.style.color = 'var(--success)';
+                        box.style.color = 'var(--success-ink)';
                         box.textContent = '✓ Done — reloading…';
                         setTimeout(function() { window.location.reload(); }, 800);
                     } else {
-                        box.style.color = 'var(--danger)';
+                        box.style.color = 'var(--danger-ink)';
                         box.textContent = '✗ ' + s.result;
                     }
                     return;
                 }
                 if (s && s.active_state === 'failed') {
                     clearInterval(poll);
-                    box.style.color = 'var(--danger)';
+                    box.style.color = 'var(--danger-ink)';
                     box.textContent = '✗ The install service exited with an error.';
                     return;
                 }

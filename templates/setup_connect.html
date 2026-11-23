@@ -8,7 +8,7 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card u-d53a7a">
+<div class="card u-d53a7a setup-card">
     <form method="POST" action="/setup/connect">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -25,7 +25,8 @@
             </div>
             <div class="form-group">
                 <label for="f-api_pass">API Password</label>
-                <input id="f-api_pass" type="password" name="api_pass" placeholder="{{ '(saved — leave blank to keep it)' if api_pass_saved else '(leave blank for none)' }}">
+                <input id="f-api_pass" type="password" name="api_pass" placeholder="{{ '(saved)' if api_pass_saved else '' }}" aria-describedby="f-api_pass-hint">
+                <div class="form-hint" id="f-api_pass-hint">{{ 'A password is saved. Leave blank to keep it.' if api_pass_saved else 'Leave blank for none.' }}</div>
             </div>
         </div>
         <details class="u-56f435 mb-4"{% if api_ca or api_client_cert %} open{% endif %}>
@@ -61,7 +62,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-kea_db_host">Database host</label>
-                <input id="f-kea_db_host" type="text" name="kea_db_host" value="{{ kea_db_host }}" required>
+                <input id="f-kea_db_host" type="text" name="kea_db_host" value="{{ kea_db_host }}" required autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label for="f-kea_db_user">Database username</label>
@@ -71,7 +72,8 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-kea_db_pass">Database password</label>
-                <input id="f-kea_db_pass" type="password" name="kea_db_pass" placeholder="{{ '(saved — leave blank to keep it)' if kea_db_pass_saved else '(leave blank for none)' }}">
+                <input id="f-kea_db_pass" type="password" name="kea_db_pass" placeholder="{{ '(saved)' if kea_db_pass_saved else '' }}" aria-describedby="f-kea_db_pass-hint">
+                <div class="form-hint" id="f-kea_db_pass-hint">{{ 'A password is saved. Leave blank to keep it.' if kea_db_pass_saved else 'Leave blank for none.' }}</div>
             </div>
             <div class="form-group">
                 <label for="f-kea_db_name">Database name</label>
@@ -91,5 +93,6 @@
         </div>
         <button type="submit" class="btn btn-primary">Test &amp; Connect</button>
     </form>
+    {% include "_setup_nav.html" %}
 </div>
 {% endblock %}

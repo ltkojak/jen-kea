@@ -95,6 +95,88 @@ class TestNavModel:
                 ctx = navmod.nav_context(t["match"][0] + "x", "admin")
                 assert [i["id"] for i in ctx["top"] if i["active"]] == [section], t["label"]
 
+    # Q248 (addition 4) - a DETAIL page keeps its parent's strip with the parent's tab lit. An IPAM subnet page, a Discovery results page, Trace and Saved searches
+    # showed no strip and lit no top item: a plugin's strip matched its index only, and the two core pages were on no tab's list.
+    PLUGIN_NAV = [
+        {"section": "network", "label": "IPAM", "icon": "clipboard-list", "endpoint": "ipam.index"},
+        {"section": "network", "label": "Discovery", "icon": "search", "endpoint": "network_discovery.index"},
+        {"section": "network", "label": "Watchdog", "icon": "activity", "endpoint": "watchdog.index"},
+        {"section": "management", "label": "Presence", "icon": "wifi", "endpoint": "presence.index"},
+        {"section": "tools", "label": "Extras", "icon": "", "endpoint": "extras.index"},
+    ]
+    DETAIL_PAGES = [
+        # (the page's endpoint, the top item that is lit, the strip's tab that is lit)
+        ("trace.trace_page", "network", "Investigate"),
+        ("search.saved_searches", "management", "Leases"),
+        ("ipam.subnet_detail", "network", "IPAM"),
+        ("ipam.subnet_history", "network", "IPAM"),
+        ("network_discovery.results", "network", "Discovery"),
+        ("watchdog.target_history", "network", "Watchdog"),
+        ("presence.anything_it_adds_later", "management", "Presence"),
+    ]
+
+    @pytest.mark.parametrize("role,all_subnets", [("admin", True), ("viewer", True), ("admin", False)])
+    @pytest.mark.parametrize("endpoint,section,tab", DETAIL_PAGES)
+    def test_a_detail_page_keeps_its_parents_strip_with_the_parents_tab_lit(
+        self, endpoint, section, tab, role, all_subnets
+    ):
+        """For an admin, a viewer and a subnet-restricted admin: exactly one top item and exactly one tab, the parent's."""
+        ctx = navmod.nav_context(endpoint, role, self.PLUGIN_NAV, all_subnets=all_subnets)
+        assert [i["id"] for i in ctx["top"] if i["active"]] == [section]
+        assert [t["label"] for t in ctx["strip"] if t["active"]] == [tab]
+        # the strip is the parent's own: the one its own page shows
+        parents = {"Investigate": "client.client", "Leases": "leases.leases"}
+        parents.update({p["label"]: p["endpoint"] for p in self.PLUGIN_NAV})
+        own = navmod.nav_context(parents[tab], role, self.PLUGIN_NAV, all_subnets=all_subnets)
+        assert [t["label"] for t in ctx["strip"]] == [t["label"] for t in own["strip"]]
+        assert [t["label"] for t in own["strip"] if t["active"]] == [tab]
+        # and the phone's More sheet marks the same one page
+        marked = [i["label"] for g in ctx["sheet"] for i in g["items"] if i["active"]]
+        assert marked == [tab]
+
+    @pytest.mark.parametrize("role,all_subnets", [("admin", True), ("viewer", True), ("admin", False)])
+    def test_a_page_of_a_plugin_with_no_strip_of_its_own_is_shown_under_network(self, role, all_subnets):
+        ctx = navmod.nav_context("extras.some_detail", role, self.PLUGIN_NAV, all_subnets=all_subnets)
+        assert [i["id"] for i in ctx["top"] if i["active"]] == ["network"]
+        assert ctx["strip"][0]["label"] == "Subnets" and not [t for t in ctx["strip"] if t["active"]]
+
+    def test_a_plugin_that_lists_two_pages_lights_one(self):
+        """The item whose endpoint IS the page; for any other page of the blueprint, the first item."""
+        two = [
+            {"section": "network", "label": "IPAM", "icon": "", "endpoint": "ipam.index"},
+            {"section": "network", "label": "IPAM history", "icon": "", "endpoint": "ipam.history"},
+        ]
+        for endpoint, tab in (("ipam.index", "IPAM"), ("ipam.history", "IPAM history"), ("ipam.subnet_detail", "IPAM")):
+            ctx = navmod.nav_context(endpoint, "admin", two)
+            assert [t["label"] for t in ctx["strip"] if t["active"]] == [tab], endpoint
+
+    def test_a_plugins_api_blueprint_and_a_core_page_are_nobodys_detail_page(self):
+        for endpoint in (
+            "ipam_api.entries",
+            "ipamx.index",
+            "dashboard.dashboard",
+            "users.profile",
+            "search.search",
+            None,
+        ):
+            ctx = navmod.nav_context(endpoint, "admin", self.PLUGIN_NAV)
+            assert not [t for t in ctx["strip"] if t.get("endpoint") and t["active"]], endpoint
+        # Profile is an account page and the search results belong to no section: they stay as they were
+        for endpoint in ("users.profile", "search.search"):
+            ctx = navmod.nav_context(endpoint, "admin", self.PLUGIN_NAV)
+            assert ctx["strip"] == [] and not [i for i in ctx["top"] if i["active"]], endpoint
+
+    def test_every_strip_match_target_is_a_real_endpoint(self, app):
+        """`trace.` and `search.saved_searches` are on a tab's list by name: a renamed route must not silently lose its strip."""
+        endpoints = {r.endpoint for r in app.url_map.iter_rules()}
+        for tabs in navmod.SECTION_STRIPS.values():
+            for t in tabs:
+                for m in t["match"]:
+                    if m.endswith("."):
+                        assert any(e.startswith(m) for e in endpoints), m
+                    else:
+                        assert m in endpoints, m
+
     @pytest.mark.parametrize(
         "endpoint,group",
         [

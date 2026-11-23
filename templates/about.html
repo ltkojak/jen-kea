@@ -78,31 +78,49 @@
 
 <!-- What's New (v5.2.1) — reads the real CHANGELOG.md shipped with
      this running instance, so what's shown always matches what's
-     actually deployed. Collapsed by default past the first entry to
-     keep the page from becoming a wall of text on every visit. -->
-<div class="card">
+     actually deployed.
+     Q248 (addition 15, V33): the page shows the newest release's lead
+     paragraph and nothing else of the file; the rest of that entry and the
+     releases before it are behind one "More", closed. The entries come from
+     changelog.whats_new(), which leaves out the tracking codes of the reviews
+     (a person here cannot look them up) and the "Registered" paragraphs. -->
+<div class="card" id="whats-new">
     <div class="card-header"><span class="card-title">What's New</span></div>
     {% if changelog_entries %}
-    {% for entry in changelog_entries %}
-    <div style="{% if not loop.first %}margin-top:16px;padding-top:16px;border-top:1px solid var(--border);{% endif %}">
-        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;">
-            <span style="font-weight:600;color:var(--primary);font-size:14px;">v{{ entry.version }}</span>
-            <span class="u-865c33">{{ entry.date }}</span>
+    {% set newest = changelog_entries[0] %}
+    <div class="wn-entry" data-version="{{ newest.version }}">
+        <div class="wn-head">
+            <span class="wn-version">v{{ newest.version }}</span>
+            <span class="u-865c33">{{ newest.date }}</span>
         </div>
-        {% if loop.first %}
-        <div class="changelog-body" style="font-size:13px;line-height:1.6;color:var(--text-muted);">
-            {{ entry.html|safe }}
+        <div class="changelog-body wn-lead">
+            {{ (newest.lead or newest.rest)|safe }}
         </div>
-        {% else %}
-        <details>
-            <summary class="u-91cb28">Show details</summary>
-            <div class="changelog-body" style="font-size:13px;line-height:1.6;color:var(--text-muted);margin-top:8px;">
-                {{ entry.html|safe }}
-            </div>
-        </details>
-        {% endif %}
     </div>
-    {% endfor %}
+    {% if (newest.lead and newest.rest) or changelog_entries|length > 1 %}
+    <details class="wn-more">
+        <summary>More</summary>
+        {% if newest.lead and newest.rest %}
+        <div class="changelog-body wn-rest">
+            {{ newest.rest|safe }}
+        </div>
+        {% endif %}
+        {% for entry in changelog_entries[1:] %}
+        <div class="wn-entry wn-older" data-version="{{ entry.version }}">
+            <div class="wn-head">
+                <span class="wn-version">v{{ entry.version }}</span>
+                <span class="u-865c33">{{ entry.date }}</span>
+            </div>
+            <details>
+                <summary class="u-91cb28">Show details</summary>
+                <div class="changelog-body wn-older-body">
+                    {{ entry.html|safe }}
+                </div>
+            </details>
+        </div>
+        {% endfor %}
+    </details>
+    {% endif %}
     <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:16px;">
         <a href="https://github.com/ltkojak/jen-kea/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">{{ icon("scroll-text") }} Full Changelog</a>
     </div>
@@ -112,6 +130,16 @@
 </div>
 
 <style>
+/* Q248 (addition 15): What's New - the newest release's lead paragraph, then one closed "More" */
+.wn-head { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
+.wn-version { font-weight:600; color:var(--primary); font-size:14px; }
+.changelog-body { font-size:13px; line-height:1.6; color:var(--text-muted); }
+.wn-lead p:last-child { margin-bottom:0; }
+.wn-more { margin-top:12px; }
+.wn-more > summary { cursor:pointer; font-size:13px; font-weight:600; color:var(--primary); padding:4px 0; width:max-content; max-width:100%; }
+.wn-more[open] > summary { margin-bottom:8px; }
+.wn-older { margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+.wn-older-body { margin-top:8px; }
 .changelog-body h4 { font-size:13px; color:var(--text); margin:10px 0 4px; }
 .changelog-body h4:first-child { margin-top:0; }
 .changelog-body p { margin:0 0 8px; }

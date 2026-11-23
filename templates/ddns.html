@@ -156,7 +156,7 @@
             <td class="mono">{{ d.get('key-name', '—') }}</td>
             <td class="mono u-6cb285">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
             <td>
-                <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove forward zone {{ d.name }}?">
+                <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove forward zone {{ d.name }}?" data-confirm-label="Remove">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="direction" value="forward">
                     <input type="hidden" name="name" value="{{ d.name }}">
@@ -205,7 +205,7 @@
             <td class="mono">{{ d.get('key-name', '—') }}</td>
             <td class="mono u-6cb285">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
             <td>
-                <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove reverse zone {{ d.name }}?">
+                <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove reverse zone {{ d.name }}?" data-confirm-label="Remove">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="direction" value="reverse">
                     <input type="hidden" name="name" value="{{ d.name }}">
@@ -258,7 +258,7 @@
             <td class="mono">{{ k.name }}</td>
             <td class="mono">{{ k.algorithm }}</td>
             <td>
-                <form method="POST" action="/ddns/d2config/tsig/remove" data-confirm="Remove TSIG key {{ k.name }}? Refused if a domain still uses it.">
+                <form method="POST" action="/ddns/d2config/tsig/remove" data-confirm="Remove TSIG key {{ k.name }}? Refused if a domain still uses it." data-confirm-label="Remove">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="name" value="{{ k.name }}">
                     <button type="submit" class="btn btn-sm btn-secondary">Remove</button>
@@ -309,7 +309,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-hostname">Hostname</label>
-                <input id="f-hostname" type="text" name="hostname" value="{{ verify_hostname }}" placeholder="host.example.com">
+                <input id="f-hostname" type="text" name="hostname" value="{{ verify_hostname }}" placeholder="host.example.com" autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label for="f-ip">IP address</label>
@@ -355,7 +355,7 @@
     <form method="GET">
         <input type="hidden" name="tab" value="status">
         <div class="u-a76d59">
-            <input type="text" name="host" value="{{ lookup_host }}" placeholder="hostname.domain.com" class="u-97445a">
+            <input type="text" name="host" value="{{ lookup_host }}" placeholder="hostname.domain.com" class="u-97445a" autocapitalize="off" spellcheck="false">
             <button type="submit" class="btn btn-primary">Lookup</button>
         </div>
     </form>
@@ -447,7 +447,7 @@
     {% if d2_stats %}
     <table style="width:100%;font-size:12px;margin-top:12px;">
         <thead><tr>{% for k in d2_stats %}<th class="mono">{{ k }}</th>{% endfor %}</tr></thead>
-        <tbody><tr>{% for k, v in d2_stats.items() %}<td class="mono" style="{% if 'error' in k and v > 0 %}color:var(--warning);{% endif %}">{{ v }}</td>{% endfor %}</tr></tbody>
+        <tbody><tr>{% for k, v in d2_stats.items() %}<td class="mono" style="{% if 'error' in k and v > 0 %}color:var(--warning-ink);{% endif %}">{{ v }}</td>{% endfor %}</tr></tbody>
     </table>
     {% endif %}
 </div>
@@ -459,7 +459,7 @@
     <div style="background:var(--surface2);border-radius:var(--radius);padding:14px;max-height:500px;overflow-y:auto;">
     {% for line in lines %}
     <div class="mono" style="font-size:11px;padding:2px 0;border-bottom:1px solid var(--border);
-        color:{% if 'ERROR' in line %}var(--danger){% elif 'SUCCESS' in line or 'Added' in line %}var(--success){% elif 'Deleted' in line %}var(--warning){% else %}var(--text-muted){% endif %};">{{ line.strip() }}</div>
+        color:{% if 'ERROR' in line %}var(--danger-ink){% elif 'SUCCESS' in line or 'Added' in line %}var(--success-ink){% elif 'Deleted' in line %}var(--warning-ink){% else %}var(--text-muted){% endif %};">{{ line.strip() }}</div>
     {% endfor %}
     </div>
     {% else %}

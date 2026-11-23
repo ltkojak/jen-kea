@@ -404,7 +404,7 @@ class TestEveryIdentityRouteIsASuperadminsForm:
         c, _ = restricted_client(client, db, None, role="admin", username="q179_admin")
         before = isolated_config.read_bytes()
         r = c.post(url, data=data, follow_redirects=True)
-        assert b"SuperAdmin access required" in r.data
+        assert b"Superadmin access required" in r.data
         assert isolated_config.read_bytes() == before
 
     @pytest.mark.parametrize(("url", "data"), IDENTITY_ROUTES)

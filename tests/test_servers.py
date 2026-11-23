@@ -337,7 +337,7 @@ class TestPacketHealthForServer:
         assert ph is not None
         assert ph["status"] == "ok"
         named_labels = {n["label"] for n in ph["named"]}
-        assert {"Received", "Acked", "Offered", "Naked", "Dropped", "Parse failed", "Allocation failed"} <= named_labels
+        assert {"Received", "ACK", "Offered", "NAK", "Dropped", "Parse failed", "Allocation failed"} <= named_labels
         assert ("pkt4-unknown-received", 3) in ph["other_counters"]
         assert len(ph["sparkline"]) == 1
 

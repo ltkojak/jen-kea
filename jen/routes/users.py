@@ -5,6 +5,8 @@ User management and profile routes.
 """
 
 import logging
+from datetime import date, timedelta
+from urllib.parse import urlencode
 
 import pymysql
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
@@ -41,6 +43,17 @@ def _JEN_VERSION():
 def audit_legacy():
     """Pre-5.9.0 URL — 301 to Settings → Logs, keeping ?page=/?search=."""
     return redirect(url_for("users.audit_log", **request.args.to_dict()), code=301)
+
+
+def _whole_day(text):
+    """A `YYYY-MM-DD` query value as a date, or None for anything else (empty, a time, another format): a day that cannot be read is no filter (Q248)."""
+    text = str(text or "").strip()
+    if len(text) != 10 or text[4] != "-" or text[7] != "-":
+        return None  # the one shape a date field sends; a newer Python's `fromisoformat` reads others too
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 @bp.route("/settings/logs")
@@ -87,9 +100,18 @@ def audit_log():
         1, __text.whole(request.args.get("page", "1"), 1)
     )  # (Q226, AL14) the one whole-number test (DEF-003), never a bare `int()` over a query string
     search = __auth.sanitize_search(request.args.get("search", "").strip())
+    # Q248 (audit log filters): by action, by user and by day, beside the search. Each is one more parameterized condition of the same query; a value that is in
+    # no row (typed into the address, or an action that has since aged out of the log) matches nothing and raises nothing. A day is a whole day in UTC, the clock
+    # the rows are stored on (`created_at`) and the page prints: `from` is that day's first second, `to` is every second of that day.
+    action = request.args.get("action", "").strip()[:100]
+    user = request.args.get("user", "").strip()[:100]
+    day_from = _whole_day(request.args.get("from", ""))
+    day_to = _whole_day(request.args.get("to", ""))
     per_page = 50
     logs = []
     total = 0
+    actions = []
+    users = []
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             where = []
@@ -98,6 +120,27 @@ def audit_log():
                 where.append("(username LIKE %s OR action LIKE %s OR entity LIKE %s OR details LIKE %s)")
                 s = f"%{search}%"
                 params += [s, s, s, s]
+            if action:
+                where.append("action = %s")
+                params.append(action)
+            if user:
+                where.append("username = %s")
+                params.append(user)
+            if day_from:
+                where.append("created_at >= %s")
+                params.append(f"{day_from.isoformat()} 00:00:00")
+            if day_to:
+                where.append("created_at < %s")
+                params.append(f"{(day_to + timedelta(days=1)).isoformat()} 00:00:00")
+            # what the two selects offer: the actions and the users the log holds now (bounded - a log with more than 200 of either is searched by the text field)
+            cur.execute(
+                "SELECT DISTINCT action FROM audit_log WHERE action IS NOT NULL AND action <> '' ORDER BY action LIMIT 200"
+            )
+            actions = [r["action"] for r in cur.fetchall()]
+            cur.execute(
+                "SELECT DISTINCT username FROM audit_log WHERE username IS NOT NULL AND username <> '' ORDER BY username LIMIT 200"
+            )
+            users = [r["username"] for r in cur.fetchall()]
             where_str = " WHERE " + " AND ".join(where) if where else ""
             cur.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where_str}", params)
             total = cur.fetchone()["cnt"]
@@ -111,7 +154,33 @@ def audit_log():
         logger.error(f"Could not load audit log: {e}")
         flash("Could not load audit log. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page)
-    return render_template("logs.html", tab="audit", logs=logs, page=page, pages=pages, total=total, search=search)
+    # a filter that is set is always one of its select's choices, so the page shows it as set even when no row carries it
+    if action and action not in actions:
+        actions = sorted([*actions, action])
+    if user and user not in users:
+        users = sorted([*users, user])
+    filters = {
+        "action": action,
+        "user": user,
+        "from": day_from.isoformat() if day_from else "",
+        "to": day_to.isoformat() if day_to else "",
+    }
+    # what a paging link carries besides its page: the tab, the search and every filter that is set
+    query = urlencode({"tab": "audit", "search": search, **{k: v for k, v in filters.items() if v}})
+    return render_template(
+        "logs.html",
+        tab="audit",
+        logs=logs,
+        page=page,
+        pages=pages,
+        total=total,
+        search=search,
+        filters=filters,
+        filtered=any(filters.values()),
+        actions=actions,
+        users=users,
+        query=query,
+    )
 
 
 # ─────────────────────────────────────────
@@ -145,9 +214,10 @@ def about():
     except Exception:
         pass
     from jen.config import ssl_configured
-    from jen.services.changelog import parse_changelog
+    from jen.services.changelog import whats_new
 
-    changelog_entries = parse_changelog(limit=5)
+    # Q248 (addition 15, V33): the entries as a person reads them - the newest one's lead paragraph, the rest behind "More", no tracking codes
+    changelog_entries = whats_new(limit=5)
     return render_template(
         "about.html",
         jen_version=_JEN_VERSION(),
@@ -232,12 +302,19 @@ def users():
                 cur.execute(
                     """
                         SELECT
-                            (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) +
-                            (SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as mfa_count
+                            (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) AS totp_count,
+                            (SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) AS passkey_count
                     """,
                     (u["id"], u["id"]),
                 )
-                u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
+                counts = cur.fetchone()
+                # (Q248, addition 8) the account's second factor in words, each method it has: the list says "Authenticator app", "Passkey", both, or "None"
+                u["mfa_methods"] = [
+                    word
+                    for word, n in (("Authenticator app", counts["totp_count"]), ("Passkey", counts["passkey_count"]))
+                    if n
+                ]
+                u["mfa_enrolled"] = bool(u["mfa_methods"])
                 # (Q224, AJ15) the minutes the server APPLIES for this account (Q215 Z18's rule, one column over): a stored row outside 0..1440 - a hand edit, an earlier release - reads as
                 # the global, and the page says so instead of printing the row
                 u["own_minutes"] = __session_timeout.parse_minutes(u.get("session_timeout")) or None
@@ -255,54 +332,103 @@ def users():
     # Q215 (F3, Z18): the minutes the server APPLIES (a hand-edited row reads as 60 there), the same number the Security form shows
     global_timeout = str(__session_timeout.global_minutes())
     mfa_mode = __mfa.get_mfa_mode()
+    # (Q248, V3) what a refused Add User or Edit User form held, for this ONE render: the page opens that dialog again with it
+    form_back = session.pop(USERS_FORM_KEY, None)
+    if not (isinstance(form_back, dict) and form_back.get("form") in ("add", "edit")):
+        form_back = None
     return render_template(
         "users.html",
         users=all_users,
         global_timeout=global_timeout,
         mfa_mode=mfa_mode,
         subnet_map=extensions.SUBNET_MAP,
+        form_back=form_back,
     )
+
+
+USERS_FORM_KEY = "users_form"
+
+
+def _keep_user_form(which, user_id=None):
+    """(Q248, V3) Keep what a refused Add User ("add") or Edit User ("edit") form held, for the next render of the Users page: the username, the role, the ticked
+    subnets and the timeout, so the dialog opens again with them and the message lands beside its field. NEVER a password. It travels in the session cookie, so every
+    value is cut short; `users()` takes it out again on the next render."""
+    session[USERS_FORM_KEY] = {
+        "form": which,
+        "id": user_id,
+        "username": request.form.get("username", "").strip()[:100],
+        "role": request.form.get("role", "")[:20],
+        "subnet_ids": [s[:12] for s in request.form.getlist("subnet_ids")[:64]],
+        "timeout": request.form.get("timeout", "").strip()[:8],
+    }
+    return redirect(url_for("users.users"))
+
+
+SUBNETS_NONE_TICKED = "Tick All Subnets or at least one subnet. Nothing was changed."
+SUBNETS_ALL_AND_NAMED = "Tick All Subnets or named subnets, not both. Nothing was changed."
+
+
+def _subnet_access_from_form(subnet_ids_raw, role):
+    """(Q248, V41, and BH1's rule carried to its siblings) What an account's subnet list of a form means: `(True, value)` with
+    `value` None for every subnet or the JSON list of ids, or `(False, sentence)` for a form that is refused whole.
+
+    An account that sees every subnet is made ONLY by "all" alone (or by the superadmin role, which is never restricted).
+    Nothing ticked used to read as every subnet, and so did "all" beside a subnet id: with the list a set of checkboxes,
+    unticking All Subnets and ticking nothing would have made an unrestricted account in one click. A value that is not a
+    whole number refuses the form whole (Q171, Q224 AJ5); each id is stored once, in order (Q225 AK22)."""
+    import json as _json
+
+    if role == "superadmin":
+        return True, None
+    if not subnet_ids_raw:
+        return False, SUBNETS_NONE_TICKED
+    if "all" in subnet_ids_raw:
+        if any(s != "all" for s in subnet_ids_raw):
+            return False, SUBNETS_ALL_AND_NAMED
+        return True, None
+    if not all(is_whole(s) for s in subnet_ids_raw):
+        return False, "Subnet ids must be numbers."
+    return True, _json.dumps(sorted({int(s) for s in subnet_ids_raw}))
 
 
 @bp.route("/users/add", methods=["POST"])
 @login_required
 @_superadmin_required
 def add_user():
-    import json as _json
 
     username = request.form.get("username", "").strip()[:100]
     password = request.form.get("password", "")
     role = request.form.get("role", "viewer")
     timeout_raw = request.form.get("timeout", "").strip()
     subnet_ids_raw = request.form.getlist("subnet_ids")
-    subnet_access = None
-    if subnet_ids_raw and "all" not in subnet_ids_raw and role != "superadmin":
-        # v5.69.0-beta.2 (Q171): a value that is not a whole number used to raise and fall back to None - an UNRESTRICTED account - while the edit routes read the same
-        # list as "no access". Fail closed: the form is refused whole, and what is stored is only ever a list of the numbers submitted.
-        if not all(is_whole(s) for s in subnet_ids_raw):
-            flash("Subnet ids must be numbers.", "error")
-            return users(), 400
-        subnet_access = _json.dumps(sorted({int(s) for s in subnet_ids_raw}))  # (Q225, AK22) each id once, in order
+    # v5.69.0-beta.2 (Q171): a value that is not a whole number used to raise and fall back to None - an UNRESTRICTED account. Fail closed: the form is refused whole, and
+    # what is stored is only ever a list of the numbers submitted. (Q248) nothing ticked, or All Subnets beside a subnet, is refused the same way.
+    # (Q248, V3) every refusal goes back to the Users page with the dialog open again, what was typed still in it (`_keep_user_form`: never the password) and the
+    # message beside its field. The subnet list's refusal used to answer 400 with the page itself, which a reload would have posted again.
+    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, role)
+    if not ok:
+        flash_field("subnet_ids", subnet_access)
+        return _keep_user_form("add")
 
     if not username:
         flash_field("username", "Username is required.")
-        return redirect(url_for("users.users"))
+        return _keep_user_form("add")
     if not __auth.valid_username(username):
         flash_field("username", "Username may only contain letters, numbers, underscores, hyphens, and dots.")
-        return redirect(url_for("users.users"))
+        return _keep_user_form("add")
     if len(password) < 8:
         flash_field("password", "Password must be at least 8 characters.")
-        return redirect(url_for("users.users"))
+        return _keep_user_form("add")
     if role not in ("superadmin", "admin", "viewer"):
         flash("Invalid role.", "error")
-        return redirect(url_for("users.users"))
+        return _keep_user_form("add")
     # Q215: the timeout is refused the way the edit and set-timeout routes refuse it, after the name, the password and the role (an out-of-range or unreadable value used to create the account on the
     # global timeout without a word) - so a form with several things wrong still says the field errors first
     timeout_val = None
     if timeout_raw:
         if (__session_timeout.parse_minutes(timeout_raw) or 0) < 1:
-            flash("Timeout must be 1–1440 minutes.", "error")
-            return redirect(url_for("users.users"))
+            flash_field("timeout", "Timeout must be 1–1440 minutes.")
+            return _keep_user_form("add")
         timeout_val = __session_timeout.parse_minutes(timeout_raw)
 
     try:
@@ -317,7 +443,8 @@ def add_user():
         flash(f"User '{username}' created.", "success")
         __user.audit("ADD_USER", username, f"Role={role} subnet_access={subnet_access or 'all'}")
     except pymysql.IntegrityError:
-        flash(f"Username '{username}' already exists.", "error")
+        flash_field("username", f"Username '{username}' already exists.")
+        return _keep_user_form("add")
     except Exception as e:
         logger.error(f"Error creating user '{username}': {e}")
         flash("Error creating user. Check server logs for details.", "error")
@@ -343,7 +470,7 @@ def delete_user(user_id):
                 if row["role"] == "superadmin":
                     cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
                     if cur.fetchone()["cnt"] <= 1:
-                        flash("Cannot delete the last SuperAdmin account.", "error")
+                        flash("Cannot delete the last Superadmin account.", "error")
                         return redirect(url_for("users.users"))
                 cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
             db.commit()
@@ -406,7 +533,7 @@ def change_password():
     new_pw = request.form.get("new_password", "")
     confirm_pw = request.form.get("confirm_password", "")
 
-    # v5.69.0-beta.2 (Q171): a failure goes back to the profile this form lives on - the Users page is superadmin-only, so a viewer or admin got "SuperAdmin access
+    # v5.69.0-beta.2 (Q171): a failure goes back to the profile this form lives on - the Users page is superadmin-only, so a viewer or admin got "Superadmin access
     # required" and never saw why their change was refused.
     if new_pw != confirm_pw:
         flash_field("confirm_password", "New passwords do not match.")
@@ -476,7 +603,7 @@ def set_user_role(user_id):
         flash("Invalid role.", "error")
         return redirect(url_for("users.users"))
     if user_id == current_user.id and role != "superadmin":
-        flash("You cannot demote your own account from SuperAdmin.", "error")
+        flash("You cannot demote your own account from Superadmin.", "error")
         return redirect(url_for("users.users"))
     try:
         with __db.jen_db() as db:
@@ -490,7 +617,7 @@ def set_user_role(user_id):
                 if row["role"] == "superadmin" and role != "superadmin":
                     cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
                     if cur.fetchone()["cnt"] <= 1:
-                        flash("Cannot demote the last SuperAdmin account.", "error")
+                        flash("Cannot demote the last Superadmin account.", "error")
                         return redirect(url_for("users.users"))
                 cur.execute("UPDATE users SET role=%s, token_version=token_version+1 WHERE id=%s", (role, user_id))
             db.commit()
@@ -511,19 +638,14 @@ def set_user_role(user_id):
 @login_required
 @_superadmin_required
 def set_user_subnets(user_id):
-    import json as _json
 
     subnet_ids_raw = request.form.getlist("subnet_ids")
-    # "all" value means unrestricted (NULL)
-    if not subnet_ids_raw or "all" in subnet_ids_raw:
-        subnet_access = None
-    else:
-        # (Q224, AJ5) the rule `add_user` has had since Q171, carried to its sibling: a value that is not a whole number refuses the form whole; nothing here ever falls back to None (an
-        # UNRESTRICTED account) or drops one id from a selection
-        if not all(is_whole(s) for s in subnet_ids_raw):
-            flash("Subnet ids must be numbers.", "error")
-            return redirect(url_for("users.users"))
-        subnet_access = _json.dumps(sorted({int(s) for s in subnet_ids_raw}))  # (Q225, AK22) each id once, in order
+    # "all" ALONE means unrestricted (NULL). (Q224, AJ5) a value that is not a whole number refuses the form whole; (Q248) so does nothing ticked, and "all" beside an id:
+    # nothing here ever falls back to None (an UNRESTRICTED account) or drops one id from a selection. The role is not this form's, so no role is exempt here.
+    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, None)
+    if not ok:
+        flash(subnet_access, "error")
+        return redirect(url_for("users.users"))
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -601,7 +723,6 @@ def link_user_to_sso(user_id):
 @_superadmin_required
 def edit_user(user_id):
     """Unified edit endpoint — handles role, subnets, timeout, and optional password reset."""
-    import json as _json
 
     role = request.form.get("role", "viewer")
     timeout_raw = request.form.get("timeout", "").strip()
@@ -614,32 +735,30 @@ def edit_user(user_id):
         flash("Invalid role.", "error")
         return redirect(url_for("users.users"))
 
+    # (Q248, V3) a refusal that names a field of the dialog opens the dialog again for this account, with what was typed (`_keep_user_form`: never a password) and the
+    # message beside the field. The Edit User fields carry their own ids (`f-edit-...`): the Add User dialog is on the same page and has a timeout and a subnet list too.
     # Validate timeout
     timeout_val = None
     if timeout_raw:
         if (__session_timeout.parse_minutes(timeout_raw) or 0) < 1:
-            flash("Timeout must be 1–1440 minutes.", "error")
-            return redirect(url_for("users.users"))
+            flash_field("edit-timeout", "Timeout must be 1–1440 minutes.")
+            return _keep_user_form("edit", user_id)
         timeout_val = __session_timeout.parse_minutes(timeout_raw)
 
     # Validate password if provided
     if new_pw:
         if len(new_pw) < 8:
-            flash("New password must be at least 8 characters.", "error")
-            return redirect(url_for("users.users"))
+            flash_field("edit-new_password", "New password must be at least 8 characters.")
+            return _keep_user_form("edit", user_id)
         if new_pw != confirm_pw:
-            flash("New passwords do not match.", "error")
-            return redirect(url_for("users.users"))
+            flash_field("edit-confirm_password", "New passwords do not match.")
+            return _keep_user_form("edit", user_id)
 
-    # Subnet access
-    if not subnet_ids_raw or "all" in subnet_ids_raw or role == "superadmin":
-        subnet_access = None
-    else:
-        # (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short
-        if not all(is_whole(s) for s in subnet_ids_raw):
-            flash("Subnet ids must be numbers.", "error")
-            return redirect(url_for("users.users"))
-        subnet_access = _json.dumps(sorted({int(s) for s in subnet_ids_raw}))  # (Q225, AK22) each id once, in order
+    # Subnet access. (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short; (Q248) nothing ticked is refused too
+    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, role)
+    if not ok:
+        flash_field("edit-subnet_ids", subnet_access)
+        return _keep_user_form("edit", user_id)
 
     try:
         with __db.jen_db() as db:
@@ -665,11 +784,11 @@ def edit_user(user_id):
                 # Protect last superadmin from demotion
                 if row["role"] == "superadmin" and role != "superadmin":
                     if user_id == current_user.id:
-                        flash("You cannot demote your own SuperAdmin account.", "error")
+                        flash("You cannot demote your own Superadmin account.", "error")
                         return redirect(url_for("users.users"))
                     cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
                     if cur.fetchone()["cnt"] <= 1:
-                        flash("Cannot demote the last SuperAdmin account.", "error")
+                        flash("Cannot demote the last Superadmin account.", "error")
                         return redirect(url_for("users.users"))
 
                 # Apply all changes in one update

@@ -78,6 +78,7 @@ class TestNewUserCreationSetsFlag:
                 "password": "temporarypass123",
                 "role": "viewer",
                 "timeout": "",
+                "subnet_ids": ["all"],
             },
             follow_redirects=True,
         )

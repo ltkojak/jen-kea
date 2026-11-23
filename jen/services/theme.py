@@ -7,8 +7,9 @@ superadmin can define for the whole install. Pure — no Flask, no DB, no
 Jinja — so the generated CSS, the contrast math and the validator are all
 testable directly (tests/test_theme.py).
 
-`dark` and `light` are today's values, byte-identical — the default look
-does not change. `contrast` (High Contrast) keeps every text/background
+`dark` and `light` carried their pre-Q63 values byte for byte until Q248
+moved the one token in each that could not be read (`text_muted`: 3.2:1 on
+Dark's surface, 4.2:1 on Light's page). `contrast` (High Contrast) keeps every text/background
 pair at 7:1 or better (WCAG AAA); `phosphor` is the "for fun" terminal
 preset the maintainer asked for (amber-on-green, monospace UI on desktop,
 zero radius) — no animation, no typing effect, no scanline: just a palette.
@@ -138,7 +139,7 @@ PRESETS = {
             "surface3": "#252525",
             "border": "#2a2a2a",
             "text": "#e0e0e0",
-            "text_muted": "#666",
+            "text_muted": "#8c8c8c",
             "primary": "#00b4d8",
             "success": "#2ecc71",
             "warning": "#f39c12",
@@ -157,7 +158,7 @@ PRESETS = {
             "surface3": "#eceff3",
             "border": "#dee2e6",
             "text": "#212529",
-            "text_muted": "#6c757d",
+            "text_muted": "#646d75",
             "primary": "#0077b6",
             "success": "#198754",
             "warning": "#fd7e14",
@@ -198,7 +199,7 @@ PRESETS = {
             "text_muted": "#7fbf7f",
             "primary": "#ffb000",
             "success": "#33ff66",
-            "warning": "#ffb000",
+            "warning": "#ee7dff",
             "danger": "#ff5f56",
         },
         "radius": 0,
@@ -236,7 +237,7 @@ PRESETS = {
             "text_muted": "#a08a7e",
             "primary": "#ff8a3d",
             "success": "#7fd67a",
-            "warning": "#ffc247",
+            "warning": "#f2ee5e",
             "danger": "#ff4d5e",
         },
         "radius": 6,
@@ -252,7 +253,7 @@ PRESETS = {
             "surface3": "#e6e6e6",
             "border": "#404040",
             "text": "#000000",
-            "text_muted": "#3c3c3c",
+            "text_muted": "#282828",
             "primary": "#000080",
             "success": "#004d00",
             "warning": "#5c2e00",
@@ -293,8 +294,12 @@ def render_css(
     at `--font-mono` for that theme — phones never get the monospace UI (it
     widens tables past the phone overflow guard). `extra_css` is appended
     verbatim after that — a built-in preset's own fixed string (e.g. Retro's
-    bevels); the custom palette never has one, so it never passes this."""
+    bevels); the custom palette never has one, so it never passes this.
+    After the eleven tokens come the colors DERIVED from them (`derived_vars`):
+    a built-in preset gets all of them computed, the custom palette gets its
+    `--on-accent` computed and everything else as it always rendered."""
     decls = "".join(f"{CSS_VARS[name]}:{tokens[name]};" for name in TOKENS)
+    decls += "".join(f"{name}:{value};" for name, value in derived_vars(tokens, preset=theme_id in PRESETS).items())
     css = f':root[data-theme="{theme_id}"]{{color-scheme:{color_scheme};{decls}--radius:{radius}px;}}'
     if mono_ui:
         css += f'@media screen and (min-width:769px){{:root[data-theme="{theme_id}"]{{--font-ui:var(--font-mono);}}}}'
@@ -374,6 +379,141 @@ def guess_color_scheme(tokens: dict) -> str:
     mainly steers browser-native chrome (scrollbars, form controls), so a
     background-luminance guess is a fine default rather than one more field."""
     return "light" if _relative_luminance(tokens["bg"]) > 0.5 else "dark"
+
+
+# ── Q248 (V4 to V7): the colors a theme DERIVES from its eleven tokens ──────────────────────────────────────────────────────────────────────────
+# Three kinds, all computed here so one pure test (tests/test_q248_c1.py) can hold every preset to 4.5:1:
+#   on-colors  the text on a solid button of that color: white where white reads at 4.5:1, else black or white, whichever reads better (`on_fill`). White on the accent was 1.6:1 in
+#              High contrast and 2.5:1 in Dark.
+#   inks       the token as TEXT on its own 18% chip (a banner, a status or subnet badge): the token itself when that already reads at 4.5:1,
+#              else the token moved toward black or white in 5% steps until it does (`ink`). Light's warning banner was 2.3:1. The three STATUS
+#              inks are also plain text with no chip (`.ok`, `.warn`, `.bad`), so they read on the page, a card and the second surface as well.
+#   keep       how much of a categorical hue (a manufacturer badge's device-type color, the yellow and purple subnet tones) a badge's text keeps
+#              before the rest is black or white: ONE percentage per theme, the highest at which every hue in BADGE_HUES reads at 4.5:1.
+# A chip is the color mixed 18% (TINT) into the theme's SURFACE - not into whatever is behind it - so its own background is one known color.
+BLACK = "#000000"
+WHITE = "#ffffff"
+TINT = 18  # percent of the color in a banner's or a badge's background (base.html's color-mix)
+HUE_TINT = 13  # percent of a device-type color in a manufacturer badge's background (the "22" alpha it always had)
+INK_FLOOR = 4.6  # what a derived text color is computed to; the tests hold 4.5, the difference is the browser's rounding of a color-mix
+TONE_YELLOW = "#e6b400"  # the two subnet badge tones that are fixed hues, not theme tokens (templates/base.html .badge-tone-yellow / -purple)
+TONE_PURPLE = "#a371f7"
+# every categorical hue a badge prints its text in: jen/services/fingerprint.py's DEVICE_TYPE_DISPLAY colors (tests/test_q248_c1.py holds the two
+# lists equal; this module stays pure and imports nothing) and the two fixed tones
+DEVICE_HUES = (
+    "#a8a8a8",
+    "#a4c639",
+    "#00a4ef",
+    "#e95420",
+    "#ff9900",
+    "#00b4d8",
+    "#9b59b6",
+    "#7f8c8d",
+    "#16a085",
+    "#27ae60",
+    "#2980b9",
+    "#e74c3c",
+    "#c7053d",
+    "#4285f4",
+    "#3498db",
+    "#555555",
+)
+
+
+def mix(hex_a: str, hex_b: str, percent_a: float) -> str:
+    """`color-mix(in srgb, a percent_a%, b)` of two opaque colors, as `#rrggbb`."""
+    a = (_normalize_hex(hex_a) or hex_a).lstrip("#")
+    b = (_normalize_hex(hex_b) or hex_b).lstrip("#")
+    p = percent_a / 100.0
+    return "#" + "".join(f"{round(int(a[i : i + 2], 16) * p + int(b[i : i + 2], 16) * (1 - p)):02x}" for i in (0, 2, 4))
+
+
+def on_color(hex_color: str) -> str:
+    """Black or white, whichever has the higher contrast ratio on `hex_color` (one of the two is always at least 4.5:1)."""
+    return BLACK if contrast_ratio(BLACK, hex_color) >= contrast_ratio(WHITE, hex_color) else WHITE
+
+
+def on_fill(hex_color: str) -> str:
+    """The text on a solid button of `hex_color`: white when white reads on it at 4.5:1, else black or white by `on_color`.
+
+    A preset whose buttons can all carry white keeps one text color across them: in Light, white is 4.87:1 on the accent and 4.53:1 on
+    success and on danger, where black is 4.63:1 and 4.64:1, and `on_color` alone gave the primary button white text and the two beside
+    it black."""
+    return WHITE if contrast_ratio(WHITE, hex_color) >= 4.5 else on_color(hex_color)
+
+
+def ink(hex_color: str, surface: str, tint: int = TINT, grounds: tuple = ()) -> str:
+    """`hex_color` as text on its own chip (`tint`% of it mixed into `surface`): the color itself when that reads at INK_FLOOR, else moved toward
+    black or white (whichever the chip needs) in 5% steps until it does.
+
+    `grounds` are the plain backgrounds the ink is ALSO printed on with no chip under it (Q248: a status line - "Connected", "No key generated",
+    a field's error - is the ink on the page, on a card or on the second surface): the ink reads at INK_FLOOR on each of them too. Retro is the
+    one preset this moves: its page is a mid teal, where the three status inks that read on its gray cards were 3.6:1 to 3.7:1."""
+    chip = mix(hex_color, surface, tint)
+    pole = on_color(chip)
+    for keep in range(100, -1, -5):
+        candidate = mix(hex_color, pole, keep)
+        if all(contrast_ratio(candidate, back) >= INK_FLOOR for back in (chip, *grounds)):
+            return candidate
+    return pole
+
+
+def hue_keep(surface: str, hues: tuple = DEVICE_HUES, tint: int = HUE_TINT) -> int:
+    """The highest percentage (a multiple of 5) of a categorical hue that a badge's text may keep on this surface with every one of `hues` (each on
+    a chip of `tint`% of itself) still reading at INK_FLOOR; the rest of the text color is `on_color(surface)`."""
+    pole = on_color(surface)
+    for keep in range(100, -1, -5):
+        if all(contrast_ratio(mix(h, pole, keep), mix(h, surface, tint)) >= INK_FLOOR for h in hues):
+            return keep
+    return 0
+
+
+def derived_vars(tokens: dict, preset: bool = True) -> dict:
+    """CSS custom property -> value for everything a theme derives from its tokens, in the order render_css() emits them.
+
+    `preset=False` is the custom palette: its `--on-accent` is computed like a preset's, and every other name carries what the page drew before
+    these names existed (white on success and danger, black on warning, a token as its own text color, a transparent chip), so an operator's
+    palette looks as it did except for the text on its primary button."""
+    if not preset:
+        return {
+            "--on-accent": on_fill(tokens["primary"]),
+            "--on-success": WHITE,
+            "--on-warning": BLACK,
+            "--on-danger": WHITE,
+            "--primary-ink": "var(--primary)",
+            "--success-ink": "var(--success)",
+            "--warning-ink": "var(--warning)",
+            "--danger-ink": "var(--danger)",
+            "--muted-ink": "var(--text-muted)",
+            "--tint-base": "transparent",
+            "--hue-keep": "100%",
+            "--hue-pole": WHITE,
+            "--tone-keep": "50%",
+            "--tone-pole": "var(--text)",
+            "--vendor-invert": "1",
+        }
+    surface = tokens["surface"]
+    pole = on_color(surface)
+    # a status ink is also plain text (`.ok`, `.warn`, `.bad`, a field's error): on the page, on a card and on the second surface
+    plain = (tokens["bg"], surface, tokens["surface2"])
+    return {
+        "--on-accent": on_fill(tokens["primary"]),
+        "--on-success": on_fill(tokens["success"]),
+        "--on-warning": on_fill(tokens["warning"]),
+        "--on-danger": on_fill(tokens["danger"]),
+        "--primary-ink": ink(tokens["primary"], surface),
+        "--success-ink": ink(tokens["success"], surface, grounds=plain),
+        "--warning-ink": ink(tokens["warning"], surface, grounds=plain),
+        "--danger-ink": ink(tokens["danger"], surface, grounds=plain),
+        "--muted-ink": ink(tokens["text_muted"], surface),
+        "--tint-base": "var(--surface)",
+        "--hue-keep": f"{hue_keep(surface)}%",
+        "--hue-pole": pole,
+        "--tone-keep": f"{hue_keep(surface, (TONE_YELLOW, TONE_PURPLE), TINT)}%",
+        "--tone-pole": pole,
+        # a manufacturer's logo is drawn as a one-color silhouette: white on a dark surface, black on a light one
+        "--vendor-invert": "1" if pole == WHITE else "0",
+    }
 
 
 def palette_warnings(tokens: dict) -> list[str]:

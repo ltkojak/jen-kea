@@ -85,11 +85,11 @@
         <div class="form-row u-e2c960">
             <div class="form-group">
                 <label for="f-next_server">next-server</label>
-                <input id="f-next_server" type="text" name="next_server" value="{{ existing.get('next-server', '') if existing else '' }}" placeholder="e.g. 10.0.0.5">
+                <input id="f-next_server" type="text" name="next_server" value="{{ existing.get('next-server', '') if existing else '' }}" placeholder="e.g. 10.0.0.5" autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label for="f-server_hostname">server-hostname</label>
-                <input id="f-server_hostname" type="text" name="server_hostname" value="{{ existing.get('server-hostname', '') if existing else '' }}">
+                <input id="f-server_hostname" type="text" name="server_hostname" value="{{ existing.get('server-hostname', '') if existing else '' }}" autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label for="f-boot_file_name">boot-file-name</label>
@@ -175,6 +175,7 @@
     function buildOpSelect(fieldKey, selectedOp) {
         var sel = document.createElement('select');
         sel.name = 'rule_op';
+        sel.setAttribute('aria-label', 'Operator');
         var meta = FIELDS[fieldKey] || {};
         var ops = meta.ops || ['equals'];
         ops.forEach(function(op) {
@@ -198,6 +199,7 @@
         fieldLabel.textContent = 'Field';
         var fieldSel = document.createElement('select');
         fieldSel.name = 'rule_field';
+        fieldSel.setAttribute('aria-label', 'Field');
         Object.keys(FIELDS).forEach(function(key) {
             var o = document.createElement('option');
             o.value = key;
@@ -223,6 +225,7 @@
         var valInput = document.createElement('input');
         valInput.type = 'text';
         valInput.name = 'rule_value';
+        valInput.setAttribute('aria-label', 'Value');
         valInput.value = rule.value || '';
         valGroup.appendChild(valLbl);
         valGroup.appendChild(valInput);

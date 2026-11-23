@@ -338,15 +338,32 @@ def dashboard_catalog_data():
         # them is actually requested) instead of once per widget, which
         # doubled every Kea/DB/DNS/remote round trip Health Center makes
         # whenever both catalog widgets were enabled on the same dashboard.
+        # Q248 (the "Needs attention" card): `attention` reads the same pass - a page that asks for it together with the two widgets pays for one run, and the
+        # server read the card names its down servers from is handed to that run, never made twice.
         checks = None
-        if "readiness" in requested or "ddns_errors" in requested:
+        server_statuses = None
+        if "readiness" in requested or "ddns_errors" in requested or "attention" in requested:
+            shared_reads = {}
+            if "attention" in requested:
+                try:
+                    server_statuses = __kea.get_all_server_status()
+                    shared_reads["server_status"] = server_statuses
+                except Exception as e:
+                    logger.warning(f"dashboard catalog-data server status: {e}")
             try:
                 checks = __health.run_checks(
-                    {"subnet_filter": current_user.can_access_subnet, "unrestricted": current_user.all_subnets}
+                    {
+                        "subnet_filter": current_user.can_access_subnet,
+                        "unrestricted": current_user.all_subnets,
+                        "admin": current_user.role in ("superadmin", "admin"),  # Q248 (V28)
+                        **shared_reads,
+                    }
                 )  # (Q204 second pass H1: the readiness rows are the caller's)
             except Exception as e:
                 logger.warning(f"dashboard catalog-data health run_checks: {e}")
                 checks = None
+        if "attention" in requested:
+            out["attention"] = __dcatalog.attention_widget(checks, server_statuses, accessible)
         if "readiness" in requested:
             out["readiness"] = __dcatalog.readiness_widget(checks)
         if "events_feed" in requested:

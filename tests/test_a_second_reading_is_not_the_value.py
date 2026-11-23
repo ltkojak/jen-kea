@@ -818,9 +818,9 @@ class TestAnExpiredCertificateIsSaidAsExpired:
         return kwargs
 
     def test_the_two_sides_of_the_expiry(self, monkeypatch):
-        assert self._fire(monkeypatch, 5) == {"days_left": 5, "when": "expires in <b>5</b> day(s)"}
-        assert self._fire(monkeypatch, 0)["when"] == "expires in <b>0</b> day(s)"
-        assert self._fire(monkeypatch, -400) == {"days_left": -400, "when": "expired <b>400</b> day(s) ago"}
+        assert self._fire(monkeypatch, 5) == {"days_left": 5, "when": "expires in <b>5</b> days"}
+        assert self._fire(monkeypatch, 0)["when"] == "expires in <b>0</b> days"
+        assert self._fire(monkeypatch, -400) == {"days_left": -400, "when": "expired <b>400</b> days ago"}
 
     def test_the_shipped_sentence_prints_it(self):
         src = (ROOT / "jen/services/alerts.py").read_text(encoding="utf-8")

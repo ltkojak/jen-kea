@@ -6,7 +6,7 @@ role system: superadmin > admin > viewer.
 
 Permission matrix
 ─────────────────
-SuperAdmin : full access to everything, all subnets, always
+Superadmin : full access to everything, all subnets, always
 Admin      : full management capability on assigned subnets only;
              can access Settings, Audit; cannot manage users or touch
              Database (export/import/migrate — v4.4.2, see database.py)
@@ -38,6 +38,12 @@ def is_any_role():
 # ── Decorators ────────────────────────────────────────────────────────────────
 
 
+def refusal_sentence(who):
+    """Q248 (V47): a refusal names the page that refused. The person lands on the dashboard with this flash, and "Admin access required." alone did not say what
+    they had asked for. The path is the request's own (no query), cut to a length a banner can hold; the template that prints a flash escapes it."""
+    return f"{who} access required for {request.path[:200]}."
+
+
 def superadmin_required(f):
     """Restrict to superadmin only (user management, role assignment)."""
 
@@ -46,7 +52,7 @@ def superadmin_required(f):
         if not current_user.is_authenticated:
             return redirect(url_for("auth.login"))
         if current_user.role != "superadmin":
-            flash("SuperAdmin access required.", "error")
+            flash(refusal_sentence("Superadmin"), "error")
             return redirect(url_for("dashboard.dashboard"))
         return f(*args, **kwargs)
 
@@ -61,7 +67,7 @@ def admin_required(f):
         if not current_user.is_authenticated:
             return redirect(url_for("auth.login"))
         if current_user.role not in ("superadmin", "admin"):
-            flash("Admin access required.", "error")
+            flash(refusal_sentence("Admin"), "error")
             return redirect(url_for("dashboard.dashboard"))
         return f(*args, **kwargs)
 
@@ -208,7 +214,7 @@ def recent_auth_required(minutes: int = 10, fetch: bool = False):
 def get_accessible_subnet_map():
     """
     Return SUBNET_MAP filtered to subnets the current user can access.
-    SuperAdmins and users with subnet_access=None get the full map.
+    Superadmins and users with subnet_access=None get the full map.
     """
     from jen import extensions
 

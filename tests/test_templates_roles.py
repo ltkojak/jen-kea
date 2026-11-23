@@ -121,7 +121,10 @@ class TestSubnetsOffersOnlyWhatTheCallerMayDo:
 class TestTheReconcileChipsAreReadable:
     def test_the_selected_chip_sets_a_text_color_with_its_background(self):
         text = pathlib.Path("templates/ddns_reconcile.html").read_text(encoding="utf-8")
-        assert text.count("background:var(--primary);color:white;") == 2
+        # Q248 (V4): the chosen chip is .badge-accent - the accent with the theme's own on-color, not a fixed white (1.6:1 in High contrast)
+        assert text.count("badge-accent") == 2 and "color:white" not in text
+        base = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+        assert ".badge-accent { background: var(--primary); color: var(--on-accent); }" in base
         assert "badge-production" not in text
 
     def test_the_reverify_link_is_for_a_caller_who_can_use_it(self):

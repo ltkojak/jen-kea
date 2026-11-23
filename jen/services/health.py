@@ -36,6 +36,7 @@ import jen.services.capabilities as __caps
 import jen.services.capacity as __capacity
 import jen.services.kea as __kea
 from jen import extensions
+from jen.services.reltime import plural as _plural
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,8 @@ logger = logging.getLogger(__name__)
 # Same set servers.py derives "healthy backup" from.
 HEALTHY_HA_STATES = {"hot-standby", "load-balancing"}
 
-_ADMIN_GUIDE_HOOKS = "/docs/admin-guide.md#kea-hooks"  # anchor referenced by kea_hooks detail
+# Q248 (V28): no page of Jen serves the docs folder, so the guide is named in words (it was printed as an address into that folder, which opens nothing)
+_ADMIN_GUIDE_HOOKS = "the admin guide, section Health Center"
 
 
 @dataclass
@@ -56,6 +58,10 @@ class Check:
     fix_hint: str = ""
     fix_url: str = ""
     elapsed_ms: int = 0
+    # Q248 (V28): a page of Jen the detail refers to, at any status (`fix_url` is drawn for a warning or a failure only). The detail no longer prints an address
+    # as text (it told the reader to see a path); the Health page and the dashboard draw this pair as a link, and the JSON answers carry it as two more fields.
+    link: str = ""
+    link_label: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -67,6 +73,8 @@ class Check:
             "fix_hint": self.fix_hint,
             "fix_url": self.fix_url,
             "elapsed_ms": self.elapsed_ms,
+            "link": self.link,
+            "link_label": self.link_label,
         }
 
 
@@ -100,6 +108,8 @@ def _build_ctx(ctx: dict | None) -> dict:
     # False for a subnet-restricted caller: fleet-wide summaries (which cannot be
     # filtered per subnet) are then skipped rather than shown.
     ctx.setdefault("unrestricted", True)
+    # Q248 (V28): False for a viewer's page - a check then names no page that only an admin may open (`Check.link`). A caller that does not say is an admin's or a key's.
+    ctx.setdefault("admin", True)
     if "server_status" not in ctx:
         try:
             ctx["server_status"] = __kea.get_all_server_status()
@@ -553,7 +563,7 @@ def _kea_config_drift(ctx) -> Check:
         return c
     c.status = "warn"
     first = issues[0].get("message", "")
-    c.detail = f"{len(issues)} issue(s): {first}" if len(issues) > 1 else first
+    c.detail = f"{_plural(len(issues), 'issue')}: {first}" if len(issues) > 1 else first
     return c
 
 
@@ -587,7 +597,7 @@ def _kea_write_gate(ctx) -> Check:
     else:
         c.status, c.detail = (
             "ok",
-            f"{on_api} Live API server(s): every gate was open at each server's last check; the file on the host is proved again before every change",
+            f"{_plural(on_api, 'Live API server')}: every gate was open at each server's last check; the file on the host is proved again before every change",
         )
     return c
 
@@ -614,14 +624,16 @@ def _kea_subnets_declared(ctx) -> Check:
     parts = []
     if undeclared:
         parts.append(
-            f"Kea subnet id(s) {', '.join(map(str, undeclared))} have no name in Jen — declare them in Settings → Kea"
+            f"Kea subnet {'id' if len(undeclared) == 1 else 'ids'} {', '.join(map(str, undeclared))} {'has' if len(undeclared) == 1 else 'have'} no name in Jen — declare {'it' if len(undeclared) == 1 else 'them'} in Settings → Kea"
         )
     if orphaned:
-        parts.append(f"Jen names subnet id(s) {', '.join(map(str, orphaned))} that Kea's live config no longer has")
+        parts.append(
+            f"Jen names subnet {'id' if len(orphaned) == 1 else 'ids'} {', '.join(map(str, orphaned))} that Kea's live config no longer has"
+        )
     if parts:
         c.status, c.detail = "warn", "; ".join(parts)
     else:
-        c.status, c.detail = "ok", f"{len(kea_ids)} subnet(s), all named"
+        c.status, c.detail = "ok", f"{_plural(len(kea_ids), 'subnet')}, all named"
     return c
 
 
@@ -695,10 +707,12 @@ def _config_doctor(ctx) -> Check:
 
     if c.status == "ok":
         kinds = len(group_findings(infos))
-        c.detail = f"{len(infos)} note(s) of {kinds} kind{'' if kinds == 1 else 's'} — see /tools/doctor"
+        c.detail = f"{_plural(len(infos), 'note')} of {_plural(kinds, 'kind')}"
     else:
         first = fails[0] if fails else warns[0]
-        c.detail = f"{first['title']}: {first['detail']} — {len(findings)} finding(s), see /tools/doctor"
+        c.detail = f"{first['title']}: {first['detail']} — {_plural(len(findings), 'finding')}"
+    if ctx.get("admin", True):  # Doctor is an admin's page: a viewer is not sent to a page that refuses them
+        c.link, c.link_label = "/tools/doctor", "Open Doctor"
     return c
 
 
@@ -874,6 +888,47 @@ def _latest_lease_history() -> list[dict]:
         return list(cur.fetchall())
 
 
+def _pool_reading(row, threshold, exhaustion) -> tuple[float, int, str] | None:
+    """One latest-snapshot row as `(percent used, addresses free, level)`, level "crit", "warn" or "" - or None when the row is not a reading. The one place the
+    Health row and the dashboard's "Needs attention" card (Q248) judge a pool, so they cannot disagree."""
+    size = row["pool_size"] or 0
+    # v5.68.0-beta.19 (Q154): the leases INSIDE the pools. A snapshot with no pool_used (taken before migration 34, or while Kea's
+    # config was unreadable) is not a reading - it used to be the whole subnet's active count, so a reservation outside the pool read as 110 %.
+    if size <= 0 or row.get("pool_used") is None:
+        return None
+    used = row["pool_used"] or 0
+    pct = 100.0 * used / size
+    # v5.69.0-beta.3 (Q172): "near exhaustion" is the alert's own definition (DEF-002) - `pool_exhaustion_free` addresses or fewer left - not a third one (a flat 95 %,
+    # which on a /24 pool of 20 addresses was "near" at one free address and on a /16 pool of 60,000 at three thousand)
+    if size - used <= exhaustion:
+        return pct, size - used, "crit"
+    if pct >= threshold:
+        return pct, size - used, "warn"
+    return pct, size - used, ""
+
+
+def pools_needing_attention(subnet_ids) -> list[dict]:
+    """The pools of `subnet_ids` (the caller's own subnets - nothing is read out for any other id) that are near exhaustion or over the alert threshold, from the same
+    latest snapshot and by the same rule as the Pool utilization check: `[{"subnet_id", "pct", "free", "level", "threshold"}]`, the exhausted ones first. Raises what
+    the read raises; the caller decides what a failed read shows (Q248, the dashboard's "Needs attention" card)."""
+    from jen.services.setting_bounds import bounded_setting
+
+    threshold = bounded_setting("alert_threshold_pct")
+    exhaustion = bounded_setting("pool_exhaustion_free")
+    wanted = set(subnet_ids)
+    out = []
+    for r in _latest_lease_history():
+        if r["subnet_id"] not in wanted:
+            continue
+        reading = _pool_reading(r, threshold, exhaustion)
+        if reading is None or not reading[2]:
+            continue
+        pct, free, level = reading
+        out.append({"subnet_id": r["subnet_id"], "pct": pct, "free": free, "level": level, "threshold": threshold})
+    out.sort(key=lambda p: (p["level"] != "crit", -p["pct"], p["subnet_id"]))
+    return out
+
+
 def _pool_utilization(ctx) -> Check:
     c = Check("pool_utilization", "Pool utilization", "capacity", fix_url="/subnets")
     from jen.services.setting_bounds import bounded_setting
@@ -893,19 +948,15 @@ def _pool_utilization(ctx) -> Check:
     warn, crit = [], []
     measured = 0
     for r in rows:
-        size = r["pool_size"] or 0
-        # v5.68.0-beta.19 (Q154): the leases INSIDE the pools. A snapshot with no pool_used (taken before migration 34, or while Kea's
-        # config was unreadable) is not a reading - it used to be the whole subnet's active count, so a reservation outside the pool read as 110 %.
-        if size <= 0 or r.get("pool_used") is None:
+        reading = _pool_reading(r, threshold, exhaustion)
+        if reading is None:
             continue
         measured += 1
-        pct = 100.0 * (r["pool_used"] or 0) / size
+        pct, _free, level = reading
         label = f"{_subnet_label(r['subnet_id'])} {pct:.0f}%"
-        # v5.69.0-beta.3 (Q172): "near exhaustion" is the alert's own definition (DEF-002) - `pool_exhaustion_free` addresses or fewer left - not a third one (a flat 95 %,
-        # which on a /24 pool of 20 addresses was "near" at one free address and on a /16 pool of 60,000 at three thousand)
-        if size - (r["pool_used"] or 0) <= exhaustion:
+        if level == "crit":
             crit.append(label)
-        elif pct >= threshold:
+        elif level == "warn":
             warn.append(label)
     if crit:
         c.status, c.detail = "fail", "near exhaustion: " + ", ".join(crit)
@@ -914,7 +965,7 @@ def _pool_utilization(ctx) -> Check:
     elif not measured:
         c.status, c.detail = "skip", "waiting for the first snapshot that records pool use (5.68.0-beta.19)"
     else:
-        c.status, c.detail = "ok", f"{measured} subnet(s) below {threshold}%"
+        c.status, c.detail = "ok", f"{_plural(measured, 'subnet')} below {threshold}%"
     return c
 
 
@@ -979,7 +1030,7 @@ def _pool_exhaustion_forecast(ctx) -> Check:
     else:
         rising = sum(1 for f in fitted.values() if f["trend"] == "rising")
         c.status = "ok"
-        c.detail = f"{len(fitted)} subnet(s) forecast, none reach 90% within {__capacity.WARN_DAYS} days"
+        c.detail = f"{_plural(len(fitted), 'subnet')} forecast, none reach 90% within {__capacity.WARN_DAYS} days"
         if rising:
             c.detail += f" ({rising} rising)"
     return c
@@ -1126,13 +1177,13 @@ def _dns_reconcile(ctx) -> Check:
     if multiple:
         notes += f"; {multiple} with several A records — review"
     if failed:
-        notes += f"; {failed} lookup(s) could not be answered — check the resolver"
+        notes += f"; {_plural(failed, 'lookup')} could not be answered — check the resolver"
     if problems > 0:
-        c.status, c.detail = "warn", f"{problems}/{total} name(s) mismatched{notes}{age_note}"
+        c.status, c.detail = "warn", f"{problems}/{_plural(total, 'name')} mismatched{notes}{age_note}"
     elif failed:
-        c.status, c.detail = "warn", f"{total} name(s) checked{notes}{age_note}"
+        c.status, c.detail = "warn", f"{_plural(total, 'name')} checked{notes}{age_note}"
     else:
-        c.status, c.detail = "ok", f"{total} name(s) checked, none mismatched{notes}{age_note}"
+        c.status, c.detail = "ok", f"{_plural(total, 'name')} checked, none mismatched{notes}{age_note}"
     return c
 
 
@@ -1159,13 +1210,13 @@ def _cert_expiry(ctx) -> Check:
         c.status, c.detail = "skip", "HTTPS not configured or certificate unreadable"
         return c
     if days < 0:
-        c.status, c.detail = "fail", f"the TLS certificate expired {abs(days)} day(s) ago"
+        c.status, c.detail = "fail", f"the TLS certificate expired {_plural(abs(days), 'day')} ago"
     elif days <= 7:
-        c.status, c.detail = "fail", f"the TLS certificate expires in {days} day(s)"
+        c.status, c.detail = "fail", f"the TLS certificate expires in {_plural(days, 'day')}"
     elif days <= 30:
-        c.status, c.detail = "warn", f"the TLS certificate expires in {days} day(s)"
+        c.status, c.detail = "warn", f"the TLS certificate expires in {_plural(days, 'day')}"
     else:
-        c.status, c.detail = "ok", f"valid for {days} more day(s)"
+        c.status, c.detail = "ok", f"valid for {_plural(days, 'more day')}"
     return c
 
 
@@ -1244,8 +1295,8 @@ def _kea_tls_expiry(ctx) -> Check:
         return bool(rows) and all(n in parked_records for n, _d in rows)
 
     if expired or failing:
-        parts = [f"{n} expired {abs(d)} day(s) ago" for n, d in expired] + [
-            f"{n} expires in {d} day(s)" for n, d in failing
+        parts = [f"{n} expired {_plural(abs(d), 'day')} ago" for n, d in expired] + [
+            f"{n} expires in {_plural(d, 'day')}" for n, d in failing
         ]
         remedy = (
             "remove the socket under Settings → Kea, or forget the parked record there"
@@ -1260,12 +1311,12 @@ def _kea_tls_expiry(ctx) -> Check:
             if parked_only(warning)
             else "plan a Rotate (Settings → Kea)"
         )
-        c.detail = "; ".join(f"{n} expires in {d} day(s)" for n, d in warning) + f" — {remedy}"
+        c.detail = "; ".join(f"{n} expires in {_plural(d, 'day')}" for n, d in warning) + f" — {remedy}"
     else:
         soonest = min((d for _n, d in items if d is not None), default=None)
         n_servers = len(items) - 2
         c.status = "ok"
-        c.detail = f"CA, client and {n_servers} server certificate(s) valid — soonest expiry in {soonest} day(s)"
+        c.detail = f"CA, client and {_plural(n_servers, 'server certificate')} valid — soonest expiry in {_plural(soonest, 'day')}"
     if unlisted:
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += f" — but {unlisted}"
@@ -1476,16 +1527,16 @@ def _kea_identifiers(ctx) -> Check:
     if damaged:
         c.status = "fail"
         c.detail = (
-            f"{len(damaged)} of {total} reservation identifier(s) are the text of their own hex — a restore or "
+            f"{len(damaged)} of {_plural(total, 'reservation identifier')} {'is' if len(damaged) == 1 else 'are'} the text of their own hex — a restore or "
             f"migration made before 5.67.0-beta.11 wrote them that way, and those clients no longer match "
             f"their reservation."
         )
         c.fix_hint = "A superadmin can preview and repair exactly those rows: Settings → Databases → the repair page."
     else:
-        c.status, c.detail = "ok", f"{total} reservation(s) checked, none look like the hex text of themselves"
+        c.status, c.detail = "ok", f"{_plural(total, 'reservation')} checked, none look like the hex text of themselves"
         if ambiguous:
             c.detail += (
-                f" ({len(ambiguous)} client-id(s) are hex text with no lease to say which way — review them on the "
+                f" ({_plural(len(ambiguous), 'client-id')} {'is' if len(ambiguous) == 1 else 'are'} hex text with no lease to say which way — review {'it' if len(ambiguous) == 1 else 'them'} on the "
                 f"repair page)"
             )
     return c
@@ -1507,7 +1558,7 @@ def _schema_current(ctx) -> Check:
     else:
         pending = sorted(v for v in range(1, latest + 1) if v not in applied)
         c.status = "fail"
-        c.detail = f"migration(s) {', '.join(map(str, pending))} not applied — restart Jen to migrate"
+        c.detail = f"{'migration' if len(pending) == 1 else 'migrations'} {', '.join(map(str, pending))} not applied — restart Jen to migrate"
     return c
 
 
@@ -1677,10 +1728,12 @@ def _background_workers(ctx) -> Check:
     current, oldest = ds.get("current_age_s"), ds.get("oldest_queued_age_s")
     if current is not None and current > 60:
         warnings.append(
-            f"event dispatcher is stuck: one subscriber has been running for {current:.0f} s ({depth} event(s) queued behind it)"
+            f"event dispatcher is stuck: one subscriber has been running for {current:.0f} s ({_plural(depth, 'event')} queued behind it)"
         )
     elif oldest is not None and oldest > 60:
-        warnings.append(f"event dispatcher is behind: the oldest of {depth} queued event(s) has waited {oldest:.0f} s")
+        warnings.append(
+            f"event dispatcher is behind: the oldest of {_plural(depth, 'queued event')} has waited {oldest:.0f} s"
+        )
     if ds.get("dropped_recent"):
         warnings.append(
             f"{ds['dropped_recent']} event deliveries were dropped in the last 10 minutes because the dispatcher's queue was full "
@@ -1850,9 +1903,7 @@ def _kea32_control_transport(ctx) -> Check:
         return c
     daemons = 1 + (1 if ipv6 else 0) + (1 if ddns else 0)
     c.status = "ok"
-    c.detail = (
-        f"direct mode — {len(extensions.KEA_SERVERS)} server(s) × {daemons} daemon(s) on their own control sockets"
-    )
+    c.detail = f"direct mode — {_plural(len(extensions.KEA_SERVERS), 'server')} × {_plural(daemons, 'daemon')} on their own control sockets"
     return c
 
 
@@ -1916,7 +1967,7 @@ def _kea32_removed_keys(ctx) -> Check:
     shown = [f"{f['path']} → {f['replacement']} (since {f['since']})" for f in found[:3]]
     more = f" … and {len(found) - 3} more" if len(found) > 3 else ""
     c.status = "warn"
-    c.detail = f"{len(found)} key(s) Kea has removed or renamed: " + "; ".join(shown) + more
+    c.detail = f"{_plural(len(found), 'key')} Kea has removed or renamed: " + "; ".join(shown) + more
     if any(f["key"] == "reservation-mode" for f in found):
         c.fix_url, c.fix_hint = "/servers", "Servers"
     return c

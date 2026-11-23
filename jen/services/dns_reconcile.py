@@ -39,6 +39,19 @@ VERDICTS = (
     "lookup-failed",
 )
 
+# Q248 (V55): what the Reconcile page SHOWS for each verdict. The names above are the stored and exported values (the filter's address, the CSV, the Health
+# summary, the admin guide's table); a chip that read "missing-forward" told an operator nothing.
+VERDICT_LABELS = {
+    "ok": "OK",
+    "missing-forward": "No address record",
+    "wrong-forward": "Wrong address",
+    "missing-ptr": "No reverse record",
+    "wrong-ptr": "Wrong reverse name",
+    "stale-ptr": "Stale reverse record",
+    "multiple-a": "Several addresses",
+    "lookup-failed": "Lookup failed",
+}
+
 # resolver errnos that are a DEFINITIVE "no such record": getaddrinfo's
 # EAI_NONAME/EAI_NODATA, gethostbyaddr's herror HOST_NOT_FOUND(1)/NO_DATA(4).
 # Anything else (EAI_AGAIN, EAI_FAIL, timeouts, other OSErrors) is a

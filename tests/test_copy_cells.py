@@ -222,7 +222,7 @@ class TestRenderedRows:
             None,
             "secondary",
             "primary",
-            "hide",
+            "third",  # Q248 (V51): the MAC cell is the phone card's third line, and it is this copy control
             "secondary",
             "hide",
             "secondary",

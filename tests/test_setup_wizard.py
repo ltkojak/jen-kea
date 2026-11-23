@@ -1377,7 +1377,8 @@ class TestConnectRoute:
         monkeypatch.setattr(extensions, "KEA_API_PASS", "stored-api")
         monkeypatch.setattr(extensions, "KEA_DB_PASS", "")
         r = logged_in_client.get("/setup/connect")
-        assert b"leave blank to keep it" in r.data
+        # Q248 (V48): the sentence is the field's hint now (the placeholder, "(saved)", fits a phone's field)
+        assert b"A password is saved. Leave blank to keep it." in r.data
         assert b'name="kea_db_port"' in r.data
 
 

@@ -2038,7 +2038,7 @@ class TestSudoLSummary:
             "    (root) NOPASSWD: /usr/bin/python3\n"
         )
         summary = kea_host._sudo_l_summary(listing)
-        assert "python3 rule(s) on this host" in summary
+        assert "python3 rule on this host" in summary
         assert "NOPASSWD: /usr/bin/python3" in summary
         assert "LATER rule" not in summary
 

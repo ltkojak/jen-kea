@@ -357,25 +357,22 @@ class TestOnlyASuperadminMakesALockoutPermanent:
         assert security.PERMANENT_IS_A_SUPERADMINS == (
             "Only a superadmin can set a lockout that lasts until it is cleared (0 minutes)."
         )
-        assert security.CLEARED_SENTENCE.format(attempts=4, lockouts=2) == (
-            "Cleared 4 failed login attempt(s) and ended 2 permanent lockout(s)."
-        )
+        assert security.cleared_sentence(4, 2) == ("Cleared 4 failed login attempts and ended 2 permanent lockouts.")
+        # Q248 (V36): each count with the noun that agrees with it
+        assert security.cleared_sentence(1, 1) == "Cleared 1 failed login attempt and ended 1 permanent lockout."
 
     def test_the_clear_counts_what_it_deleted(self):
         src = _function("jen/routes/settings/security.py", "clear_lockouts")
         assert src.index("DELETE FROM login_attempts") < src.index("DELETE FROM login_lockouts")
-        assert (
-            src.count("max(cur.rowcount, 0)") == 2
-            and "CLEARED_SENTENCE.format(attempts=attempts, lockouts=lockouts)" in src
-        )
+        assert src.count("max(cur.rowcount, 0)") == 2 and "cleared_sentence(attempts, lockouts)" in src
         assert 'flash("All login attempt records cleared."' not in src
 
     def test_the_security_page_shows_the_lockouts_in_force_and_who_sets_zero(self):
         html = (ROOT / "templates/settings_security.html").read_text(encoding="utf-8")
         assert (
             'id="rl-permanent-lockouts"' in html
-            and "{{ rl_lockouts_username }}" in html
-            and "{{ rl_lockouts_ip }}" in html
+            and "{{ rl_lockouts_username|plural('account name') }}" in html
+            and "{{ rl_lockouts_ip|plural('address', 'addresses') }}" in html
         )
         assert "Only a superadmin can set 0." in html
         assert "end every permanent lockout?" in html

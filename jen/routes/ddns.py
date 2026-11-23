@@ -496,6 +496,7 @@ def ddns_reconcile():
             limit=limit,
             verdict_filter=verdict_filter,
             verdicts=__reconcile.VERDICTS,
+            verdict_labels=__reconcile.VERDICT_LABELS,
             tab="reconcile",
         )
     counts = __reconcile.summarize(results)
@@ -549,6 +550,7 @@ def ddns_reconcile():
         limit=limit,
         verdict_filter=verdict_filter,
         verdicts=__reconcile.VERDICTS,
+        verdict_labels=__reconcile.VERDICT_LABELS,
         tab="reconcile",
     )
 

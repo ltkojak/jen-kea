@@ -4,10 +4,10 @@
 <style>
     .hc-pill { display:inline-block; min-width:46px; text-align:center; padding:2px 8px; border-radius:20px;
                font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
-    .hc-ok   { background:color-mix(in srgb, var(--success) 18%, transparent); color:var(--success); }
-    .hc-warn { background:color-mix(in srgb, var(--warning) 18%, transparent); color:var(--warning); }
-    .hc-fail { background:color-mix(in srgb, var(--danger) 18%, transparent); color:var(--danger); }
-    .hc-skip { background:color-mix(in srgb, var(--text-muted) 18%, transparent); color:var(--text-muted); }
+    .hc-ok   { background:color-mix(in srgb, var(--success) 18%, var(--tint-base)); color:var(--success-ink); }
+    .hc-warn { background:color-mix(in srgb, var(--warning) 18%, var(--tint-base)); color:var(--warning-ink); }
+    .hc-fail { background:color-mix(in srgb, var(--danger) 18%, var(--tint-base)); color:var(--danger-ink); }
+    .hc-skip { background:color-mix(in srgb, var(--text-muted) 18%, var(--tint-base)); color:var(--muted-ink); }
     .hc-row  { display:flex; gap:12px; align-items:baseline; padding:10px 0; border-top:1px solid var(--border); }
     .hc-row:first-child { border-top:0; }
     .hc-row .hc-body { flex:1; min-width:0; }
@@ -16,6 +16,13 @@
     .hc-row .hc-fix { font-size:12px; white-space:nowrap; }
     .hc-summary { display:flex; gap:14px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--text-muted); }
     .hc-summary strong { color:var(--text); }
+    /* Q248 (addition 3): failures and warnings first, each group's passing checks, the skipped checks behind one line */
+    .hc-section-title { font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:4px; }
+    .hc-group-tag { font-weight:400; font-size:11px; color:var(--text-muted); border:1px solid var(--border); border-radius:20px; padding:0 7px; margin-left:6px; white-space:nowrap; }
+    .hc-skipped { border-top:1px solid var(--border); padding-top:10px; }
+    .hc-skipped > summary { cursor:pointer; font-size:13px; color:var(--text-muted); padding:4px 0; }
+    .hc-skipped[open] > summary { margin-bottom:4px; }
+    .hc-row:target { background:color-mix(in srgb, var(--primary) 10%, transparent); box-shadow:0 0 0 6px color-mix(in srgb, var(--primary) 10%, transparent); border-radius:2px; }
 </style>
 
 <div class="page-header">
@@ -34,4 +41,20 @@
         {% include "_health_checks.html" %}
     </div>
 </div>
+{% endblock %}
+{% block scripts %}
+// Q248 (addition 3): the results are swapped by htmx every minute and on Refresh, and a swap draws the skipped checks' fold closed again. A person who opened it
+// keeps it open: the choice is read when the fold is toggled (the event does not bubble, so it is caught on the way down) and put back after every swap.
+(function() {
+    var results = document.getElementById('health-results');
+    if (!results) return;
+    var skippedOpen = false;
+    results.addEventListener('toggle', function(e) {
+        if (e.target && e.target.id === 'hc-skipped') skippedOpen = e.target.open;
+    }, true);
+    results.addEventListener('htmx:afterSwap', function() {
+        var fold = document.getElementById('hc-skipped');
+        if (fold && skippedOpen) fold.open = true;
+    });
+})();
 {% endblock %}

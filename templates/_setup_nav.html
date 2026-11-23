@@ -1,0 +1,20 @@
+{# Q248 (addition 9) - the foot of every /setup step: Back (steps 2 to 6) and Next (steps 1 to 5) are plain links to the neighboring step, which records nothing: a step
+   is ticked only by its own action, and "Skip for now" is still the way to say a step was passed over on purpose. The last step has Finish instead of Next: it posts to the
+   step's own route (which marks the step done, as its "Finish setup" button did) and lands on the dashboard. `progress` is the same object the step list is drawn from. #}
+{% set setup_at = progress.steps.index(progress.current) %}
+<div class="setup-nav">
+    {% if setup_at > 0 %}
+    <a class="btn btn-secondary" href="/setup/{{ progress.steps[setup_at - 1] }}">{{ icon("arrow-left") }} Back</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+    {% if setup_at < progress.steps|length - 1 %}
+    <a class="btn btn-secondary" href="/setup/{{ progress.steps[setup_at + 1] }}">Next {{ icon("arrow-right") }}</a>
+    {% else %}
+    <form method="POST" action="/setup/investigate/visit">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="finish" value="1">
+        <button type="submit" class="btn btn-primary">Finish</button>
+    </form>
+    {% endif %}
+</div>

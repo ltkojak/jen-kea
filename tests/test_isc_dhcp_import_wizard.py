@@ -94,7 +94,7 @@ class TestIscDhcpImportWizard:
     def test_non_superadmin_redirected_with_flash(self, client, db, monkeypatch, mock_kea):
         c, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="isc_import_admin1")
         r = c.get("/subnets/import-isc", follow_redirects=True)
-        assert r.status_code == 200 and b"SuperAdmin access required." in r.data
+        assert r.status_code == 200 and b"Superadmin access required for /subnets/import-isc." in r.data  # Q248 (V47)
 
     # ── upload + review ─────────────────────────────────────────────────
 
@@ -126,7 +126,7 @@ class TestIscDhcpImportWizard:
         self._wire(monkeypatch)
         self._upload(logged_in_client, with_leases=True)
         body = logged_in_client.get("/subnets/import-isc/review").data.decode()
-        assert "<strong>4</strong> active lease(s)" in body and "<strong>2</strong> inside" in body
+        assert "<strong>4</strong> active leases in the file" in body and "<strong>2</strong> inside" in body
         assert "<strong>1</strong> on an address that becomes a reservation" in body
         assert "never imported" in body
 

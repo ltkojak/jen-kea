@@ -120,8 +120,24 @@ class TestTheStyleExtractorsBadRuleIsGone:
 
     def test_the_setup_progress_pills_use_tokens_every_theme_defines(self):
         text = pathlib.Path("templates/_setup_progress.html").read_text(encoding="utf-8")
+        # Q248 (V4): the text of the current and of a finished step is the theme's own on-color (white was 1.6:1 on High contrast's accent); every preset and
+        # the custom palette define both names (jen/services/theme.py derived_vars, tests/test_q248_c1.py)
+        from jen.services import theme
+
+        derived = set(theme.derived_vars(theme.PRESETS["dark"]["tokens"])) & set(
+            theme.derived_vars(theme.PRESETS["dark"]["tokens"], preset=False)
+        )
+        assert {"--on-accent", "--on-success"} <= derived
         for token in re.findall(r"var\((--[a-z0-9-]+)\)", text):
-            assert token in {"--primary", "--surface2", "--success", "--border", "--text-muted"}, token
+            assert token in {
+                "--primary",
+                "--surface2",
+                "--success",
+                "--border",
+                "--text-muted",
+                "--on-accent",
+                "--on-success",
+            }, token
 
     def test_the_options_grid_collapses_on_a_phone(self):
         base = pathlib.Path("templates/base.html").read_text(encoding="utf-8")

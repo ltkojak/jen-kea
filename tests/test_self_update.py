@@ -110,7 +110,7 @@ class TestSelfUpdateRouteIsNowJustATrigger:
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             r = client.post("/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True)
         assert r.status_code == 200
-        assert b"SuperAdmin access required" in r.data
+        assert b"Superadmin access required" in r.data
         mock_run.assert_not_called()
 
 

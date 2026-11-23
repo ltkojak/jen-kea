@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Logs{% endblock %}
+{% block content_class %}content--wide{% endblock %}
 {% block content %}
 {% from '_settings_subtabs.html' import subtabs %}
 {% from '_investigate.html' import investigate_link %}
@@ -54,11 +55,41 @@
 </div>
 
 {% else %}
-<form method="GET" action="/settings/logs" class="filter-bar u-da12f2">
+{# Q248 (audit log filters): by action, by user and by day, beside the search. The two selects offer what the log holds; a day is a whole day in UTC, the
+   clock the Timestamp column is printed on. Every filter that is set is shown as set, is carried by the paging links, and is cleared by Clear filters. The two
+   words "From" and "to" are for a desktop: on a phone the bar becomes the Filters sheet, which labels each control from its aria-label. #}
+<style>
+    .logs-word { font-size: 12px; color: var(--text-muted); }
+    /* a date field drawn as the fields beside it (the shared rule for inputs names the types it knows, and this is the first date field in Jen) */
+    .filter-bar input[type=date] {
+        background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text);
+        padding: 7px 10px; font-size: 13px; font-family: inherit; min-width: 0; outline: none;
+    }
+    .filter-bar input[type=date]:focus { border-color: var(--primary); }
+    @media screen and (min-width: 769px) { #audit-filters input[name=search] { min-width: 270px; } }
+    @media screen and (max-width: 768px) {
+        .filter-bar .logs-word { display: none; }
+        .filter-bar input[type=date] { font-size: 16px; padding: 8px 12px; }
+    }
+</style>
+<form method="GET" action="/settings/logs" class="filter-bar u-da12f2" id="audit-filters">
     <input type="hidden" name="tab" value="audit">
-    <input type="text" name="search" value="{{ search }}" placeholder="Search user, action, entity, details…">
+    <input type="text" name="search" value="{{ search }}" placeholder="Search audit log" title="Search by user, action, entity or details" aria-label="Search by user, action, entity or details">
+    <select name="action" aria-label="Action">
+        <option value="">All actions</option>
+        {% for a in actions %}<option value="{{ a }}"{% if a == filters.action %} selected{% endif %}>{{ a }}</option>{% endfor %}
+    </select>
+    <select name="user" aria-label="User">
+        <option value="">All users</option>
+        {% for u in users %}<option value="{{ u }}"{% if u == filters.user %} selected{% endif %}>{{ u }}</option>{% endfor %}
+    </select>
+    <span class="logs-word" aria-hidden="true">From</span>
+    <input type="date" name="from" value="{{ filters['from'] }}" aria-label="From day (UTC)" title="From day (UTC)">
+    <span class="logs-word" aria-hidden="true">to</span>
+    <input type="date" name="to" value="{{ filters['to'] }}" aria-label="To day (UTC)" title="To day (UTC)">
     <button type="submit" class="btn btn-sm btn-secondary">Search</button>
-    {% if search %}<a href="/settings/logs?tab=audit" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
+    {% if filtered %}<a href="/settings/logs?tab=audit" class="btn btn-sm btn-secondary" id="audit-clear">Clear filters</a>
+    {% elif search %}<a href="/settings/logs?tab=audit" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
 </form>
 <div class="card u-41d7d7">
 <div class="table-wrap">
@@ -78,11 +109,18 @@
         <td data-m="primary"><strong>{{ log.username }}</strong></td>
         <td data-m="badge"><span class="badge {% if 'DELETE' in log.action %}badge-admin{% elif 'ADD' in log.action %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ log.action }}</span></td>
         <td data-m="secondary" class="mono u-6cb285">{{ log.entity }}</td>
-        <td data-m="secondary" class="u-865c33">{{ log.details }}</td>
+        {# Q248 (V12): the details are free text - one line, cut at the column's width, whole in the title; an event has no page of its own, so a click opens the cell where it is #}
+        <td data-m="secondary" class="u-865c33"><span class="clip" data-clip-toggle title="{{ log.details or '' }}">{{ log.details }}</span></td>
         <td data-m="hide" class="mono u-749148">{{ log.ip_address }}</td>
     </tr>
     {% else %}
+    {# Q248 (V21): a search that matches nothing says so and offers the way out, as the other lists do; "yet" is for a log with nothing in it #}
+    {% if search or filtered %}
+    {% from '_empty.html' import empty_state %}
+    <tr><td data-m="full" colspan="6">{{ empty_state(icon('search'), 'No audit events match.', [('Clear filters' if filtered else 'Clear search', '/settings/logs?tab=audit')]) }}</td></tr>
+    {% else %}
     <tr><td data-m="full" colspan="6" class="u-c92bea">No audit events yet.</td></tr>
+    {% endif %}
     {% endfor %}
     </tbody>
 </table>
@@ -90,14 +128,14 @@
 </div>
 {% if pages > 1 %}
 <div class="pagination">
-    {% if page > 1 %}<a href="?tab=audit&search={{ search|urlencode }}&page={{ page-1 }}">‹ Prev</a>{% endif %}
+    {% if page > 1 %}<a href="?{{ query }}&amp;page={{ page-1 }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
     {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
-    <a href="?tab=audit&search={{ search|urlencode }}&page={{ p }}">{{ p }}</a>
+    <a href="?{{ query }}&amp;page={{ p }}">{{ p }}</a>
     {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
     {% endfor %}
-    {% if page < pages %}<a href="?tab=audit&search={{ search|urlencode }}&page={{ page+1 }}">Next ›</a>{% endif %}
+    {% if page < pages %}<a href="?{{ query }}&amp;page={{ page+1 }}">Next ›</a>{% endif %}
 </div>
 {% endif %}
 {% endif %}

@@ -40,6 +40,7 @@ from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.config_revisions import RevisionStoreUnreadable
 from jen.services.forms import flash_field
 from jen.services.leases_sql import ACTIVE_LEASE4
+from jen.services.reltime import plural as _plural
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -501,13 +502,13 @@ def add_subnet_post():
     if routers:
         bad = [ip for ip in routers.split(",") if not _valid_ip(ip)]
         if bad:
-            flash_field("routers", f"Invalid router IP(s): {', '.join(bad)}")
+            flash_field("routers", f"Invalid router {'IP' if len(bad) == 1 else 'IPs'}: {', '.join(bad)}")
             return redirect(url_for("subnets.add_subnet"))
 
     if dns:
         bad = [ip for ip in dns.split(",") if not _valid_ip(ip)]
         if bad:
-            flash_field("dns", f"Invalid DNS server IP(s): {', '.join(bad)}")
+            flash_field("dns", f"Invalid DNS server {'IP' if len(bad) == 1 else 'IPs'}: {', '.join(bad)}")
             return redirect(url_for("subnets.add_subnet"))
 
     for t, label in [(lifetime, "Valid Lifetime"), (renew, "Renew Timer"), (rebind, "Rebind Timer")]:
@@ -605,9 +606,9 @@ def delete_subnet(subnet_id):
     if active_leases > 0 or reservations > 0:
         parts = []
         if active_leases:
-            parts.append(f"{active_leases} active lease(s)")
+            parts.append(f"{_plural(active_leases, 'active lease')}")
         if reservations:
-            parts.append(f"{reservations} reservation(s)")
+            parts.append(f"{_plural(reservations, 'reservation')}")
         flash(
             f"Cannot delete '{subnet_name}' — it still has {' and '.join(parts)}. "
             f"Release the leases and remove the reservations first.",
@@ -699,14 +700,14 @@ def _parse_and_validate_subnet_edit_form(form):
     if new_routers:
         bad = [ip for ip in new_routers.split(",") if not _valid_ip(ip)]
         if bad:
-            return None, f"Invalid router IP(s): {', '.join(bad)}"
+            return None, f"Invalid router {'IP' if len(bad) == 1 else 'IPs'}: {', '.join(bad)}"
 
     if new_dns:
         bad = [ip for ip in new_dns.split(",") if not _valid_ip(ip)]
         if bad:
             return (
                 None,
-                f"Invalid DNS server IP(s): {', '.join(bad)} — enter one IP per entry, comma-separated (e.g. 9.9.9.9,149.112.112.112)",
+                f"Invalid DNS server {'IP' if len(bad) == 1 else 'IPs'}: {', '.join(bad)} — enter one IP per entry, comma-separated (e.g. 9.9.9.9,149.112.112.112)",
             )
 
     for t, label in [(new_lifetime, "Valid Lifetime"), (new_renew, "Renew Timer"), (new_rebind, "Rebind Timer")]:
@@ -1771,7 +1772,7 @@ def _parse_and_validate_subnet6_edit_form(form):
     if new_dns:
         bad = [ip for ip in new_dns.split(",") if not _valid_ip6(ip)]
         if bad:
-            return None, f"Invalid DNS server address(es): {', '.join(bad)}"
+            return None, f"Invalid DNS server {'address' if len(bad) == 1 else 'addresses'}: {', '.join(bad)}"
 
     for t, label in [
         (new_preferred, "Preferred Lifetime"),
@@ -2184,6 +2185,8 @@ def import_windows():
         return render_template(
             "import_windows.html",
             import_target_name=_import_target_name(target),
+            # Q248 (V22): with no name of its own the server IS "the first server that takes changes", and the page said the phrase twice
+            import_target_named=bool((target or {}).get("name")),
             import_target_transport=__changeset._transport(target, "dhcp4") if target else "off",
         )
 
@@ -2210,7 +2213,9 @@ def import_windows():
 
     _store_import_plan(plan, "windows")
     __user.audit(
-        "IMPORT_WINDOWS_DHCP", "upload", f"{len(plan.scopes)} scope(s) parsed, {len(plan.warnings)} warning(s)"
+        "IMPORT_WINDOWS_DHCP",
+        "upload",
+        f"{_plural(len(plan.scopes), 'scope')} parsed, {_plural(len(plan.warnings), 'warning')}",
     )
     return redirect(url_for("subnets.import_windows_review", source="windows"))
 
@@ -2254,7 +2259,11 @@ def import_isc():
             leases = __isc.active_leases_in_ranges(__isc.parse_leases(leases_data), plan)
 
     _store_import_plan(plan, "isc", {"leases": leases})
-    __user.audit("IMPORT_ISC_DHCP", "upload", f"{len(plan.scopes)} subnet(s) parsed, {len(plan.warnings)} warning(s)")
+    __user.audit(
+        "IMPORT_ISC_DHCP",
+        "upload",
+        f"{_plural(len(plan.scopes), 'subnet')} parsed, {_plural(len(plan.warnings), 'warning')}",
+    )
     return redirect(url_for("subnets.import_windows_review", source="isc"))
 
 
@@ -2450,7 +2459,7 @@ def _finish_windows_import(token, entry):
         new_map.update(subnets_to_declare)
         try:
             __config.write_subnets_config(new_map)
-            report.append(f"{len(subnets_to_declare)} subnet(s) registered with Jen.")
+            report.append(f"{_plural(len(subnets_to_declare), 'subnet')} registered with Jen.")
         except ValueError as e:
             # v5.67.0-beta.7 (Q119, item g) — Kea already has the real
             # subnets/reservations by this point (win_dhcp_import's own
@@ -2465,7 +2474,7 @@ def _finish_windows_import(token, entry):
     __user.audit(
         _import_src(entry)["audit"],
         "apply",
-        f"{len(subnets_to_declare)} subnet(s), {reservation_results['added']} reservation(s)",
+        f"{_plural(len(subnets_to_declare), 'subnet')}, {_plural(reservation_results['added'], 'reservation')}",
     )
     return report
 

@@ -213,11 +213,11 @@ class TestProjectionNote:
 
     def test_insufficient_says_how_many_more_days(self):
         f = cap.forecast(_rows([10, 20, 30]), today=TODAY)
-        assert cap.projection_note(f) == "No projection yet: 4 more day(s) of history needed."
+        assert cap.projection_note(f) == "No projection yet: 4 more days of history needed."
 
     def test_one_day_short_is_still_a_positive_number(self):
         f = cap.forecast(_rows([10, 20, 30, 40, 50, 60]), today=TODAY)
-        assert "1 more day(s)" in cap.projection_note(f)
+        assert "1 more day of history" in cap.projection_note(f)
 
     def test_no_pool(self):
         f = cap.forecast(_rows([10] * 10, pool_size=0), today=TODAY)

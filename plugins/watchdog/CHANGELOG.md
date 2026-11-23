@@ -1,5 +1,25 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.1.5] - 2026-11-22
+
+Page polish from the look over the pages of Jen 7.2.0-beta.5. Nothing a probe does, stores or sends changes. `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged, and there is no migration.
+
+### Changed: a page with no target yet shows the first steps (a first-run block on each empty plugin page, addition 11; plugin pages differ from each other, V52)
+
+On a fresh install the page showed a card of five filter buttons (*All (0)*, *Up*, *Down*, *Unknown*, *Paused*) with nothing to filter, and under it the headings of a table over one line, *No targets yet. Add one above.* The page said in one sentence what Watchdog is for. It did not say what a target is, what happens after one is added, or where the alerts it promises are switched on, and a person who added a target and never ticked the two alerts on a channel got no message when the host went down (a channel sends only the alerts ticked on it).
+
+Until the first target exists the page now shows one card, *Getting started*, in place of the filters and the table:
+
+1. Add a target. A target is a host Watchdog probes, by ping or by a TCP port. The step carries its own **Add Target** button, which opens the same dialog as the one in the page header.
+2. Watchdog then probes each target on its interval (5 minutes unless you pick a longer one) and calls it down after the failed checks in a row you chose (3 unless you change it).
+3. Its two alerts, "Watchdog: host down" and "Watchdog: host back up", are set under Settings - Alerts: tick them on the channels that should get them.
+
+A viewer sees the same card without the button and without the link (adding a target and the Alerts page both need an admin). The filters and the table are drawn again as soon as there is a target to show, and the filter script is only sent with them.
+
+### Not changed: "Add Target" keeps its name
+
+The look-over found that this page and DNS Sync's both had a button named *Add Target* for two different things (a host to probe here, a DNS server there). The word stays here, where it has always meant a watched host, and the first step now says what it is. DNS Sync 1.1.6 calls its own a DNS server. The button was already in the page header at the right and already in Title Case, so neither moved.
+
 ## [1.1.4] - 2026-11-20
 
 Four fixes from the audit of 1.1.3 (WD-1 to WD-4). `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged, and there is no migration.

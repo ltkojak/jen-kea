@@ -1,14 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Settings{% endblock %}
 {% block content %}
+<style>
+    .settings-find { display: flex; align-items: center; gap: 8px; max-width: 480px; margin-bottom: 16px; }
+    .settings-find label { flex: none; white-space: nowrap; }
+    .settings-find input { flex: 1 1 auto; min-width: 0; }
+    .settings-find-none { color: var(--text-muted); padding: 24px 0; }
+    .settings-tile[hidden] { display: none; }
+</style>
 <div class="page-header">
     <h1>{{ icon("settings", "ico-lg") }} Settings</h1>
     <p>Everything about this Jen install, grouped by what you're trying to do.</p>
 </div>
 
-<div class="settings-grid">
+{# Q248 (addition 14) - "Find a setting": typing filters the groups below in the browser, by each group's name, its description and the words in data-keywords (the
+   settings its pages hold, written here from those pages' cards). No request is made; Escape clears. With no script the box does nothing and every group shows. #}
+{% set keywords = {
+    'kea': 'control agent, control socket, API URL, API password, connection mode, direct mode, TLS, CA bundle, client certificate, Kea servers, high availability, HA, SSH host, SSH key, helper, jen-kea-helper, DDNS, D2, DNS provider, packages, Kea version, config drift, investigation logging, debug log, IPv6, DHCPv6, write mode, probe',
+    'databases': 'MySQL, MariaDB, database host, database port, database password, export, import, backup, backups, schedule, restore, migrate, migration, recovery bundle, passphrase',
+    'security': 'users, accounts, roles, password, API key, API keys, token, API documentation, MFA, multi-factor, two-factor, session timeout, idle, rate limiting, lockout, failed sign-in, SSL, HTTPS, certificate, single sign-on, SSO, OIDC',
+    'alerts': 'alert channels, notifications, email, SMTP, ntfy, webhook, Pushover, Discord, Slack, Telegram, message templates, thresholds, pool usage, daily summary, Prometheus, metrics',
+    'appearance': 'logo, nav color, navigation bar, favicon, brand icons, manufacturer icons, theme, palette, colors, custom theme, dark, light',
+    'system': 'update, upgrade, version, release channel, plugins, ports, HTTP port, HTTPS port, threads, restart, audit log retention, Kea config history, support bundle, Grafana dashboard',
+    'logs': 'audit log, alert log, alert delivery, history, events',
+} %}
+<div class="settings-find" role="search">
+    <label for="settings-find" class="u-865c33">Find a setting</label>
+    <input type="text" id="settings-find" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="SMTP, certificate, backup" aria-controls="settings-grid">
+</div>
+
+<div class="settings-grid" id="settings-grid">
     {% for g in nav.settings_groups %}
-    <a href="{{ g.url }}" class="settings-tile">
+    <a href="{{ g.url }}" class="settings-tile" data-keywords="{{ keywords.get(g.id, '') }}">
         <div class="settings-tile-head">
             <span class="settings-tile-icon">{{ nav_icon(g.icon) }}</span>
             <span class="settings-tile-label">{{ g.label }}</span>
@@ -25,4 +48,33 @@
     </a>
     {% endfor %}
 </div>
+<p class="settings-find-none" id="settings-find-none" role="status" hidden>No setting matches.</p>
+{% endblock %}
+{% block scripts %}
+(function() {
+    var box = document.getElementById('settings-find');
+    var none = document.getElementById('settings-find-none');
+    var tiles = Array.prototype.slice.call(document.querySelectorAll('#settings-grid .settings-tile'));
+    if (!box || !none) return;
+    function words(tile) {
+        var label = tile.querySelector('.settings-tile-label');
+        var blurb = tile.querySelector('.settings-tile-blurb');
+        return ((label ? label.textContent : '') + ' ' + (blurb ? blurb.textContent : '') + ' ' + (tile.getAttribute('data-keywords') || '')).toLowerCase();
+    }
+    function filter() {
+        var asked = box.value.toLowerCase().split(/\s+/).filter(function(w) { return w; });
+        var shown = 0;
+        tiles.forEach(function(tile) {
+            var text = words(tile);
+            var match = asked.every(function(w) { return text.indexOf(w) !== -1; });
+            tile.hidden = !match;
+            if (match) shown += 1;
+        });
+        none.hidden = shown !== 0;
+    }
+    box.addEventListener('input', filter);
+    box.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && box.value) { e.preventDefault(); e.stopPropagation(); box.value = ''; filter(); }
+    });
+})();
 {% endblock %}

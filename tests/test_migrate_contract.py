@@ -352,9 +352,9 @@ class TestMigrateKeaTargetContract:
             "class options are not part of a reservation move)"
             for r in results
         ), results
-        assert any(r.startswith("ℹ️ dhcp4_options: 2 option row(s) of Kea's config backend") for r in results), results
+        assert any(r.startswith("ℹ️ dhcp4_options: 2 option rows of Kea's config backend") for r in results), results
         assert any(r.startswith("ℹ️ dhcp6_options: 0 host-scoped option rows") for r in results), results
-        assert any(r.startswith("ℹ️ dhcp6_options: 1 option row(s) of Kea's config backend") for r in results), results
+        assert any(r.startswith("ℹ️ dhcp6_options: 1 option row of Kea's config backend") for r in results), results
         tgt.close()
 
     def test_no_left_behind_line_when_there_is_nothing_left_behind(self, db, scratch, kea_source):

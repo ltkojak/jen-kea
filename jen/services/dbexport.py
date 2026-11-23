@@ -19,6 +19,7 @@ import pymysql
 import pymysql.cursors
 
 from jen import extensions
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 
@@ -1319,7 +1320,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
             manifest = _plugins._manifest_for_owned_tables(pid)
             if manifest is None:
                 results.append(
-                    f"⚠️ {pid}: plugin code is not installed here — its data ({len(plugin_tables_all)} table(s)) "
+                    f"⚠️ {pid}: plugin code is not installed here — its data ({_plural(len(plugin_tables_all), 'table')}) "
                     f"was not restored; it is still inside this export/bundle. Install the plugin and restore "
                     f"again to bring it back."
                 )
@@ -1383,7 +1384,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
     if violations:
         named = ", ".join(f"{pid}.{t}" for pid, t in violations)
         results.append(
-            f"⚠️ invariant check: recorded migration(s) with a missing table ({named}) — "
+            f"⚠️ invariant check: {_plural(len(violations), 'recorded migration')} with a missing table ({named}) — "
             f"Jen will repair this automatically the next time it starts"
         )
         for pid, tbl in violations:
@@ -2010,7 +2011,7 @@ def _verify_copy(src, dst, tbl, dst_before, pk_cols, where=None):
         missing = _pks_missing(dst, tbl, pk_cols, _pk_sample(src, tbl, pk_cols, where=where))
         if missing:
             raise RuntimeError(
-                f"{tbl}: {len(missing)} sampled primary key(s) are missing from the target, e.g. {missing[0]}"
+                f"{tbl}: {_plural(len(missing), 'sampled primary key')} {'is' if len(missing) == 1 else 'are'} missing from the target, e.g. {missing[0]}"
             )
 
 
@@ -2256,8 +2257,8 @@ def migrate_kea(
                 left_behind = _row_count(src, tbl) - _row_count(src, tbl, KEA_TABLE_WHERE[tbl])
                 if left_behind > 0:
                     line = (
-                        f"ℹ️ {tbl}: {left_behind} option row(s) of Kea's config backend (global, subnet, shared-network, "
-                        f"pool or class options) were left behind — the target's own are untouched"
+                        f"ℹ️ {tbl}: {_plural(left_behind, 'option row')} of Kea's config backend (global, subnet, shared-network, "
+                        f"pool or class options) {'was' if left_behind == 1 else 'were'} left behind — the target's own are untouched"
                     )
                     _cb("  " + line)
                     results.append(line)

@@ -23,10 +23,10 @@
     {% else %}
     <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-jen-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
-            <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.jen_db_host }}"></div>
-            <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.jen_db_user }}"></div>
-            <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="(unchanged)"><div class="form-hint">Leave blank to keep existing password</div></div>
-            <div class="form-group"><label>Database Name</label><input type="text" name="database" value="{{ conn.jen_db_name }}"></div>
+            <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.jen_db_host }}" aria-label="Host" autocapitalize="off" spellcheck="false"></div>
+            <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.jen_db_user }}" aria-label="Username"></div>
+            <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="(unchanged)" aria-label="Password"><div class="form-hint">Leave blank to keep existing password</div></div>
+            <div class="form-group"><label>Database Name</label><input type="text" name="database" value="{{ conn.jen_db_name }}" aria-label="Database Name"></div>
         </div>
         <button type="submit" class="btn btn-primary">Save Jen DB</button>
     </form>
@@ -41,10 +41,10 @@
     {% else %}
     <form data-guard-unsaved method="POST" action="/settings/infrastructure/save-kea-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
-            <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.kea_db_host }}"></div>
-            <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.kea_db_user }}"></div>
-            <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="(unchanged)"><div class="form-hint">Leave blank to keep existing password</div></div>
-            <div class="form-group"><label>Database Name</label><input type="text" name="database" value="{{ conn.kea_db_name }}"></div>
+            <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.kea_db_host }}" aria-label="Host" autocapitalize="off" spellcheck="false"></div>
+            <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.kea_db_user }}" aria-label="Username"></div>
+            <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="(unchanged)" aria-label="Password"><div class="form-hint">Leave blank to keep existing password</div></div>
+            <div class="form-group"><label>Database Name</label><input type="text" name="database" value="{{ conn.kea_db_name }}" aria-label="Database Name"></div>
         </div>
         <button type="submit" class="btn btn-primary">Save Kea DB</button>
     </form>
@@ -71,7 +71,7 @@
     <div class="card" style="border-left:4px solid var(--warning);">
         <div class="u-6ccf13">
             <span class="u-881f70"></span>
-            <span style="font-size:16px;font-weight:700;color:var(--warning);">Kea Database</span>
+            <span style="font-size:16px;font-weight:700;color:var(--warning-ink);">Kea Database</span>
         </div>
         <div class="u-1a27f0">
             <div>Host: <strong class="u-f045bb">{{ kea_db_host }}</strong></div>
@@ -126,7 +126,7 @@
     <!-- Kea Export -->
     <div class="card">
         <div class="card-header">
-            <h3>Export <span style="color:var(--warning);font-weight:800;">Kea Data</span></h3>
+            <h3>Export <span style="color:var(--warning-ink);font-weight:800;">Kea Data</span></h3>
         </div>
         <p class="u-c0a2eb">
             Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong> to a compressed JSON file. The reservation tables are ticked: they are what a backup saves. Leases are a point-in-time snapshot; tick <code class="u-11a508">lease4</code> to put one in the same file. An option or IPv6 row is restored only with the <code class="u-11a508">hosts</code> row it belongs to, so export <code class="u-11a508">hosts</code> with them.
@@ -149,7 +149,7 @@
             <div class="alert alert-warning" style="font-size:12px;margin-bottom:12px;">
                 Kea exports may contain MAC addresses, IP assignments, and hostnames for your entire network. Store securely.
             </div>
-            <button type="submit" class="btn btn-warning" style="width:100%;color:black;">Download Kea Export</button>
+            <button type="submit" class="btn btn-warning u-046678">Download Kea Export</button>
         </form>
     </div>
 </div>
@@ -220,7 +220,7 @@
                 {% if b.db == 'JEN' %}
                 <span style="color:var(--primary);font-weight:700;">{{ icon("circle", "ico-dot ico-success") }} Jen</span>
                 {% elif b.db == 'KEA' %}
-                <span style="color:var(--warning);font-weight:700;">{{ icon("circle", "ico-dot ico-warning") }} Kea</span>
+                <span style="color:var(--warning-ink);font-weight:700;">{{ icon("circle", "ico-dot ico-warning") }} Kea</span>
                 {% else %}
                 <span class="u-5872de">{{ b.db }}</span>
                 {% endif %}
@@ -231,18 +231,18 @@
             <td data-m="hide" class="u-749148">{{ b.tables | join(', ') if b.tables else '—' }}</td>
             <td data-m="trailing" class="u-86abda">
                 <div class="action-menu">
-                    <input type="checkbox" id="am-backup-{{ loop.index }}" class="action-menu-toggle">
+                    <input type="checkbox" id="am-backup-{{ loop.index }}" class="action-menu-toggle" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="Actions for {{ b.filename }}">
                     <label for="am-backup-{{ loop.index }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
-                    <div class="action-menu-dropdown">
-                        <a href="/database/backup/download/{{ b.filename }}" class="action-menu-item">{{ icon_download() }}Download</a>
+                    <div class="action-menu-dropdown" role="menu">
+                        <a href="/database/backup/download/{{ b.filename }}" class="action-menu-item" role="menuitem">{{ icon_download() }}Download</a>
                         {% if not b.has_sidecar %}
                         <form method="POST" action="/database/backup/details/{{ b.filename }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="action-menu-item">{{ icon("info") }}Read details</button>
+                            <button type="submit" class="action-menu-item" role="menuitem">{{ icon("info") }}Read details</button>
                         </form>
                         {% endif %}
                         <div class="action-menu-divider"></div>
-                        <form method="POST" action="/database/backup/delete/{{ b.filename }}" data-confirm="Delete backup {{ b.filename }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Delete backup</button>
+                        <form method="POST" action="/database/backup/delete/{{ b.filename }}" data-confirm="Delete backup {{ b.filename }}? This cannot be undone." data-confirm-label="Delete"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="action-menu-item danger" role="menuitem">{{ icon_trash() }}Delete backup</button>
                         </form>
                     </div>
                 </div>

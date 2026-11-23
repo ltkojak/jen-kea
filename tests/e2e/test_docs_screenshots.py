@@ -285,9 +285,9 @@ class TestInvestigationScreenshot:
                 wanted,
             )
             raise AssertionError(f"explain-tab: the page lacks part of what it should show: {seen}") from None
-        # the Explain tab is the active one: the tab strip marks it with badge-reserved (templates/client.html)
+        # the Explain tab is the current one: the in-page tabs mark it with aria-current (Q248, V38; templates/client.html)
         active = desktop.evaluate(
-            "() => [...document.querySelectorAll('a.badge-reserved[href*=\"tab=\"]')].map(a => a.getAttribute('href'))"
+            "() => [...document.querySelectorAll('a.page-tab[aria-current=\"page\"][href*=\"tab=\"]')].map(a => a.getAttribute('href'))"
         )
         assert len(active) == 1 and "tab=explain" in active[0], active
         # the class decision line: step 3's evidence names the class and says it matched

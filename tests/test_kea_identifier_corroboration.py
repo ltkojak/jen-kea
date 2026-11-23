@@ -229,7 +229,7 @@ class TestClientIdCorroboration:
 
         _host(kea, 1, TEXT, 3)
         c = health._kea_identifiers({"unrestricted": True})
-        assert c.status == "ok" and "1 client-id(s) are hex text with no lease" in c.detail
+        assert c.status == "ok" and "1 client-id is hex text with no lease" in c.detail
         _lease(kea, 167772300, client_id=DECODED)
         assert health._kea_identifiers({"unrestricted": True}).status == "fail"
 

@@ -140,7 +140,9 @@ class TestTheMacro:
 
     def test_the_three_kinds(self, macro_env):
         menu = self._render(macro_env, "{{ investigate_link('aa:bb:cc:dd:ee:ff') }}")
-        assert menu.startswith('<a href="/client?q=aa%3Abb%3Acc%3Add%3Aee%3Aff" class="action-menu-item">')
+        assert menu.startswith(
+            '<a href="/client?q=aa%3Abb%3Acc%3Add%3Aee%3Aff" class="action-menu-item" role="menuitem">'
+        )
         assert "Investigate</a>" in menu
         button = self._render(macro_env, "{{ investigate_link('10.0.0.5', 'button') }}")
         assert 'class="btn btn-sm btn-secondary"' in button and "Investigate</a>" in button

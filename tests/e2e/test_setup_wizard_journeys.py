@@ -111,9 +111,11 @@ class TestSetupWizardJourney:
             # Step 6: investigate — whichever branch this session's shared
             # lease state puts us in, the primary action marks the step
             # done.
-            if page.get_by_role("button", name="Finish setup").count():
-                page.get_by_role("button", name="Finish setup").click()
-                page.wait_for_url("**/setup/investigate", timeout=10000)
+            # Q248 (addition 9): with no lease to pick, the foot's Finish is the step's action (it was a "Finish setup" button that stayed on the page) and it
+            # lands on the dashboard.
+            if not page.get_by_role("button", name="Investigate").count():
+                page.get_by_role("button", name="Finish", exact=True).click()
+                page.wait_for_url(f"{base_url}/", timeout=10000)
                 assert "First hour complete" in page.content()
             else:
                 # v5.67.0-beta.5 (Q117 item k) — this now opens the full

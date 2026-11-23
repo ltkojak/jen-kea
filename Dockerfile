@@ -6,14 +6,15 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Kea DHCP Management Console"
-LABEL version="7.2.0-beta.5"
+LABEL version="7.2.0-beta.6"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies. nmap, iputils-ping and snmp are what the Network Discovery, Host Watchdog
 # and Switch Port Locator plugins shell out to (the same three packages the plugin installer allow-lists);
-# without them those plugins load but cannot work in this image (v5.65.10).
+# without them those plugins load but cannot work in this image (v5.65.10). iproute2 is `ip`: Jen reads the host's
+# own addresses with it, and without it Wake & Actions cannot tell whether Jen is in a wake's subnet (7.2.0-beta.6).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -25,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nmap \
     iputils-ping \
     snmp \
+    iproute2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

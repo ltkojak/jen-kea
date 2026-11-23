@@ -5,3 +5,8 @@
 {% macro copy_cell(value, label=None, display=None) -%}
 {%- if value -%}<button type="button" class="copy mono" data-copy="{{ value }}" title="Copy {{ label or value }}">{{ display if display is not none else value }}</button>{%- endif -%}
 {%- endmacro %}
+{#- Q248 (addition 10): a Copy BUTTON beside a block of text. `target` is the id of the element whose text is copied (or pass `text`); the same delegated listener in base.html
+   copies it and says "Copied" on the button for two seconds, or "Copy failed - select the text". `what` finishes the accessible name ("Copy the install command"). -#}
+{% macro copy_button(target=None, text=None, what=None) -%}
+<button type="button" class="btn btn-sm btn-secondary copy-btn"{% if text is not none %} data-copy-text="{{ text }}"{% else %} data-copy-target="{{ target }}"{% endif %}{% if what %} aria-label="Copy {{ what }}"{% endif %}>{{ icon("copy") }} <span class="copy-btn-label" aria-live="polite">Copy</span></button>
+{%- endmacro %}

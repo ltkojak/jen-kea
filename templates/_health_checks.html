@@ -1,3 +1,20 @@
+{# Q248 (addition 3): the order a person needs. What failed and what warns comes first, whatever group it is in (a failure in the fourth group used to sit half way
+   down the page); then each group's passing checks; then ONE closed line for the checks that were skipped, which opens to show them. The JSON answer of
+   /health-center/data is not reordered: it keeps every check in the fixed order of health.CHECK_IDS. Every row carries the id `check-<id>`, which the dashboard's
+   "Needs attention" card links to. No script here: this partial is swapped by htmx every minute (the page keeps the fold open across a swap). #}
+{% macro hc_row(c, group_label='') %}
+    <div class="hc-row" id="check-{{ c.id }}" data-check="{{ c.id }}" data-status="{{ c.status }}">
+        <span class="hc-pill hc-{{ c.status }}">{{ c.status }}</span>
+        <div class="hc-body">
+            <div class="hc-title">{{ c.title }}{% if group_label %} <span class="hc-group-tag">{{ group_label }}</span>{% endif %}</div>
+            {# Q248 (V28): a page the detail refers to is a link, never an address printed as text #}
+            {% if c.detail %}<div class="hc-detail">{{ c.detail }}{% if c.link %} <a class="hc-link" href="{{ c.link }}">{{ c.link_label or 'Open' }}</a>{% endif %}</div>{% endif %}
+        </div>
+        {% if c.fix_url and c.fix_url != c.link and c.status in ('warn', 'fail') %}
+        <a class="hc-fix" href="{{ c.fix_url }}">{{ c.fix_hint or 'Fix' }} &rarr;</a>
+        {% endif %}
+    </div>
+{% endmacro %}
 <div class="hc-summary u-2b583d">
     <span>checked <strong>{{ checked_at.strftime('%H:%M:%S') }} UTC</strong></span>
     <span><strong>{{ summary.ok|number }}</strong> ok</span>
@@ -6,25 +23,36 @@
     {% if summary.skip %}<span><strong>{{ summary.skip|number }}</strong> skipped</span>{% endif %}
 </div>
 
+{% if summary.fail or summary.warn %}
+<div class="u-905d8b hc-section" data-hc-section="attention">
+    <div class="hc-section-title">Failures and warnings</div>
+    {% for status in ('fail', 'warn') %}{% for group_id, group_label, checks in grouped %}{% for c in checks if c.status == status %}
+    {{ hc_row(c, group_label) }}
+    {% endfor %}{% endfor %}{% endfor %}
+</div>
+{% endif %}
+
 {% for group_id, group_label, checks in grouped %}
-<div class="u-905d8b">
-    <div style="font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-bottom:4px;">
-        {{ group_label }}
-    </div>
+{% set passing = checks|selectattr('status', 'equalto', 'ok')|list %}
+{% if passing %}
+<div class="u-905d8b hc-section" data-hc-section="{{ group_id }}">
+    <div class="hc-section-title">{{ group_label }}</div>
     {% if group_banners and group_banners.get(group_id) %}
     <div class="u-760160">{{ group_banners[group_id] }}</div>
     {% endif %}
-    {% for c in checks %}
-    <div class="hc-row" data-check="{{ c.id }}" data-status="{{ c.status }}">
-        <span class="hc-pill hc-{{ c.status }}">{{ c.status }}</span>
-        <div class="hc-body">
-            <div class="hc-title">{{ c.title }}</div>
-            {% if c.detail %}<div class="hc-detail">{{ c.detail }}</div>{% endif %}
-        </div>
-        {% if c.fix_url and c.status in ('warn', 'fail') %}
-        <a class="hc-fix" href="{{ c.fix_url }}">{{ c.fix_hint or 'Fix' }} &rarr;</a>
-        {% endif %}
-    </div>
+    {% for c in passing %}
+    {{ hc_row(c) }}
     {% endfor %}
 </div>
+{% endif %}
 {% endfor %}
+
+{% set skipped = summary.skip %}
+{% if skipped %}
+<details class="hc-skipped" id="hc-skipped" data-hc-section="skipped">
+    <summary>{{ skipped|plural('check') }} {{ 'was' if skipped == 1 else 'were' }} skipped (not applicable to this install)</summary>
+    {% for group_id, group_label, checks in grouped %}{% for c in checks if c.status == 'skip' %}
+    {{ hc_row(c, group_label) }}
+    {% endfor %}{% endfor %}
+</details>
+{% endif %}

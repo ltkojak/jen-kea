@@ -696,7 +696,7 @@ class TestTheLogsAreReadConcurrentlyInsideOneBudget:
         pool["hang"] = {1, 2, 3, 4}
         view, elapsed = self._timed(lambda: ctx.read_log(MAC, allowed=True))
         assert view["state"] == "error" and view["not_checked"] == ["kea-a", "kea-b", "kea-c", "kea-d"]
-        assert "4 server(s) could not be checked in time" in view["message"]
+        assert "4 servers could not be checked in time" in view["message"]
         assert elapsed < self.BUDGET + 1.0
         print(f"BUDGET all unavailable: {elapsed:.2f} s")
 

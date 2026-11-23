@@ -105,8 +105,96 @@ document.addEventListener('click', function(e) {
     else if (el.classList.contains('save-note-btn')) saveNote(id);
     else if (el.classList.contains('cancel-note-btn')) cancelNote(id);
 });
+// Q248 (V44): the subnets are a list and a row opens in place. Which rows are open is this person's choice in this browser ('jen-subnets-open': a JSON list of subnet ids, or the
+// string 'all' after Expand All), restored here before the page is shown; an id that no longer exists is ignored, and a private window just starts closed.
+(function() {
+    var KEY = 'jen-subnets-open';
+    var rows = Array.prototype.slice.call(document.querySelectorAll('.subnet-row'));
+    var allBtn = document.getElementById('subnets-expand-all');
+    if (!rows.length) return;
+    function isOpen(row) { return row.querySelector('.subnet-toggle').getAttribute('aria-expanded') === 'true'; }
+    function setOpen(row, open) {
+        row.querySelector('.subnet-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+        row.querySelector('.subnet-detail').hidden = !open;
+        row.classList.toggle('open', open);
+    }
+    function allOpen() { return rows.every(isOpen); }
+    function label() { if (allBtn) allBtn.textContent = allOpen() ? 'Collapse All' : 'Expand All'; }
+    function remember(all) {
+        var value = all ? 'all' : JSON.stringify(rows.filter(isOpen).map(function(r) { return Number(r.getAttribute('data-subnet-id')); }));
+        try { localStorage.setItem(KEY, value); } catch (e) { /* private mode */ }
+    }
+    var stored = null;
+    try { stored = localStorage.getItem(KEY); } catch (e) { /* private mode */ }
+    if (stored === 'all') {
+        rows.forEach(function(r) { setOpen(r, true); });
+    } else if (stored) {
+        var list = [];
+        try { list = JSON.parse(stored); } catch (e) { list = []; }
+        if (!Array.isArray(list)) list = [];
+        var want = {};
+        list.forEach(function(id) { want[String(id)] = true; });
+        rows.forEach(function(r) { setOpen(r, want[r.getAttribute('data-subnet-id')] === true); });
+    }
+    label();
+    // one listener: the row's own button (Enter and Space are the button's), or a click anywhere on the row's head that is not another control (the badge's color picker, a link)
+    document.addEventListener('click', function(e) {
+        var head = e.target.closest('.subnet-row-head');
+        if (!head) return;
+        if (!e.target.closest('.subnet-toggle') && e.target.closest('a, button, select, input, textarea, label, form, .tone-picker')) return;
+        var row = head.closest('.subnet-row');
+        setOpen(row, !isOpen(row));
+        label();
+        remember(false);
+    });
+    if (allBtn) allBtn.addEventListener('click', function() {
+        var open = !allOpen();
+        rows.forEach(function(r) { setOpen(r, open); });
+        label();
+        remember(open);
+    });
+})();
 {% endblock %}
 {% block content %}
+{# Q248 (V44): the list. A row is the subnet's name (its largest text), badge and CIDR, the pool's bar with its figures, the lease time, the gateway and the number of options; the
+   detail that was the whole card is under it, closed until the row is opened. On a phone the row is the name, the badge, the CIDR and the bar. #}
+<style>
+/* Expand All sits at the right of the list's first heading, on the heading's own line */
+.subnet-tools { float: right; margin: 4px 0 4px 12px; }
+.subnet-row { clear: both; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
+.subnet-row.open { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.subnet-row-head { display: grid; grid-template-columns: minmax(220px, 1.5fr) minmax(240px, 2fr) 96px minmax(120px, 150px) 64px; gap: 20px; align-items: start; padding: 12px 16px; border-radius: calc(var(--radius) - 1px); cursor: pointer; }
+.subnet-row.open .subnet-row-head { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.subnet-row-head:hover { background: var(--surface2); }
+.subnet-ident { min-width: 0; }
+.subnet-ident-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.subnet-toggle { display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; cursor: pointer; text-align: left; }
+.subnet-toggle .ico { color: var(--text-muted); transition: transform .15s; }
+.subnet-toggle[aria-expanded="false"] .ico { transform: rotate(-90deg); }
+.subnet-name { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.subnet-cidr { display: block; margin: 2px 0 0 24px; font-size: var(--fs-md); color: var(--text-muted); }
+.subnet-cell { min-width: 0; padding-top: 3px; font-size: var(--fs-md); line-height: 18px; }
+.subnet-cell .stat-label { margin-bottom: 2px; line-height: 16px; }
+.subnet-cell .mono { overflow-wrap: anywhere; }
+.subnet-usage-line { display: flex; align-items: center; gap: 12px; }
+/* the bar's track is a tint of the text color, so it shows on the surface and on a hovered row (the second surface is the track's usual color) */
+.subnet-usage-line progress.pool-use { flex: 1; min-width: 60px; margin-top: 0; height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--text) 12%, transparent); }
+.subnet-usage-line progress.pool-use::-webkit-progress-bar { background: color-mix(in srgb, var(--text) 12%, transparent); }
+/* every row's figures take the same width, so every row's bar is the same length */
+.subnet-usage-figures { min-width: 16ch; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.subnet-detail { padding: 16px; border-top: 1px solid var(--border); }
+.subnet-detail-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.subnet-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.subnet-stat { font-size: 14px; font-weight: 600; }
+@media screen and (max-width: 768px) {
+    .subnet-row-head { grid-template-columns: 1fr; gap: 10px; padding: 12px 14px; }
+    .subnet-cell-desk { display: none; }
+    .subnet-toggle { min-height: var(--tap); }
+    .subnet-cidr { margin-top: -4px; }
+    .subnet-cell { padding-top: 0; }
+    .subnet-detail { padding: 14px; }
+}
+</style>
 <div class="page-header u-1bcfaf">
     <div>
         <h1>{{ icon("network", "ico-lg") }} Subnets & Scope Options</h1>
@@ -134,10 +222,13 @@ document.addEventListener('click', function(e) {
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
 {% endif %}
 
-{# Q208 (AX10): the badge on a card is the color picker and only its tooltip said so. Administrators only (a viewer's badge is not a control), and only when a card renders; the script at the head
+{# Q208 (AX10): the badge on a row is the color picker and only its tooltip said so. Administrators only (a viewer's badge is not a control), and only when a row renders; the script at the head
    of this page un-hides it unless this browser has already dismissed it (localStorage 'jen-tone-hint'). A hint waits to be read: no data-autofade. #}
 {% if subnets and current_user.role in ('superadmin','admin') %}
-<div class="alert alert-info alert-flash" id="tone-hint" role="note" hidden><span class="alert-text">{{ icon("info") }} Click a subnet's name on its card to choose its badge color - the badge is the picker.</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+<div class="alert alert-info alert-flash" id="tone-hint" role="note" hidden><span class="alert-text">{{ icon("info") }} Click a subnet's badge to choose its color - the badge is the picker.</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+{% endif %}
+{% if subnets %}
+<div class="subnet-tools"><button type="button" class="btn btn-sm btn-secondary" id="subnets-expand-all">Expand All</button></div>
 {% endif %}
 {% set grp = namespace(cur=false) %}
 {% for s in subnets %}
@@ -146,8 +237,9 @@ document.addEventListener('click', function(e) {
     {% if s.shared_network %}
     <h2 style="margin:24px 0 8px;font-size:16px;">
         Shared network: {{ s.shared_network }}{% for n in shared_networks if n.name == s.shared_network and n.interface %} · {{ n.interface }}{% endfor %}
-        {% if can_manage_networks and ssh_ready %}
-        <form method="POST" action="/subnets/shared-networks/delete" class="u-2d191d" data-confirm="Delete shared network '{{ s.shared_network }}'? It must have no subnets left. Kea restarts.">
+        {# Q248 (V44): an administrator's control - a viewer who sees every subnet was shown this button and the form below, and both routes refuse a viewer #}
+        {% if can_manage_networks and ssh_ready and current_user.role in ('superadmin','admin') %}
+        <form method="POST" action="/subnets/shared-networks/delete" class="u-2d191d" data-confirm="Delete shared network '{{ s.shared_network }}'? It must have no subnets left. Kea restarts." data-confirm-label="Delete">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="name" value="{{ s.shared_network }}">
             <button type="submit" class="btn btn-sm u-be83f6">{{ icon("trash") }} Delete network</button>
@@ -158,74 +250,94 @@ document.addEventListener('click', function(e) {
     <h2 style="margin:8px 0;font-size:16px;">Subnets</h2>
     {% endif %}
 {% endif %}
-<div class="card">
-    <div class="card-header">
-        <div class="u-95fd83">
-            {% if current_user.role in ('superadmin','admin') %}
-            <span class="tone-picker">
-                <button type="button" class="badge badge-tone-{{ subnet_tone(s.id) }} tone-btn" data-subnet-id="{{ s.id }}" data-tone-badge="{{ s.id }}" aria-haspopup="true" aria-expanded="false"
-                        title="Choose this subnet's badge color">{{ s.name }}</button>
-                <div class="tone-menu" role="group" aria-label="Badge color for {{ s.name }}" hidden>
-                    {% for t in badge_tones %}
-                    <button type="button" class="badge badge-tone-{{ t }} tone-choice" data-subnet-id="{{ s.id }}" data-tone="{{ t }}" aria-pressed="{{ 'true' if subnet_tone(s.id) == t else 'false' }}"
-                            title="{{ t|title }}">{{ s.name }} · {{ t }}</button>
-                    {% endfor %}
-                </div>
-            </span>
-            {% else %}
-            {{ subnet_badge(s.id, s.name) }}
-            {% endif %}
-            <span class="mono u-de0080">{{ s.cidr }}</span>
-            {% if s.shared_network %}<span class="badge u-d6f005"  title="In shared network {{ s.shared_network }}">shared</span>{% endif %}
-            {% for s6 in subnets6 if s6.paired_v4_id == s.id %}
-            <span class="badge badge-tone-blue" title="Paired IPv6 subnet">IPv6</span>
-            {% endfor %}
+{# Q205 (AU2): the live usage, by the dashboard's definitions (DEF-001 active leases, DEF-002 pool size, the leases INSIDE the pools); amber from the operator's alert threshold, red when the pool is full #}
+{% set u = s.usage %}
+<div class="subnet-row" id="subnet-{{ s.id }}" data-subnet-id="{{ s.id }}">
+    <div class="subnet-row-head">
+        <div class="subnet-ident">
+            <div class="subnet-ident-line">
+                <button type="button" class="subnet-toggle" aria-expanded="false" aria-controls="subnet-detail-{{ s.id }}">{{ icon("chevron-down") }}<span class="subnet-name">{{ s.name }}</span></button>
+                {% if current_user.role in ('superadmin','admin') %}
+                <span class="tone-picker">
+                    <button type="button" class="badge badge-tone-{{ subnet_tone(s.id) }} tone-btn" data-subnet-id="{{ s.id }}" data-tone-badge="{{ s.id }}" aria-haspopup="true" aria-expanded="false"
+                            title="Choose this subnet's badge color">{{ s.name }}</button>
+                    <div class="tone-menu" role="group" aria-label="Badge color for {{ s.name }}" hidden>
+                        {% for t in badge_tones %}
+                        <button type="button" class="badge badge-tone-{{ t }} tone-choice" data-subnet-id="{{ s.id }}" data-tone="{{ t }}" aria-pressed="{{ 'true' if subnet_tone(s.id) == t else 'false' }}"
+                                title="{{ t|title }}">{{ s.name }} · {{ t }}</button>
+                        {% endfor %}
+                    </div>
+                </span>
+                {% else %}
+                {{ subnet_badge(s.id, s.name) }}
+                {% endif %}
+                {% if s.shared_network %}<span class="badge u-d6f005"  title="In shared network {{ s.shared_network }}">shared</span>{% endif %}
+                {% for s6 in subnets6 if s6.paired_v4_id == s.id %}
+                <span class="badge badge-tone-blue" title="Paired IPv6 subnet">IPv6</span>
+                {% endfor %}
+            </div>
+            <span class="mono subnet-cidr">{{ s.cidr }}</span>
         </div>
-        {% if current_user.role in ('superadmin','admin') and ssh_ready %}
-        <div class="u-01ef7f">
-            {% if can_manage_networks and (shared_networks or s.shared_network) %}
-            <form method="POST" action="/subnets/move/{{ s.id }}" class="u-cccfa4">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <select name="shared_network" data-submit title="Move this subnet" style="font-size:12px;padding:2px 4px;">
-                    <option value="" {% if not s.shared_network %}selected{% endif %}>— top level —</option>
-                    {% for n in shared_networks %}<option value="{{ n.name }}" {% if s.shared_network == n.name %}selected{% endif %}>{{ n.name }}</option>{% endfor %}
-                </select>
-            </form>
-            {% endif %}
-            <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
+        <div class="subnet-usage subnet-cell">
+            <div class="stat-label">Pool use</div>
+            <div class="subnet-usage-line">
+                {% if u.pool_size and u.pool_used is not none %}
+                <progress class="pool-use usage-bar usage-{{ u.level }}" max="100" value="{{ [u.pct, 100]|min }}" aria-label="Pool use {{ u.pct }} percent"></progress>
+                {% endif %}
+                <span class="subnet-usage-figures">
+                    {% if u.pool_used is none %}<span class="muted">unavailable</span>
+                    {% elif not u.pool_size %}<span class="muted">no pool</span>
+                    {% else %}{{ u.pool_used|number }} of {{ u.pool_size|number }} ({{ u.pct }}%){% endif %}
+                </span>
+            </div>
         </div>
-        {% endif %}
+        <div class="subnet-cell subnet-cell-desk">
+            <div class="stat-label">Lease time</div>
+            <div>{% if s.valid_lifetime %}{{ s.valid_lifetime|duration_short }}{% else %}—{% endif %}</div>
+        </div>
+        <div class="subnet-cell subnet-cell-desk">
+            <div class="stat-label">Gateway</div>
+            <div class="mono">{{ s.routers or '—' }}</div>
+        </div>
+        <div class="subnet-cell subnet-cell-desk">
+            <div class="stat-label">Options</div>
+            <div>{{ (s.options_here + s.options_inherited)|number }}</div>
+        </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:16px;">
+    <div class="subnet-detail" id="subnet-detail-{{ s.id }}" hidden>
+    {% if current_user.role in ('superadmin','admin') and ssh_ready %}
+    <div class="subnet-detail-actions">
+        {% if can_manage_networks and (shared_networks or s.shared_network) %}
+        <form method="POST" action="/subnets/move/{{ s.id }}" class="u-cccfa4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <select name="shared_network" data-submit title="Move this subnet" aria-label="Move {{ s.name }} to a shared network" class="sel-sm">
+                <option value="" {% if not s.shared_network %}selected{% endif %}>— top level —</option>
+                {% for n in shared_networks %}<option value="{{ n.name }}" {% if s.shared_network == n.name %}selected{% endif %}>{{ n.name }}</option>{% endfor %}
+            </select>
+        </form>
+        {% endif %}
+        <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
+    </div>
+    {% endif %}
+    <div class="subnet-stats">
         <div>
             <div class="stat-label">Lease Duration</div>
-            <div class="u-9aa3cd">
+            <div class="subnet-stat">
                 {% if s.valid_lifetime %}{{ s.valid_lifetime|duration_short }}{% else %}—{% endif %}
             </div>
         </div>
         <div>
             <div class="stat-label">Renew Timer (T1)</div>
-            <div class="u-9aa3cd">{{ (s.renew_timer or 0)|duration_short }}</div>
+            <div class="subnet-stat">{{ (s.renew_timer or 0)|duration_short }}</div>
         </div>
         <div>
             <div class="stat-label">Rebind Timer (T2)</div>
-            <div class="u-9aa3cd">{{ (s.rebind_timer or 0)|duration_short }}</div>
+            <div class="subnet-stat">{{ (s.rebind_timer or 0)|duration_short }}</div>
         </div>
-    </div>
-    {# Q205 (AU2): the live usage, by the dashboard's definitions (DEF-001 active leases, DEF-002 pool size, the leases INSIDE the pools); amber from the operator's alert threshold, red when the pool is full #}
-    {% set u = s.usage %}
-    <div class="subnet-usage u-87c136">
-        <div class="stat-label">Usage</div>
-        <div class="u-9aa3cd">
-            Active: {{ u.active|number }}
-            · Pool:
-            {% if u.pool_used is none %}<span class="muted">unavailable</span>
-            {% elif not u.pool_size %}<span class="muted">no pool</span>
-            {% else %}{{ u.pool_used|number }} of {{ u.pool_size|number }} ({{ u.pct }}%){% endif %}
+        <div>
+            <div class="stat-label">Leases</div>
+            <div class="subnet-stat">Active: {{ u.active|number }}</div>
         </div>
-        {% if u.pool_size and u.pool_used is not none %}
-        <progress class="pool-use usage-bar usage-{{ u.level }}" max="100" value="{{ [u.pct, 100]|min }}" aria-label="Pool use {{ u.pct }} percent"></progress>
-        {% endif %}
     </div>
     <div class="u-da12f2">
         <div class="stat-label u-4e420a">Address Pools</div>
@@ -335,15 +447,16 @@ document.addEventListener('click', function(e) {
         <div class="u-b62e37">
             <div>
                 <div class="stat-label">Active Leases</div>
-                <div class="u-9aa3cd">{{ s6.active|number }}</div>
+                <div class="subnet-stat">{{ s6.active|number }}</div>
             </div>
             <div>
                 <div class="stat-label">Reservations</div>
-                <div class="u-9aa3cd">{{ s6.reserved|number }}</div>
+                <div class="subnet-stat">{{ s6.reserved|number }}</div>
             </div>
         </div>
     </div>
     {% endfor %}
+    </div>
 </div>
 {% else %}
 {% from '_empty.html' import empty_state %}
@@ -359,7 +472,7 @@ document.addEventListener('click', function(e) {
 </div>
 {% endfor %}
 
-{% if can_manage_networks and ssh_ready %}
+{% if can_manage_networks and ssh_ready and current_user.role in ('superadmin','admin') %}
 {#- v5.55.1 (Q64) — a <details> accordion instead of always-expanded: open by
     default only on first run (no shared network exists yet, where
     discoverability matters most), collapsed once the install has at least
@@ -378,7 +491,7 @@ document.addEventListener('click', function(e) {
         </div>
         <button type="submit" class="btn btn-sm btn-primary">Create</button>
     </form>
-    <p class="form-hint u-8a77e5">Empty to start — add subnets to it from the Add Subnet form, or move existing ones in with the dropdown on each card.</p>
+    <p class="form-hint u-8a77e5">Empty to start — add subnets to it from the Add Subnet form, or move existing ones in with the dropdown in each subnet's open row.</p>
 </details>
 {% endif %}
 

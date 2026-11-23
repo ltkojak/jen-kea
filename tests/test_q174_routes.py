@@ -313,7 +313,7 @@ class TestOnlyASuperadminReplacesJensSshKey:
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: ran.append(a))
         c, _ = restricted_client(client, db, None, role="admin", username="q203_key_admin")
         r = c.post("/settings/generate-ssh-key", data={}, follow_redirects=True)
-        assert b"SuperAdmin access required" in r.data
+        assert b"Superadmin access required" in r.data
         assert ran == [] and key.read_text() == "old-private"
 
     def test_an_admin_sees_a_sentence_and_no_button(self, client, db):

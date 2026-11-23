@@ -8,5 +8,5 @@
 .jen-dialog .field-note { color: #f0808a; font-size: 13px; }
 .jen-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .jen-dialog .btn { border: 1px solid #223040; border-radius: 6px; padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: #0d151d; color: #e0e0e0; }
-.jen-dialog .btn-primary { background: #00b4d8; border-color: #00b4d8; color: #fff; }
+.jen-dialog .btn-primary { background: linear-gradient(135deg, #005f92, #0077b6); border-color: #0077b6; color: #fff; }
 .jen-dialog .btn:disabled { opacity: .6; cursor: default; }

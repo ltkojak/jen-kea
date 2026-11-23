@@ -20,13 +20,14 @@
 <div class="card u-41d7d7">
     {% for row in summary.rows %}
     <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;{% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}" data-row="{{ loop.index0 }}">
-        <span class="u-4ff818">{{ icon('circle-check') if row.done else icon('circle') }}</span>
+        {# Q248 (V26): three marks - done, a warning (the check's own result, as Health shows it), not done #}
+        <span class="u-4ff818{% if row.warn %} warn{% endif %}"{% if row.warn %} role="img" aria-label="Warning" title="Warning"{% endif %}>{{ icon('circle-check') if row.done else (icon('triangle-alert') if row.warn else icon('circle')) }}</span>
         <div class="u-59eddc">
             <div class="u-eed0f8">{{ row.title }}</div>
             <div class="u-865c33">{{ row.detail }}</div>
         </div>
         {% if not row.done %}
-        <a class="btn btn-sm" href="{{ row.link }}">Fix</a>
+        <a class="btn btn-sm" href="{{ row.link }}">{{ 'Open Health' if row.warn else 'Fix' }}</a>
         {% endif %}
     </div>
     {% endfor %}

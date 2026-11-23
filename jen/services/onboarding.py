@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import time
 
+from jen.services.reltime import plural as _plural
+
 _DISMISSED_KEY = "getting_started_dismissed"
 _PILL_CACHE_TTL = 300  # seconds — the nav pill must never trigger a Kea round trip per page load.
 _PILL_CACHE_MAX = 64  # distinct (role, scope) keys kept — a handful in practice; the bound is only a ceiling.
@@ -38,15 +40,10 @@ def _control_transport_row(ctx: dict) -> dict:
         return {"title": "Control transport ready for 3.2", "done": False, "detail": "check unavailable", "link": link}
     if c.status == "ok":
         return {"title": c.title, "done": True, "detail": c.detail, "link": c.fix_url or link}
-    if c.status == "warn" and ctx.get("kea_connection_mode") != "direct":
-        # Same condition the check itself uses for "nothing reachable is
-        # 3.0+ yet" — fine to defer, so it counts as done here.
-        return {
-            "title": c.title,
-            "done": True,
-            "detail": "fine for now — switch to direct sockets before upgrading to Kea 3.2",
-            "link": c.fix_url or link,
-        }
+    if c.status == "warn":
+        # Q248 (V26): the row shows the check's OWN result. A warning used to be ticked here ("fine for now") while Health showed the same check as WARN: two
+        # pages, two answers. It is not ticked; it carries the warning mark and the check's own sentence, and it links to Health, where the check is.
+        return {"title": c.title, "done": False, "warn": True, "detail": c.detail, "link": link}
     return {"title": c.title, "done": False, "detail": c.detail, "link": c.fix_url or link}
 
 
@@ -164,7 +161,7 @@ def checklist(ctx: dict) -> dict:
             {
                 "title": "A second server is added for HA",
                 "done": server_count > 1,
-                "detail": f"{server_count} server(s) configured",
+                "detail": f"{_plural(server_count, 'server')} configured",
                 "link": "/servers",
             }
         )

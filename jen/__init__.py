@@ -27,7 +27,7 @@ from jen.services.runtime import deployment
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "7.2.0-beta.5"
+JEN_VERSION = "7.2.0-beta.6"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -261,7 +261,7 @@ def create_app() -> Flask:
     # ── Login manager ─────────────────────────────────────────────────────────
     login_manager.init_app(app)
     login_manager.login_view = "auth.login"
-    login_manager.login_message = "Please log in to access Jen."
+    login_manager.login_message = "Please sign in to access Jen."
 
     @login_manager.unauthorized_handler
     def _anonymous_to_login():
@@ -498,7 +498,7 @@ def create_app() -> Flask:
                 # the browser's script goes to the sign-in page itself at the deadline; a request that still arrives past it (another tab, a stale form) is sent there too, and a GET
                 # comes back to the page it asked for (the form data of a POST is gone either way, so a POST carries no `next`)
                 logout_user()
-                flash("Session expired. Please log in again.", "error")
+                flash("Session expired. Please sign in again.", "error")
                 return redirect(
                     session_timeout_svc.login_redirect_location(
                         url_for("auth.login"), request.method, request.full_path, request.args.get("next", "")
@@ -847,9 +847,28 @@ def create_app() -> Flask:
         # label, rendered server-side (Jinja, not |tojson'd into a script —
         # it's never used as a JS value).
         theme_default_name = dict(theme_presets).get(theme_default, theme_default)
+        # Q248 (addition 17) - the Display menu shows a sample of each theme beside its name: (id, page background, surface, accent). The colors are the presets' own tokens
+        # and the custom palette's REVALIDATED ones (hex colors, nothing else), so base.html may print them into its style block. "system" (Match My System) shows the dark
+        # page and the light page side by side.
+        theme_samples = [
+            (tid, p["tokens"]["bg"], p["tokens"]["surface"], p["tokens"]["primary"])
+            for tid, p in _theme.PRESETS.items()
+        ]
+        if theme_custom:
+            t = theme_custom["tokens"]
+            theme_samples.append(("custom", t["bg"], t["surface"], t["primary"]))
+        theme_samples.append(
+            (
+                "system",
+                _theme.PRESETS["dark"]["tokens"]["bg"],
+                _theme.PRESETS["light"]["tokens"]["bg"],
+                _theme.PRESETS["light"]["tokens"]["primary"],
+            )
+        )
         return {
             "theme_css": theme_css,
             "theme_presets": theme_presets,
+            "theme_samples": theme_samples,
             "theme_default": theme_default,
             "theme_default_name": theme_default_name,
             "theme_custom": theme_custom,
@@ -861,7 +880,18 @@ def create_app() -> Flask:
     def not_found(e):
         from flask import render_template
 
-        return render_template("error.html", code=404, message="Page not found."), 404
+        # Q248 (V47): the page had no navigation and ignored the theme. A signed-in person who NAVIGATED to an address Jen does not have is shown the normal page
+        # (top row, their theme) with the address and the way back. Everything else keeps the standalone page: a signed-out request (this handler runs for any path
+        # anyone sends, so that page reads nothing about an account), and a fetch or an htmx swap - a page nobody reads, which must not consume a message waiting
+        # for the next real page (Q215). `asked` is the path alone, cut to a length a page can hold; the templates escape it.
+        asked = request.path[:200]
+        navigation = not request.headers.get("HX-Request") and request.headers.get("Sec-Fetch-Mode", "navigate") in (
+            "navigate",
+            "nested-navigate",
+        )
+        if navigation and request.method == "GET" and current_user.is_authenticated:
+            return render_template("not_found.html", asked=asked), 404
+        return render_template("error.html", code=404, message="Page not found.", asked=asked), 404
 
     @app.errorhandler(500)
     def server_error(e):

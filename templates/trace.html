@@ -2,6 +2,8 @@
 {% block title %}Client Trace{% endblock %}
 {% from '_investigation_logging.html' import investigation_controls with context %}
 {% block content %}
+{# Q248 (addition 4): a detail page keeps its parent's strip and has one way back, here. With a client being traced it goes back to that client's Investigate page. #}
+<a class="back-link" href="/client{% if mac %}?q={{ mac|urlencode }}{% endif %}">&larr; Investigate a client</a>
 <div class="page-header">
     <h1>{{ icon("search-code", "ico-lg") }} Client trace</h1>
     <p>What Kea's own log says happened to one client — no packet capture, nothing installed. Compare it with what Jen predicts.</p>
@@ -12,7 +14,7 @@
         <div class="form-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
             <div class="form-group u-116966">
                 <label for="f-mac">MAC address</label>
-                <input id="f-mac" type="text" name="mac" class="mono" value="{{ mac }}" placeholder="aa:bb:cc:dd:ee:ff">
+                <input id="f-mac" type="text" name="mac" class="mono" value="{{ mac }}" placeholder="aa:bb:cc:dd:ee:ff" autocapitalize="off" autocomplete="off" spellcheck="false">
             </div>
             <div class="form-group u-116966">
                 <label for="f-server">Kea server</label>

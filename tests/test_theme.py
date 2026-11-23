@@ -110,7 +110,12 @@ class TestHexWall:
 class TestPresetsPinned:
     """The default look must not change. Pin dark and light to their
     pre-Q63 literal values (theme.py) and their concatenated CSS output
-    to the exact rule base.html used to hand-write."""
+    to the exact rule base.html used to hand-write.
+
+    Q248 (V5) moved ONE token in each on purpose: `text_muted`, which could
+    not be read (#666 was 3.2:1 on Dark's surface, #6c757d 4.2:1 on Light's
+    page). Every other token is still the pre-Q63 value, and the block now
+    ends with the colors a theme derives from its tokens (`derived_vars`)."""
 
     def test_dark_tokens_are_byte_identical_to_pre_q63(self):
         assert theme.PRESETS["dark"]["tokens"] == {
@@ -120,7 +125,7 @@ class TestPresetsPinned:
             "surface3": "#252525",
             "border": "#2a2a2a",
             "text": "#e0e0e0",
-            "text_muted": "#666",
+            "text_muted": "#8c8c8c",  # Q248 (V5): was #666
             "primary": "#00b4d8",
             "success": "#2ecc71",
             "warning": "#f39c12",
@@ -138,7 +143,7 @@ class TestPresetsPinned:
             "surface3": "#eceff3",
             "border": "#dee2e6",
             "text": "#212529",
-            "text_muted": "#6c757d",
+            "text_muted": "#646d75",  # Q248 (V5): was #6c757d
             "primary": "#0077b6",
             "success": "#198754",
             "warning": "#fd7e14",
@@ -148,11 +153,15 @@ class TestPresetsPinned:
 
     def test_dark_render_css_matches_the_old_hand_written_block(self):
         css = theme.render_css("dark", **{k: v for k, v in theme.PRESETS["dark"].items() if k != "name"})
+        derived = "".join(
+            f"{name}:{value};" for name, value in theme.derived_vars(theme.PRESETS["dark"]["tokens"]).items()
+        )
+        assert derived.startswith("--on-accent:#000000;--on-success:#000000;--on-warning:#000000;--on-danger:#000000;")
         assert css == (
             ':root[data-theme="dark"]{color-scheme:dark;'
             "--bg:#0d0d0d;--surface:#141414;--surface2:#1c1c1c;--surface3:#252525;"
-            "--border:#2a2a2a;--text:#e0e0e0;--text-muted:#666;--primary:#00b4d8;"
-            "--success:#2ecc71;--warning:#f39c12;--danger:#e74c3c;--radius:6px;}"
+            "--border:#2a2a2a;--text:#e0e0e0;--text-muted:#8c8c8c;--primary:#00b4d8;"
+            "--success:#2ecc71;--warning:#f39c12;--danger:#e74c3c;" + derived + "--radius:6px;}"
         )
 
     def test_phosphor_gets_a_desktop_only_mono_ui_rule(self):
@@ -245,10 +254,9 @@ class TestValidatePalette:
     def test_a_full_valid_form_round_trips(self):
         result, errors = theme.validate_palette(self._valid_form())
         assert errors == []
-        # validate_palette always normalizes to 6-digit hex, even when the
-        # submitted value (dark's own "#666") was 3-digit shorthand.
+        # validate_palette always normalizes to 6-digit hex (the next test
+        # submits 3-digit shorthand; dark's own muted was "#666" until Q248).
         expected = dict(theme.PRESETS["dark"]["tokens"])
-        expected["text_muted"] = "#666666"
         assert result["tokens"] == expected
         assert result["radius"] == 6
         assert result["mono_ui"] is True
@@ -345,12 +353,17 @@ class TestPickerNeverPersistsTheFallback:
         end = src.index("});", start)
         # Every real CALL to applyTheme(...) — not the `function applyTheme(id, persist) {` definition.
         calls = [m.start() for m in re.finditer(r"(?<!function )applyTheme\(", src)]
-        assert len(calls) == 3, f"expected 3 applyTheme(...) calls (IIFE + 2 in the click handler), found {len(calls)}"
-        outside = [i for i in calls if not (start <= i <= end)]
-        assert len(outside) == 1, (
-            f"expected exactly one applyTheme(...) call outside the click handler, found {len(outside)}"
+        # Q248: "Match My System" added two calls, one in the click handler and one that follows the operating system while the page is open; neither persists
+        assert len(calls) == 5, (
+            f"expected 5 applyTheme(...) calls (IIFE, the system follower, 3 in the click handler), found {len(calls)}"
         )
+        outside = [i for i in calls if not (start <= i <= end)]
+        assert len(outside) == 2, f"expected two applyTheme(...) calls outside the click handler, found {len(outside)}"
         assert src[outside[0] :].startswith("applyTheme(initial, false)")
+        assert src[outside[1] :].startswith("applyTheme(jenThemeResolve('system'), false)")
+        # and every call that persists is the click handler's
+        persisting = [i for i in calls if re.match(r"applyTheme\([^;]*,\s*true\)", src[i : i + 80])]
+        assert len(persisting) == 1 and start <= persisting[0] <= end
 
     def test_the_click_handler_is_the_only_persist_true_call(self):
         src = self._base_html()
@@ -371,14 +384,23 @@ class TestPickerNeverPersistsTheFallback:
         # install-default fallback, mislabeling it as a personal pick.
         src = self._base_html()
         assert "localStorage.getItem('jen-theme-pick')" in src
-        assert "bid === pick" in src and "bid === ''" in src
+        # Q248 (T1): the row to mark is worked out from the STORED pick - the install's default row (the empty id) for no pick, for a pick that is the default's own id
+        # and for a pick the page has no block for; 'system' and a listed preset mark their own row
+        assert (
+            "var marked = (pick === 'system' || (pick && pick !== THEME_DEFAULT && THEME_IDS.indexOf(pick) !== -1)) ? pick : '';"
+            in src
+        )
+        assert "jenMarkPick(b, b.getAttribute('data-theme-id') === marked);" in src
 
 
 class TestInstallDefaultPickerEntry:
     def test_both_picker_surfaces_have_an_empty_data_theme_id_entry(self):
+        # Q248 (T1): the picks are written ONCE, by the display_picks macro, for the nav dropdown and the phone sheet; the install's default is the first row,
+        # "<name> (default)", with the empty id - there is no separate "Install default" row
         src = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
-        assert src.count('data-theme-id=""') == 2  # nav dropdown + phone sheet
-        assert src.count("Install default (") == 2
+        assert src.count('"data-theme-id", "", theme_default_name ~ " (default)"') == 1
+        assert src.count("{{ display_picks('menu') }}") == 1 and src.count("{{ display_picks('sheet') }}") == 1
+        assert "Install default (" not in src
 
 
 class TestThemeAppliesBeforePaint:

@@ -15,6 +15,7 @@ Jen runs as an unprivileged service user. Sending a raw ICMP echo request normal
 
 ## Features
 
+- **First steps on an empty page**: until the first target is added the page shows a *Getting started* card in place of the table and its filters - add a target, what Watchdog then does (it probes each target on its interval, 5 minutes unless you pick a longer one, and calls it down after the failed checks in a row you chose, 3 unless you change it), and where its two alerts are set (Settings - Alerts)
 - **Targets** from a Kea reservation, an IPAM Lite entry (when that plugin is installed), or any bare IP — the Add Target picker offers the first two, and always accepts a manual address
 - **Two probe types**: `ping` (ICMP) or `tcp:<port>[,<port>]` (any one port answering counts as up). Ports are whole numbers from 1 to 65535, and the whole probe string is stored in a 40-character column, so a TCP probe takes about seven four-digit ports at most; a longer one is refused with a sentence that says so
 - **Configurable per target**: check interval (1–60 min) and how many consecutive failures before it counts as down (1–10)

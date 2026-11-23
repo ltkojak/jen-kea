@@ -2,7 +2,7 @@
 jen/routes/database.py
 ──────────────────────
 Database management — export, import, scheduled backup, migration.
-SuperAdmin-only (v4.4.2): a subnet-restricted admin has no business
+Superadmin-only (v4.4.2): a subnet-restricted admin has no business
 touching a full-database export/import, since it includes every subnet's
 data plus users, password hashes, MFA secrets, and API key records —
 none of which "assigned subnets only" scoping can meaningfully apply to.
@@ -41,6 +41,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.forms import flash_field
+from jen.services.reltime import plural as _plural
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -950,7 +951,7 @@ def kea_identifiers_repair():
         "kea",
         f"repaired={fixed} skipped={len(results) - fixed} hosts={ids} options={option_ids}",
     )
-    flash(f"{fixed} value(s) repaired, {len(results) - fixed} left unchanged.", "success")
+    flash(f"{_plural(fixed, 'value')} repaired, {len(results) - fixed} left unchanged.", "success")
     return _identifier_page(results)
 
 

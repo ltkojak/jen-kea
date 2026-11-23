@@ -5,6 +5,9 @@
 {% from '_copy.html' import copy_cell %}
 {% block title %}Search Results{% endblock %}
 {% block content %}
+{# the two buttons of a row sit on one middle line: one carries a word, the other may be an icon alone, and their baselines differ #}
+<style>.search-actions .btn { vertical-align: middle; }</style>
+{% macro row_investigate(who) %}<span class="desk-only">{{ investigate_link(who, "button") }}</span><span class="phone-only">{{ investigate_link(who, "icon") }}</span>{% endmacro %}
 <div class="page-header">
     <h1>{{ icon("search", "ico-lg") }} Search Results</h1>
     <p>{{ total|plural('result') }} for <strong>{{ q }}</strong></p>
@@ -23,7 +26,7 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("list") }} Leases ({{ results.leases|length|number }})</span></div>
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>IP Address</th>
             <th>Hostname</th>
@@ -34,12 +37,12 @@
         <tbody>
         {% for l in results.leases %}
         <tr>
-            <td class="mono">{{ copy_cell(l.ip, display=l.ip|mark(q)) }}</td>
-            <td>{{ hostname_or_none(l.hostname, q) }}</td>
-            <td class="mono hide-mobile">{{ copy_cell(l.mac, display=l.mac|mark(q)) }}</td>
-            <td>{% set sname = subnet_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) %}
+            <td class="mono" data-m="secondary">{{ copy_cell(l.ip, display=l.ip|mark(q)) }}</td>
+            <td data-m="primary">{{ hostname_or_none(l.hostname, q) }}</td>
+            <td class="mono hide-mobile" data-m="hide">{{ copy_cell(l.mac, display=l.mac|mark(q)) }}</td>
+            <td data-m="secondary">{% set sname = subnet_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) %}
                 {{ subnet_badge(l.subnet_id, sname, link=True) }}</td>
-            <td><a href="/leases?search={{ l.ip }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link(l.mac, "button") }}</td>
+            <td data-m="trailing" class="search-actions"><a href="/leases?search={{ l.ip }}" class="btn btn-sm btn-secondary">View</a> {{ row_investigate(l.mac) }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -52,7 +55,7 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("pin") }} Reservations ({{ results.reservations|length|number }})</span></div>
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>IP Address</th>
             <th>Hostname</th>
@@ -63,12 +66,12 @@
         <tbody>
         {% for r in results.reservations %}
         <tr>
-            <td class="mono">{{ copy_cell(r.ip, display=r.ip|mark(q)) }}</td>
-            <td>{{ hostname_or_none(r.hostname, q) }}</td>
-            <td class="mono hide-mobile">{{ copy_cell(r.mac, display=r.mac|mark(q)) }}</td>
-            <td>{% set sname = subnet_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) %}
+            <td class="mono" data-m="secondary">{{ copy_cell(r.ip, display=r.ip|mark(q)) }}</td>
+            <td data-m="primary">{{ hostname_or_none(r.hostname, q) }}</td>
+            <td class="mono hide-mobile" data-m="hide">{{ copy_cell(r.mac, display=r.mac|mark(q)) }}</td>
+            <td data-m="secondary">{% set sname = subnet_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) %}
                 {{ subnet_badge(r.subnet_id, sname, link=True) }}</td>
-            <td><a href="/reservations?search={{ r.ip }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link(r.mac, "button") }}</td>
+            <td data-m="trailing" class="search-actions"><a href="/reservations?search={{ r.ip }}" class="btn btn-sm btn-secondary">View</a> {{ row_investigate(r.mac) }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -81,7 +84,7 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("monitor-smartphone") }} Devices ({{ results.devices|length|number }})</span></div>
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>MAC Address</th>
             <th>Last IP</th>
@@ -92,11 +95,11 @@
         <tbody>
         {% for d in results.devices %}
         <tr>
-            <td class="mono">{{ copy_cell(d.mac, display=d.mac|mark(q)) }}</td>
-            <td class="mono">{{ copy_cell(d.last_ip, display=d.last_ip|mark(q)) or '—' }}</td>
-            <td>{{ d.name or '—' }}</td>
-            <td class="hide-mobile">{{ d.owner or '—' }}</td>
-            <td><a href="/devices?search={{ d.mac }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link(d.mac, "button") }}</td>
+            <td class="mono" data-m="primary">{{ copy_cell(d.mac, display=d.mac|mark(q)) }}</td>
+            <td class="mono" data-m="secondary">{{ copy_cell(d.last_ip, display=d.last_ip|mark(q)) or '—' }}</td>
+            <td data-m="secondary">{{ d.name or '—' }}</td>
+            <td class="hide-mobile" data-m="hide">{{ d.owner or '—' }}</td>
+            <td data-m="trailing" class="search-actions"><a href="/devices?search={{ d.mac }}" class="btn btn-sm btn-secondary">View</a> {{ row_investigate(d.mac) }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -109,7 +112,7 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("list") }} IPv6 Leases ({{ results.leases6|length|number }})</span></div>
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>Address</th>
             <th>Hostname</th>
@@ -120,11 +123,11 @@
         <tbody>
         {% for l in results.leases6 %}
         <tr>
-            <td class="mono">{{ copy_cell(l.address, display=l.address|mark(q)) }}</td>
-            <td>{{ hostname_or_none(l.hostname, q) }}</td>
-            <td class="mono hide-mobile">{{ l.duid_hex }}</td>
-            <td>{{ subnet6_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) }}</td>
-            <td><a href="/leases?view=v6&search={{ l.address }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link('duid:' ~ l.duid_hex if l.duid_hex else l.address, "button") }}</td>
+            <td class="mono" data-m="secondary">{{ copy_cell(l.address, display=l.address|mark(q)) }}</td>
+            <td data-m="primary">{{ hostname_or_none(l.hostname, q) }}</td>
+            <td class="mono hide-mobile" data-m="hide">{{ l.duid_hex }}</td>
+            <td data-m="secondary">{{ subnet6_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) }}</td>
+            <td data-m="trailing" class="search-actions"><a href="/leases?view=v6&search={{ l.address }}" class="btn btn-sm btn-secondary">View</a> {{ row_investigate('duid:' ~ l.duid_hex if l.duid_hex else l.address) }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -137,7 +140,7 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("pin") }} IPv6 Reservations ({{ results.reservations6|length|number }})</span></div>
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>Hostname</th>
             <th class="hide-mobile">DUID</th>
@@ -148,11 +151,11 @@
         <tbody>
         {% for r in results.reservations6 %}
         <tr>
-            <td>{{ hostname_or_none(r.hostname, q) }}</td>
-            <td class="mono hide-mobile">{{ r.duid_hex }}</td>
-            <td class="mono">{{ r.addresses|join(', ') }}</td>
-            <td>{{ subnet6_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) }}</td>
-            <td><a href="/reservations?view=v6&search={{ r.duid_hex }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link('duid:' ~ r.duid_hex if r.duid_hex else '', "button") }}</td>
+            <td data-m="primary">{{ hostname_or_none(r.hostname, q) }}</td>
+            <td class="mono hide-mobile" data-m="hide">{{ r.duid_hex }}</td>
+            <td class="mono" data-m="secondary">{{ r.addresses|join(', ') }}</td>
+            <td data-m="secondary">{{ subnet6_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) }}</td>
+            <td data-m="trailing" class="search-actions"><a href="/reservations?view=v6&search={{ r.duid_hex }}" class="btn btn-sm btn-secondary">View</a> {{ row_investigate('duid:' ~ r.duid_hex if r.duid_hex else '') }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -165,28 +168,36 @@
    after the core sections; a provider that raised, ran over its budget (Q146) or was
    turned away because too many calls are outstanding shows "unavailable"
    (with the reason) rather than an empty card silently disappearing. #}
+{# Q248 (V43): a group with matches, or one that could not answer, gets a card. The groups that answered with nothing are named in ONE closing line: four of them
+   used to take four cards to say "No ... results." #}
+{% set no_match = [] %}
 {% for provider in provider_results %}
+{% if provider.unavailable or provider.rows %}
 <div class="card">
-    <div class="card-header"><span class="card-title">{{ icon("puzzle") }} {{ provider.title }}{% if not provider.unavailable %} ({{ provider.rows|length }}){% endif %}</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("puzzle") }} {{ provider.title }}{% if not provider.unavailable %} ({{ provider.rows|length|number }}){% endif %}</span></div>
     {% if provider.unavailable %}
     <p class="u-6f1339">{{ provider.title }} search is unavailable right now{% if provider.reason %} ({{ provider.reason }}){% endif %}.</p>
-    {% elif provider.rows %}
+    {% else %}
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr><th>Result</th><th>Action</th></tr></thead>
         <tbody>
         {% for row in provider.rows %}
         <tr>
-            <td>{{ row.title }}{% if row.subtitle %} <span class="muted small">{{ row.subtitle }}</span>{% endif %}</td>
-            <td><a href="{{ row.href }}" class="btn btn-sm btn-secondary">View</a></td>
+            <td data-m="primary">{{ row.title }}{% if row.subtitle %} <span class="muted small">{{ row.subtitle }}</span>{% endif %}</td>
+            <td data-m="trailing" class="search-actions"><a href="{{ row.href }}" class="btn btn-sm btn-secondary">View</a></td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
     </div>
-    {% else %}
-    <p class="u-6f1339">No {{ provider.title }} results.</p>
     {% endif %}
 </div>
+{% else %}
+{% set _ = no_match.append(provider.title) %}
+{% endif %}
 {% endfor %}
+{% if no_match %}
+<p class="u-6f1339" id="search-no-match">No matches in: {{ no_match|join(', ') }}.</p>
+{% endif %}
 {% endblock %}

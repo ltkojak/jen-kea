@@ -20,6 +20,7 @@ import jen.models.user as __user
 import jen.services.setup_wizard as __setup
 from jen.services.access import step_up_redirect as _step_up_redirect
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("setup", __name__, url_prefix="/setup")
@@ -662,11 +663,13 @@ def setup_investigate():
 @_superadmin_required
 def setup_investigate_visit():
     mac = request.form.get("mac", "")
+    # Q248 (addition 9): the foot's Finish button. It is this step's own action with no client picked (what "Finish setup" was), and it leaves the wizard for the dashboard.
+    finish = request.form.get("finish", "") == "1" and not mac
     __setup.set_step("investigate", "done")
-    __user.audit("SETUP_WIZARD", "investigate", f"mac={mac}" if mac else "skipped")
+    __user.audit("SETUP_WIZARD", "investigate", f"mac={mac}" if mac else ("finished" if finish else "skipped"))
     if __setup.all_resolved():
         elapsed = __setup.elapsed_seconds()
-        took = f" — took {elapsed // 60} minute(s)" if elapsed is not None else ""
+        took = f" — took {_plural(elapsed // 60, 'minute')}" if elapsed is not None else ""
         flash(f"First hour complete{took}.", "success")
     if mac:
         # v5.67.0-beta.5 (Q117, item k) — the Investigation page
@@ -676,6 +679,8 @@ def setup_investigate_visit():
         # corrected). "overview" is client_page()'s own default tab, so
         # it's left implicit here rather than named.
         return redirect(url_for("client.client_page", q=mac))
+    if finish:
+        return redirect(url_for("dashboard.dashboard"))
     return redirect(url_for("setup.setup_investigate"))
 
 

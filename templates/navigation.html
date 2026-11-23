@@ -11,6 +11,9 @@
     .navc-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .navc-group { color: var(--text-muted); font-size: 12px; }
     .navc-list form, .navc-foot form { margin: 0; }
+    /* Q248 (V50, V8) - the row's three buttons are a 24 px target or better, and one that cannot be used (Move up on the first row, Move down on the last) looks it */
+    .navc-list .btn { min-width: 34px; min-height: 28px; justify-content: center; }
+    .navc-list .btn:disabled { opacity: 0.35; cursor: not-allowed; }
     .navc-add { display: flex; gap: 8px; margin-top: 12px; }
     .navc-add select { flex: 1; min-width: 0; }
     .navc-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; color: var(--text-muted); font-size: 12px; }
@@ -29,12 +32,14 @@
 {% for place, card_icon, title, blurb, empty in cards %}
 {% set l = lists[place] %}
 <div class="card" id="navc-{{ place }}">
-    <div class="card-header"><span class="card-title">{{ icon(card_icon) }} {{ title }} ({{ l.chosen|length }} of {{ l.limit }})</span></div>
+    {# Q248 (V50) - a phone bar the person has not set is not "0 of 4": the bar is showing its four default pages, and the heading says so #}
+    <div class="card-header"><span class="card-title">{{ icon(card_icon) }} {{ title }} {% if place == "tabbar" and not l.chosen %}(the default pages){% else %}({{ l.chosen|length }} of {{ l.limit }}){% endif %}</span></div>
     <p class="navc-group">{{ blurb }}</p>
     {% if l.chosen %}
     <ul class="navc-list">
         {% for d in l.chosen %}
         <li>
+            {% set is_first = loop.first %}{% set is_last = loop.last %}
             <span class="navc-name">{{ nav_icon(d.icon) }} {{ d.label }} <span class="navc-group">{{ d.group }}</span></span>
             {% for action, glyph, word in [("up", "chevron-up", "Move up"), ("down", "chevron-down", "Move down"), ("remove", "x", "Remove")] %}
             <form method="POST" action="{{ url_for('navigation.edit') }}">
@@ -42,7 +47,7 @@
                 <input type="hidden" name="place" value="{{ place }}">
                 <input type="hidden" name="action" value="{{ action }}">
                 <input type="hidden" name="dest" value="{{ d.id }}">
-                <button type="submit" class="btn btn-sm btn-secondary" title="{{ word }}" aria-label="{{ word }} {{ d.label }}">{{ icon(glyph) }}</button>
+                <button type="submit" class="btn btn-sm btn-secondary" title="{{ word }}" aria-label="{{ word }} {{ d.label }}"{% if (action == "up" and is_first) or (action == "down" and is_last) %} disabled{% endif %}>{{ icon(glyph) }}</button>
             </form>
             {% endfor %}
         </li>

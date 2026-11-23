@@ -612,9 +612,13 @@ class TestACountThatCannotBeReadSaysSo:
 
         html = (ROOT / "templates/settings_security.html").read_text(encoding="utf-8")
         cell = re.search(r'<strong class="u-52df2b" id="rl-permanent-lockouts">(.*?)</strong>', html, re.S).group(1)
-        render = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=True).from_string(cell).render
-        assert render(rl_lockouts_username=2, rl_lockouts_ip=0) == "2 account name(s), 0 address(es)"
-        assert render(rl_lockouts_username=0, rl_lockouts_ip=0) == "0 account name(s), 0 address(es)"
+        from jen.services import reltime
+
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=True)
+        env.filters["plural"] = reltime.plural  # (Q248, V36) the card's two counts go through the app's own filter
+        render = env.from_string(cell).render
+        assert render(rl_lockouts_username=2, rl_lockouts_ip=1) == "2 account names, 1 address"
+        assert render(rl_lockouts_username=0, rl_lockouts_ip=0) == "0 account names, 0 addresses"
         for a, b in ((None, 0), (0, None), (None, None)):
             assert render(rl_lockouts_username=a, rl_lockouts_ip=b).startswith("could not be read")
 

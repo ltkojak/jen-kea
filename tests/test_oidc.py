@@ -747,7 +747,7 @@ class TestOidcSettingsRoute:
         c, _ = restricted_client(client, db, None, role="admin", username="q203_oidc_admin")
         before = isolated_oidc_settings_config.read_bytes()
         r = self._post(c, enabled="1", default_role="superadmin", auto_create="1")
-        assert b"SuperAdmin access required" in r.data
+        assert b"Superadmin access required" in r.data
         assert isolated_oidc_settings_config.read_bytes() == before
 
     def test_q203_a_superadmin_without_a_recent_confirmation_is_sent_to_confirm_and_nothing_is_written(
@@ -888,5 +888,5 @@ class TestOidcSettingsRoute:
         c, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="oidc_settings_admin1")
         r = self._post(c, enabled="1")
         assert r.status_code == 200
-        assert b"SuperAdmin access required." in r.data
+        assert b"Superadmin access required for /settings/" in r.data  # Q248 (V47): a refusal names the page
         assert not _on_disk(isolated_oidc_settings_config).has_section("oidc")

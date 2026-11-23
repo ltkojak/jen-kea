@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}IP Map{% endblock %}
 {% block content %}
+{# Q248 (help choosing an address): for an account that may add a reservation (an admin or a superadmin), a free cell is a link to the Add Reservation form with
+   this subnet and that address filled in - the two query parameters the form has always read. A viewer's free cells stay what they were. #}
+{% set can_reserve = current_user.role in ('superadmin', 'admin') %}
+<style>
+    a.ip-cell { text-decoration: none; cursor: pointer; }
+    a.ip-cell:hover, a.ip-cell:focus-visible { border-color: var(--primary); color: var(--primary); }
+    .ipmap-how { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+</style>
 <div class="page-header">
     <h1>{{ icon("map", "ico-lg") }} IP Address Map</h1>
     <p>Visual layout of address space usage</p>
@@ -26,7 +34,7 @@
 </div>
 
 {% if pool_truncated %}
-<div style="font-size:12px;color:var(--warning);margin-bottom:12px;">{{ icon("triangle-alert") }} Pool is larger than the display limit ({{ max_ipmap_addresses|number }} addresses) — showing a truncated view.</div>
+<div style="font-size:12px;color:var(--warning-ink);margin-bottom:12px;">{{ icon("triangle-alert") }} Pool is larger than the display limit ({{ max_ipmap_addresses|number }} addresses) — showing a truncated view.</div>
 {% endif %}
 
 <div class="card">
@@ -34,6 +42,7 @@
         <span><span aria-hidden="true" style="display:inline-block;width:12px;height:12px;background:var(--surface2);border:1px solid var(--border);border-radius:2px;margin-right:6px;"></span><span class="u-865c33">Free</span></span>
         <span><span aria-hidden="true" style="display:inline-block;width:12px;height:12px;background:color-mix(in srgb, var(--primary) 18%, transparent);border:1px solid color-mix(in srgb, var(--primary) 20%, transparent);border-radius:2px;margin-right:6px;"></span><span style="font-size:12px;color:var(--primary);">Dynamic Lease</span></span>
         <span><span aria-hidden="true" style="display:inline-block;width:12px;height:12px;background:color-mix(in srgb, var(--success) 18%, transparent);border:1px solid color-mix(in srgb, var(--success) 20%, transparent);border-radius:2px;margin-right:6px;"></span><span class="u-d92d40">Reserved</span></span>
+        {% if can_reserve and pool_blocks %}<span class="ipmap-how" id="ipmap-how">Select a free address to reserve it.</span>{% endif %}
     </div>
 
     {% if pool_blocks %}
@@ -47,8 +56,10 @@
         {% for ip in pb.ips %}
         {% if ip in used %}
         <div class="ip-cell ip-{{ used[ip].type }}" role="img" aria-label="{{ ip }}: {{ used[ip].type }}{% if used[ip].hostname %}, {{ used[ip].hostname }}{% endif %}" title="{{ ip }}&#10;{{ used[ip].hostname or 'No hostname' }}&#10;{{ used[ip].type }}">
-            .{{ ip.split('.')[-1] }}<br><span style="font-size:9px;opacity:0.7;">{{ (used[ip].hostname | hostname or '')[:8] }}</span>
+            .{{ ip.split('.')[-1] }}<br><span class="ip-name">{{ used[ip].hostname | hostname or '' }}</span>
         </div>
+        {% elif can_reserve %}
+        <a class="ip-cell ip-free" href="/reservations/add?subnet_id={{ subnet_id }}&amp;ip={{ ip }}" aria-label="{{ ip }}: free. Add a reservation for this address" title="{{ ip }} is free: add a reservation">.{{ ip.split('.')[-1] }}</a>
         {% else %}
         <div class="ip-cell ip-free" role="img" aria-label="{{ ip }}: free" title="{{ ip }} — Free">.{{ ip.split('.')[-1] }}</div>
         {% endif %}

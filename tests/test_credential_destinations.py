@@ -933,9 +933,9 @@ class TestTheSevenFormsAreHeldByTheWriterWhoeverPosts:
         )
         r = c.post(f"/settings/infrastructure/{form}", data=body, follow_redirects=True)
         if form in ("save-kea-db", "save-jen-db"):
-            assert b"SuperAdmin access required" in r.data
+            assert b"Superadmin access required" in r.data
         else:
-            assert b"SuperAdmin access required" in r.data
+            assert b"Superadmin access required" in r.data
         assert _sha(isolated_config) == before
 
     @pytest.mark.parametrize("form", [*SEVEN_FORMS, "save-extra-servers"])
@@ -972,7 +972,7 @@ class TestTheSevenFormsAreHeldByTheWriterWhoeverPosts:
         else:
             body = {**SEVEN_FORMS[form]}
         r = logged_in_client.post(f"/settings/infrastructure/{form}", data=body, follow_redirects=True)
-        assert b"SuperAdmin access required" not in r.data
+        assert b"Superadmin access required" not in r.data
         assert _sha(isolated_config) == before, f"{form}: a blank password for a new endpoint wrote something"
 
     @pytest.mark.parametrize("form", list(SEVEN_FORMS))

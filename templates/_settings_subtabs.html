@@ -4,11 +4,20 @@
   role-filtered. Usage:
       {% from '_settings_subtabs.html' import subtabs %}
       {{ subtabs(nav.subtabs['security'], 'users') }}
+
+  Q248 (V38) - these are real tabs now, in the ONE in-page tab style (`.page-tabs` /
+  `.page-tab` in base.html): the pages of a Settings group, the DDNS page's views and the
+  Investigate page's views all come through this macro. The current tab carries
+  aria-current="page". A row of one tab is no row: an account that may open a single
+  page of the group has nowhere else to go from it. Every page of a group draws its
+  group's row, so the way back to the group's first page is never gone.
 #}
-{% macro subtabs(items, active_id) %}
-<div class="subtabs">
+{% macro subtabs(items, active_id, label='Pages of this section') %}
+{% if items|length > 1 %}
+<nav class="subtabs page-tabs" aria-label="{{ label }}">
   {% for t in items %}
-  <a href="{{ t.url }}" class="subtab {% if t.id == active_id %}active{% endif %}">{{ t.label }}</a>
+  <a href="{{ t.url }}" class="subtab page-tab{% if t.id == active_id %} active{% endif %}"{% if t.id == active_id %} aria-current="page"{% endif %}>{{ t.label }}</a>
   {% endfor %}
-</div>
+</nav>
+{% endif %}
 {% endmacro %}

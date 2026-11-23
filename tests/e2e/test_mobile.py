@@ -242,11 +242,13 @@ class TestSettingsCardsCollapsibleOnPhone:
         for anchor in ("kea-ssh", "kea-servers", "kea-ddns", "kea6", "kea-packages", "kea-drift"):
             assert "collapsed" in (phone.get_attribute(f"#{anchor}", "class") or ""), anchor
 
-    def test_tapping_a_toc_chip_opens_its_card(self, phone, base_url):
+    def test_tapping_a_folded_cards_header_opens_it(self, phone, base_url):
+        # Q248 (V38): the jump list is one line of links on a desktop and is not shown on a phone, where each folded card's header is the way in
         _visit(phone, base_url, "/settings/kea")
+        expect(phone.locator(".page-jump")).to_be_hidden()
         phone.click(
-            '.card-toc a[href="#kea-ddns"]'
-        )  # Q176: the D2 socket and the DNS provider are one section; its chip opens both
+            "#kea-ddns > .card-header"
+        )  # Q176: the D2 socket and the DNS provider are one section; its header opens both
         assert "collapsed" not in (phone.get_attribute("#kea-ddns", "class") or "")
         expect(phone.locator("#kea-ddns form").first).to_be_visible()
 
@@ -286,6 +288,10 @@ class TestSettingsCardsCollapsibleOnPhone:
     # v7.0.0-beta.4 (Q218, BH6 c): CI's desktop-screenshots artifact of run 42000846507 (ce42884) measured settings-kea.png at 1440x2542. The ceiling was 2542.4 - a slack of 0.4 px, which fails on the next
     # sentence anyone adds - so the baseline gains 29 px (3632 -> 3661, ceiling 2562.7): the ceiling clears the measured height by 20.7 px, per the rule above. Remeasure from the artifact of the release commit.
     WRITE_MODE_CARD_Q218 = 29
+    # Q248 stage a2 (V48): the probe's address field lost its sentence of a placeholder ("optional - probe a specific direct socket URL, e.g. ...", cut on a phone) and
+    # gained it as a one-line hint under the field. The page measured 2563 px on the test machine (tree q248a2e) against a ceiling of 2562.7, so the baseline gains 30 px
+    # (3661 -> 3691, ceiling 2583.7): the ceiling clears the measured height by 20.7 px, per the rule above. Remeasure from the artifact of the release commit.
+    PROBE_HINT_Q248 = 30
 
     def test_settings_kea_is_at_least_30_percent_shorter_than_5_56_3(self, desktop, base_url):
         _visit(desktop, base_url, "/settings/kea")
@@ -297,6 +303,7 @@ class TestSettingsCardsCollapsibleOnPhone:
             + self.CONFIG_TRANSPORT_CARD_Q212
             + self.WRITE_MODE_CARD_Q217
             + self.WRITE_MODE_CARD_Q218
+            + self.PROBE_HINT_Q248
         )
         ceiling = baseline * 0.7
         assert height <= ceiling, f"settings-kea is {height}px tall now, needed <= {ceiling:.0f}px (was {baseline}px)"
@@ -808,13 +815,15 @@ class TestListPagesOnThePhone:
         expect(bar.get_by_text("Dry-run Import")).to_be_visible()
         phone.keyboard.press("Escape")
 
-    def test_devices_type_chips_are_one_row_and_stale_days_is_in_the_sheet(self, phone, base_url):
+    def test_devices_type_chips_are_one_row_and_stale_days_is_beside_the_filters(self, phone, base_url):
+        # Q248 (V35): the stale-days form is a setting, not a filter. Inside the sheet its number was counted as a filter that was set ("Filters (1)" with none set),
+        # so it sits under the search now, in view without opening the sheet, and the sheet holds filters only.
         _visit(phone, base_url, "/devices")
         expect(phone.locator("#type-filter-bar")).to_have_css("flex-wrap", "nowrap")
         bar = phone.locator(".filter-bar").first
-        bar.locator(".fs-filter-toggle").click()
-        expect(bar.locator(".fs-label", has_text="Stale after (days)")).to_be_visible()
-        expect(bar.locator('input[name="stale_days"]')).to_be_visible()
+        expect(bar.locator('input[name="stale_days"]')).to_have_count(0)
+        expect(phone.locator('.devices-stale input[name="stale_days"]')).to_be_visible()
+        expect(bar.locator(".fs-count-label")).to_have_text("Filters")
 
     def test_the_desktop_keeps_its_columns_and_hides_the_phone_controls(self, desktop, base_url):
         for path in ("/leases", "/reservations", "/devices"):
@@ -954,10 +963,12 @@ class TestThemePickerSwitchesWithoutReload:
         assert stored == "light"
         meta = desktop.get_attribute('meta[name="theme-color"]', "content")
         assert meta.lower() == thememod.PRESETS["light"]["tokens"]["primary"].lower()
-        # Reset so this module-scoped `desktop` page doesn't leak into later tests.
+        # Reset so this module-scoped `desktop` page doesn't leak into later tests. Q248 (T1): Dark is the install's default here, so it is the
+        # first row (the empty id), which clears the pick.
         desktop.click("#dd-theme + label.theme-toggle")
-        desktop.click('.theme-pick[data-theme-id="dark"]')
+        desktop.click('.nav-dropdown-content .theme-pick[data-theme-id=""]')
         expect(desktop.locator("html")).to_have_attribute("data-theme", "dark")
+        assert desktop.evaluate("localStorage.getItem('jen-theme-pick')") is None
 
 
 class TestTouchNav:
@@ -1126,7 +1137,7 @@ class TestInstallDefaultPrecedence:
             # API (unlike the legacy page.click(selector) string form used
             # elsewhere in this file) refuses to resolve it.
             install_default_btn = page.locator('.nav-dropdown-content .theme-pick[data-theme-id=""]')
-            expect(install_default_btn).to_contain_text("Install default (Phosphor)")
+            expect(install_default_btn).to_contain_text("Phosphor (default)")
             expect(install_default_btn).to_have_class(re.compile(r"\bactive\b"))
         finally:
             ctx.close()

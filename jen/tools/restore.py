@@ -512,7 +512,7 @@ def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
                 _write_file(etc_jen / sub / rel, path.read_bytes(), 0o600, owner, etc_jen)
                 count += 1
         if count:
-            lines.append(f"wrote {count} file(s) under {sub}/")
+            lines.append(f"wrote {count} file{'' if count == 1 else 's'} under {sub}/")
     return lines
 
 
@@ -922,7 +922,7 @@ def run(
             for line in restore_etc_jen(bundle_dir, Path(etc_jen)):
                 print(line)
             content_count = restore_content(bundle_dir, Path(content_dir))
-            print(f"restored {content_count} content file(s)")
+            print(f"restored {content_count} content file{'' if content_count == 1 else 's'}")
             for line in restore_jen_db(bundle_dir, Path(etc_jen) / "jen.config", lenient_plugins=lenient_plugins):
                 print(line)
                 if line.startswith("\u274c"):
@@ -970,8 +970,8 @@ def run(
     if not (manage and restart):
         print("  1. Start Jen: sudo systemctl start jen")
     else:
-        print("  1. Confirm Jen is up and you can log in.")
-    print("  2. Log in and go to Settings → Kea → SSH — run 'Update helper' on each server")
+        print("  1. Confirm Jen is up and you can sign in.")
+    print("  2. Sign in and go to Settings → Kea → SSH — run 'Update helper' on each server")
     print("     (a helper version mismatch after a restore is expected, not a bug).")
     print("  3. Check Settings → Plugins — any plugin the manifest recorded is back in the")
     print("     database, but its code was NOT re-copied here; reinstall from the registry")

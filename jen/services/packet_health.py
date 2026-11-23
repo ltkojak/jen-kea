@@ -11,6 +11,8 @@ them in, which is what keeps this testable without a database.
 
 from datetime import timedelta
 
+from jen.services.reltime import plural as _plural
+
 DEFAULT_THRESHOLDS = {
     # warn when drops+parse-failures exceed this % of pkt4-received
     "warn_drop_pct": 1.0,
@@ -143,9 +145,9 @@ def assess(rates_result, thresholds=None):
         if acks:
             notes.append(f"NAKs: {nak_pct:.1f}% of replies ({naks} NAK / {acks} ACK)")
         else:
-            notes.append(f"{naks} NAK(s), 0 ACKs")
+            notes.append(f"{_plural(naks, 'NAK')}, 0 ACKs")
     if alloc_fail_total:
-        notes.append(f"{alloc_fail_total} allocation failure(s)")
+        notes.append(f"{_plural(alloc_fail_total, 'allocation failure')}")
     reasons = [f"{label} {totals[key]}" for key, label in DROP_REASON_LABELS.items() if totals.get(key, 0) > 0]
     if reasons:
         notes.append("Kea 3.2 drop reasons: " + ", ".join(reasons))

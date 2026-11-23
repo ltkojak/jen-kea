@@ -36,6 +36,56 @@ _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 _ITALIC_RE = re.compile(r"\*([^*]+)\*")
 _CODE_RE = re.compile(r"`([^`]+)`")
 
+# Q248 (V33) - what the About page leaves out of "What's New". The file's entries cite the rows of the reviews and passes they answer ("(BG1, BG6, BG7)", "(U5 to U15)",
+# "(WOL-1 to WOL-4)", "(DEF-003)") and close with a paragraph of rows that were registered and not changed. A person reading About cannot look any of them up. The file
+# is not edited: `whats_new()` leaves these out of what it renders, and `parse_changelog()` renders the file as it is.
+#   a code:   one to six capitals, an optional hyphen, one to four digits ("U1", "BG27", "WOL-16", "DEF-003"). "RFC 5280" has a space, "v5.65.10" and "7.2.0-beta.4"
+#             start otherwise, "Ubuntu 22.04" has small letters: none of them is one.
+#   a group:  a pair of parentheses holding codes and nothing else, joined by a comma, a semicolon, a slash, "and" or "to". The space before it goes with it.
+#   kept:     names that only look like a code (a hash, a cipher, a curve, a protocol version, Kea's D2 daemon).
+_TRACKING_CODE = r"[A-Z]{1,6}-?\d{1,4}"
+_TRACKING_JOIN = r"(?:\s*[,;/]\s*(?:and\s+)?|\s+(?:and|to)\s+)"
+_TRACKING_GROUP_RE = re.compile(rf"[ \t]*\((\s*{_TRACKING_CODE}(?:{_TRACKING_JOIN}{_TRACKING_CODE})*\s*)\)")
+_TRACKING_TOKEN_RE = re.compile(_TRACKING_CODE)
+_NOT_A_CODE_PREFIX = frozenset(
+    {
+        "RFC",
+        "SHA",
+        "MD",
+        "AES",
+        "RSA",
+        "RS",
+        "ES",
+        "HS",
+        "PS",
+        "UTF",
+        "HTTP",
+        "TLS",
+        "SSL",
+        "IPV",
+        "X",
+        "CVE",
+        "ISO",
+        "HMAC",
+    }
+)
+_NOT_A_CODE = frozenset({"D2", "P-256", "P-384", "P-521", "P256", "P384", "P521"})
+_REGISTERED_RE = re.compile(r"^[\s*_]*Registered\b")
+
+
+def _is_tracking_code(token: str) -> bool:
+    return token not in _NOT_A_CODE and re.match(r"[A-Z]+", token).group(0) not in _NOT_A_CODE_PREFIX
+
+
+def strip_tracking_codes(text: str) -> str:
+    """`text` without the parenthesized groups that hold tracking codes and nothing else (Q248, V33). Everything else is returned as it was."""
+
+    def _drop(m):
+        tokens = _TRACKING_TOKEN_RE.findall(m.group(1))
+        return "" if all(_is_tracking_code(t) for t in tokens) else m.group(0)
+
+    return _TRACKING_GROUP_RE.sub(_drop, text)
+
 
 def _inline_markdown_to_html(text: str) -> str:
     """Escape raw text first, then reintroduce only the specific inline
@@ -54,25 +104,34 @@ def _inline_markdown_to_html(text: str) -> str:
     return escaped
 
 
-def _render_body(lines: list) -> str:
-    """Convert one release's raw markdown body lines (subheadings,
-    prose paragraphs, bullet lists, and their continuation lines) into
-    a single HTML string."""
+def _render_parts(lines: list, for_reading: bool = False) -> list:
+    """One release's raw markdown body lines (subheadings, prose paragraphs,
+    bullet lists, and their continuation lines) as a list of HTML blocks, in
+    order: `<h4>`, `<p>` and `<ul>` strings.
+
+    `for_reading` (Q248, V33) is the About page's reading of the same lines:
+    a group of tracking codes is left out of every block (`strip_tracking_codes`),
+    a paragraph that begins "Registered" is left out whole, and so is the section
+    under a subheading that begins "Registered" (up to the next subheading)."""
     parts = []
     bullets = []
     paragraph = []
+    clean = strip_tracking_codes if for_reading else (lambda text: text)
+    skipping_section = False
 
     def flush_bullets():
         if bullets:
-            items = "".join(f"<li>{_inline_markdown_to_html(b)}</li>" for b in bullets)
-            parts.append(f"<ul>{items}</ul>")
+            if not skipping_section:
+                items = "".join(f"<li>{_inline_markdown_to_html(clean(b))}</li>" for b in bullets)
+                parts.append(f"<ul>{items}</ul>")
             bullets.clear()
 
     def flush_paragraph():
         if paragraph:
             joined = " ".join(paragraph).strip()
-            if joined:
-                parts.append(f"<p>{_inline_markdown_to_html(joined)}</p>")
+            registered = for_reading and _REGISTERED_RE.match(joined)
+            if joined and not skipping_section and not registered:
+                parts.append(f"<p>{_inline_markdown_to_html(clean(joined).strip())}</p>")
             paragraph.clear()
 
     for raw in lines:
@@ -85,7 +144,9 @@ def _render_body(lines: list) -> str:
         if sub:
             flush_bullets()
             flush_paragraph()
-            parts.append(f"<h4>{_inline_markdown_to_html(sub.group(1))}</h4>")
+            skipping_section = bool(for_reading and _REGISTERED_RE.match(sub.group(1)))
+            if not skipping_section:
+                parts.append(f"<h4>{_inline_markdown_to_html(clean(sub.group(1)))}</h4>")
             continue
         bullet = _BULLET_RE.match(line)
         if bullet:
@@ -103,7 +164,12 @@ def _render_body(lines: list) -> str:
 
     flush_bullets()
     flush_paragraph()
-    return "".join(parts)
+    return parts
+
+
+def _render_body(lines: list) -> str:
+    """One release's body as a single HTML string, the file as it is."""
+    return "".join(_render_parts(lines))
 
 
 def _version_sort_key(version: str) -> tuple:
@@ -117,7 +183,7 @@ def _version_sort_key(version: str) -> tuple:
     return parse_version(version)
 
 
-def parse_changelog(path=None, limit=None) -> list:
+def parse_changelog(path=None, limit=None, for_reading=False) -> list:
     """
     Parse CHANGELOG.md into a list of release entries, each a dict with
     "version", "date", and "html" (pre-rendered, already-safe HTML
@@ -173,7 +239,13 @@ def parse_changelog(path=None, limit=None) -> list:
 
     def flush():
         if current is not None:
-            current["html"] = _render_body(body_lines)
+            parts = _render_parts(body_lines, for_reading)
+            current["html"] = "".join(parts)
+            if for_reading:
+                # Q248 (addition 15): the lead is the entry's first paragraph, the sentence that says what the release is; `rest` is everything after it
+                lead = parts[0] if parts and parts[0].startswith("<p>") else ""
+                current["lead"] = lead
+                current["rest"] = "".join(parts[1:] if lead else parts)
             releases.append(current)
 
     for line in text.splitlines():
@@ -194,3 +266,10 @@ def parse_changelog(path=None, limit=None) -> list:
         releases = releases[:limit]
 
     return releases
+
+
+def whats_new(limit=5, path=None) -> list:
+    """The newest `limit` releases as the About page shows them (Q248, addition 15 and V33): `parse_changelog`'s entries read `for_reading` - no group of tracking
+    codes, no "Registered" paragraph or section - and each with two more keys, `lead` (its first paragraph, as HTML) and `rest` (the HTML after it). The page shows
+    the newest entry's lead and puts the rest, and the older entries, behind one closed "More"."""
+    return parse_changelog(path=path, limit=limit, for_reading=True)

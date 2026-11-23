@@ -2,6 +2,7 @@
 {% block title %}Kea Settings{% endblock %}
 {% block content %}
 {% from '_icons.html' import icon_trash %}
+{% from '_copy.html' import copy_button %}
 {#- v5.29.0 (Q29) — "Set up direct socket": one inline form per (server, daemon).
     Jen adds the http entry to the daemon's control-sockets over SSH, restarts,
     probes, and only then points itself at it. Plain <details>, no script. -#}
@@ -48,7 +49,7 @@
             <button type="submit" class="btn btn-sm btn-primary">Add socket, restart {{ daemon }} and probe</button>
         </form>
         {% if (infra.kea_connection_mode == 'direct' and service == 'dhcp4') or (service != 'dhcp4' and current_url) %}
-        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override{% if infra.kea_connection_mode != 'direct' %} and its own user and password (they were the socket's; it then uses the Control Agent's){% endif %}.{% endif %}">
+        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override{% if infra.kea_connection_mode != 'direct' %} and its own user and password (they were the socket's; it then uses the Control Agent's){% endif %}.{% endif %}" data-confirm-label="Remove">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
                 {% if service == 'dhcp4' %}<label>The Control Agent's address ({% if server_id in infra.needs_ca_url %}required: Jen has none to return to{% else %}blank uses the saved address, {{ infra.prev_urls.get(server_id)|shown_url }}{% endif %})
@@ -58,8 +59,8 @@
                 <label>{% if service == 'dhcp4' %}The password Jen will use at {{ (infra.prev_urls.get(server_id)|shown_url) if infra.prev_urls.get(server_id) else 'the Control Agent address (set it above)' }}{% else %}Replace this daemon's saved password{% endif %}
                     <input type="password" name="password" placeholder="{% if service == 'dhcp4' %}(blank keeps the socket's pair){% else %}(blank keeps what is saved){% endif %}" autocomplete="new-password"></label>
                 <div class="form-hint">{% if service == 'dhcp4' %}A saved password is never moved to a different address by this button: type the Control Agent's, tick No password, or restore the one saved when this socket was set up.{% else %}Leave it blank unless this daemon's password changes. A password saved for a daemon whose address moves must be typed under Settings → Kea first.{% endif %}</div>
-                <label><input type="checkbox" name="no_password" value="1" class="u-30e741"> No password (nothing there is authenticated)</label>
-                {% if service == 'dhcp4' and server_id in infra.prev_pairs and infra.prev_urls.get(server_id) %}<label><input type="checkbox" name="restore_saved" value="1" class="u-30e741"> Restore the Control Agent's user and password saved for {{ infra.prev_urls.get(server_id)|shown_url }}</label>{% endif %}
+                <label class="check-label"><input type="checkbox" name="no_password" value="1" class="u-30e741"> No password (nothing there is authenticated)</label>
+                {% if service == 'dhcp4' and server_id in infra.prev_pairs and infra.prev_urls.get(server_id) %}<label class="check-label"><input type="checkbox" name="restore_saved" value="1" class="u-30e741"> Restore the Control Agent's user and password saved for {{ infra.prev_urls.get(server_id)|shown_url }}</label>{% endif %}
             </div>
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("undo-2") }} Switch back to the Control Agent</button>
         </form>
@@ -78,8 +79,8 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. {% if current_user.role == 'superadmin' %}<form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form>{% else %}A superadmin restarts Jen.{% endif %}</div>
 {% endif %}
 
-{% set toc = [('kea-api', 'Control Plane'), ('kea-config-transport', 'Write mode'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA'), ('kea-ddns', 'DDNS')] %}
-{% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
+{% set toc = [('kea-api', 'Kea Control Plane'), ('kea-config-transport', 'Write mode'), ('kea-ssh', 'SSH to the Kea server'), ('kea-servers', 'Kea servers & high availability'), ('kea-ddns', "DDNS - Kea's D2 daemon and the DNS provider")] %}
+{% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'Kea6 Control Plane'), ('kea-investigation-logging', 'Investigation logging'), ('kea-packages', 'Kea Package Status'), ('kea-drift', 'Config Drift Check')] %}{% endif %}
 {% include '_card_toc.html' %}
 
 {% if ca_removed %}
@@ -96,7 +97,7 @@
 <div class="card" id="kea-api">
     <div class="card-header"><span class="card-title">{{ icon("plug") }} Kea Control Plane</span>
         {% if kea_up %}<span class="u-d5881b">● Connected{% if kea_version %} · Kea {{ kea_version }}{% endif %}</span>
-        {% else %}<span style="color:var(--danger);font-size:12px;">● Unreachable</span>{% endif %}
+        {% else %}<span style="color:var(--danger-ink);font-size:12px;">● Unreachable</span>{% endif %}
     </div>
     {#- RBAC-004 (v5.69.0-beta.10, Q179): where Jen reaches a Kea server is a superadmin's setting - an admin sees the facts, and the probe of a daemon on the host Jen already reaches -#}
     {% if current_user.role != 'superadmin' %}
@@ -108,6 +109,7 @@
     </div>
     <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
     <div class="u-10a65a">
+        <div class="btn-row">
         <button type="button" class="btn btn-secondary" id="probe-kea-btn">{{ icon("search") }} Probe</button>
         {% if kea_servers|length > 1 %}
         <select id="probe-server" class="u-c70577">
@@ -120,8 +122,10 @@
             <option value="dhcp6">dhcp6</option>
         </select>
         {% endif %}
-        <input type="text" id="probe-candidate-url" placeholder="optional - another daemon of the same host, e.g. https://kea:8004"
-               class="u-784acb">
+        <input type="text" id="probe-candidate-url" placeholder="https://kea:8004"
+               class="u-784acb" aria-label="Address to probe (optional)" aria-describedby="probe-candidate-hint">
+        </div>
+        <div class="form-hint" id="probe-candidate-hint">The address is optional: type one to probe another daemon of the same host.</div>
         <div id="probe-kea-results" class="u-b20d1a"></div>
     </div>
     {% else %}
@@ -143,7 +147,7 @@
             </div>
             <div class="form-group">
                 <label>API Username</label>
-                <input type="text" name="api_user" value="{{ infra.kea_api_user }}">
+                <input type="text" name="api_user" value="{{ infra.kea_api_user }}" aria-label="API Username">
             </div>
             <div class="form-group">
                 <label>API Password</label>
@@ -159,7 +163,7 @@
             </div>
             <div class="form-group">
                 <label>Verify TLS</label>
-                <label class="u-bf5dd8">
+                <label class="check-label u-bf5dd8">
                     <input type="checkbox" name="api_tls_verify" value="1" {% if infra.kea_api_tls_verify %}checked{% endif %} class="u-30e741">
                     Verify the control socket's certificate
                 </label>
@@ -177,6 +181,7 @@
                 <div class="form-hint" id="f-api_client_key-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>{{ jen_layout.config_dir }}/ssl/</code>.</div>
             </div>
         </div>
+        <div class="btn-row">
         <button type="submit" class="btn btn-primary">Save Kea API</button>
         <button type="button" class="btn btn-secondary" id="probe-kea-btn">{{ icon("search") }} Probe</button>
         {% if kea_servers|length > 1 %}
@@ -190,8 +195,10 @@
             <option value="dhcp6">dhcp6</option>
         </select>
         {% endif %}
-        <input type="text" id="probe-candidate-url" placeholder="optional — probe a specific direct socket URL, e.g. https://kea:8004"
-               class="u-784acb">
+        <input type="text" id="probe-candidate-url" placeholder="https://kea:8004"
+               class="u-784acb" aria-label="Address to probe (optional)" aria-describedby="probe-candidate-hint">
+        </div>
+        <div class="form-hint" id="probe-candidate-hint">The address is optional: type one to probe a specific direct socket.</div>
         <div id="probe-kea-results" class="u-b20d1a"></div>
     </form>
     {% endif %}
@@ -227,7 +234,7 @@
         </form>
         {% if kea_ca.prepared %}
         <div class="form-hint u-fdf33f">A new CA is prepared: SHA-256 fingerprint <code>{{ kea_ca.prepared_fingerprint }}</code>. A rotation reuses it.</div>
-        <form method="POST" action="/settings/infrastructure/kea-ca/discard" class="u-cccfa4" data-confirm="Discard the prepared CA? A daemon whose trust anchor already holds it will need another one prepared.">
+        <form method="POST" action="/settings/infrastructure/kea-ca/discard" class="u-cccfa4" data-confirm="Discard the prepared CA? A daemon whose trust anchor already holds it will need another one prepared." data-confirm-label="Discard">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("trash") }} Discard prepared CA</button>
         </form>
@@ -245,7 +252,7 @@
         </form>
         {% if kea_ca.prepared %}
         <div class="form-hint u-fdf33f">A new CA is prepared: SHA-256 fingerprint <code>{{ kea_ca.prepared_fingerprint }}</code>. A rotation reuses it.</div>
-        <form method="POST" action="/settings/infrastructure/kea-ca/discard" class="u-cccfa4" data-confirm="Discard the prepared CA? A daemon whose trust anchor already holds it will need another one prepared.">
+        <form method="POST" action="/settings/infrastructure/kea-ca/discard" class="u-cccfa4" data-confirm="Discard the prepared CA? A daemon whose trust anchor already holds it will need another one prepared." data-confirm-label="Discard">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("trash") }} Discard prepared CA</button>
         </form>
@@ -420,11 +427,11 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-host">Kea server</label>
-                <input id="f-host" type="text" name="host" value="{{ infra.ssh_host }}">
+                <input id="f-host" type="text" name="host" value="{{ infra.ssh_host }}" autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label>SSH Username</label>
-                <input id="f-ssh_user" type="text" name="user" value="{{ infra.ssh_user }}">
+                <input id="f-ssh_user" type="text" name="user" value="{{ infra.ssh_user }}" aria-label="SSH Username">
             </div>
             <div class="form-group">
                 <label for="f-kea_conf">Kea Config Path</label>
@@ -473,7 +480,7 @@
                     {% elif s.helper_version %}<span class="u-52df2b">v{{ s.helper_version }}{% if s.helper_build %} (build {{ s.helper_build }}){% endif %} — upgrade available (v{{ s.helper_want }})</span>
                     {% elif s.helper_known %}<span class="u-52df2b">not installed — legacy path</span>
                     {% else %}<span class="u-5872de">unknown — check</span>{% endif %}
-                    {% if s.legacy_grant %}<br><span class="badge u-5fdac8"  title="The old NOPASSWD: /usr/bin/python3 sudoers grant is still present on this host">legacy grant still present</span>{% endif %}
+                    {% if s.legacy_grant %}<br><span class="badge badge-warning" title="The old NOPASSWD: /usr/bin/python3 sudoers grant is still present on this host">legacy grant still present</span>{% endif %}
                     {% if s.signed_update %}<br><span class="badge u-5a4529" title="Helper updates on this host are verified by signature — no sudoers grant is used for them">signed updates</span>{% endif %}
                 </td>
                 <td data-m="trailing" style="text-align:right;padding:4px 8px;white-space:nowrap;">
@@ -492,7 +499,7 @@
                     </form>
                     {% endif %}
                     {% if current_user.role == 'superadmin' and s.legacy_grant and s.helper_version is integer %}
-                    <form method="POST" action="/settings/infrastructure/remove-legacy-grant/{{ s.id }}" class="u-cccfa4" data-confirm="Remove /etc/sudoers.d/jen-kea on {{ s.name }}? Jen keeps working through the helper.{% if s.signed_update %} Helper updates on this host are signature-verified — you will not need this grant again.{% else %} You will need to add it again, for one run, to reach helper v6; from v6 on, updates are signed and need it never again.{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <form method="POST" action="/settings/infrastructure/remove-legacy-grant/{{ s.id }}" class="u-cccfa4" data-confirm="Remove /etc/sudoers.d/jen-kea on {{ s.name }}? Jen keeps working through the helper.{% if s.signed_update %} Helper updates on this host are signature-verified — you will not need this grant again.{% else %} You will need to add it again, for one run, to reach helper v6; from v6 on, updates are signed and need it never again.{% endif %}" data-confirm-label="Remove"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">Remove legacy grant</button>
                     </form>
                     {% endif %}
@@ -505,7 +512,9 @@
         <details class="u-56f435">
             <summary class="u-3928fa">Install or update the helper by hand</summary>
             <p class="u-707d4f">The exact command Jen itself shows in every flash that offers a by-hand fallback: downloads the helper and its release signature, verifies the signature, self-tests the downloaded candidate, and only then installs it — nothing gets installed unverified or unchecked. See <code>docs/admin-guide.md</code> &rarr; Kea host helper for the offline variant (a tarball install already has both files locally).</p>
-            <pre class="mono u-c046bf">{{ helper_by_hand_command }}</pre>
+            {# Q248 (addition 10): a Copy button beside the command #}
+            <div class="code-head-end">{{ copy_button("helper-by-hand-command", what="the helper install command") }}</div>
+            <pre class="mono u-c046bf" id="helper-by-hand-command">{{ helper_by_hand_command }}</pre>
         </details>
         {% endif %}
         <details class="u-56f435">
@@ -611,7 +620,7 @@
                     <input type="password" name="extra_api_pass[]" placeholder="(unchanged)">
                 </div>
             </div>
-            <label class="u-6125e5"><input type="checkbox" name="extra_no_pass[]" value="1" class="u-30e741"{% if srv.api_pass_none %} checked{% endif %}> No password (this server has no authentication)</label>
+            <label class="check-label u-6125e5"><input type="checkbox" name="extra_no_pass[]" value="1" class="u-30e741"{% if srv.api_pass_none %} checked{% endif %}> No password (this server has no authentication)</label>
             {% if srv.api_pass_shared %}
             <div class="form-hint">API password: <strong>shared copy</strong> - a copy of the primary's, made once; it does not follow a later change of the primary's.
                 <button type="submit" form="copy-primary-{{ srv.id }}" class="btn btn-sm btn-secondary">Copy the primary's again</button></div>
@@ -634,17 +643,17 @@
                 <div class="form-group">
                     <label>IPv6 API Password</label>
                     <input type="password" name="extra_api6_pass[]" placeholder="(unchanged)">
-                    <label class="u-6125e5"><input type="checkbox" name="extra_api6_no_pass[]" value="1" class="u-30e741"{% if srv.api6_pass_none %} checked{% endif %}> No password</label>
+                    <label class="check-label u-6125e5"><input type="checkbox" name="extra_api6_no_pass[]" value="1" class="u-30e741"{% if srv.api6_pass_none %} checked{% endif %}> No password</label>
                 </div>
             </div>
             {% if srv.api_d2_url %}
-            <label class="u-6125e5"><input type="checkbox" name="extra_d2_no_pass[]" value="1" class="u-30e741"{% if srv.api_d2_pass_none %} checked{% endif %}> The D2 socket ({{ srv.api_d2_url|shown_url }}) has no password</label>
+            <label class="check-label u-6125e5"><input type="checkbox" name="extra_d2_no_pass[]" value="1" class="u-30e741"{% if srv.api_d2_pass_none %} checked{% endif %}> The D2 socket ({{ srv.api_d2_url|shown_url }}) has no password</label>
             {% endif %}
             <div class="form-hint u-27d304">Only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on (a kea-dhcp4 daemon can't answer v6 commands). Blank = this server's own API URL and credentials (ca mode); required in direct mode when IPv6 is on.</div>
             <div class="form-row">
                 <div class="form-group">
                     <label>SSH Host</label>
-                    <input type="text" name="extra_ssh_host[]" value="{{ srv.ssh_host }}" placeholder="10.0.0.x">
+                    <input type="text" name="extra_ssh_host[]" value="{{ srv.ssh_host }}" placeholder="10.0.0.x" autocapitalize="off" spellcheck="false">
                 </div>
                 <div class="form-group">
                     <label>SSH Username</label>
@@ -718,15 +727,15 @@
                 </div>
                 <div class="form-group">
                     <label>API Username</label>
-                    <input type="text" name="api_user" value="{{ infra.d2_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited on the same host)">
+                    <input type="text" name="api_user" value="{{ infra.d2_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited on the same host)" aria-label="API Username">
                 </div>
                 <div class="form-group">
                     <label>API Password</label>
                     <input type="password" name="api_pass" placeholder="(kept unless changed)">
                     {% if 'd2' in infra.shared_copies %}<div class="form-hint">Password: <strong>shared copy</strong> - a copy of the Kea API's, made once; it does not follow a later change of it.</div>{% endif %}
                     <div class="u-6125e5">
-                        <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
-                        <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
+                        <label class="check-label"><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
+                        <label class="check-label" title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
                     </div>
                     {% if infra.d2_inherit_over_http %}<div class="form-hint u-52df2b">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
                 </div>
@@ -819,7 +828,7 @@
             </div>
 
             <div class="form-group">
-                <label class="u-3a9859">
+                <label class="check-label u-3a9859">
                     <input type="checkbox" name="clear_api_token" value="1"> Remove the saved API token / password
                 </label>
             </div>
@@ -889,15 +898,15 @@
             </div>
             <div class="form-group">
                 <label>API Username</label>
-                <input type="text" name="api_user" value="{{ infra.kea6_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited on the same host)">
+                <input type="text" name="api_user" value="{{ infra.kea6_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited on the same host)" aria-label="API Username">
             </div>
             <div class="form-group">
                 <label>API Password</label>
                 <input type="password" name="api_pass" placeholder="(kept unless changed)">
                 {% if 'kea6' in infra.shared_copies %}<div class="form-hint">Password: <strong>shared copy</strong> - a copy of the Kea API's, made once; it does not follow a later change of it.</div>{% endif %}
                 <div class="u-6125e5">
-                    <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
-                    <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
+                    <label class="check-label"><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
+                    <label class="check-label" title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
                 </div>
                     {% if infra.kea6_inherit_over_http %}<div class="form-hint u-52df2b">{{ icon("triangle-alert") }} Inheriting here: this endpoint is reached over http - the inherited password travels to it in clear text.</div>{% endif %}
             </div>
@@ -905,7 +914,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-db_host">DB Host</label>
-                <input id="f-db_host" type="text" name="db_host" value="{{ infra.kea6_db_host }}" placeholder="{{ infra.kea_db_host }} (inherited)">
+                <input id="f-db_host" type="text" name="db_host" value="{{ infra.kea6_db_host }}" placeholder="{{ infra.kea_db_host }} (inherited)" autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label for="f-db_user">DB Username</label>
@@ -916,8 +925,8 @@
                 <input id="f-db_pass" type="password" name="db_pass" placeholder="(kept unless changed)" aria-describedby="f-db_pass-hint">
                 {% if 'kea6_db' in infra.shared_copies %}<div class="form-hint" id="f-db_pass-hint">Password: <strong>shared copy</strong> - a copy of the Kea database's, made once; it does not follow a later change of it.</div>{% endif %}
                 <div class="u-6125e5">
-                    <label><input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741"> Inherit the Kea DB password</label>
-                    <label><input type="checkbox" name="no_db_pass" value="1" class="u-30e741"> No password</label>
+                    <label class="check-label"><input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741"> Inherit the Kea DB password</label>
+                    <label class="check-label"><input type="checkbox" name="no_db_pass" value="1" class="u-30e741"> No password</label>
                 </div>
             </div>
             <div class="form-group">
@@ -1006,17 +1015,17 @@ function addServerRow() {
             <div class="form-group"><label>API Username</label><input type="text" name="extra_api_user[]" placeholder="kea-api"></div>
             <div class="form-group"><label>API Password</label><input type="password" name="extra_api_pass[]" placeholder="password"></div>
         </div>
-        <label class="u-6125e5"><input type="checkbox" name="extra_share_pass[]" value="1" class="u-30e741"> Share the primary's API password (an HA peer of the same Kea)</label>
-        <label class="u-6125e5"><input type="checkbox" name="extra_no_pass[]" value="1" class="u-30e741"> No password (this server has no authentication)</label>
+        <label class="check-label u-6125e5"><input type="checkbox" name="extra_share_pass[]" value="1" class="u-30e741"> Share the primary's API password (an HA peer of the same Kea)</label>
+        <label class="check-label u-6125e5"><input type="checkbox" name="extra_no_pass[]" value="1" class="u-30e741"> No password (this server has no authentication)</label>
         <div class="form-hint">A blank password keeps the saved one; an endpoint on another host needs its own, or No password.</div>
         <div class="form-row">
             <div class="form-group"><label>IPv6 API URL</label><input type="text" name="extra_api6_url[]" placeholder="http://YOUR-KEA-SERVER-2:8006"></div>
             <div class="form-group"><label>IPv6 API Username</label><input type="text" name="extra_api6_user[]" placeholder="(same as API username)"></div>
-            <div class="form-group"><label>IPv6 API Password</label><input type="password" name="extra_api6_pass[]" placeholder="(unchanged)"><label class="u-6125e5"><input type="checkbox" name="extra_api6_no_pass[]" value="1" class="u-30e741"> No password</label></div>
+            <div class="form-group"><label>IPv6 API Password</label><input type="password" name="extra_api6_pass[]" placeholder="(unchanged)"><label class="check-label u-6125e5"><input type="checkbox" name="extra_api6_no_pass[]" value="1" class="u-30e741"> No password</label></div>
         </div>
         <div class="form-hint u-27d304">IPv6 API fields are only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on.</div>
         <div class="form-row">
-            <div class="form-group"><label>SSH Host</label><input type="text" name="extra_ssh_host[]"></div>
+            <div class="form-group"><label>SSH Host</label><input type="text" name="extra_ssh_host[]" autocapitalize="off" spellcheck="false"></div>
             <div class="form-group"><label>SSH Username</label><input type="text" name="extra_ssh_user[]"></div>
             <div class="form-group"><label>Kea Config Path</label><input type="text" name="extra_kea_conf[]" value="/etc/kea/kea-dhcp4.conf"></div>
         </div>`;
@@ -1349,17 +1358,17 @@ async function installKeaPkg(btn, service) {
         });
         var data = await resp.json();
         if (data.ok) {
-            statusEl.style.color = 'var(--success)';
+            statusEl.style.color = 'var(--success-ink)';
             statusEl.textContent = ' Installed';
             await checkKeaPackages();
         } else {
-            statusEl.style.color = 'var(--danger)';
+            statusEl.style.color = 'var(--danger-ink)';
             var msg = (data.servers || []).map(function(s) { return s.name + ': ' + (s.output || 'failed'); }).join(' | ');
             statusEl.textContent = (msg || data.error || 'Install failed.');
             btn.disabled = false;
         }
     } catch (e) {
-        statusEl.style.color = 'var(--danger)';
+        statusEl.style.color = 'var(--danger-ink)';
         statusEl.textContent = e.message;
         btn.disabled = false;
     }

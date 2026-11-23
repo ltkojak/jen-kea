@@ -157,7 +157,9 @@
         .btn-login {
             width: 100%;
             padding: 12px;
-            background: linear-gradient(135deg, #0077b6, #00b4d8);
+            /* Q248 (V4): white on the old gradient's light end (#00b4d8) was 2.46:1. Both ends of this one hold white at 4.5:1 or better (#0077b6 4.87:1,
+               #005f92 6.9:1); the forced password change page, the MFA challenge and the idle-session dialog use the same fill. */
+            background: linear-gradient(135deg, #005f92, #0077b6);
             border: none;
             border-radius: 7px;
             color: #fff;

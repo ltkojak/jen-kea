@@ -1,13 +1,27 @@
 {% extends "base.html" %}
 {% block title %}Reports{% endblock %}
 {% block content %}
-<div class="page-header u-69957c">
+{# Q248 (V53): the page's controls sit beside the title on a desktop; on a phone the range control has a row to itself and the Scale to Pool choice the next one #}
+<style>
+.reports-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 24px; flex-wrap: wrap; }
+.reports-controls { display: flex; align-items: center; gap: 8px 20px; flex-wrap: wrap; }
+.reports-range, .reports-scale { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-muted); }
+.reports-scale { cursor: pointer; }
+.reports-scale input { margin: 0; }
+@media screen and (max-width: 768px) {
+    .reports-controls { flex-direction: column; align-items: flex-start; width: 100%; }
+    .reports-range { width: 100%; }
+    .reports-scale { min-height: var(--tap); }
+}
+</style>
+<div class="page-header reports-head">
     <div>
         <h1>{{ icon("chart-line", "ico-lg") }} Reports</h1>
         <p>Lease utilization history and network trends</p>
     </div>
-    <div class="u-01ef7f">
-        <span class="u-865c33">Time range:</span>
+    <div class="reports-controls">
+        <span class="reports-range">
+        <label for="days-select">Time range:</label>
         <select id="days-select" class="u-30e741">
             <option value="1" {% if days==1 %}selected{% endif %}>Last 24 hours</option>
             <option value="3" {% if days==3 %}selected{% endif %}>Last 3 days</option>
@@ -16,6 +30,10 @@
             <option value="30" {% if days==30 %}selected{% endif %}>Last 30 days</option>
             <option value="90" {% if days==90 %}selected{% endif %}>Last 90 days</option>
         </select>
+        </span>
+        {% if data_points > 0 %}
+        <label class="reports-scale" title="Run each chart's axis up to the pool size, so the lines are read against the whole pool"><input type="checkbox" id="scale-pool"> Scale to Pool</label>
+        {% endif %}
     </div>
 </div>
 
@@ -50,7 +68,7 @@
     {% if f %}
     <div class="forecast-line" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text-muted);">
         {% if f.high_water %}Peak <strong>{{ f.high_water.peak|number }}{% if f.pool_size %}/{{ f.pool_size|number }}{% endif %}</strong> on {{ f.high_water.on }} ·{% endif %}
-        <span style="{% if f.days_to_90pct is not none and f.days_to_90pct <= 7 %}color:var(--danger);font-weight:600;{% elif f.days_to_90pct is not none and f.days_to_90pct <= 30 %}color:var(--warning);font-weight:600;{% endif %}">{{ f.line }}</span>
+        <span style="{% if f.days_to_90pct is not none and f.days_to_90pct <= 7 %}color:var(--danger-ink);font-weight:600;{% elif f.days_to_90pct is not none and f.days_to_90pct <= 30 %}color:var(--warning-ink);font-weight:600;{% endif %}">{{ f.line }}</span>
     </div>
     {% endif %}
 </div>
@@ -74,7 +92,9 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">{{ icon("chart-bar") }} {{ h.name }} — {{ h.cidr }}</span>
-        <span class="u-865c33">{{ h.data|length|number }} data points</span>
+        {# Q248 (V53): the axis fits the lines, so a pool far above them has no line to draw; its size is said here instead. The script shows this figure
+           exactly when it leaves the pool's line out (and hides it when Scale to Pool runs the axis up to the pool). #}
+        <span class="u-865c33">{% if h.data[-1].pool_size %}<span id="chart-pool-{{ subnet_id }}" hidden>Pool: {{ h.data[-1].pool_size|plural('address', 'addresses') }} · </span>{% endif %}{{ h.data|length|number }} data points</span>
     </div>
     <canvas id="chart-{{ subnet_id }}" height="80"></canvas>
     {# v5.67.0-beta.12 (Q124) — no projection is said once, here, in words; the chart then adds no
@@ -145,6 +165,74 @@ const FORECAST = {{ forecast | tojson }};
 // v5.53.0 (Q60): on a phone the canvas's 80px-tall default aspect (about 90px at 350 wide) is
 // unreadable; a 1.5:1 chart is ~230px tall there, and the legend moves below it.
 const PHONE = window.matchMedia('(max-width: 768px)').matches;
+const DAYS = {{ days | tojson }};
+
+// Q248 (V53): "Scale to Pool" is this person's choice in this browser ('jen-reports-scale': '1' when on). Off, the default, each chart's axis fits its lines.
+const SCALE_KEY = 'jen-reports-scale';
+const scaleBox = document.getElementById('scale-pool');
+function scaleToPool() {
+    try { return localStorage.getItem(SCALE_KEY) === '1'; } catch (e) { return false; }
+}
+// The next "nice" step above the largest value drawn: steps of 1, 2 or 5 times a power of ten, about six of them up the axis at most. Every chart ran to
+// the pool size (120 with the lines under 25) because the pool's line was one of the series the axis had to hold.
+function niceAxis(largest) {
+    const v = Math.max(1, Math.ceil(largest));
+    let step = 1;
+    for (let p = 1, found = false; !found; p *= 10) {
+        for (const m of [1, 2, 5]) {
+            step = m * p;
+            if (v / step <= 6) { found = true; break; }
+        }
+    }
+    return { max: (Math.floor(v / step) + 1) * step, step: step };
+}
+function largestOf(lists) {
+    let top = 0;
+    lists.forEach(list => list.forEach(v => { if (typeof v === 'number' && v > top) top = v; }));
+    return top;
+}
+// A legend entry is drawn as its line is: the line's own color and width, dashed where the line is dashed (a filled box said neither). Chart.js builds a
+// point-style entry from the dataset's POINTS, which carry neither the line's dash nor its width, so each entry is built here from the line itself.
+function legendOptions(textColor) {
+    return {
+        position: PHONE ? 'bottom' : 'top',
+        labels: {
+            color: textColor,
+            usePointStyle: true,
+            pointStyleWidth: 28,
+            font: { size: 11 },
+            generateLabels: function(chart) {
+                return chart.data.datasets.map(function(d, i) {
+                    return {
+                        text: d.label, datasetIndex: i, hidden: !chart.isDatasetVisible(i), fontColor: textColor, pointStyle: 'line',
+                        strokeStyle: d.borderColor, fillStyle: d.borderColor, lineWidth: d.borderWidth, lineDash: d.borderDash || []
+                    };
+                });
+            }
+        }
+    };
+}
+// The x-axis labels. A phone gets fewer and shorter ones ("Nov 15", or the hour on the one-day range) with room between them; a desktop keeps the full stamp.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function shortLabel(stamp) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d{2}))?/.exec(String(stamp));
+    if (!m) return stamp;
+    if (DAYS <= 1 && m[4]) return m[4];
+    return MONTHS[Number(m[2]) - 1] + ' ' + Number(m[3]);
+}
+function xTicks(textColor) {
+    return {
+        color: textColor,
+        font: { size: 10 },
+        maxTicksLimit: PHONE ? 5 : 12,
+        maxRotation: 0,
+        autoSkipPadding: PHONE ? 16 : 8,
+        callback: function(value) {
+            const stamp = this.getLabelForValue(value);
+            return PHONE ? shortLabel(stamp) : stamp;
+        }
+    };
+}
 
 // v5.55.0 (Q63) — every color below comes from window.jenColor() (base.html),
 // which resolves the theme's actual CSS custom properties: Canvas/Chart.js
@@ -187,6 +275,14 @@ function buildCharts() {
             projection[projection.length - 1] = total[total.length - 1];
             proj.forEach(p => { labels.push(p[0]); projection.push(p[1]); poolSize.push(fc.pool_size); });
         }
+        // Q248 (V53): the axis runs to the next nice step above the largest value DRAWN. The pool's dashed line is one of the lines only when it is inside
+        // that range; when it is not, the card says the pool's size in words. Scale to Pool is the view this page always had: the pool's line is drawn and
+        // the axis runs up to it.
+        const toPool = scaleToPool();
+        const axis = niceAxis(largestOf([total, reserved, active, projection]));
+        const poolInRange = largestOf([poolSize]) > 0 && (toPool || largestOf([poolSize]) <= axis.max);
+        const poolNote = document.getElementById('chart-pool-' + subnetId);
+        if (poolNote) poolNote.hidden = poolInRange;
         const datasets = [
             {
                 label: 'Pool used',
@@ -218,18 +314,20 @@ function buildCharts() {
                 pointRadius: 0,
                 borderWidth: 1,
             },
-            {
+        ];
+        if (poolInRange) {
+            datasets.push({
                 label: 'Pool Size',
                 data: poolSize,
-                borderColor: `color-mix(in srgb, ${textStrong} 10%, transparent)`,
+                borderColor: textColor,
                 backgroundColor: 'transparent',
                 fill: false,
                 tension: 0,
                 pointRadius: 0,
-                borderWidth: 1,
+                borderWidth: 1.5,
                 borderDash: [4, 4],
-            },
-        ];
+            });
+        }
         if (proj.length) {
             datasets.push({
                 label: 'Projected total (trend of daily peaks)',
@@ -256,10 +354,7 @@ function buildCharts() {
                 ...(PHONE ? { aspectRatio: 1.5 } : {}),
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
-                    legend: {
-                        position: PHONE ? 'bottom' : 'top',
-                        labels: { color: textColor, boxWidth: 12, font: { size: 11 } }
-                    },
+                    legend: legendOptions(textColor),
                     tooltip: {
                         backgroundColor: surface2,
                         borderColor: borderColor,
@@ -287,17 +382,13 @@ function buildCharts() {
                 scales: {
                     x: {
                         grid: { color: gridColor },
-                        ticks: {
-                            color: textColor,
-                            font: { size: 10 },
-                            maxTicksLimit: 12,
-                            maxRotation: 0,
-                        }
+                        ticks: xTicks(textColor)
                     },
                     y: {
                         grid: { color: gridColor },
-                        ticks: { color: textColor, font: { size: 11 } },
+                        ticks: { color: textColor, font: { size: 11 }, ...(toPool ? {} : { stepSize: axis.step }) },
                         beginAtZero: true,
+                        ...(toPool ? {} : { max: axis.max }),
                     }
                 }
             }
@@ -322,8 +413,8 @@ function buildCharts6() {
             ['Active addresses (IA_NA)', 'active_na', primary, false, true],
             ['Active prefixes (IA_PD)', 'active_pd', success, false, true],
             ['Temporary addresses (IA_TA)', 'active_ta', warning, false, false],
-            ['Reserved addresses', 'reserved_na', textStrong, true, false],
-            ['Reserved prefixes', 'reserved_pd', textColor, true, false],
+            ['Address reservations', 'reserved_na', textStrong, true, false],
+            ['Prefix reservations', 'reserved_pd', textColor, true, false],
         ];
         const datasets = series
             .filter(([, key, , , always]) => always || h.data.some(d => d[key] > 0))
@@ -346,25 +437,31 @@ function buildCharts6() {
                 ...(PHONE ? { aspectRatio: 1.5 } : {}),
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
-                    legend: { position: PHONE ? 'bottom' : 'top', labels: { color: textColor, boxWidth: 12, font: { size: 11 } } },
+                    legend: legendOptions(textColor),
                     tooltip: { backgroundColor: surface2, borderColor: borderColor, borderWidth: 1, titleColor: textStrong, bodyColor: textColor },
                 },
                 scales: {
-                    x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 }, maxTicksLimit: 12, maxRotation: 0 } },
+                    x: { grid: { color: gridColor }, ticks: xTicks(textColor) },
                     y: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 11 } }, beginAtZero: true },
                 },
             },
         });
     });
 }
+if (scaleBox) scaleBox.checked = scaleToPool();
 buildCharts();
 buildCharts6();
 // v5.55.0 (Q63) — a theme switch changes every color above; destroy and
 // rebuild rather than trying to patch live Chart.js instances in place.
-document.addEventListener('jen:theme', function() {
+function rebuildCharts() {
     Object.values(Chart.instances).forEach(c => c.destroy());
     buildCharts();
     buildCharts6();
+}
+document.addEventListener('jen:theme', rebuildCharts);
+if (scaleBox) scaleBox.addEventListener('change', function() {
+    try { localStorage.setItem(SCALE_KEY, scaleBox.checked ? '1' : '0'); } catch (e) { /* private mode: the choice lasts until the page is left */ }
+    rebuildCharts();
 });
 {% endif %}
 {% endblock %}

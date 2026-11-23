@@ -14,6 +14,7 @@ import requests
 
 from jen import extensions
 from jen.services import pools as __pools
+from jen.services import reltime as __reltime
 from jen.services import setting_bounds as __bounds
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
@@ -737,18 +738,21 @@ def _send_email_channel(message, alert_type, config):
     if port == 465:
         raise Exception("Port 465 (implicit TLS) is not supported - use 587 with STARTTLS, or 25")
     # Strip HTML tags for email subject, keep for body
-    subject_text = re.sub(r"<[^>]+>", "", message.split("\n")[0])
+    # (Q248, BH7) unescaped like the plain part; split() then drops any line break an entity such as &#10; turns into, so
+    # an unescaped value can never start a second header
+    subject_text = " ".join(html.unescape(re.sub(r"<[^>]+>", "", message.split("\n")[0])).split())
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Jen Alert: {subject_text}"
     msg["From"] = from_addr
     msg["To"] = ", ".join(recipients)
-    # Plain text version
-    plain = re.sub(r"<[^>]+>", "", message).replace("\n", "\n")
+    # Plain text version. (Q248, BH7) unescaped like Slack, ntfy and the webhook below: a value a plugin escaped for the
+    # HTML part (IPAM Lite, Host Watchdog) read "Lab &amp; &lt;one&gt;" in the part a text-only mail client shows.
+    plain = html.unescape(re.sub(r"<[^>]+>", "", message))
     # HTML version
     html_body = message.replace("\n", "<br>").replace("<b>", "<strong>").replace("</b>", "</strong>")
-    html = f"<html><body style='font-family:sans-serif;'>{html_body}</body></html>"
+    html_part = f"<html><body style='font-family:sans-serif;'>{html_body}</body></html>"
     msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
+    msg.attach(MIMEText(html_part, "html"))
     use_tls = config.get("use_tls", "true") == "true"
     with smtplib.SMTP(host, port, timeout=15) as server:
         if use_tls:
@@ -1605,7 +1609,10 @@ def _build_daily_summary() -> str:
                 active = cur.fetchone()["cnt"]
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                 reserved = cur.fetchone()["cnt"]
-                lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
+                # Q248 (V19): the second number counts reservations, not leases, and says so ("reserved" is said of leases only)
+                lines.append(
+                    f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {__reltime.plural(reserved, 'reservation')}"
+                )
             # New devices in last 24h
             with jdb.cursor() as jcur:
                 jcur.execute(
@@ -1711,7 +1718,11 @@ def check_cert_expiry_alert(now=None, use_cache=False) -> None:
         else:
             # (Q230, AP16) `days` is negative for a certificate that has expired, and the sentence said "expires in -400 day(s)" while Health said "expired 400 day(s) ago" of
             # the same number. `days_left` stays for a template an operator wrote with it
-            when = f"expires in <b>{days}</b> day(s)" if days >= 0 else f"expired <b>{-days}</b> day(s) ago"
+            when = (
+                f"expires in <b>{days}</b> day{'' if days == 1 else 's'}"
+                if days >= 0
+                else f"expired <b>{-days}</b> day{'' if days == -1 else 's'} ago"
+            )
             notify_condition("cert_expiring", b, True, kwargs={"days_left": days, "when": when}, now=now)
     if legacy:
         __set_global_setting("cert_expiry_alerted", "0")

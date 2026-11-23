@@ -2,6 +2,12 @@
 {% block title %}Appearance{% endblock %}
 {% block content %}
 {% from '_icons.html' import icon_trash %}
+<style>
+    /* Q248 (addition 17) - the logo and the favicon in use, beside their upload controls */
+    .app-preview { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .app-preview-logo { max-height: 36px; max-width: 180px; border-radius: 4px; border: 1px solid var(--border); padding: 4px; background: var(--surface2); }
+    .app-preview-favicon { width: 32px; height: 32px; border-radius: 4px; background: var(--surface2); padding: 2px; }
+</style>
 <div class="page-header">
     <h1>{{ icon("palette", "ico-lg") }} Appearance</h1>
     <p>Logo, nav color, favicon, and the brand icons shown in the device inventory.</p>
@@ -23,17 +29,20 @@
     <div class="form-row">
         <div class="form-group">
             <label>Nav Logo</label>
-            {% if branding.nav_logo %}
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-                <img src="{{ branding.nav_logo }}" alt="Current navigation logo" style="max-height:36px;max-width:180px;border-radius:4px;border:1px solid var(--border);padding:4px;background:var(--surface2);">
+            {# Q248 (addition 17) - the logo in use is always shown beside its upload control: the uploaded one with its Remove button, or Jen's own with the word "Default" #}
+            <div class="app-preview" id="app-logo-preview">
+                <img src="{{ branding.nav_logo or '/static/icons/jen-logo-navbar.png' }}" alt="Current navigation logo" class="app-preview-logo">
+                {% if branding.nav_logo %}
                 <form method="POST" action="/settings/remove-nav-logo" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn-act btn-act-del" data-confirm="Remove logo?" aria-label="Remove logo">{{ icon_trash() }}</button>
+                    <button type="submit" class="btn-act btn-act-del" data-confirm="Remove logo? This cannot be undone." data-confirm-label="Remove" aria-label="Remove logo">{{ icon_trash() }}</button>
                 </form>
+                {% else %}
+                <span class="muted small">Default</span>
+                {% endif %}
             </div>
-            {% endif %}
             <form method="POST" action="/settings/upload-nav-logo" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="u-01ef7f">
-                    <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" class="u-97445a">
+                    <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" class="u-97445a" aria-label="Nav logo file">
                     <button type="submit" class="btn btn-primary btn-sm">{{ icon("upload") }} Upload</button>
                 </div>
                 <div class="form-hint">PNG, SVG, JPG, or WebP — max 200KB. SVGs with scripts or event handlers are refused. Recommended height: 28–36px.</div>
@@ -43,9 +52,9 @@
             <label>Nav Bar Color</label>
             <form method="POST" action="/settings/save-nav-color"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-                    <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" style="width:48px;height:36px;padding:2px;cursor:pointer;">
-                    <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414 or leave blank for default" class="u-97445a">
-                    <button type="submit" class="btn btn-primary btn-sm">{{ icon("save") }} Save</button>
+                    <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" aria-label="Nav bar color" style="width:48px;height:36px;padding:2px;cursor:pointer;">
+                    <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414" class="u-97445a" aria-label="Nav bar color as a hex value">
+                    <button type="submit" class="btn btn-primary btn-sm">{{ icon("save") }} Save Nav Color</button>
                 </div>
                 <div class="form-hint">Useful for distinguishing prod vs dev environments. Leave blank for default.</div>
             </form>
@@ -69,19 +78,19 @@
     <p class="u-abf201">
         The default look every viewer gets, unless they pick one for themselves from the {{ icon("palette") }}
         button in the nav. The default look does not change on upgrade — Dark stays Dark.
-        Anyone who has picked a theme for themselves keeps it; the same menu has an Install default entry to return to it.
+        Anyone who has picked a theme for themselves keeps it; the first row of the same menu, marked (default), returns to it.
     </p>
 
     <div class="form-group u-4a724c">
         <label>Install Default</label>
         <form method="POST" action="/settings/theme/default" class="u-a76d59">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <select name="theme_default" class="u-97445a">
+            <select name="theme_default" class="u-97445a" aria-label="Install default theme">
                 {% for tid, tname in theme_presets %}
                 <option value="{{ tid }}" {% if tid == theme_default %}selected{% endif %}>{{ tname }}</option>
                 {% endfor %}
             </select>
-            <button type="submit" class="btn btn-primary btn-sm">{{ icon("save") }} Save</button>
+            <button type="submit" class="btn btn-primary btn-sm">{{ icon("save") }} Save Default Theme</button>
         </form>
         <div class="form-hint">Only the built-in presets and "Custom" (once saved below) are offered.</div>
     </div>
@@ -106,9 +115,9 @@
                     {% set start = theme_custom.tokens if theme_custom else theme_all_presets['dark'].tokens %}
                     {% for name, label in field_labels.items() %}
                     <div class="form-group" data-theme-field="{{ name }}">
-                        <label>{{ label }}</label>
+                        <label for="f-{{ name }}">{{ label }}</label>
                         <div class="flex items-center gap-1">
-                            <input type="color" class="theme-color-picker" data-pairs="{{ name }}"
+                            <input type="color" class="theme-color-picker" data-pairs="{{ name }}" aria-label="{{ label }} color picker"
                                    value="{{ start[name] }}" style="width:36px;height:32px;padding:2px;cursor:pointer;flex-shrink:0;">
                             <input type="text" name="{{ name }}" id="f-{{ name }}" class="theme-color-hex u-97445a"
                                    value="{{ start[name] }}" maxlength="7" placeholder="#000000">
@@ -141,7 +150,7 @@
                 <div class="flex gap-2 mt-3">
                     <button type="submit" class="btn btn-primary">{{ icon("save") }} Save Custom Palette</button>
                     {% if theme_custom %}
-                    <button type="submit" formaction="/settings/theme/custom/remove" formnovalidate class="btn btn-danger" data-confirm="Remove the custom palette? Any install or viewer using it falls back to Dark.">{{ icon_trash() }} Remove</button>
+                    <button type="submit" formaction="/settings/theme/custom/remove" formnovalidate class="btn btn-danger" data-confirm="Remove the custom palette? Any install or viewer using it falls back to Dark. This cannot be undone." data-confirm-label="Remove">{{ icon_trash() }} Remove</button>
                     {% endif %}
                 </div>
                 {% if theme_custom %}
@@ -185,14 +194,17 @@
         <span class="card-title">{{ icon("image") }} Favicon</span>
         {% if has_favicon %}<span class="badge badge-reserved">Custom</span>{% endif %}
     </div>
-    {% if has_favicon %}
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
-        <img src="/favicon.ico" alt="Current favicon" style="width:32px;height:32px;border-radius:4px;background:var(--surface2);padding:2px;">
+    {# Q248 (addition 17) - the favicon in use is always shown (/favicon.ico serves the uploaded one, or Jen's own): with its Remove button, or the word "Default" #}
+    <div class="app-preview" id="app-favicon-preview">
+        <img src="/favicon.ico" alt="Current favicon" class="app-preview-favicon">
+        {% if has_favicon %}
         <form method="POST" action="/settings/remove-favicon" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-danger btn-sm">Remove</button>
         </form>
+        {% else %}
+        <span class="muted small">Default</span>
+        {% endif %}
     </div>
-    {% endif %}
     <form method="POST" action="/settings/upload-favicon" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label for="f-favicon">Upload Favicon</label>
@@ -240,7 +252,7 @@
             <span class="u-749148">{{ icon.name }}</span>
             <form method="POST" action="/settings/icons/delete/{{ icon.name }}" class="u-116966"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del"
-                        data-confirm="Delete custom icon {{ icon.name }}?">{{ icon_trash() }} Remove</button>
+                        data-confirm="Delete custom icon {{ icon.name }}? This cannot be undone." data-confirm-label="Delete">{{ icon_trash() }} Remove</button>
             </form>
         </div>
         {% endfor %}
@@ -258,7 +270,7 @@
                         background:var(--surface2);border:1px solid {{ 'var(--primary)' if icon.custom_override else 'var(--border)' }};
                         border-radius:var(--radius);padding:12px 16px;min-width:100px;position:relative;">
                 {% if icon.custom_override %}
-                <span style="position:absolute;top:4px;right:4px;font-size:9px;background:var(--primary);color:black;
+                <span style="position:absolute;top:4px;right:4px;font-size:9px;background:var(--primary);color:var(--on-accent);
                               padding:1px 5px;border-radius:3px;">overridden</span>
                 {% endif %}
                 <img src="/static/icons/brands/{{ icon.file }}" alt="{{ icon.name }}"
@@ -281,6 +293,8 @@
 // the IIFE below no-ops for anyone else.
 const THEME_PRESET_TOKENS = {{ theme_all_presets | tojson }};
 const THEME_TOKEN_NAMES = {{ theme_token_names | tojson }};
+// Q248 (V4) - what a custom palette derives from its tokens (jen.services.theme.derived_vars, preset=False); --on-accent is recomputed below from the accent in the form
+const THEME_CUSTOM_DERIVED = {{ theme_custom_derived | tojson }};
 
 function themeNormalizeHex(v) {
     v = (v || '').trim().toLowerCase();
@@ -343,6 +357,15 @@ function themePaletteWarnings(tokens) {
         });
         const radius = document.getElementById('f-radius').value;
         if (radius !== '') style += '--radius:' + radius + 'px;';
+        // the text on the preview's primary button: black or white, whichever reads better on the accent - the same rule theme.py's on_color() applies when the palette is saved
+        const accent = themeNormalizeHex(tokens.primary);
+        Object.keys(THEME_CUSTOM_DERIVED).forEach((name) => {
+            let value = THEME_CUSTOM_DERIVED[name];
+            if (name === '--on-accent' && accent) {
+                value = themeContrastRatio('#000000', accent) >= themeContrastRatio('#ffffff', accent) ? '#000000' : '#ffffff';
+            }
+            style += name + ':' + value + ';';
+        });
         preview.setAttribute('style', style);
 
         const warnings = themePaletteWarnings(tokens);
@@ -350,7 +373,7 @@ function themePaletteWarnings(tokens) {
         if (warnings.length) {
             const div = document.createElement('div');
             div.className = 'form-hint';
-            div.style.color = 'var(--warning)';
+            div.style.color = 'var(--warning-ink)';
             div.style.marginTop = '6px';
             div.textContent = warnings.join(' ');
             warningsBox.appendChild(div);

@@ -4,3 +4,8 @@
 {% macro hostname_or_none(name, q=None) -%}
 {%- if name | hostname -%}{{ (name | hostname) | mark(q) if q else name | hostname }}{%- else -%}<span class="muted">no hostname</span>{%- endif -%}
 {%- endmacro %}
+{#- Q248 (V12): the same name in a LIST's cell. It is one line, cut with an ellipsis at its column's width (.clip in base.html), and its title is the whole name: an 85-character
+    hostname took the Leases table 140 px past its card and the row menus off the screen. The row's Investigate page shows the name whole. -#}
+{% macro hostname_clip(name) -%}
+{%- if name | hostname -%}<span class="clip" title="{{ name | hostname }}">{{ name | hostname }}</span>{%- else -%}<span class="muted">no hostname</span>{%- endif -%}
+{%- endmacro %}

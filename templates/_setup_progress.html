@@ -3,10 +3,11 @@
 <div class="u-setup-progress" style="display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
     {% for step in progress.steps %}
     <span style="display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:0.85em;
-        {% if step == progress.current %}background:var(--primary);color:white;
-        {% elif progress.state.get(step) == 'done' %}background:var(--success);color:white;
+        {% if step == progress.current %}background:var(--primary);color:var(--on-accent);
+        {% elif progress.state.get(step) == 'done' %}background:var(--success);color:var(--on-success);
         {% elif progress.state.get(step) == 'skipped' %}background:var(--border);color:var(--text-muted);
-        {% else %}background:var(--surface2);color:var(--text-muted);{% endif %}">
+        {% else %}background:var(--surface2);color:var(--text-muted);{% endif %}"{% if step == progress.current %} aria-current="step"{% endif %}{% if progress.state.get(step) == 'done' %} title="Done" data-step-state="done"{% elif progress.state.get(step) == 'skipped' %} title="Skipped" data-step-state="skipped"{% endif %}>
+        {# Q248 (addition 9): the tick is drawn for a step the wizard's own state calls done (setup_wizard.get_state), never for one that was skipped or only looked at #}
         {% if progress.state.get(step) == 'done' %}{{ icon('circle-check') }}{% endif %}
         {{ loop.index }}. {{ step|capitalize }}
     </span>

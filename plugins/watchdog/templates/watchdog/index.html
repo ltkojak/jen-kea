@@ -12,6 +12,14 @@
 .wd-dialog-add{width:min(460px,94vw);max-height:90vh}
 .wd-dialog-history{width:min(480px,94vw);max-height:80vh}
 .wd-hidden{display:none}
+{% if not rows %}
+/* v1.1.5 - the card of first steps, shown in place of an empty table */
+.first-run h3{font-size:15px;margin-bottom:12px}
+.first-run ol{padding-left:22px}
+.first-run li{margin-bottom:10px;line-height:1.6}
+.first-run li:last-child{margin-bottom:0}
+.first-run .btn{margin-left:8px}
+{% endif %}
 </style>
 
 <div class="page-header flex items-center between wrap gap-3">
@@ -20,7 +28,7 @@
         <p>Probes chosen hosts on a schedule — alerts when one stops answering, and again when it's back.</p>
     </div>
     {% if is_admin %}
-    <button id="wd-add-btn" class="btn btn-primary">{{ icon("plus") }} Add Target</button>
+    <button type="button" id="wd-add-btn" class="btn btn-primary wd-add-open">{{ icon("plus") }} Add Target</button>
     {% endif %}
 </div>
 
@@ -28,6 +36,19 @@
 <div class="alert alert-info">{{ icon("info") }} Host Watchdog probes IPv4 addresses only.</div>
 {% endif %}
 
+{% if not rows %}
+{# v1.1.5 - no target yet: the first steps, in place of an empty table and of filters with nothing to filter #}
+<div class="card first-run">
+    <h3>Getting started</h3>
+    <ol>
+        <li>Add a target. A target is a host Watchdog probes, by ping or by a TCP port.
+            {% if is_admin %}<button type="button" class="btn btn-sm btn-primary wd-add-open">{{ icon("plus") }} Add Target</button>
+            {% else %}<span class="muted">Adding a target needs an admin.</span>{% endif %}</li>
+        <li>Watchdog then probes each target on its interval (5 minutes unless you pick a longer one) and calls it down after the failed checks in a row you chose (3 unless you change it).</li>
+        <li>Its two alerts, "Watchdog: host down" and "Watchdog: host back up", are set under {% if is_admin %}<a href="/settings/alerts">Settings - Alerts</a>{% else %}Settings - Alerts{% endif %}: tick them on the channels that should get them.</li>
+    </ol>
+</div>
+{% else %}
 <div class="card">
     <div class="flex gap-2 wrap" id="wd-filters">
         <button class="btn btn-sm btn-primary" data-filter="all">All ({{ rows|length }})</button>
@@ -89,13 +110,11 @@
         </td>
     </tr>
     {% endfor %}
-    {% if not rows %}
-    <tr><td data-m="full" colspan="7" class="center muted">No targets yet. {% if is_admin %}Add one above.{% endif %}</td></tr>
-    {% endif %}
     </tbody>
 </table>
 </div>
 </div>
+{% endif %}
 
 {% if is_admin %}
 <div id="wd-add-modal" class="wd-modal">
@@ -181,7 +200,10 @@ function _wdModal(id, show) {
 }
 
 {% if is_admin %}
-document.getElementById('wd-add-btn').addEventListener('click', function() { _wdModal('wd-add-modal', true); });
+// the header's button and, on a page with no target yet, the one in the first step
+document.querySelectorAll('.wd-add-open').forEach(function(btn) {
+    btn.addEventListener('click', function() { _wdModal('wd-add-modal', true); });
+});
 document.getElementById('wd-add-close-btn').addEventListener('click', function() { _wdModal('wd-add-modal', false); });
 document.getElementById('wd-add-cancel-btn').addEventListener('click', function() { _wdModal('wd-add-modal', false); });
 document.getElementById('wd-add-modal').addEventListener('click', function(e) { if (e.target === this) _wdModal('wd-add-modal', false); });
@@ -261,6 +283,7 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+{% if rows %}
 document.getElementById('wd-filters').addEventListener('click', function(e) {
     var btn = e.target.closest('button[data-filter]');
     if (!btn) return;
@@ -276,6 +299,7 @@ document.getElementById('wd-filters').addEventListener('click', function(e) {
         row.style.display = show ? '' : 'none';
     });
 });
+{% endif %}
 </script>
 
 {% endblock %}

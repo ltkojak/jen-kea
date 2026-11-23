@@ -66,7 +66,8 @@ class TestRowlistTables:
 
     def test_the_audit_log_keeps_its_details_on_a_phone(self):
         src = _src("logs.html")
-        assert re.search(r'data-m="secondary"[^>]*>\{\{ log\.details \}\}', src)
+        # Q248 (V12): the details are inside a clip (one line on a desktop; a phone's card wraps them as before)
+        assert re.search(r'data-m="secondary"[^>]*><span class="clip"[^>]*>\{\{ log\.details \}\}', src)
 
 
 class Forms(HTMLParser):

@@ -19,6 +19,12 @@
 </div>
 {% endmacro %}
 
+{# Q248 (V32): a subnet is shown as every other page shows it - the badge and name for an IPv4 subnet, the name for an IPv6 one - and only for a subnet in the
+   caller's own map. An id that map does not hold stays the number it was; a global reservation (subnet 0) says so. #}
+{% from '_subnet_badge.html' import subnet_badge %}
+{% macro subnet4_cell(sid) %}{% if sid in subnet_choices %}{{ subnet_badge(sid, subnet_choices[sid].name) }}{% elif sid == 0 %}Global{% else %}{{ sid }}{% endif %}{% endmacro %}
+{% macro subnet6_cell(sid) %}{{ (subnet6_choices.get(sid) or {}).name or sid }}{% endmacro %}
+
 {% macro v4_note(view) %}
 {% if view.kind in ('ipv6', 'duid') %}
 <p class="u-865c33">{% if view.mac %}This tab evaluates DHCPv4, for the MAC {{ view.mac }}{% if view.mac_source == 'duid' %} (read out of the DUID by Jen — the hardware address Kea itself captured is not on any of its leases){% endif %}.{% else %}This tab evaluates the DHCPv4 decision; this client has no IPv4 identity Jen can see.{% endif %}</p>
@@ -35,7 +41,7 @@
         <div class="form-row u-f0e9d3">
             <div class="form-group u-116966">
                 <label>MAC, IP address, DUID or hostname</label>
-                <input type="text" name="q" class="mono" value="{{ q }}" placeholder="aa:bb:cc:dd:ee:ff, 10.0.0.50, 2001:db8::50, a DUID or a hostname" autofocus>
+                <input type="text" name="q" class="mono" value="{{ q }}" placeholder="aa:bb:cc:dd:ee:ff" autofocus autocapitalize="off" autocomplete="off" spellcheck="false">
             </div>
         </div>
         <div class="u-012c80">
@@ -63,18 +69,15 @@
 <div class="card"><p class="u-5872de">No client matched that identifier, or you don't have access to it.</p></div>
 {% else %}
 
-<div class="card u-8bfeea">
-    <div class="u-b5711a">
-        {% for t in tabs %}
-        <a href="/client?q={{ q|urlencode }}&tab={{ t }}" class="badge {% if t == tab %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ 'DNS' if t == 'dns' else t|capitalize }}</a>
-        {% endfor %}
-    </div>
-</div>
+{# Q248 (V38): the views of a client are tabs in the one in-page tab style (they were status badges in a card) #}
+{% from '_settings_subtabs.html' import subtabs %}
+{% set view_tabs = namespace(items=[]) %}
+{% for t in tabs %}{% set view_tabs.items = view_tabs.items + [{'id': t, 'label': 'DNS' if t == 'dns' else t|capitalize, 'url': '/client?q=' ~ (q|urlencode) ~ '&tab=' ~ t}] %}{% endfor %}
+{{ subtabs(view_tabs.items, tab, 'Views of this client') }}
 
 <div class="card u-e25041">
-    <div class="card-header"><span class="card-title">{{ view.mac or view.ip or view.hostname }}</span>
-        <span class="u-865c33 mono" title="investigation {{ investigation_id }}">{{ investigation_id }}</span>
-    </div>
+    {# Q248 (V32): the corner carried a code made for this one page load and recorded nowhere, so nobody could look it up; it is gone #}
+    <div class="card-header"><span class="card-title">{{ view.mac or view.ip or view.hostname }}</span></div>
     <div class="u-260fab">
         {% if view.mac %}<div><div class="stat-label">MAC{% if view.mac_source == 'duid' %} (read from the DUID){% elif view.mac_source == 'hwaddr' %} (captured by Kea){% endif %}</div><div class="mono">{{ view.mac }}</div></div>{% endif %}
         {% if view.duid %}<div><div class="stat-label">DUID</div><div class="mono">{{ view.duid }}</div></div>{% endif %}
@@ -118,7 +121,7 @@
         <thead><tr><th>IP</th><th>Subnet</th><th>Hostname</th><th>Expires</th></tr></thead>
         <tbody>
         {% for l in view.leases4 %}
-        <tr><td class="mono">{{ l.ip }}</td><td>{{ l.subnet_id }}</td><td>{{ l.hostname or '—' }}</td><td>{{ l.expire|utcfmt }}</td></tr>
+        <tr><td class="mono">{{ l.ip }}</td><td>{{ subnet4_cell(l.subnet_id) }}</td><td>{{ l.hostname or '—' }}</td><td>{{ l.expire|utcfmt }}</td></tr>
         {% endfor %}
         </tbody>
     </table>
@@ -130,7 +133,7 @@
         <thead><tr><th>IPv6 address</th><th>Type</th><th>Subnet</th><th>Hostname</th><th>Expires</th></tr></thead>
         <tbody>
         {% for a in view.leases6 %}
-        <tr><td class="mono">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</td><td>{{ a.type_name or '—' }}</td><td>{{ a.subnet_id }}</td><td>{{ a.hostname or '—' }}</td><td>{{ a.expire|utcfmt if a.expire else '—' }}</td></tr>
+        <tr><td class="mono">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</td><td>{{ a.type_name or '—' }}</td><td>{{ subnet6_cell(a.subnet_id) }}</td><td>{{ a.hostname or '—' }}</td><td>{{ a.expire|utcfmt if a.expire else '—' }}</td></tr>
         {% endfor %}
         </tbody>
     </table>
@@ -145,7 +148,7 @@
         <thead><tr><th>IP</th><th>Subnet</th><th>Hostname</th></tr></thead>
         <tbody>
         {% for r in view.reservations %}
-        <tr><td class="mono">{{ r.ip }}</td><td>{{ r.subnet_id }}</td><td>{{ r.hostname or '—' }}</td></tr>
+        <tr><td class="mono">{{ r.ip }}</td><td>{{ subnet4_cell(r.subnet_id) }}</td><td>{{ r.hostname or '—' }}</td></tr>
         {% endfor %}
         </tbody>
     </table>
@@ -159,7 +162,7 @@
         {% for h in view.reservations6 %}
         <tr>
             <td class="mono">{{ h.duid_hex or '—' }}</td>
-            <td>{{ h.subnet_id }}</td>
+            <td>{{ subnet6_cell(h.subnet_id) }}</td>
             <td>{{ h.hostname or '—' }}</td>
             <td class="mono">{% for r in h.reservations %}{{ r.address }}{% if r.type_name == 'IA_PD' %}/{{ r.prefix_len }}{% if r.excluded_prefix %} (excluding {{ r.excluded_prefix }}/{{ r.excluded_prefix_len }}){% endif %}{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
         </tr>

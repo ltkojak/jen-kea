@@ -1213,7 +1213,7 @@ class TestTheChangeSetReportsAndRevertsARefusedTarget:
             "dhcp4", edit, "authored", servers=[_server(w, 2), _server(w, 1)], restart=False
         )
         assert result.status == "aborted" and result.last_code == "investigation-on"
-        assert "reverted 1 server(s) that had already been updated: kea-b" in " ".join(t for _k, t in result.lines)
+        assert "reverted 1 server that had already been updated: kea-b" in " ".join(t for _k, t in result.lines)
         assert w.daemons[2].file == original_b, "kea-b is exactly what it was"
         assert _marker(w.daemons[1].file) is not None
 

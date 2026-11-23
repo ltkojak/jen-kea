@@ -46,14 +46,14 @@ def _find_server(server_id):
     return next((s for s in extensions.KEA_SERVERS if s["id"] == server_id), None)
 
 
-# Named for the block's "received / offered / acked / naked / dropped /
+# Named for the block's "received / offered / ACK / NAK / dropped /
 # parse-failed / allocation-failed" rate rows — every other pkt4-*/v4-*
 # key the server reports still shows up in the "all counters" table.
 _PACKET_HEALTH_NAMED_KEYS = (
     ("pkt4-received", "Received"),
     ("pkt4-offer-sent", "Offered"),
-    ("pkt4-ack-sent", "Acked"),
-    ("pkt4-nak-sent", "Naked"),
+    ("pkt4-ack-sent", "ACK"),  # Q248 (V24): the two replies by their names - "Naked" read as the English word
+    ("pkt4-nak-sent", "NAK"),
     ("pkt4-receive-drop", "Dropped"),
     ("pkt4-parse-failed", "Parse failed"),
 )
@@ -568,7 +568,7 @@ def ha_action(server_id, action):
         abort(404)
     if _ha_role_denied(spec["role"]):
         message = (
-            "SuperAdmin access required for this HA action."
+            "Superadmin access required for this HA action."
             if spec["role"] == "superadmin"
             else "Admin access required."
         )

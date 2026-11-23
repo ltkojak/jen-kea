@@ -90,7 +90,7 @@ class TestAccessibilityCss:
 
     def test_aria_labels_on_the_audited_nav_controls(self):
         html = _render()
-        assert 'aria-label="Theme"' in html  # already there since Q63
+        assert 'aria-label="Display"' in html  # the palette menu (Q63's Theme picker; Q248 named it for all it holds)
         assert 'aria-label="Account"' in html  # avatar
         assert 'aria-label="Keyboard shortcuts"' in html
         assert 'id="kb-modal-close-btn" aria-label="Close"' in html
@@ -100,12 +100,13 @@ class TestAccessibilityCss:
     def test_flash_messages_carry_role_and_aria_live(self):
         html = _render(flashes=[("success", "Saved."), ("error", "Nope.")])
         # Q206 (AV2): each flash also carries a close button and its message sits in `.alert-text`; the roles are what they were
+        # Q248 (V7): and the icon of its category comes before the text (tests/test_q248_c1.py holds which icon)
         assert re.search(
-            r'<div class="alert alert-success alert-flash" role="status" aria-live="polite"[^>]*><span class="alert-text">Saved\.</span><button type="button" class="alert-close" aria-label="Dismiss">',
+            r'<div class="alert alert-success alert-flash" role="status" aria-live="polite"[^>]*><svg class="ico"[^>]*><use href="#i-circle-check"></use></svg><span class="alert-text">Saved\.</span><button type="button" class="alert-close" aria-label="Dismiss">',
             html,
         )
         assert re.search(
-            r'<div class="alert alert-error alert-flash" role="alert"><span class="alert-text">Nope\.</span><button type="button" class="alert-close" aria-label="Dismiss">',
+            r'<div class="alert alert-error alert-flash" role="alert"><svg class="ico"[^>]*><use href="#i-circle-x"></use></svg><span class="alert-text">Nope\.</span><button type="button" class="alert-close" aria-label="Dismiss">',
             html,
         )
 
@@ -166,7 +167,7 @@ class TestTwoColumnSettings:
             '<div class="form-hint u-8a77e5">Ports are set on '
             '<a href="/settings/system#sys-ports">System → Ports &amp; threads</a>.</div>\n</div>\n</div>\n{% endblock %}'
         ),
-        "settings_system.html": '<button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>\n    </form>\n</div>\n</div>\n\n<script',
+        "settings_system.html": '<button type="submit" class="btn btn-primary">{{ icon("save") }} Save Config History</button>\n    </form>\n</div>\n</div>\n\n<script',
         # (Q204 AT1 d: the metrics form is rendered only for an account that may see every subnet, so the card's `</form>` is followed by its `{% endif %}` - like settings_kea's)
         "settings_alerts.html": (
             '<button type="submit" class="btn btn-primary u-8a77e5">Save Metrics Settings</button>\n'

@@ -17,6 +17,7 @@ import jen.services.mfa as __mfa
 import jen.services.oidc as __oidc
 import jen.services.passkeys as __passkeys
 import jen.services.session_timeout as __session_timeout
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("auth", __name__)
@@ -139,7 +140,7 @@ def login():
             if remaining == __auth.PERMANENT_LOCKOUT:  # (Q226, AL12) the sentinel, never a magnitude
                 flash("Account is locked. Contact an administrator.", "error")
             else:
-                flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")
+                flash(f"Too many failed attempts. Try again in {_plural(remaining, 'minute')}.", "error")
             return _render_login(prefill_username=username)
 
         # v5.25.0 (Q21) — an OIDC-linked account has no usable local
@@ -218,7 +219,7 @@ def login():
             # v5.25.0 (Q21) — the clear/login_user/session-keys/audit block
             # moved to oidc.establish_session() so the OIDC callback can
             # share it exactly, rather than keeping its own copy in sync.
-            __oidc.establish_session(row, f"User {username} logged in from {ip}")
+            __oidc.establish_session(row, f"User {username} signed in from {ip}")
             # v5.69.0-beta.5 (Q174): the page the person was sent from (Flask-Login's ?next=), as the MFA and OIDC paths always honored - a plain login dropped it
             return redirect(_safe_next(request.args.get("next", "")) or url_for("dashboard.dashboard"))
 
@@ -271,7 +272,7 @@ def login_oidc_callback():
         if remaining == __auth.PERMANENT_LOCKOUT:
             flash("Sign-in is locked. Contact an administrator.", "error")
         else:
-            flash(f"Too many failed sign-in attempts. Try again in {remaining} minute(s).", "error")
+            flash(f"Too many failed sign-in attempts. Try again in {_plural(remaining, 'minute')}.", "error")
         return redirect(url_for("auth.login"))
 
     try:
@@ -328,7 +329,7 @@ def login_oidc_callback():
     next_url = session.pop("oidc_next", "") or url_for("dashboard.dashboard")
 
     __auth.clear_login_attempts(ip, __auth.NO_ACCOUNT)
-    __oidc.establish_session(row, f"User {row['username']} logged in via SSO from {ip}")
+    __oidc.establish_session(row, f"User {row['username']} signed in via SSO from {ip}")
     return redirect(next_url)
 
 
@@ -339,7 +340,7 @@ def logout():
     # <img src> can no longer sign a user out.
     if request.method == "GET":
         return render_template("logout_confirm.html")
-    __user.audit("LOGOUT", "auth", f"User {current_user.username} logged out")
+    __user.audit("LOGOUT", "auth", f"User {current_user.username} signed out")
     logout_user()
     session.clear()
     return redirect(url_for("auth.login"))
@@ -387,7 +388,7 @@ def reauth():
         if remaining == __auth.PERMANENT_LOCKOUT:
             flash("Account is locked. Contact an administrator.", "error")
         else:
-            flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")
+            flash(f"Too many failed attempts. Try again in {_plural(remaining, 'minute')}.", "error")
         return render_template("reauth.html", has_mfa=has_mfa, has_passkey=has_passkey, next_url=next_url)
 
     password = request.form.get("password", "")

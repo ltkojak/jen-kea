@@ -36,11 +36,78 @@
     <script nonce="{{ csp_nonce }}">
 var THEME_DEFAULT = {{ theme_default | tojson }};
 var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
+// Q248 - the stored pick is a preset's id, or 'system' ("Match My System": the dark preset when the operating system asks for dark, the light one when it asks for light), or
+// nothing (the install's default). ONE resolver, used here before the page paints and by the picker script below.
+function jenThemeResolve(pick) {
+    if (pick === 'system') return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    return (pick && THEME_IDS.indexOf(pick) !== -1) ? pick : THEME_DEFAULT;
+}
 (function() {
     var saved = null;
     try { saved = localStorage.getItem('jen-theme-pick'); } catch (e) { /* private mode / blocked storage */ }
-    var initial = (saved && THEME_IDS.indexOf(saved) !== -1) ? saved : THEME_DEFAULT;
+    var initial = jenThemeResolve(saved);
     document.documentElement.dataset.theme = initial;
+    // Q248 - the table density pick ('jen-density-pick' = 'compact'; absent = comfortable) is applied here too, so a compact list never paints tall first
+    var density = null;
+    try { density = localStorage.getItem('jen-density-pick'); } catch (e) { /* private mode / blocked storage */ }
+    if (density === 'compact') document.documentElement.dataset.density = 'compact';
+})();
+// Q248 (V3) - ONE helper for a dialog a page writes itself (Add User, Edit User): window.jenDialog.open(overlay, opener) / .close(). The overlay carries role="dialog", aria-modal and
+// `hidden`; open() shows it, makes everything beside it inert (the siblings of the overlay and of each of its ancestors, so the dialog may live inside the page's own container; the
+// confirm, prompt and idle-session dialogs and the toasts stay live because they open ON TOP of it), focuses the first field, keeps Tab and Shift+Tab inside, closes on Escape, on a
+// click on the backdrop and on any [data-dialog-close] inside, and gives focus back to whatever opened it. It is defined in the head for the reason jenFetch is: a page's own script
+// in the content block runs before the scripts at the end of this file.
+window.jenDialog = (function() {
+    var FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    var ON_TOP = '#jen-confirm-overlay, #jen-prompt-overlay, #jen-session-overlay, .toast-stack';
+    var current = null;
+    function showing(el) { return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+    function stops(el) { return Array.prototype.filter.call(el.querySelectorAll(FOCUSABLE), showing); }
+    function close() {
+        if (!current) return;
+        var was = current;
+        current = null;
+        was.el.hidden = true;
+        was.inert.forEach(function(n) { n.inert = false; });
+        was.el.dispatchEvent(new CustomEvent('jen:dialog-close', { bubbles: true }));
+        if (was.opener && was.opener.focus && document.body.contains(was.opener)) was.opener.focus();
+    }
+    function open(el, opener) {
+        if (!el) return;
+        if (current) close();
+        current = { el: el, opener: opener || document.activeElement, inert: [] };
+        el.hidden = false;
+        for (var node = el; node.parentNode && node !== document.body; node = node.parentNode) {
+            Array.prototype.forEach.call(node.parentNode.children, function(sib) {
+                if (sib === node || sib.inert || !('inert' in sib) || sib.matches(ON_TOP) || /^(SCRIPT|STYLE|LINK)$/.test(sib.tagName)) return;
+                sib.inert = true;
+                current.inert.push(sib);
+            });
+        }
+        var first = stops(el).filter(function(s) { return !s.hasAttribute('data-dialog-close'); })[0] || stops(el)[0];
+        if (first) first.focus();
+    }
+    document.addEventListener('keydown', function(e) {
+        if (!current) return;
+        // a dialog that opened on top of this one (a confirmation of a button inside it) has the keyboard
+        var a = document.activeElement;
+        if (a && a.closest && a.closest(ON_TOP)) return;
+        if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+        if (e.key !== 'Tab') return;
+        var list = stops(current.el);
+        if (!list.length) { e.preventDefault(); return; }
+        var first = list[0], last = list[list.length - 1];
+        if (!current.el.contains(a)) { e.preventDefault(); first.focus(); }
+        else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+    });
+    document.addEventListener('click', function(e) {
+        if (!current) return;
+        if (e.target === current.el) { close(); return; }
+        var c = e.target.closest ? e.target.closest('[data-dialog-close]') : null;
+        if (c && current.el.contains(c)) close();
+    });
+    return { open: open, close: close, isOpen: function() { return !!current; } };
 })();
 // v5.69.0-beta.4 (Q173) - one shared #jen-progress bar for every request this page makes: htmx's own lifecycle events, and the app's own fetch() calls (routed
 // through jenFetch() instead of the bare global, so this counter sees them too - v5.56.4, Q72b). It is defined HERE, in the head, because leases.html and
@@ -124,13 +191,16 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         a { color: var(--primary); text-decoration: none; }
         a:hover { text-decoration: underline; }
 
-        /* v5.56.4 (Q72a) — a visible keyboard-focus ring everywhere; nothing in
-           this file or the generated utility stylesheet sets outline:none on a
-           :focus-visible selector, so this always wins the cascade even where a
-           plain, non-focus-visible rule (form inputs, the search box) sets
-           outline:none for the mouse/touch case. */
+        /* v5.56.4 (Q72a) — a visible keyboard-focus ring everywhere. Q248 (V2): ONE focus style for the whole product. The form-field rule further down
+           used to switch the outline off at this rule's own specificity and LATER in the file, so it won the cascade and a text field (the global search box
+           among them, which also switched it off inline) showed no ring at all; nothing in this file switches it off now. */
         a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
         textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+        }
+        /* Q248 (V1) - a menu's toggle is a checkbox that is hidden from the eye, not from the keyboard: its label shows the ring while it has keyboard focus */
+        .nav-dd-toggle:focus-visible + label, .action-menu-toggle:focus-visible + label {
             outline: 2px solid var(--primary);
             outline-offset: 2px;
         }
@@ -139,7 +209,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            keyboard focus (the first Tab stop on every page). */
         .skip-link {
             position: absolute; top: -40px; left: 8px; z-index: 1100;
-            background: var(--primary); color: var(--bg); padding: 8px 14px;
+            background: var(--primary); color: var(--on-accent); padding: 8px 14px;
             border-radius: var(--radius); font-size: 13px; font-weight: 600;
             text-decoration: none; transition: top 0.15s;
         }
@@ -200,7 +270,11 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         }
 
         /* Nav */
-        .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 6px 20px; padding-top: calc(6px + env(safe-area-inset-top)); padding-left: calc(20px + env(safe-area-inset-left)); padding-right: calc(20px + env(safe-area-inset-right)); display: flex; align-items: center; min-height: 56px; gap: 4px; position: sticky; top: 0; z-index: 100; }
+        /* Q248 (V54) - the bar's background runs edge to edge; its CONTENTS sit in .nav-inner, a column with the page's own width and side padding (1,400 px, or 1,800 px on
+           a table page: .content--wide, below), so on a wide monitor the logo lines up with the page title and the search box with the content's right edge. It was the bar
+           itself that held the links, so at 2560 px the logo sat 580 px to the left of the title under it. */
+        .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 6px 0; padding-top: calc(6px + env(safe-area-inset-top)); display: flex; align-items: center; min-height: 56px; position: sticky; top: 0; z-index: 100; }
+        .nav-inner { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 0 20px; padding-left: calc(20px + env(safe-area-inset-left)); padding-right: calc(20px + env(safe-area-inset-right)); }
         .nav-brand { color: var(--primary); font-weight: 700; font-size: 16px; margin-right: 16px; text-decoration: none; flex-shrink: 0; }
         .nav-brand:hover { text-decoration: none; }
         .nav-brand span { color: var(--text-muted); font-size: 11px; font-weight: 400; display: block; }
@@ -211,10 +285,24 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .nav a.nav-link { color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius); font-size: 13px; display: flex; align-items: center; gap: 5px; text-decoration: none; white-space: nowrap; }
         .nav a.nav-link:hover, .nav a.nav-link.active { background: var(--surface2); color: var(--text); text-decoration: none; }
         /* v7.2.0-beta.1 (Q243) - the person's own favorites after the fixed items: a hairline, then links that keep their icon and drop their word when the row is short of room */
-        .nav-links { min-width: 0; }
+        /* Q248 (V10, V37) - the top row never overlaps. The link group is the one part that may shrink (min-width: 0) and it CLIPS what does not fit (the 3 px of padding,
+           taken back by the margin, keep a link's focus ring inside the clip); the right-hand group, the keyboard button and the search box never shrink. The script at the
+           foot of this file (jenNavFit) measures the row and steps through the levels below until it fits: 1 favorites show their icon only, 2 About leaves the row (it is
+           always in the Account menu), 3 Getting started shows its icon only. With no script the row is level 0 and clips. This replaced a fixed rule that took the
+           favorites' names away below 1500 px, though a 1440 px window with three favorites has room for them. */
+        .nav-links { min-width: 0; overflow: hidden; padding: 3px; margin: -3px; }
+        .nav-links > * { flex-shrink: 0; }
         .nav-fav-sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
-        @media screen and (max-width: 1500px) { .nav-fav-label { display: none; } }
+        .nav.nav-fit-1 .nav-fav-label, .nav.nav-fit-2 .nav-fav-label, .nav.nav-fit-3 .nav-fav-label { display: none; }
+        .nav.nav-fit-2 .nav-top-about, .nav.nav-fit-3 .nav-top-about { display: none; }
+        .nav.nav-fit-3 .gs-pill-label { display: none; }
         .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        .nav-kb, .nav-search { flex-shrink: 0; }
+        /* Q248 (V8) - the two top-row controls that were 22 px tall */
+        .nav a.gs-pill, #kb-hint-btn { min-height: 24px; }
+        #kb-hint-btn { min-width: 24px; display: inline-flex; align-items: center; justify-content: center; }
+        /* Q248 (addition 14) - the phone's top bar has a search button; it opens the same search field as a row under the bar */
+        .nav-search-btn { display: none; }
         .kea-status { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .kea-up { background: var(--success); box-shadow: 0 0 6px var(--success); }
         .kea-down { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
@@ -232,9 +320,39 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .section-pin-btn { display: inline-flex; align-items: center; gap: 5px; background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
         .section-pin-btn:hover, .section-pin-btn.pinned { color: var(--text); border-color: var(--primary); }
         @media screen and (max-width: 768px) { .section-pin { display: none; } }
+        /* Q248 (V11) - a sticky block stops at its scroller's PADDING, so the strip's 20 px of right padding stayed open and the letters of a tab scrolled under the button
+           showed to the right of it. A strip with a pin block has no right padding of its own; the block carries it. (A phone shows no pin block, and the phone's own
+           padding rule for the strip, later in this file, puts the padding back.) */
+        .section-tabs--pin { padding-right: 0; }
+        .section-tabs--pin .section-pin { padding-right: 20px; }
         /* fade hint that the strip scrolls (v5.9.0) */
         .section-tabs-wrap { position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; }
         .section-tabs-wrap::after { content: ""; position: absolute; right: 0; top: 0; bottom: 1px; width: 28px; pointer-events: none; background: linear-gradient(to right, transparent, var(--surface)); }
+        /* Q248 (V11) - and the same fade at the LEFT edge, only while the strip is scrolled (the script at the foot of this file keeps .is-scrolled): a tab cut at the left
+           edge had nothing to say there was more that way */
+        .section-tabs-wrap::before { content: ""; position: absolute; left: 0; top: 0; bottom: 1px; width: 28px; z-index: 100; pointer-events: none; background: linear-gradient(to left, transparent, var(--surface)); opacity: 0; transition: opacity 0.15s; }
+        .section-tabs-wrap.is-scrolled::before { opacity: 1; }
+        /* Q248 (V54) - the strip's background and its bottom line run edge to edge (they are the wrap's); the strip itself is a column with the page's own width and side
+           padding, centered, so the first tab lines up with the page title and the pin button sits at the content's right edge. The two fades follow the column's edges.
+           --page-w is the page's column: 1,400 px, or 1,800 px on a table page (the wrap's --wide class, set where the page asks for .content--wide). */
+        .section-tabs-wrap { --page-w: 1400px; background: var(--surface); border-bottom: 1px solid var(--border); }
+        .section-tabs-wrap--wide { --page-w: 1800px; }
+        .section-tabs-wrap > .section-tabs { max-width: var(--page-w); margin: 0 auto; border-bottom: 0; min-height: 39px; }   /* 39 + the wrap's line = the 40 px --sticky-top counts */
+        .section-tabs-wrap::before { left: max(0px, calc((100% - var(--page-w)) / 2)); bottom: 0; }
+        .section-tabs-wrap::after { right: max(0px, calc((100% - var(--page-w)) / 2)); bottom: 0; }
+
+        /* ── The setup wizard's cards (Q248: V14, addition 9). The page reset takes every margin away, so a heading touched the control above it and a list's bullets hung
+           outside the card's padding. A heading that follows anything has 16 px above it; a list keeps its bullets inside; the foot holds Back and Next (Finish on the last). ── */
+        .setup-card h3, .setup-card h4 { margin: 16px 0 6px; }
+        .setup-card > h3:first-child, .setup-card > h4:first-child { margin-top: 0; }
+        .setup-card p { margin-bottom: 8px; }
+        .setup-card ul { margin: 0 0 8px; padding-left: 22px; }
+        .setup-card li { margin-bottom: 2px; }
+        .setup-card table { margin-bottom: 12px; }
+        .setup-card .copy-box, .setup-card .copy-row { margin-bottom: 8px; }
+        .setup-card .copy-row .copy-box { margin-bottom: 0; }
+        .setup-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+        .setup-nav form { margin: 0; }
 
         /* ── Settings IA (v5.9.0) ── */
         .settings-back { display: none; padding: 8px 0 0; font-size: 13px; }
@@ -247,8 +365,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .settings-tile-blurb { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
         .settings-tile-hints { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
         .settings-hint { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); }
-        .settings-hint-ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 27%, transparent); }
-        .settings-hint-warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 27%, transparent); }
+        .settings-hint-ok { color: var(--success-ink); border-color: color-mix(in srgb, var(--success) 27%, transparent); }
+        .settings-hint-warn { color: var(--warning-ink); border-color: color-mix(in srgb, var(--warning) 27%, transparent); }
         /* v5.56.4 (Q72c) — the five chip-TOC Settings group pages wrap their
            cards in .settings-cols; multi-column CSS keeps document order (top
            to bottom, then the second column), so the chip TOC's anchors and
@@ -267,7 +385,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .settings-cols .card--wide:not(:first-child) { margin-top: 16px; }
             .settings-cols .card--wide + .card--wide { margin-top: 0; }
         }
-        .settings-hint-bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 27%, transparent); }
+        .settings-hint-bad { color: var(--danger-ink); border-color: color-mix(in srgb, var(--danger) 27%, transparent); }
         .subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
         .subtab { padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); font-size: 12px; font-weight: 500; text-decoration: none; white-space: nowrap; }
         .subtab:hover { color: var(--text); text-decoration: none; }
@@ -279,6 +397,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 
         /* Layout */
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        /* Q248 (V54) - forms, settings and About stay 1,400 px wide; a TABLE page may use up to 1,800 px. A page asks for it by filling the content_class block with
+           content--wide; the content column, the top row's inner wrapper and the strip all take the same width. After the rules it widens (.container, .nav-inner),
+           so it wins at equal weight. */
+        .content--wide { max-width: 1800px; }
+        /* Q248 (addition 4) - a detail page's one way back, the first element of its content */
+        .back-link { display: inline-block; margin-bottom: 8px; font-size: 13px; }
+        /* Q248 (V54) - About's release notes are prose: about 80 characters a line, however wide the card is (they ran to 1,298 px) */
+        .changelog-body { max-width: 80ch; }
         .page-header { margin-bottom: 24px; }
         .page-header h1 { font-size: 22px; font-weight: 600; }
         .page-header p { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
@@ -296,6 +422,20 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         details.card > summary.card-header::-webkit-details-marker { display: none; }
         details.card > summary.card-header::after { content: "\25B8"; color: var(--text-muted); flex: none; }
         details.card[open] > summary.card-header::after { content: "\25BE"; }
+
+        /* ── Q248 (V38): the in-page tabs. ONE style for the pages of a Settings group, the DDNS page's views and the Investigate page's views: real tabs on a rule,
+           the current one (the tab that carries aria-current) joined to the page under it and marked with the accent. The markup is _settings_subtabs.html's macro. The elements
+           still carry .subtabs / .subtab (the pills these were, earlier in this block); every property those rules set is set again here. A phone gets one
+           scrolling row of tabs at least 40 px tall. ── */
+        .page-tabs { display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 16px; padding: 0 4px; border-bottom: 1px solid var(--border); }
+        .page-tab { margin-bottom: -1px; padding: 8px 16px; border: 1px solid transparent; border-bottom-color: var(--border); border-radius: var(--radius) var(--radius) 0 0; background: none; color: var(--text-muted); font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+        .page-tab:hover { color: var(--text); background: var(--surface2); text-decoration: none; }
+        .page-tab.active { color: var(--text); font-weight: 600; background: var(--bg); border-color: var(--border); border-bottom-color: var(--bg); box-shadow: inset 0 2px 0 var(--primary); }
+        @media screen and (max-width: 768px) {
+            .page-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 0; }
+            .page-tabs::-webkit-scrollbar { display: none; }
+            .page-tab { flex: none; display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; }
+        }
 
         /* Tables */
         /* v5.1.18 attempted to fix .action-menu-dropdown clipping by
@@ -359,6 +499,25 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         td.mono { font-size: 12px; }
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: var(--surface2); }
+        /* Q248 (V12) - one long value never pushes a list off the page. A table sizes a column by its cells' widest unbreakable run, and an 85-character hostname is one
+           run: the Leases table grew 140 px past its card at 1440 px (447 px at 1024) and took the row menus off the screen. A value a client or an operator chose is
+           written in a .clip: it may break anywhere, so the least room it asks of its column is one character, and it shows ONE line, cut with an ellipsis; its whole
+           text is in its title. With room it is as wide as its text (the table looks as it did); short of room it is the column that gives way, never the page.
+           .clip-row holds a clip and what follows it (a vendor badge, the Investigate button): they keep their size and the clip takes what is left. */
+        .clip { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; overflow: hidden; white-space: normal; word-break: break-all; min-width: 0; max-width: 48ch; }
+        .clip-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .clip-row > * { flex: none; }
+        .clip-row > .clip { flex: 0 1 auto; }
+        /* a clip with nowhere else to be read whole (an audit event's details) opens where it is, on a click (the listener is with the page's script) */
+        .clip[data-clip-toggle] { cursor: pointer; max-width: none; }
+        .clip.clip-open { -webkit-line-clamp: unset; line-clamp: unset; word-break: normal; overflow-wrap: anywhere; }
+        /* a vendor's name is not the operator's, but a long one is as wide: the badge is capped and its name cut (the whole name is the badge's title) */
+        .vendor-badge { max-width: 24ch; }
+        .vendor-badge > .vendor-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* Q248 (V13) - a date, a time and a status badge never break: "First seen" broke inside a date and every status badge put its dot above its word at 1024 px */
+        table.rowlist time, table.rowlist .badge { white-space: nowrap; }
+        /* a subnet's name is the operator's too: its badge (the one with a tone) is capped and cut, so a long name on one line cannot do what a long hostname did */
+        table.rowlist .badge[class*="badge-tone-"] { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 
         /* Buttons */
         button.linkish { background: none; border: none; padding: 0; cursor: pointer; font: inherit; color: var(--primary); text-decoration: underline; }
@@ -370,12 +529,16 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .ico-muted { color: var(--text-muted); }
         .ico-dot { fill: currentColor; stroke: none; width: 0.7em; height: 0.7em; vertical-align: 0; }
         .ico-success { color: var(--success); } .ico-warning { color: var(--warning); } .ico-danger { color: var(--danger); }
-        .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border-radius: var(--radius); border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: opacity 0.15s; text-decoration: none; }
+        /* Q248 (V18, V8) - every .btn carries a 1px border (transparent unless its variant draws one) and a line height in px, so a primary button is the height of the secondary
+           beside it in any font: 32px, and .btn-sm 24px, both held by a min-height (a button that is only an icon has no line of text to take its height from). Two buttons in a line
+           of text sit on its middle, not on their baselines: a button that starts with an icon has its baseline 3px lower than one that starts with a word. */
+        .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border-radius: var(--radius); border: 1px solid transparent; cursor: pointer; font-size: 13px; font-weight: 500; line-height: 16px; min-height: 32px; vertical-align: middle; transition: opacity 0.15s; text-decoration: none; }
         .btn:hover { opacity: 0.85; text-decoration: none; }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-success { background: var(--success); color: white; }
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-warning { background: var(--warning); color: black; }
+        /* Q248 (V4) - the text on a solid button is the theme's own on-color (black or white, whichever reads on that color: jen/services/theme.py derived_vars), never a fixed white */
+        .btn-primary { background: var(--primary); color: var(--on-accent); }
+        .btn-success { background: var(--success); color: var(--on-success); }
+        .btn-danger { background: var(--danger); color: var(--on-danger); }
+        .btn-warning { background: var(--warning); color: var(--on-warning); }
         /* ── Unified row action buttons ── */
         .btn-act { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; font-size:13px; transition:background .12s, border-color .12s, color .12s; text-decoration:none; }
         .btn-act:hover { text-decoration: none; }
@@ -383,11 +546,11 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .btn-act-edit:hover  { background:var(--surface2); border-color:var(--text-muted); color:var(--text); }
         .btn-act-pin   { background:transparent; border:1px solid var(--border); color:var(--text-muted); }
         .btn-act-pin:hover   { background:color-mix(in srgb, var(--success) 15%, transparent); border-color:var(--success); color:var(--success); }
-        .btn-act-del   { background:transparent; border:1px solid var(--danger); color:var(--danger); font-weight:600; }
-        .btn-act-del:hover   { background:color-mix(in srgb, var(--danger) 15%, transparent); border-color:var(--danger); color:var(--danger); }
+        .btn-act-del   { background:transparent; border:1px solid var(--danger); color:var(--danger-ink); font-weight:600; }
+        .btn-act-del:hover   { background:color-mix(in srgb, var(--danger) 15%, transparent); border-color:var(--danger); color:var(--danger-ink); }
         .btn-act-divider { width:1px; height:16px; background:var(--border); margin:0 3px; display:inline-block; vertical-align:middle; }
         .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
-        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; line-height: 14px; min-height: 24px; }
         .btn-icon { padding: 5px 8px; }
 
         /* Forms */
@@ -396,7 +559,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
         input[type=text], input[type=password], input[type=email], input[type=number], input[type=file], select, textarea {
             background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius);
-            color: var(--text); padding: 8px 12px; font-size: 13px; width: 100%; outline: none;
+            color: var(--text); padding: 8px 12px; font-size: 13px; width: 100%;
         }
         input:focus, select:focus, textarea:focus { border-color: var(--primary); }
         .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
@@ -432,21 +595,38 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         progress.pool-use.usage-full::-moz-progress-bar { background: var(--danger); }
         .badge-v6 { font-size: 9px; padding: 1px 5px; margin-right: 4px; }
         .danger-card { margin-top: 16px; border-color: var(--danger); }
-        .badge-tone-blue { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
-        .badge-tone-green { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
-        .badge-tone-red { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-        .badge-tone-orange { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
-        .badge-tone-yellow { background: color-mix(in srgb, #e6b400 18%, transparent); color: color-mix(in srgb, #e6b400 50%, var(--text)); }
-        .badge-tone-purple { background: color-mix(in srgb, #a371f7 18%, transparent); color: color-mix(in srgb, #a371f7 50%, var(--text)); }
-        .badge-tone-mono { background: color-mix(in srgb, var(--text) 18%, transparent); color: var(--text); }
+        /* Q248 (V6) - a badge's and a banner's text is at least 4.5:1 on its own background in every preset. Two things changed in each rule. The background is the color mixed into
+           --tint-base (the preset's surface) instead of into whatever is behind it, so a chip is ONE known color wherever it sits (on Retro's teal page it used to be teal). And the
+           text is the token's INK (jen/services/theme.py derived_vars): the token itself where that already reads on its chip, else moved toward black or white until it does (Light's
+           warning was 2.3:1). yellow and purple, the two fixed hues, keep --tone-keep of the hue and take the rest from --tone-pole. A custom palette carries the old values of all
+           of these (a transparent base, the token as its own ink, 50% toward its text), so it draws what it drew. tests/test_q248_c1.py measures every preset. */
+        .badge-tone-blue { background: color-mix(in srgb, var(--primary) 18%, var(--tint-base)); color: var(--primary-ink); }
+        .badge-tone-green { background: color-mix(in srgb, var(--success) 18%, var(--tint-base)); color: var(--success-ink); }
+        .badge-tone-red { background: color-mix(in srgb, var(--danger) 18%, var(--tint-base)); color: var(--danger-ink); }
+        .badge-tone-orange { background: color-mix(in srgb, var(--warning) 18%, var(--tint-base)); color: var(--warning-ink); }
+        .badge-tone-yellow { background: color-mix(in srgb, #e6b400 18%, var(--tint-base)); color: color-mix(in srgb, #e6b400 var(--tone-keep), var(--tone-pole)); }
+        .badge-tone-purple { background: color-mix(in srgb, #a371f7 18%, var(--tint-base)); color: color-mix(in srgb, #a371f7 var(--tone-keep), var(--tone-pole)); }
+        .badge-tone-mono { background: color-mix(in srgb, var(--text) 18%, var(--tint-base)); color: var(--text); }
+        /* a manufacturer badge (templates/_device_badge.html, _device_rows.html): its device-type color arrives as --tc; the text keeps --hue-keep of it */
+        .mfr-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap; background: color-mix(in srgb, var(--tc) 13%, var(--tint-base)); color: color-mix(in srgb, var(--tc) var(--hue-keep), var(--hue-pole)); border: 1px solid color-mix(in srgb, var(--tc) 27%, transparent); }
+        .mfr-badge-lg { gap: 5px; padding: 3px 8px; }
+        .mfr-badge-manual { border-style: dashed; }
+        .mfr-badge img { width: 11px; height: 11px; object-fit: contain; filter: brightness(0) invert(var(--vendor-invert)); opacity: 0.85; }
+        .mfr-badge-lg img { width: 13px; height: 13px; }
         .table-foot { display:flex; justify-content:flex-end; margin:8px 0; }   /* Q205 AU5: the quiet controls under a list (Delete stale leases) */
-        a.badge { text-decoration: none; }
+        /* Q248 (V8) - a badge that is a link is 24 px tall to a pointer: a transparent border the pill's color does not fill, taken back by the margin */
+        a.badge { text-decoration: none; border: solid transparent; border-width: 4px 0; background-clip: padding-box; margin: -4px 0; }
+        a.fix-link { display: inline-block; padding: 5px 0; margin: -5px 0; }
         a.badge:hover, a.badge:focus-visible { filter: brightness(1.15); text-decoration: underline; }
-        .badge-admin { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-        .badge-viewer { background: color-mix(in srgb, var(--text-muted) 18%, transparent); color: var(--text-muted); }
-        .badge-dynamic { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
-        .badge-reserved { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
-        .badge-danger { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+        .badge-admin { background: color-mix(in srgb, var(--danger) 18%, var(--tint-base)); color: var(--danger-ink); }
+        .badge-viewer { background: color-mix(in srgb, var(--text-muted) 18%, var(--tint-base)); color: var(--muted-ink); }
+        .badge-dynamic { background: color-mix(in srgb, var(--primary) 18%, var(--tint-base)); color: var(--primary-ink); }
+        .badge-reserved { background: color-mix(in srgb, var(--success) 18%, var(--tint-base)); color: var(--success-ink); }
+        .badge-danger { background: color-mix(in srgb, var(--danger) 18%, var(--tint-base)); color: var(--danger-ink); }
+        .badge-warning { background: color-mix(in srgb, var(--warning) 18%, var(--tint-base)); color: var(--warning-ink); }
+        .badge-muted { background: color-mix(in srgb, var(--text-muted) 18%, var(--tint-base)); color: var(--muted-ink); }
+        /* text on the accent itself (the chosen filter of a row of badges, a step of the setup, an API method): the theme's on-color */
+        .badge-accent { background: var(--primary); color: var(--on-accent); }
 
         /* v5.55.1 (Q64) — dashboard Alert Summary widget's JS-built rows
            (loadAlertSummary() in dashboard.html). These were inline style=
@@ -457,14 +637,17 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .as-type-cell { font-size: 12px; padding: 3px 8px; }
         .as-status-cell { font-size: 11px; padding: 3px 0; }
         .as-status-cell .badge[title] { cursor: help; }
-        .as-fail-banner { background: var(--surface2); border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: var(--warning); }
+        .as-fail-banner { background: var(--surface2); border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: var(--warning-ink); }
 
         /* Alerts */
         .alert { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 13px; }
-        .alert-success { background: color-mix(in srgb, var(--success) 18%, transparent); border: 1px solid color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
-        .alert-error, .alert-danger { background: color-mix(in srgb, var(--danger) 18%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
-        .alert-info { background: color-mix(in srgb, var(--primary) 18%, transparent); border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent); color: var(--primary); }
-        .alert-warning { background: color-mix(in srgb, var(--warning) 18%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+        /* Q248 (V6) - a banner's text is the token's ink on a chip of the token over the preset's surface (see the badges above) */
+        .alert-success { background: color-mix(in srgb, var(--success) 18%, var(--tint-base)); border: 1px solid color-mix(in srgb, var(--success) 20%, transparent); color: var(--success-ink); }
+        .alert-error, .alert-danger { background: color-mix(in srgb, var(--danger) 18%, var(--tint-base)); border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger-ink); }
+        .alert-info { background: color-mix(in srgb, var(--primary) 18%, var(--tint-base)); border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent); color: var(--primary-ink); }
+        .alert-warning { background: color-mix(in srgb, var(--warning) 18%, var(--tint-base)); border: 1px solid color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning-ink); }
+        /* Q248 (V7) - a flashed message carries its category's icon, so a warning is told from an information line by more than its color */
+        .alert-flash > .ico, .toast > .ico { margin-top: 2px; }
         /* Q217: the Write mode card - one choice, the steps its choice needs under it */
         .wm-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px; }
         .wm-modes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
@@ -489,7 +672,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .alert-flash { display: flex; align-items: flex-start; gap: 12px; }
         .alert-flash[hidden] { display: none; }
         .alert-flash .alert-text, .toast .alert-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-        .alert-close { background: none; border: 0; padding: 0 2px; margin: 0; font: inherit; font-size: 18px; line-height: 1; color: inherit; cursor: pointer; opacity: .7; }
+        /* Q248 (V8) - a 24 px target: the box grows, and the negative margin keeps the banner the height it was */
+        .alert-close { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 24px; min-height: 24px; background: none; border: 0; padding: 0 2px; margin: -3px -4px -3px 0; font: inherit; font-size: 18px; line-height: 1; color: inherit; cursor: pointer; opacity: .7; }
         .alert-close:hover, .alert-close:focus-visible { opacity: 1; }
         .toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 10000; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
         .toast-region { display: flex; flex-direction: column; gap: 8px; }
@@ -511,18 +695,41 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .jen-dialog label { display: block; font-size: 14px; margin-bottom: 10px; line-height: 1.5; }
         .jen-dialog input[type=text] { width: 100%; margin-bottom: 20px; }
         .jen-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
-        .field-note { color: var(--danger); font-size: 12px; margin-top: 6px; }
+        /* Q248 (V3) - a page's own dialog with a form in it (Add User, Edit User): the prompt dialog's overlay, a wider card that scrolls when the form is taller than the window */
+        .jen-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); width: min(520px, 94vw); max-height: 90vh; max-height: 90dvh; overflow-y: auto; padding: 24px; box-shadow: 0 16px 48px rgba(0,0,0,.5); }
+        .jen-modal-close { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; background: none; border: none; border-radius: var(--radius); color: var(--text-muted); font-size: 20px; line-height: 1; cursor: pointer; }
+        .jen-modal-close:hover { color: var(--text); background: var(--surface2); }
+        .jen-modal-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+        .field-note { color: var(--danger-ink); font-size: 12px; margin-top: 6px; }
         .field-note[hidden] { display: none; }
         /* a MAC or an IP printed on a list is a copy control: a button styled as text (templates/_copy.html) */
-        .copy { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; text-align: inherit; cursor: copy; border-radius: 3px; }
+        /* Q248 (V8) - the text stays where it was (the padding is taken back by the margin); the control is 24 px tall to a pointer */
+        .copy { background: none; border: 0; padding: 5px 0; margin: -5px 0; min-width: 24px; font: inherit; color: inherit; text-align: inherit; cursor: copy; border-radius: 3px; }
         .copy:hover { text-decoration: underline dotted; }
         .copy.copied { color: var(--success); }
         .copy-sink { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+        /* Q248 (addition 10) - a Copy button beside a block of text, and the block: one line that scrolls sideways inside its card and never widens the page (V14) */
+        .copy-btn { min-height: 24px; white-space: nowrap; }
+        .copy-btn.copied { color: var(--success); border-color: var(--success); }
+        .copy-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+        .copy-row > .copy-box { flex: 1 1 0; }
+        .copy-row > .copy-btn { flex: none; }
+        .copy-box { min-width: 0; max-width: 100%; overflow-x: auto; white-space: pre; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; font-family: monospace; font-size: 12px; line-height: 1.5; }
+        .copy-box--wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+        .code-head-end { display: flex; justify-content: flex-end; margin-bottom: 6px; }
         .results-summary { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); }
+        /* Q248 (addition 5) - a count in the summary is a link that filters the list to what it counts; a filter in force is a chip that takes it away again */
+        .results-summary a.summary-filter { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+        .results-summary a.summary-filter:hover { color: var(--text); }
+        .filter-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 8px; border: 1px solid var(--primary); border-radius: 20px; color: var(--text); font-size: 12px; text-decoration: none; white-space: nowrap; vertical-align: middle; }
+        .filter-chip:hover { background: var(--surface2); text-decoration: none; }
+        .filter-chip .ico { width: 12px; height: 12px; }
+        /* a lease row's marks ("Reserved", "Expires soon") show what the summary counts; in the page's font even in a cell set in the code font */
+        .row-mark { font-family: var(--font-ui); }
         /* v5.70.0-beta.4 (Q208): what a search matched (AX6) - no theme has a soft accent token, so the highlight is the warning color mixed into whatever the surface is */
         mark { background: color-mix(in srgb, var(--warning) 35%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
         /* AX4: an error printed under its field */
-        .field-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
+        .field-error { color: var(--danger-ink); font-size: 12px; margin-top: 4px; }
         input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); }
         /* AX2: the idle-session notice shares the prompt dialog's overlay and card; it sits above the confirmation dialog */
         #jen-session-overlay { z-index: 10001; }
@@ -540,7 +747,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .pagination a, .pagination span { padding: 5px 10px; border-radius: var(--radius); border: 1px solid var(--border); font-size: 12px; display: inline-flex; align-items: center; min-height: 32px; }
         .pagination a { color: var(--text); }
         .pagination a:hover { background: var(--surface2); text-decoration: none; }
-        .pagination .current { background: var(--primary); color: white; border-color: var(--primary); }
+        .pagination .current { background: var(--primary); color: var(--on-accent); border-color: var(--primary); }
 
         /* Mono */
         .mono { font-family: var(--font-mono); font-size: 12px; }
@@ -567,6 +774,9 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
                    background: var(--surface2); display: flex; flex-direction: column; align-items: center;
                    justify-content: center; font-size: 10px; color: var(--text-muted); overflow: hidden;
                    cursor: default; }
+        /* Q248 (V55) - a cell's name was cut to eight characters by the template ("printer-" three times in one map). The whole name is printed and the CELL cuts it,
+           with an ellipsis, so a wider cell shows more of it; the whole name is always in the cell's title. */
+        .ip-cell .ip-name { max-width: 100%; padding: 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; opacity: 0.7; }
         .ip-cell.ip-dynamic { background: color-mix(in srgb, var(--primary) 18%, transparent); border-color: color-mix(in srgb, var(--primary) 20%, transparent); color: var(--primary); }
         .ip-cell.ip-reserved { background: color-mix(in srgb, var(--success) 18%, transparent); border-color: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
 
@@ -583,27 +793,45 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 
         /* Nav dropdown */
         .nav-dropdown { position: relative; }
-        .nav-dropdown input[type=checkbox] { display: none; }
+        /* Q248 (V1) - the toggle of a menu (the Display menu, the Account menu, a row's action menu) stays a checkbox, so the menu opens with no script; it is hidden from the
+           eye only (transparent, laid over its label, and the pointer goes through it to the label), so Tab reaches it and Space opens the menu. It was display:none, which
+           took all three menus away from the keyboard. */
+        input.nav-dd-toggle, input.action-menu-toggle { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; appearance: none; -webkit-appearance: none; }
         .nav-dropdown-content { display:none; position:absolute; top:calc(100% + 6px); left:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); min-width:180px; box-shadow:0 8px 24px rgba(0,0,0,0.4); z-index:200; overflow:hidden; }
         .nav-dropdown input:checked ~ .nav-dropdown-content { display: block; }
-        .nav-dropdown-content a { display: block; padding: 10px 14px; color: var(--text); font-size: 13px; }
-        .nav-dropdown-content a:hover { background: var(--surface2); text-decoration: none; }
-        .nav-dropdown-content button.linkish { display: block; width: 100%; text-align: left; padding: 10px 14px; font-size: 13px; background: none; border: none; cursor: pointer; font-family: inherit; }
-        .nav-dropdown-content button.linkish:hover { background: var(--surface2); }
+        /* one item style for both top-row menus (Q248, V46): a plain row in the text color, never an underlined colored link */
+        .nav-dropdown-content a, .nav-dropdown-content button.nav-dd-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 10px 14px; color: var(--text); font: inherit; font-size: 13px; background: none; border: none; cursor: pointer; text-decoration: none; white-space: nowrap; }
+        .nav-dropdown-content a:hover, .nav-dropdown-content button.nav-dd-item:hover, .nav-dropdown-content a:focus-visible, .nav-dropdown-content button.nav-dd-item:focus-visible { background: var(--surface2); text-decoration: none; }
+        .nav-dropdown-content a:focus-visible, .nav-dropdown-content button.nav-dd-item:focus-visible { outline-offset: -2px; }
+        .nav-dropdown-content button.nav-dd-item.danger { color: var(--danger); }
+        .nav-dropdown-content form { margin: 0; }
         .nav-dropdown-header { padding: 10px 14px; }
+        .nav-dropdown-header.nav-dd-section { padding: 8px 14px 4px; font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+        .nav-dd-name { font-weight: 600; }
+        .nav-dd-role { font-size: 11px; color: var(--text-muted); text-transform: capitalize; }
         .nav-dropdown-divider { height: 1px; background: var(--border); margin: 4px 0; }
         .nav-avatar-wrap .nav-dropdown-content { min-width:200px; right: 0; left: auto; }
-        .nav-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg, color-mix(in srgb, var(--primary) 65%, black), var(--primary)); color:white; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
+        .nav-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg, color-mix(in srgb, var(--primary) 65%, black), var(--primary)); color:var(--on-accent); font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
 
         /* Theme picker (v5.55.0, Q63) — the nav-dropdown mechanism above,
            reused for the preset list; .theme-toggle keeps its old class
            (button styling) but now opens a dropdown instead of toggling
            dark/light directly. The checkmark is CSS-only (JS just toggles
            .active on the matching button on load/switch). */
-        .nav-dropdown-content button.theme-pick { display:flex; align-items:center; gap:8px; }
         .theme-pick-check { visibility:hidden; display:inline-flex; }
-        .theme-pick.active .theme-pick-check, .time-pick.active .theme-pick-check { visibility:visible; color:var(--primary); }
-        .nav-dropdown-content button.time-pick { display:flex; align-items:center; gap:8px; }
+        .theme-pick.active .theme-pick-check, .time-pick.active .theme-pick-check, .density-pick.active .theme-pick-check { visibility:visible; color:var(--primary); }
+        /* Q248 (addition 17) - a theme's row shows a sample of it: three dots (page background, surface, accent). The colors are the presets' own tokens, printed here as
+           rules from inject_theme's theme_samples (validated hex colors), never as inline styles. "Match My System" shows the dark and the light page side by side. */
+        .theme-sample { display: inline-flex; flex: none; border: 1px solid var(--border); border-radius: 999px; padding: 2px; gap: 2px; background: var(--surface2); }
+        .theme-sample i { display: block; width: 10px; height: 10px; border-radius: 50%; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent); }   /* the ring keeps a dot in sight on a theme of its own color */
+        {% for _sid, _sbg, _ssurface, _saccent in theme_samples %}.theme-sample-{{ _sid }} .ts-bg{background:{{ _sbg }};}.theme-sample-{{ _sid }} .ts-surface{background:{{ _ssurface }};}.theme-sample-{{ _sid }} .ts-accent{background:{{ _saccent }};}
+        {% endfor %}
+        /* Q248 (addition 13) - the Table Rows pick of the Display menu: with Compact, a body row of a list table is about 36 px tall, not 53. Desktop widths only: a phone's
+           rows are cards and keep their size. */
+        @media screen and (min-width: 769px) {
+            html[data-density="compact"] table.rowlist tbody td { padding-top: 3px; padding-bottom: 3px; }
+            html[data-density="compact"] table.rowlist .action-menu-btn { width: 28px; height: 28px; }
+        }
 
         /* Row action menu — same checkbox-toggle mechanism as .nav-dropdown
            above, so it works identically across browsers with zero JS
@@ -614,13 +842,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            which actions apply to that row — no icons shifting around when
            one doesn't apply. */
         .action-menu { position: relative; display: inline-block; }
-        .action-menu-toggle { display: none; }
+        /* the toggle's own rule is with .nav-dd-toggle above (Q248, V1): hidden from the eye, not from the keyboard */
         .action-menu-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius); cursor: pointer; color: var(--text-muted); -webkit-tap-highlight-color: transparent; }
         .action-menu-btn:hover, .action-menu-toggle:checked ~ .action-menu-btn { background: var(--surface2); color: var(--text); }
         .action-menu-dropdown { display: none; position: absolute; top: calc(100% + 4px); right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 60; overflow: hidden; }
         .action-menu-toggle:checked ~ .action-menu-dropdown { display: block; }
         .action-menu-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; color: var(--text); text-decoration: none; background: none; border: none; width: 100%; text-align: left; cursor: pointer; font-family: inherit; }
         .action-menu-item:hover { background: var(--surface2); text-decoration: none; }
+        .action-menu-item:focus-visible { background: var(--surface2); outline-offset: -2px; }
         .action-menu-item.disabled { color: var(--text-muted); cursor: default; }
         .action-menu-item.disabled:hover { background: none; }
         .action-menu-item.danger { color: var(--danger); }
@@ -632,13 +861,20 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .small { font-size: var(--fs-sm); }
         .xs { font-size: var(--fs-xs); }
         .flex { display: flex; }
+        /* Q248 (V55) - a row of buttons (and the fields that belong to them) that keeps 8 px between them when it wraps: buttons written one after the other as plain
+           inline boxes touch when a phone, or a narrow card, puts them on two lines */
+        .btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+        .btn-row > * { margin-left: 0 !important; }
+        .btn-row > form { margin: 0; }
+        .setup-card .btn-row { margin: 8px 0; }
         .wrap { flex-wrap: wrap; }
         .stack { display: flex; flex-direction: column; }
         .grow { flex: 1; min-width: 0; }
         .right { text-align: right; }
         .center { text-align: center; }
         .nowrap { white-space: nowrap; }
-        .ok { color: var(--success); } .warn { color: var(--warning); } .bad { color: var(--danger); }
+        /* Q248: a status word printed as plain text is the INK of its token (theme.py: 4.5:1 on the page, a card and the second surface in every preset; Light's .warn was 2.6:1) */
+        .ok { color: var(--success-ink); } .warn { color: var(--warning-ink); } .bad { color: var(--danger-ink); }
         .gap-1 { gap: var(--sp-1); } .gap-2 { gap: var(--sp-2); } .gap-3 { gap: var(--sp-3); } .gap-4 { gap: var(--sp-4); }
         .mt-2 { margin-top: var(--sp-2); } .mt-3 { margin-top: var(--sp-3); } .mt-4 { margin-top: var(--sp-4); }
         .mb-2 { margin-bottom: var(--sp-2); } .mb-3 { margin-bottom: var(--sp-3); } .mb-4 { margin-bottom: var(--sp-4); }
@@ -652,19 +888,18 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .phone-only { display: none; }
         .card.flush { padding: 0; }
         .col-check { width: 32px; }
-        .th-link { color: inherit; text-decoration: none; }
+        .th-link { color: inherit; text-decoration: none; display: inline-block; padding: 6px 0; margin: -6px 0; min-width: 24px; }   /* Q248 (V8): 24 px tall, the header row no taller */
         .w-70 { width: 70px; }
         .sel-sm { min-width: 130px; font-size: var(--fs-sm); }
         .search-w { min-width: 220px; }
         .notes-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .empty-note { text-align: center; padding: var(--sp-6); color: var(--text-muted); }
         .chip-label { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-        .vendor-img { width: 13px; height: 13px; object-fit: contain; filter: brightness(0) invert(1); opacity: 0.85; }
         .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: var(--sp-3); }
         .segmented .btn { border-radius: 0; }
         .bulk-bar { display: none; margin-bottom: var(--sp-3); }
-        .btn-danger-outline { border: 1px solid var(--danger); color: var(--danger); background: transparent; }
-        .badge-stale { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+        .btn-danger-outline { border: 1px solid var(--danger); color: var(--danger-ink); background: transparent; }
+        .badge-stale { background: color-mix(in srgb, var(--warning) 18%, var(--tint-base)); color: var(--warning-ink); }
         .badge-duid { font-size: 10px; padding: 1px 6px; background: var(--surface2); color: var(--text-muted); }
         .filter-bar input.w-70 { width: 70px; min-width: 0; }
         @media screen and (min-width: 769px) { .nw-d { white-space: nowrap; } }
@@ -706,12 +941,27 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .sheet-list .full { grid-column: 1 / -1; }
         .sheet-list .danger { color: var(--danger); }
         .sheet form.sheet-search { margin-bottom: var(--sp-2); }
+        .sheet-close { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 0 var(--sp-3); background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font: inherit; font-size: 14px; font-weight: 400; cursor: pointer; }
         body.sheet-open { overflow: hidden; }
+
+        /* Q248 (V13) - a list drops columns by the room it has, and never the column it is sorted by nor the row menu. .hide-tablet (below) is 1024 px and under; these
+           two are for a list with more columns than a 1280 px or a 1440 px window holds (Devices has twelve). Screen only: a printout keeps every column. */
+        @media screen and (max-width: 1439px) and (min-width: 769px) {
+            .hide-below-1440 { display: none !important; }
+        }
+        @media screen and (max-width: 1279px) and (min-width: 769px) {
+            .hide-below-1280 { display: none !important; }
+        }
 
         /* ── iPad (769–1024px) ── */
         @media screen and (max-width: 1024px) and (min-width: 769px) {
             .hide-tablet { display: none !important; }
             .container { padding: 16px; }
+            /* the bars' columns keep the content's side padding at this width too (Q248, V54) */
+            .nav-inner { padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); }
+            .section-tabs { padding: 0 16px; }
+            .section-tabs--pin { padding-right: 0; }
+            .section-tabs--pin .section-pin { padding-right: 16px; }
             .stat-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
@@ -732,10 +982,15 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .page-header-controls .btn { width: auto; }
 
             /* Nav — preserve safe-area-inset on mobile too */
-            .nav { padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top)); padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
+            .nav-inner { padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
             .nav-links { display: none !important; }
             .nav-search { display: none !important; }
             .nav-right { gap: 8px; }
+            /* Q248 (addition 14) - search from the phone's top bar: the button, and the field as a row under the bar while it is open */
+            .nav-search-btn { display: inline-flex; align-items: center; justify-content: center; width: var(--tap); height: var(--tap); margin: -6px 0; background: none; border: 0; border-radius: var(--radius); color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+            .nav-search-btn .ico { width: 20px; height: 20px; }
+            .nav.search-open .nav-search { display: block !important; position: absolute; left: 0; right: 0; top: 100%; margin: 0 !important; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: 0 8px 16px rgba(0,0,0,0.25); }
+            .nav.search-open .nav-search input { width: 100% !important; min-height: var(--tap); padding: 8px 12px !important; font-size: 16px !important; }
             /* v5.51.0 (Q58): the phone's top bar is logo, status dot and avatar —
                everything else lives on the bottom tab bar / More sheet. */
             .nav .theme-toggle, .nav-kb, .gs-pill { display: none !important; }
@@ -765,8 +1020,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .filter-bar select, .filter-bar input { flex: 1; }
 
             /* Buttons — 44px minimum tap target */
-            .btn { min-height: 44px; padding: 10px 16px; font-size: 14px; }
-            .btn-sm { min-height: var(--tap); padding: 8px 12px; font-size: 13px; }
+            .btn { min-height: 44px; padding: 10px 16px; font-size: 14px; line-height: 18px; }
+            .btn-sm { min-height: var(--tap); padding: 8px 12px; font-size: 13px; line-height: 16px; }
             .action-bar .btn { min-height: var(--tap); }
 
             /* Section tabs */
@@ -780,6 +1035,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .settings-back { display: block; }
             .settings-grid { grid-template-columns: 1fr; }
             .card-toc { margin-top: 0; }
+            .subtab { display: inline-flex; align-items: center; min-height: 40px; padding: 6px 14px; }   /* Q248 (V8): a thumb's target */
 
             /* Pagination */
             .pagination a, .pagination span { min-height: 44px; padding: 10px 14px; font-size: 13px; }
@@ -857,6 +1113,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             table.rowlist tbody tr[data-rl-href], table.rowlist tbody tr:has(.action-menu-toggle) { cursor: pointer; }
             table.rowlist tbody tr:hover td { background: none; }
             body.select-mode table.rowlist tbody td.rl-select { display: block; }
+            /* Q248 (V51) - a third line: the MAC in the code font (the cell the desktop row prints it in, so it is still a copy control), and on Devices the subnet
+               and the status. The lists dropped the MAC on a phone; it was in the row's menu only. */
+            table.rowlist tbody tr:has(> td[data-m="third"])::before { content: ""; order: 5; flex-basis: 100%; height: 0; }
+            table.rowlist tbody td[data-m="third"] { order: 6; font-size: var(--fs-xs); color: var(--text-muted); }
+            table.rowlist tbody td[data-m="third"] ~ td[data-m="third"]::before { content: "·"; margin-right: var(--sp-2); }
+            /* a card wraps a long name as it always did (Q248, V12 is the desktop table's) */
+            .clip-row { display: inline; }
+            .clip { display: inline; word-break: normal; }
 
             /* select mode — checkboxes stay out of the way until asked for */
             .phone-only { display: revert; }
@@ -878,6 +1142,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             /* filter sheet + action overflow — collapsed: the kept control(s) and one toggle */
             .fs-toggle { display: inline-flex; }
             .fs-ready .fs-keep { flex: 1; min-width: 0; }
+            /* Q248 (V48) - the Select button keeps its own width: it took a third of the row, and the search field beside it was 90 px wide and cut its placeholder */
+            .fs-ready .select-toggle { flex: none; }
             .fs-ready:not(.open) .fs-rest { display: none !important; }
             .fs-ready.open { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1101; margin: 0; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: var(--sp-3); background: var(--surface); border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; max-height: 85vh; max-height: 85dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: var(--sp-3) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom)); box-shadow: 0 -8px 32px rgba(0,0,0,0.5); }
             .fs-ready.open .fs-head { display: flex; align-items: center; justify-content: space-between; order: -2; font-size: var(--fs-lg); font-weight: 600; }
@@ -904,6 +1170,10 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .stat-grid { grid-template-columns: 1fr; }
             .btn { width: 100%; justify-content: center; }
             .btn-sm { width: auto; }
+            /* Q248 - the wizard's Back and Next (Finish) stay one row: Back at the left, the way forward at the right; a Copy button stays beside its box */
+            .setup-nav { flex-wrap: nowrap; }
+            .setup-nav .btn, .copy-row .btn { width: auto; }
+            .copy-row { flex-wrap: nowrap; }
             .action-bar .btn { width: auto; }
             /* Filter bar buttons stay compact — don't go full width */
             .filter-bar .btn { width: auto; }
@@ -913,13 +1183,50 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     <!-- v5.53.0 (Q60): the static inline styles, extracted (tools/extract_inline_styles.py). After the
          inline block so its equal-precedence rules win. -->
     <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
+    <link rel="stylesheet" href="/static/css/rowlist-dots.css?v={{ jen_version }}">
     <link rel="stylesheet" href="/static/css/print.css?v={{ jen_version }}" media="print">
 </head>
 <body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}"{% if session_expires is defined and session_expires %} data-session-expires="{{ session_expires }}" data-session-now="{{ session_now }}" data-session-login="{{ session_login }}" data-session-active="{{ session_active }}"{% elif session_login is defined and session_login %} data-session-login="{{ session_login }}"{% endif %} hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <a href="#main" class="skip-link">Skip to content</a>
 <div id="jen-progress"></div>
 {% include "_icon_sprite.html" %}
-<nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
+{# Q248 - the picks of the Display menu, written ONCE for the top row's menu ('menu') and the phone's sheet ('sheet'): Theme, Display Times, Table Rows.
+   T1: the themes are listed once. The install's default theme is the first row, "<name> (default)", with an EMPTY data-theme-id: picking it clears the personal pick, so the
+   person follows a later change of the install's default; the preset that IS the default is not listed a second time. "Match My System" is the pick 'system'. #}
+{% macro display_pick(sheet, cls, attr, value, text, sample=None) -%}
+<button type="button" class="{{ 'full' if sheet else 'nav-dd-item' }} {{ cls }}" {{ attr }}="{{ value }}"{% if sheet %} aria-pressed="false" data-sheet-close{% else %} role="menuitemradio" aria-checked="false"{% endif %}>
+    <span class="theme-pick-check">{{ icon("circle-check") }}</span>{% if sample %}<span class="theme-sample theme-sample-{{ sample }}" aria-hidden="true"><i class="ts-bg"></i><i class="ts-surface"></i><i class="ts-accent"></i></span>{% endif %} {{ text }}
+</button>
+{%- endmacro %}
+{% macro display_section(sheet, title) -%}
+{% if sheet %}<div class="sheet-group-label">{{ title }}</div>{% else %}<div class="nav-dropdown-divider"></div><div class="nav-dropdown-header nav-dd-section">{{ title }}</div>{% endif %}
+{%- endmacro %}
+{% macro display_picks(kind) %}
+{% set sheet = (kind == 'sheet') %}
+{{ display_section(sheet, "Theme") }}
+<div class="{{ 'sheet-list' if sheet else 'nav-dd-group' }}"{% if not sheet %} role="group" aria-label="Theme"{% endif %}>
+    {{ display_pick(sheet, "theme-pick", "data-theme-id", "", theme_default_name ~ " (default)", theme_default) }}
+    {{ display_pick(sheet, "theme-pick", "data-theme-id", "system", "Match My System", "system") }}
+    {% for tid, tname in theme_presets if tid != theme_default %}
+    {{ display_pick(sheet, "theme-pick", "data-theme-id", tid, tname, tid) }}
+    {% endfor %}
+</div>
+{{ display_section(sheet, "Display Times") }}
+<div class="{{ 'sheet-list' if sheet else 'nav-dd-group' }}"{% if not sheet %} role="group" aria-label="Display Times"{% endif %}>
+    {{ display_pick(sheet, "time-pick", "data-time-mode", "local", "Local Browser Time") }}
+    {{ display_pick(sheet, "time-pick", "data-time-mode", "utc", "UTC Time") }}
+</div>
+{{ display_section(sheet, "Table Rows") }}
+<div class="{{ 'sheet-list' if sheet else 'nav-dd-group' }}"{% if not sheet %} role="group" aria-label="Table Rows"{% endif %}>
+    {{ display_pick(sheet, "density-pick", "data-density", "comfortable", "Comfortable") }}
+    {{ display_pick(sheet, "density-pick", "data-density", "compact", "Compact") }}
+</div>
+{% endmacro %}
+{# Q248 (V54) - a table page asks for the wide column by filling the content_class block with content--wide. The block is read ONCE, here, and the same class goes on the
+   content column and the top row's inner wrapper (and the strip's wrap gets its --wide class), so the three always agree. #}
+{% set page_class %}{% block content_class %}{% endblock %}{% endset %}{% set page_class = page_class|trim %}
+<nav class="nav"{% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
+<div class="nav-inner{{ ' ' ~ page_class if page_class }}">
     <a href="/" class="nav-brand">
         <span class="nav-brand-logo-wrap">
             <img src="{{ branding_nav_logo or '/static/icons/jen-logo-navbar.png' }}" alt="Jen" class="nav-brand-logo">
@@ -933,78 +1240,67 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
          below render from the same `nav` object. -->
     <div class="nav-links" style="display:flex;align-items:center;gap:2px;flex:1;">
         {% for item in nav.top %}
-        <a href="{{ item.url }}" class="nav-link {% if item.active %}active{% endif %}">{{ nav_icon(item.icon) }} {{ item.label }}</a>
+        <a href="{{ item.url }}" class="nav-link {% if item.id == 'about' %}nav-top-about {% endif %}{% if item.active %}active{% endif %}">{{ nav_icon(item.icon) }} {{ item.label }}</a>
         {% endfor %}
         {# v7.2.0-beta.1 (Q243) - the person's own favorites, after the fixed items (nav.favorites; chosen on /navigation or with the section strip's pin button) #}
         {% if nav.favorites %}
         <span class="nav-fav-sep" aria-hidden="true"></span>
         {% for f in nav.favorites %}
-        <a href="{{ f.url if f.url is defined else url_for(f.endpoint) }}" class="nav-link nav-fav {% if f.active %}active{% endif %}" title="{{ f.label }}">{{ nav_icon(f.icon) }} <span class="nav-fav-label">{{ f.label }}</span></a>
+        <a href="{{ f.url if f.url is defined else url_for(f.endpoint) }}" class="nav-link nav-fav {% if f.active %}active{% endif %}" title="{{ f.label }}" aria-label="{{ f.label }}">{{ nav_icon(f.icon) }} <span class="nav-fav-label">{{ f.label }}</span></a>
         {% endfor %}
         {% endif %}
     </div>
 
     <div class="nav-right">
         {% if getting_started_pill %}
-        <a href="/getting-started" class="nav-link gs-pill" title="The first-hour checklist"
+        <a href="/getting-started" class="nav-link gs-pill" title="The first-hour checklist" aria-label="Getting started ({{ getting_started_pill.done|number }}/{{ getting_started_pill.total|number }})"
            style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;white-space:nowrap;">
-            {{ icon("rocket") }} Getting started ({{ getting_started_pill.done|number }}/{{ getting_started_pill.total|number }})
+            {{ icon("rocket") }} <span class="gs-pill-label">Getting started ({{ getting_started_pill.done|number }}/{{ getting_started_pill.total|number }})</span>
         </a>
         {% endif %}
+        {# Q248 (addition 14) - a phone's top bar: the search button opens the search field as a row under the bar (the script at the foot of this file); hidden above 768 px #}
+        <button type="button" class="nav-search-btn" id="nav-search-btn" aria-label="Search" aria-expanded="false" aria-controls="nav-search">{{ icon("search") }}</button>
         <span class="kea-status" id="kea-indicator" title="Kea status"></span>
         <!-- Theme picker (v5.55.0, Q63) — replaces the old dark/light toggle.
              theme_presets (jen/__init__.py's inject_theme) lists every built-in
              preset plus "custom" when the install has one; jenTheme.js below
              marks the active button and drives the actual switch. -->
+        {# Q248 - the Display menu (it holds more than a theme: the theme, how times are shown, how tall a table row is). V1: the toggle is a checkbox the keyboard reaches
+           (Space opens it with no script; the menu script at the foot of this file adds Enter, the arrows, Home, End and Escape, and keeps aria-expanded in step). #}
         <div class="nav-dropdown">
-            <input type="checkbox" id="dd-theme" class="nav-dd-toggle">
-            <label for="dd-theme" class="theme-toggle" title="Theme" aria-label="Theme">{{ icon("palette") }}</label>
-            <div class="nav-dropdown-content">
-                <div class="nav-dropdown-header"><strong>Theme</strong></div>
-                <div class="nav-dropdown-divider"></div>
-                <button type="button" class="linkish theme-pick" data-theme-id="">
-                    <span class="theme-pick-check">{{ icon("circle-check") }}</span> Install default ({{ theme_default_name }})
-                </button>
-                {% for tid, tname in theme_presets %}
-                <button type="button" class="linkish theme-pick" data-theme-id="{{ tid }}">
-                    <span class="theme-pick-check">{{ icon("circle-check") }}</span> {{ tname }}
-                </button>
-                {% endfor %}
-                <div class="nav-dropdown-divider"></div>
-                <div class="nav-dropdown-header"><strong>Times</strong></div>
-                <button type="button" class="linkish time-pick" data-time-mode="local">
-                    <span class="theme-pick-check">{{ icon("circle-check") }}</span> In my browser's time zone
-                </button>
-                <button type="button" class="linkish time-pick" data-time-mode="utc">
-                    <span class="theme-pick-check">{{ icon("circle-check") }}</span> In UTC
-                </button>
+            <input type="checkbox" id="dd-theme" class="nav-dd-toggle" role="button" aria-haspopup="menu" aria-expanded="false" aria-controls="dd-theme-menu" aria-label="Display">
+            <label for="dd-theme" class="theme-toggle" title="Display">{{ icon("palette") }}</label>
+            <div class="nav-dropdown-content" id="dd-theme-menu" role="menu" aria-label="Display">
+                <div class="nav-dropdown-header"><strong>Display</strong></div>
+                {{ display_picks('menu') }}
             </div>
         </div>
         <!-- User avatar dropdown -->
         <div class="nav-dropdown nav-avatar-wrap">
-            <input type="checkbox" id="dd-avatar" class="nav-dd-toggle">
-            <label for="dd-avatar" class="nav-avatar" style="cursor:pointer;" aria-label="Account">
+            <input type="checkbox" id="dd-avatar" class="nav-dd-toggle" role="button" aria-haspopup="menu" aria-expanded="false" aria-controls="dd-avatar-menu" aria-label="Account">
+            <label for="dd-avatar" class="nav-avatar" title="Account">
                 {% if current_user_avatar %}
                 <img src="{{ current_user_avatar }}" alt="{{ current_user.username[0].upper() }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
                 {% else %}
                 {{ current_user.username[0].upper() }}
                 {% endif %}
             </label>
-            <div class="nav-dropdown-content nav-dropdown-right">
+            <div class="nav-dropdown-content nav-dropdown-right" id="dd-avatar-menu" role="menu" aria-label="Account">
                 <div class="nav-dropdown-header">
-                    <div style="font-weight:600;">{{ current_user.username }}</div>
-                    <div style="font-size:11px;color:var(--text-muted);text-transform:capitalize;">{{ current_user.role }}</div>
+                    <div class="nav-dd-name">{{ current_user.username }}</div>
+                    <div class="nav-dd-role">{{ current_user.role }}</div>
                 </div>
                 <div class="nav-dropdown-divider"></div>
-                <a href="/profile">{{ icon("user") }} My Profile</a>
-                <a href="/saved-searches">{{ icon("bookmark") }} Saved Searches</a>
-                <a href="/navigation">{{ icon("sliders-horizontal") }} Customize navigation</a>
-                <a href="/mfa/enroll">{{ icon("lock") }} Security & MFA</a>
-                <a href="/mfa/trusted-devices">{{ icon("monitor-smartphone") }} Trusted Devices</a>
+                <a href="/profile" role="menuitem">{{ icon("user") }} My Profile</a>
+                <a href="/saved-searches" role="menuitem">{{ icon("bookmark") }} Saved Searches</a>
+                <a href="/navigation" role="menuitem">{{ icon("sliders-horizontal") }} Customize navigation</a>
+                <a href="/mfa/enroll" role="menuitem">{{ icon("lock") }} Security & MFA</a>
+                <a href="/mfa/trusted-devices" role="menuitem">{{ icon("monitor-smartphone") }} Trusted Devices</a>
+                <a href="/about" role="menuitem">{{ icon("info") }} About</a>
                 <div class="nav-dropdown-divider"></div>
-                <form method="POST" action="/logout" style="margin:0;">
+                <form method="POST" action="/logout">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="linkish" style="color:var(--danger);">⏻ Logout</button>
+                    <button type="submit" class="nav-dd-item danger" role="menuitem">⏻ Sign Out</button>
                 </form>
             </div>
         </div>
@@ -1017,23 +1313,24 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     </div>
 
     <!-- Global search -->
-    <div class="nav-search" style="margin-left:8px;">
+    <div class="nav-search" id="nav-search" style="margin-left:8px;">
         <form action="/search" method="GET" style="display:flex;align-items:center;">
-            <input type="text" name="q" placeholder="Search..." autocomplete="off"
+            <input type="text" name="q" placeholder="Search..." autocomplete="off" aria-label="Search"
                    value="{{ request.args.get('q', '') }}"
-                   style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:5px 10px;font-size:12px;width:160px;outline:none;transition:width 0.2s;">
+                   style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:5px 10px;font-size:12px;width:160px;transition:width 0.2s;">
         </form>
     </div>
 
     {% endif %}
+</div>
 </nav>
 
 <!-- Section sub-tab strip — one template for every section, driven by
      nav.strip (jen/routes/settings/nav.py, v5.9.0). Scrolls horizontally on
      narrow screens rather than wrapping. -->
 {% if current_user.is_authenticated and nav.strip %}
-<div class="section-tabs-wrap{% if nav.landing %} section-tabs-wrap--landing{% endif %}">
-<div class="section-tabs">
+<div class="section-tabs-wrap{% if nav.landing %} section-tabs-wrap--landing{% endif %}{% if 'content--wide' in page_class %} section-tabs-wrap--wide{% endif %}">
+<div class="section-tabs{% if nav.pin %} section-tabs--pin{% endif %}">
     {% for t in nav.strip %}
     <a href="{{ t.url if t.url is defined else url_for(t.endpoint) }}" class="section-tab {% if t.active %}active{% endif %}">{{ nav_icon(t.icon) }} {{ t.label }}</a>
     {% endfor %}
@@ -1053,7 +1350,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 {% endif %}
 
 <main id="main" tabindex="-1">
-<div class="container">
+<div class="container{{ ' ' ~ page_class if page_class }}">
     {% if restart_pending and current_user.is_authenticated and current_user.role in ('superadmin','admin') %}
     <div style="background:color-mix(in srgb, var(--warning) 18%, transparent);border:1px solid var(--warning);border-radius:var(--radius);
                 padding:10px 16px;margin-bottom:12px;display:flex;align-items:center;
@@ -1116,12 +1413,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     {% if messages %}
     {% for category, message in messages %}
     {# Q206 (AV2): each flash has a close button (one delegated listener below), and a success or an info leaves by itself after 6 s - an error, a danger or a warning stays until it is closed #}
+    {# Q248 (V7): each flash carries the icon of its category before its text - a warning its triangle, an information line its "i" - so the two are told apart in a theme whose accent is near its warning color #}
+    {% set flash_icon = {'error': 'circle-x', 'danger': 'circle-x', 'success': 'circle-check', 'warning': 'triangle-alert'}.get(category, 'info') %}
     {% if category in ('error', 'danger') %}
-    <div class="alert alert-{{ category }} alert-flash" role="alert"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+    <div class="alert alert-{{ category }} alert-flash" role="alert">{{ icon(flash_icon) }}<span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
     {% elif category in ('success', 'info') %}
-    <div class="alert alert-{{ category }} alert-flash" role="status" aria-live="polite" data-autofade="6000"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+    <div class="alert alert-{{ category }} alert-flash" role="status" aria-live="polite" data-autofade="6000">{{ icon(flash_icon) }}<span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
     {% else %}
-    <div class="alert alert-{{ category }} alert-flash" role="status" aria-live="polite"><span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
+    <div class="alert alert-{{ category }} alert-flash" role="status" aria-live="polite">{{ icon(flash_icon) }}<span class="alert-text">{{ message }}</span><button type="button" class="alert-close" aria-label="Dismiss">&times;</button></div>
     {% endif %}
     {% endfor %}
     {% endif %}
@@ -1148,6 +1447,9 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 <div class="sheet-backdrop" id="sheet-backdrop"></div>
 <div class="sheet" id="more-sheet" role="dialog" aria-modal="true" aria-label="Menu">
     <div class="sheet-grab"></div>
+    {# Q248 (V55) - a title and a Close button. The button is the sheet's first control, so focus lands on it when the sheet opens and not in the search field (which
+       brought the keyboard up over the list the person came for). #}
+    <div class="sheet-title"><span>Menu</span><button type="button" class="sheet-close" data-sheet-close aria-label="Close">{{ icon("x") }} Close</button></div>
     <form class="sheet-search" action="/search" method="GET">
         <input type="text" name="q" placeholder="Search…" autocomplete="off" aria-label="Search">
     </form>
@@ -1169,40 +1471,21 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         <a href="/navigation">{{ icon("sliders-horizontal") }} Customize navigation</a>
         <a href="/mfa/enroll">{{ icon("lock") }} Security &amp; MFA</a>
         <a href="/mfa/trusted-devices">{{ icon("monitor-smartphone") }} Trusted Devices</a>
-        <button type="button" class="sheet-theme" data-sheet-open="theme-sheet">{{ icon("palette") }} Theme</button>
+        <button type="button" class="sheet-theme" data-sheet-open="theme-sheet">{{ icon("palette") }} Display</button>
         <form method="POST" action="/logout" class="contents">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="danger">{{ icon("log-out") }} Logout</button>
+            <button type="submit" class="danger">{{ icon("log-out") }} Sign Out</button>
         </form>
     </div>
 </div>
-{# Theme sheet (v5.55.0, Q63) — opened from the More sheet's Theme button
+{# The Display sheet (the Theme sheet of v5.55.0, Q63; Q248 gave it the menu's name and its three sections) — opened from the More sheet's Display button
    (showSheet() closes More first, the usual nested-sheet pattern for a
-   [data-sheet-open] control inside a sheet). Same preset list as the
-   desktop dropdown; the picker JS below marks the active one and picks
-   it on click. A Jinja comment, not an HTML one — never reaches resp.data. #}
-<div class="sheet" id="theme-sheet" role="dialog" aria-modal="true" aria-label="Theme">
+   [data-sheet-open] control inside a sheet). The same picks as the top row's menu, from the same macro; the picker JS below marks the active ones and picks
+   on click. A Jinja comment, not an HTML one — never reaches resp.data. #}
+<div class="sheet" id="theme-sheet" role="dialog" aria-modal="true" aria-label="Display">
     <div class="sheet-grab"></div>
-    <div class="sheet-group-label">Theme</div>
-    <div class="sheet-list">
-        <button type="button" class="full theme-pick" data-theme-id="" data-sheet-close>
-            <span class="theme-pick-check">{{ icon("circle-check") }}</span> Install default ({{ theme_default_name }})
-        </button>
-        {% for tid, tname in theme_presets %}
-        <button type="button" class="full theme-pick" data-theme-id="{{ tid }}" data-sheet-close>
-            <span class="theme-pick-check">{{ icon("circle-check") }}</span> {{ tname }}
-        </button>
-        {% endfor %}
-    </div>
-    <div class="sheet-group-label">Times</div>
-    <div class="sheet-list">
-        <button type="button" class="full time-pick" data-time-mode="local" data-sheet-close>
-            <span class="theme-pick-check">{{ icon("circle-check") }}</span> In my browser's time zone
-        </button>
-        <button type="button" class="full time-pick" data-time-mode="utc" data-sheet-close>
-            <span class="theme-pick-check">{{ icon("circle-check") }}</span> In UTC
-        </button>
-    </div>
+    <div class="sheet-title">Display</div>
+    {{ display_picks('sheet') }}
 </div>
 {% endif %}
 
@@ -1244,6 +1527,11 @@ function escapeHtml(str) {
 // chosen, and the install default could then never win again for that
 // browser. A saved id the page doesn't have a block for (a preset removed
 // since) falls back to THEME_DEFAULT.
+// a pick row of the Display menu or of its phone sheet (Q248): the class draws the check mark, the ARIA state says it
+function jenMarkPick(el, on) {
+    el.classList.toggle('active', on);
+    el.setAttribute(el.getAttribute('role') === 'menuitemradio' ? 'aria-checked' : 'aria-pressed', on ? 'true' : 'false');
+}
 function applyTheme(id, persist) {
     var html = document.documentElement;
     html.setAttribute('data-theme', id);
@@ -1255,9 +1543,11 @@ function applyTheme(id, persist) {
     // must never mark a preset as "picked" when nothing was.
     var pick = null;
     try { pick = localStorage.getItem('jen-theme-pick'); } catch (e) { /* ignore */ }
+    // Q248 (T1): the themes are listed once and the install's default is the row with the EMPTY id, so that row is the marked one for no pick, for a pick that IS the
+    // default's id, and for a pick the page has no block for; 'system' and any listed preset mark their own row.
+    var marked = (pick === 'system' || (pick && pick !== THEME_DEFAULT && THEME_IDS.indexOf(pick) !== -1)) ? pick : '';
     document.querySelectorAll('.theme-pick').forEach(function(b) {
-        var bid = b.getAttribute('data-theme-id');
-        b.classList.toggle('active', pick ? bid === pick : bid === '');
+        jenMarkPick(b, b.getAttribute('data-theme-id') === marked);
     });
     var primary = getComputedStyle(html).getPropertyValue('--primary').trim();
     var metaColor = document.querySelector('meta[name="theme-color"]');
@@ -1277,8 +1567,45 @@ function applyTheme(id, persist) {
     document.addEventListener('DOMContentLoaded', function() {
         var saved = null;
         try { saved = localStorage.getItem('jen-theme-pick'); } catch (e) { /* ignore */ }
-        var initial = (saved && THEME_IDS.indexOf(saved) !== -1) ? saved : THEME_DEFAULT;
+        var initial = jenThemeResolve(saved);
         applyTheme(initial, false);
+    });
+    // Q248 (addition 12) - "Match My System" follows the operating system while the page is open: when it changes between light and dark and the stored pick is 'system',
+    // the other preset is applied (never persisted: the pick stays 'system').
+    if (window.matchMedia) {
+        var systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+        var followSystem = function() {
+            var pick = null;
+            try { pick = localStorage.getItem('jen-theme-pick'); } catch (e) { /* ignore */ }
+            if (pick === 'system') applyTheme(jenThemeResolve('system'), false);
+        };
+        if (systemDark.addEventListener) systemDark.addEventListener('change', followSystem);
+        else if (systemDark.addListener) systemDark.addListener(followSystem);
+    }
+})();
+
+// Q248 (addition 13) - Table Rows: Comfortable (the default, nothing stored) or Compact ('jen-density-pick' = 'compact' in localStorage, beside the theme and time picks;
+// html[data-density="compact"] is what the stylesheet reads, and the head script sets it before the page paints).
+(function() {
+    var KEY = 'jen-density-pick';
+    function stored() { var d = null; try { d = localStorage.getItem(KEY); } catch (e) { /* private mode */ } return d === 'compact' ? 'compact' : 'comfortable'; }
+    var d = stored();
+    function paint() {
+        if (d === 'compact') document.documentElement.setAttribute('data-density', 'compact'); else document.documentElement.removeAttribute('data-density');
+        document.querySelectorAll('.density-pick').forEach(function(b) { jenMarkPick(b, b.getAttribute('data-density') === d); });
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        paint();
+        document.querySelectorAll('.density-pick').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                d = btn.getAttribute('data-density') === 'compact' ? 'compact' : 'comfortable';
+                try {
+                    if (d === 'compact') localStorage.setItem(KEY, 'compact'); else localStorage.removeItem(KEY);
+                } catch (e) { /* private mode: applies for this load */ }
+                paint();
+                document.dispatchEvent(new CustomEvent('jen:density'));
+            });
+        });
     });
 })();
 
@@ -1332,7 +1659,15 @@ window.jenTime = (function() {
         var m = mode();
         scope.querySelectorAll('time[data-jen-time]').forEach(function(el) {
             var kind = el.getAttribute('data-jen-time');
-            if (kind === 'rel') return;   // a relative phrase is the same in every zone
+            if (kind === 'rel') {
+                // a relative phrase is the same in every zone. Its exact moment is its title, in the reader's zone or in UTC as they picked (Q248, addition 5), and
+                // its UTC reading is what a tap on a touch screen shows, like every other time.
+                var moment = parse(el.getAttribute('datetime'));
+                if (!moment) return;
+                el.setAttribute('data-jen-utc', strf(moment, '%Y-%m-%d %H:%M', true) + ' UTC');
+                el.setAttribute('title', format(el.getAttribute('datetime'), 'fmt'));
+                return;
+            }
             if (!el.hasAttribute('data-jen-utc')) el.setAttribute('data-jen-utc', el.textContent);
             var original = el.getAttribute('data-jen-utc');
             if (m === 'utc') { el.textContent = original; el.removeAttribute('title'); return; }
@@ -1345,7 +1680,7 @@ window.jenTime = (function() {
     function clock() { return format(new Date().toISOString(), 'time'); }
     function paintPicks() {
         var m = mode();
-        document.querySelectorAll('.time-pick').forEach(function(b) { b.classList.toggle('active', b.getAttribute('data-time-mode') === m); });
+        document.querySelectorAll('.time-pick').forEach(function(b) { jenMarkPick(b, b.getAttribute('data-time-mode') === m); });
     }
     document.addEventListener('DOMContentLoaded', function() {
         apply(document);
@@ -1356,8 +1691,7 @@ window.jenTime = (function() {
                 apply(document);
                 paintPicks();
                 document.dispatchEvent(new CustomEvent('jen:time'));
-                var dd = document.getElementById('dd-theme');
-                if (dd) dd.checked = false;
+                // the menu closes itself when one of its items is used (the menu script at the foot of this file)
             });
         });
     });
@@ -1374,6 +1708,12 @@ window.jenTime = (function() {
     }
     return { mode: mode, format: format, apply: apply, clock: clock };
 })();
+
+// Q248 (V12) - a clipped value with nowhere else to be read whole (an audit event's details) opens where it is, and closes again, on a click. One delegated listener.
+document.addEventListener('click', function(e) {
+    var clip = e.target.closest ? e.target.closest('.clip[data-clip-toggle]') : null;
+    if (clip) clip.classList.toggle('clip-open');
+});
 
 // v5.55.0 (Q63) — resolve a CSS custom property to its actual computed value,
 // for anything (Canvas 2D, Chart.js) that can't just write `var(--x)` into a
@@ -1426,7 +1766,7 @@ function sortTable(table, col, th) {
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:420px;width:90%;max-height:80vh;overflow-y:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
             <strong>{{ icon("keyboard") }} Keyboard Shortcuts</strong>
-            <button id="kb-modal-close-btn" aria-label="Close" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);">✕</button>
+            <button id="kb-modal-close-btn" aria-label="Close" class="jen-modal-close">✕</button>
         </div>
         <table style="width:100%;font-size:13px;">
             <tr><td style="padding:6px 0;color:var(--text-muted);">Go to Dashboard</td><td><kbd>G</kbd> <kbd>D</kbd></td></tr>
@@ -1452,20 +1792,22 @@ function sortTable(table, col, th) {
 
     // Theme picker — keyboard-shortcuts hint/modal, search box focus width —
     // all were inline on*= handlers before the CSP nonce conversion (v5.22.0).
-    // An empty data-theme-id is the "Install default" entry (v5.55.3, Q66):
-    // clear the personal pick and re-apply the install default, rather
-    // than picking a (nonexistent) preset with id "".
+    // An empty data-theme-id is the install's default (v5.55.3, Q66; since Q248 it is the first row,
+    // "<name> (default)"): clear the personal pick and re-apply the install default, rather
+    // than picking a (nonexistent) preset with id "". 'system' (Q248, "Match My System") is stored as
+    // the pick and shows the dark or the light preset, whichever the operating system asks for.
     document.querySelectorAll('.theme-pick').forEach(function(btn) {
         btn.addEventListener('click', function() {
             var id = btn.getAttribute('data-theme-id');
-            if (id) {
+            if (id === 'system') {
+                try { localStorage.setItem('jen-theme-pick', 'system'); } catch (e) { /* private mode: applies for this load */ }
+                applyTheme(jenThemeResolve('system'), false);
+            } else if (id) {
                 applyTheme(id, true);
             } else {
                 try { localStorage.removeItem('jen-theme-pick'); } catch (e) { /* ignore */ }
                 applyTheme(THEME_DEFAULT, false);
             }
-            var ddTheme = document.getElementById('dd-theme');
-            if (ddTheme) ddTheme.checked = false;
         });
     });
     // The shortcuts modal is a dialog (v5.69.0-beta.4, Q173): focus moves into it when it opens, stays on its one control while it is open (Tab does not reach the
@@ -1569,16 +1911,119 @@ function sortTable(table, col, th) {
     document.addEventListener('click', function(e) {
         if (!e.target.closest('.action-menu')) closeAllActionMenus();
     });
+    // Q248 (V1) - the three kinds of menu (the Display menu, the Account menu, a row's action menu) from the keyboard. Each toggle is a checkbox the keyboard reaches (the
+    // stylesheet hides it from the eye only), so Space opens a menu with no script at all; this adds what a menu button owes a keyboard: Enter toggles; ArrowDown on the
+    // toggle opens and goes to the first item (ArrowUp: the last); ArrowDown and ArrowUp move between the items and wrap; Home and End; Escape closes and puts focus back on
+    // the toggle; focus that leaves a menu closes it; opening one closes any other; and aria-expanded is kept in step with the checkbox. All of it is delegated from the
+    // document, so a row htmx swaps in later needs nothing.
+    var MENU_TOGGLES = '.nav-dd-toggle, .action-menu-toggle';
+    var MENU_WRAPS = '.nav-dropdown, .action-menu';
+    var MENU_PANELS = '.nav-dropdown-content, .action-menu-dropdown';
+    function menuWrap(el) { return el && el.closest ? el.closest(MENU_WRAPS) : null; }
+    function menuToggle(wrap) { return wrap ? wrap.querySelector(MENU_TOGGLES) : null; }
+    function menuPanel(wrap) { return wrap ? wrap.querySelector(MENU_PANELS) : null; }
+    // what the arrows move between: every link and button of the menu that can be used (a disabled one is skipped)
+    function menuItems(wrap) {
+        var panel = menuPanel(wrap);
+        if (!panel) return [];
+        return Array.prototype.filter.call(panel.querySelectorAll('a[href], button'), function(el) {
+            return !el.disabled && !el.classList.contains('disabled') && el.getAttribute('aria-disabled') !== 'true' &&
+                !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        });
+    }
+    function setMenu(toggle, open) {
+        if (!toggle || toggle.checked === open) return;
+        toggle.checked = open;
+        toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    function syncMenus() {
+        document.querySelectorAll(MENU_TOGGLES).forEach(function(t) { t.setAttribute('aria-expanded', t.checked ? 'true' : 'false'); });
+    }
+    // The templates write a menu's roles and its name; a menu that lacks them (a row a plugin page writes, the copy button inside a row menu) gets them here.
+    function dressMenus(root) {
+        (root && root.querySelectorAll ? root : document).querySelectorAll(MENU_TOGGLES).forEach(function(t) {
+            var wrap = menuWrap(t), panel = menuPanel(wrap);
+            if (!t.hasAttribute('role')) t.setAttribute('role', 'button');
+            if (!t.hasAttribute('aria-haspopup')) t.setAttribute('aria-haspopup', 'menu');
+            if (!t.hasAttribute('aria-label')) {
+                var label = wrap ? wrap.querySelector('label') : null;
+                t.setAttribute('aria-label', (label && (label.getAttribute('aria-label') || label.getAttribute('title'))) || 'Actions');
+            }
+            if (!panel) return;
+            if (!panel.hasAttribute('role')) panel.setAttribute('role', 'menu');
+            panel.querySelectorAll('a[href], button').forEach(function(i) { if (!i.hasAttribute('role')) i.setAttribute('role', 'menuitem'); });
+        });
+        syncMenus();
+    }
+    window.jenMenuToggleOf = function(el) { return menuToggle(menuWrap(el)); };
+    document.addEventListener('DOMContentLoaded', function() { dressMenus(document); });
+    document.addEventListener('htmx:afterSwap', function(e) { dressMenus(e.target && e.target.querySelectorAll ? e.target : document); });
     document.addEventListener('change', function(e) {
-        if (!e.target.classList.contains('action-menu-toggle')) return;
-        if (e.target.checked) {
-            document.querySelectorAll('.action-menu-toggle').forEach(function(cb) {
-                if (cb !== e.target && cb.checked) closeActionMenu(cb);
+        var t = e.target;
+        if (!t.classList || !(t.classList.contains('action-menu-toggle') || t.classList.contains('nav-dd-toggle'))) return;
+        var isRowMenu = t.classList.contains('action-menu-toggle');
+        if (t.checked) {
+            // opening one menu closes any other, of either kind
+            document.querySelectorAll(MENU_TOGGLES).forEach(function(cb) {
+                if (cb === t || !cb.checked) return;
+                if (cb.classList.contains('action-menu-toggle')) closeActionMenu(cb); else cb.checked = false;
             });
-            positionActionMenuDropdown(e.target);
-        } else {
-            closeActionMenu(e.target);  // clears any leftover inline positioning
+            if (isRowMenu) positionActionMenuDropdown(t);
+        } else if (isRowMenu) {
+            closeActionMenu(t);  // clears any leftover inline positioning
         }
+        syncMenus();
+    });
+    // a menu is also closed by code that only unticks its checkbox (the outside-click listeners, a tap on a phone row): after any click or key, say what is true now
+    document.addEventListener('click', function() { setTimeout(syncMenus, 0); });
+    document.addEventListener('keyup', function(e) { if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') setTimeout(syncMenus, 0); });
+    document.addEventListener('keydown', function(e) {
+        var t = e.target;
+        var wrap = menuWrap(t);
+        var toggle = menuToggle(wrap);
+        if (!toggle) return;
+        var items;
+        if (t === toggle) {
+            if (e.key === 'Enter') { e.preventDefault(); setMenu(toggle, !toggle.checked); }
+            else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                setMenu(toggle, true);
+                items = menuItems(wrap);
+                if (items.length) items[e.key === 'ArrowDown' ? 0 : items.length - 1].focus();
+            } else if (e.key === 'Escape' && toggle.checked) { e.preventDefault(); setMenu(toggle, false); }
+            return;
+        }
+        var panel = menuPanel(wrap);
+        if (!panel || !panel.contains(t)) return;
+        if (e.key === 'Escape') { e.preventDefault(); setMenu(toggle, false); toggle.focus(); return; }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+        items = menuItems(wrap);
+        if (!items.length) return;
+        e.preventDefault();
+        var i = items.indexOf(t);
+        if (e.key === 'Home') i = 0;
+        else if (e.key === 'End') i = items.length - 1;
+        else if (e.key === 'ArrowDown') i = (i + 1) % items.length;
+        else i = (i <= 0 ? items.length : i) - 1;
+        items[i].focus();
+    });
+    // focus that goes somewhere else on the page closes the menu it left (a click on nothing focusable is the outside-click listeners' business)
+    document.addEventListener('focusout', function(e) {
+        var wrap = menuWrap(e.target);
+        if (!wrap || !e.relatedTarget || wrap.contains(e.relatedTarget)) return;
+        var toggle = menuToggle(wrap);
+        if (toggle && toggle.checked) setMenu(toggle, false);
+    });
+    // using an item of a top-row menu closes it (a row menu already closes on its item, below); when the item was a button that leaves the person on the page, focus goes
+    // back to the menu's toggle - unless the action took it (a confirmation dialog, which hands it back to the toggle itself when it closes)
+    document.addEventListener('click', function(e) {
+        var item = e.target.closest ? e.target.closest('.nav-dropdown-content a, .nav-dropdown-content button, .action-menu-dropdown a, .action-menu-dropdown button') : null;
+        var wrap = menuWrap(item);
+        var toggle = menuToggle(wrap);
+        if (!item || !toggle) return;
+        var hadFocus = wrap.contains(document.activeElement);
+        setMenu(toggle, false);
+        if (hadFocus && item.tagName === 'BUTTON') toggle.focus();
     });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closeAllActionMenus();
@@ -1617,6 +2062,8 @@ function sortTable(table, col, th) {
             return;
         }
         if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
+        // a page's own dialog is open (Q248, V3): a key belongs to it, never to a shortcut that would leave the page behind it
+        if (window.jenDialog && window.jenDialog.isOpen()) return;
         var key = e.key;
         if (key === 'Escape') { kbModalSet(false); return; }
         if (key === '?') { kbModalSet(!kbModalOpen()); return; }
@@ -1921,6 +2368,68 @@ function sortTable(table, col, th) {
         var strip = activeTab.parentNode;
         strip.scrollLeft = activeTab.offsetLeft - (strip.clientWidth - activeTab.offsetWidth) / 2;
     }
+    // Q248 (V11) - a strip that is scrolled says so: the fade at its left edge is shown while scrollLeft is past zero.
+    var stripEl = document.querySelector('.section-tabs');
+    if (stripEl && stripEl.parentNode) {
+        var markStripScrolled = function() { stripEl.parentNode.classList.toggle('is-scrolled', stripEl.scrollLeft > 1); };
+        stripEl.addEventListener('scroll', markStripScrolled, { passive: true });
+        markStripScrolled();
+    }
+
+    // Q248 (V10, V37) - the top row fits, measured: start with everything named and step through the levels (the .nav-fit-N rules in the style block) until neither the
+    // link group nor the row holds more than it shows. Bound once; run now, when the row's width changes, and when the fonts have loaded (a late font changes every width).
+    var fitNav = document.querySelector('nav.nav');
+    var fitLinks = fitNav && fitNav.querySelector('.nav-links');
+    // the row's contents: narrower than the bar on a wide monitor, where the bar's own width says nothing of what its contents hold
+    var fitRow = fitNav && fitNav.querySelector('.nav-inner');
+    function jenNavFit() {
+        if (!fitLinks) return;
+        var level = 0;
+        function set(n) {
+            fitNav.classList.remove('nav-fit-1', 'nav-fit-2', 'nav-fit-3');
+            if (n) fitNav.classList.add('nav-fit-' + n);
+        }
+        function spills() {
+            return fitLinks.scrollWidth > fitLinks.clientWidth + 1 || fitNav.scrollWidth > fitNav.clientWidth + 1 || (!!fitRow && fitRow.scrollWidth > fitRow.clientWidth + 1);
+        }
+        set(0);
+        while (level < 3 && spills()) { level += 1; set(level); }
+        fitNav.setAttribute('data-fit', String(level));
+    }
+    if (fitLinks) {
+        jenNavFit();
+        var fitWidth = fitNav.clientWidth;
+        if (window.ResizeObserver) {
+            new ResizeObserver(function() {
+                if (fitNav.clientWidth === fitWidth) return;
+                fitWidth = fitNav.clientWidth;
+                jenNavFit();
+            }).observe(fitNav);
+        } else {
+            window.addEventListener('resize', jenNavFit);
+        }
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(jenNavFit);
+        window.jenNavFit = jenNavFit;
+    }
+
+    // Q248 (addition 14) - search from the phone's top bar. The button shows the search field as a row under the bar and puts the caret in it; Escape, or the button
+    // again, puts it away and gives the button its focus back.
+    var navSearchBtn = document.getElementById('nav-search-btn');
+    var navSearchRow = document.getElementById('nav-search');
+    function setNavSearch(open) {
+        if (!navSearchBtn || !navSearchRow || !fitNav) return;
+        fitNav.classList.toggle('search-open', open);
+        navSearchBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        var field = navSearchRow.querySelector('input');
+        if (open && field) field.focus();
+        if (!open) navSearchBtn.focus();
+    }
+    if (navSearchBtn && navSearchRow) {
+        navSearchBtn.addEventListener('click', function() { setNavSearch(!fitNav.classList.contains('search-open')); });
+        navSearchRow.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && fitNav.classList.contains('search-open')) { e.preventDefault(); e.stopPropagation(); setNavSearch(false); }
+        });
+    }
 })();
 </script>
 
@@ -1972,6 +2481,11 @@ function sortTable(table, col, th) {
             el.onclick = null;
             document.removeEventListener('keydown', onKey);
             if (opener && opener.focus) opener.focus();
+            // an item of a menu that has closed meanwhile cannot take focus back: its menu's toggle does (Q248, V1)
+            if (opener && document.activeElement !== opener && window.jenMenuToggleOf) {
+                var menuToggle = window.jenMenuToggleOf(opener);
+                if (menuToggle) menuToggle.focus();
+            }
         }
         function onKey(e) {
             if (e.key === 'Escape') { cleanup(); return; }
@@ -2016,6 +2530,15 @@ function sortTable(table, col, th) {
         if (!region) return null;
         var el = document.createElement('div');
         el.className = 'alert alert-' + kind + ' toast';
+        // Q248 (V7): the icon of its category before the text - the one a flashed message of that category carries - so a warning and an information toast are told apart without their color
+        var SVG = 'http://www.w3.org/2000/svg';
+        var ico = document.createElementNS(SVG, 'svg');
+        ico.setAttribute('class', 'ico');
+        ico.setAttribute('aria-hidden', 'true');
+        var use = document.createElementNS(SVG, 'use');
+        use.setAttribute('href', '#i-' + { success: 'circle-check', error: 'circle-x', info: 'info', warning: 'triangle-alert' }[kind]);
+        ico.appendChild(use);
+        el.appendChild(ico);
         var text = document.createElement('span');
         text.className = 'alert-text';
         text.textContent = String(message);
@@ -2112,6 +2635,29 @@ function sortTable(table, col, th) {
         return Promise.resolve(legacyCopy(text));
     };
     document.addEventListener('click', function(e) {
+        // Q248 (addition 10) - a Copy BUTTON beside a block of text (a secret, a command, a code example): data-copy-target names the element whose text is copied
+        // (data-copy-text carries the text itself). The answer is said ON the button for two seconds, where the person is looking, and a refusal says what to do instead.
+        var button = e.target.closest('[data-copy-target], [data-copy-text]');
+        if (button) {
+            e.preventDefault();
+            var source = button.hasAttribute('data-copy-text') ? null : document.getElementById(button.getAttribute('data-copy-target'));
+            var text = button.hasAttribute('data-copy-text') ? button.getAttribute('data-copy-text')
+                : (source ? ('value' in source && typeof source.value === 'string' ? source.value : source.textContent) : '');
+            var label = button.querySelector('.copy-btn-label') || button;
+            if (!button.hasAttribute('data-copy-label')) button.setAttribute('data-copy-label', label.textContent);
+            var say = function(words, ok) {
+                label.textContent = words;
+                button.classList.toggle('copied', ok);
+                clearTimeout(button._copyTimer);
+                button._copyTimer = setTimeout(function() {
+                    label.textContent = button.getAttribute('data-copy-label');
+                    button.classList.remove('copied');
+                }, 2000);
+            };
+            if (!text) { say('Copy failed - select the text', false); return; }
+            window.jenCopyText(text.replace(/^\s+|\s+$/g, '')).then(function(ok) { say(ok ? 'Copied' : 'Copy failed - select the text', ok); });
+            return;
+        }
         var control = e.target.closest('[data-copy]');
         if (!control) return;
         e.preventDefault();
@@ -2189,6 +2735,8 @@ function sortTable(table, col, th) {
     //   submit its closest <form> if it has one, else navigate to its
     //   href if it has one — the same two variants the old per-button
     //   onclick="jenConfirm(...)" calls each hand-rolled.
+    // data-confirm-label (Q248, V45), beside data-confirm: the text of the dialog's button - the action itself
+    //   ("Delete", "Release", "Revoke", "Remove", "Reset"). Without it the button says "Confirm".
     // data-href: plain click-to-navigate, no confirm.
     // data-submit: plain click/change-to-submit-closest-form, no confirm.
     function wireDispatch() {
@@ -2200,7 +2748,7 @@ function sortTable(table, col, th) {
                 if (btn) {
                     btn.addEventListener('click', function(e) {
                         e.preventDefault();
-                        jenConfirm(el.getAttribute('data-confirm'), function() { jenBeginFullPageSubmit(el, btn); el.submit(); });
+                        jenConfirm(el.getAttribute('data-confirm'), function() { jenBeginFullPageSubmit(el, btn); el.submit(); }, el.getAttribute('data-confirm-label'));
                     });
                 }
             } else {
@@ -2208,9 +2756,11 @@ function sortTable(table, col, th) {
                     e.preventDefault();
                     jenConfirm(el.getAttribute('data-confirm'), function() {
                         var f = el.closest('form');
+                        // (Q248) a button that carries its own action posts to it: form.submit() knows nothing of the button, so the palette form's Remove used to SAVE
+                        if (f && el.hasAttribute('formaction')) f.setAttribute('action', el.getAttribute('formaction'));
                         if (f) { jenBeginFullPageSubmit(f, el); f.submit(); }
                         else if (el.href) window.location.href = el.href;
-                    });
+                    }, el.getAttribute('data-confirm-label'));
                 });
             }
         });
@@ -2239,6 +2789,14 @@ function sortTable(table, col, th) {
     // Run on DOM ready and after any HTMX swap (for partials like _device_rows)
     document.addEventListener('DOMContentLoaded', wireDispatch);
     document.addEventListener('htmx:afterSwap', wireDispatch);
+    // Q248 (V45) - an hx-confirm question (the reservation row's Delete) is asked by the same dialog, with the same button label, instead of the browser's own confirm():
+    // htmx fires htmx:confirm before every request and carries the question when the element has one.
+    document.addEventListener('htmx:confirm', function(e) {
+        var d = e.detail || {};
+        if (!d.question || !d.issueRequest) return;
+        e.preventDefault();
+        jenConfirm(d.question, function() { d.issueRequest(true); }, d.elt && d.elt.getAttribute ? d.elt.getAttribute('data-confirm-label') : null);
+    });
 })();
 </script>
 <script nonce="{{ csp_nonce }}">
@@ -2344,6 +2902,21 @@ function sortTable(table, col, th) {
     }
     document.addEventListener('input', clearField);
     document.addEventListener('change', clearField);
+    // Q247 (U9), moved here from the API key page by Q248 (V41) - ONE handler for every .check-list (a list of checkboxes that post one field name: the subnets of an API
+    // key, of Add User and of Edit User). "All Subnets" (the box whose value is `all`) and a named subnet are one or the other: ticking a subnet unticks All, and ticking
+    // All unticks the rest (the routes refuse both together). And a field error is printed under the list itself, so a change to any box in it ends the error the way a
+    // change to an input does.
+    document.addEventListener('change', function(e) {
+        var t = e.target;
+        var box = t && t.closest ? t.closest('.check-list') : null;
+        if (!box || t === box || t.type !== 'checkbox') return;
+        if (t.checked) {
+            box.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
+                if (c !== t && c.name === t.name && (t.value === 'all' || c.value === 'all')) c.checked = false;
+            });
+        }
+        if (box.getAttribute('aria-invalid') === 'true') box.dispatchEvent(new Event('change', { bubbles: true }));
+    });
 
     // Q210 (second pass 8): Chrome keeps the content of a CLOSED <details> out of the print layout whatever its display says, so printing opens every one and puts it back afterward
     var printOpened = [];

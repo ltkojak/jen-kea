@@ -117,7 +117,7 @@ class TestNamesUsedExist:
         base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
         assert 'title="Keyboard shortcuts (?)"' in base
         # v5.55.0 (Q63) — the dark/light toggle became the theme picker.
-        assert 'aria-label="Theme"' in base
+        assert 'aria-label="Display"' in base  # Q248: it holds the theme, the times and the row density
 
 
 class TestNoEmojiInTheUi:

@@ -31,6 +31,8 @@ import jen.services.events as __events
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_config_view as __view
+import jen.services.pools as __pools
 import jen.services.view_prefs as __view_prefs
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access
@@ -38,6 +40,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.csv_safe import safe_row as _safe_row
 from jen.services.forms import flash_field
 from jen.services.leases_sql import active_lease4
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reservations", __name__)
@@ -373,6 +376,29 @@ def _address_outside_subnet(subnet_id: int, ip: str) -> tuple[bool, int | None]:
     return True, __client_subject.subnet_for_ip(ip)
 
 
+def _pools_by_subnet(subnet_map: dict) -> dict:
+    """Q248 (help choosing an address): `{subnet id: ["first - last", ...]}`, the pools of each subnet in `subnet_map` - the caller's OWN map, so a subnet the
+    account may not see has no entry - read from Kea's running configuration and merged the way every capacity number reads them (`pools.pool_ranges`). A subnet
+    with no readable pool has no entry, and `{}` is the answer when Kea's configuration could not be read: the form then shows the subnet's range alone."""
+    out = {}
+    try:
+        result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        if result.get("result") != 0:
+            return {}
+        for s, _sn in __view.iter_subnet4((result.get("arguments") or {}).get("Dhcp4", {})):
+            if s.get("id") not in subnet_map:
+                continue
+            ranges = __pools.pool_ranges(s.get("pools", []))
+            if ranges:
+                out[s["id"]] = [
+                    f"{ipaddress.IPv4Address(first)} - {ipaddress.IPv4Address(last)}" for first, last in ranges
+                ]
+    except Exception as e:
+        logger.warning(f"add reservation: the pools could not be read: {type(e).__name__}")
+        return {}
+    return out
+
+
 @bp.route("/reservations/add")
 @login_required
 @_admin_required
@@ -397,6 +423,7 @@ def add_reservation():
         # accessible subnet's own CIDR client-side; only ever the caller's OWN map, never the
         # unfiltered one.
         subnet_cidrs={sid: info["cidr"] for sid, info in subnet_map.items()},
+        subnet_pools=_pools_by_subnet(subnet_map),
     )
 
 
@@ -434,6 +461,7 @@ def add_reservation_post():
             subnet_map=subnet_map,
             prefill=prefill,
             subnet_cidrs={sid: info["cidr"] for sid, info in subnet_map.items()},
+            subnet_pools=_pools_by_subnet(subnet_map),
         ), 400
 
     # No fallback to subnet 1 — an untouched or empty select is refused, never silently defaulted.
@@ -1105,19 +1133,19 @@ def import_reservations():
                 db.commit()
         if dry_run:
             flash(
-                f"Dry run: {results['added']} would be added, {results['skipped']} skipped. {len(results['errors'])} error(s).",
+                f"Dry run: {results['added']} would be added, {results['skipped']} skipped. {_plural(len(results['errors']), 'error')}.",
                 "info",
             )
         else:
             flash(
-                f"Import complete: {results['added']} added, {results['skipped']} skipped. {len(results['errors'])} error(s).",
+                f"Import complete: {results['added']} added, {results['skipped']} skipped. {_plural(len(results['errors']), 'error')}.",
                 "success",
             )
             __user.audit("IMPORT_RESERVATIONS", "reservations", f"Added {results['added']} by {current_user.username}")
         for err in results["errors"][:10]:
             flash(err, "warning")
         if len(results["errors"]) > 10:
-            flash(f"... and {len(results['errors']) - 10} more row(s) with errors.", "warning")
+            flash(f"... and {_plural(len(results['errors']) - 10, 'more row')} with errors.", "warning")
         for skip in results["skips"][:10]:
             flash(skip, "info")
     except Exception as e:
@@ -1181,7 +1209,7 @@ def bulk_delete_reservations():
         return redirect(url_for("reservations.reservations"))
 
     flash(
-        f"Deleted {deleted} reservation(s)." + (f" {errors} failed." if errors else ""),
+        f"Deleted {_plural(deleted, 'reservation')}." + (f" {errors} failed." if errors else ""),
         "success" if errors == 0 else "warning",
     )
     __user.audit("BULK_DELETE_RESERVATIONS", "reservations", f"Deleted={deleted} Errors={errors}")

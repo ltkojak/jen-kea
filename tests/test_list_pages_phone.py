@@ -123,7 +123,7 @@ class TestLeaseRow:
             None,
             "secondary",
             "primary",
-            "hide",
+            "third",  # Q248 (V51): the MAC is the phone card's third line
             "secondary",
             "hide",
             "secondary",
@@ -134,14 +134,13 @@ class TestLeaseRow:
         cells = _cells(_render("_lease_rows.html", leases=[_lease()]))[0]
         assert "living-tv" in cells[2][1]
         assert cells[1][1] == "10.0.0.5" and cells[4][1] == "Prod"
-        assert "in 3 d" in cells[6][1]  # the phone rendering of the expiry sits beside the full timestamp
+        assert "in 3 d" in cells[6][1]  # the expiry is the relative phrase at every width (Q248, addition 5)
 
-    def test_expiry_has_both_renderings_and_the_mac_moves_into_the_menu(self):
+    def test_expiry_is_relative_with_the_exact_time_as_its_title_and_the_mac_is_in_the_menu_too(self):
         html = _render("_lease_rows.html", leases=[_lease()])
-        assert (
-            '<span class="desk-only" title="in 3 d">2026-09-21 10:00 UTC</span><span class="phone-only">in 3 d</span>'
-            in html
-        )
+        # Q248 (addition 5): one rendering - the relative phrase - with the exact UTC time as the title a page without script shows
+        assert '<span title="2026-09-21 10:00 UTC">in 3 d</span>' in html
+        assert "desk-only" not in html and "phone-only" not in html
         # Q206 (AV3): the menu's MAC line is a copy control now - the same text, inside the button
         assert re.search(
             r'action-menu-item disabled mono"><button type="button" class="copy mono" data-copy="aa:bb:cc:dd:ee:ff"[^>]*>aa:bb:cc:dd:ee:ff</button>',
@@ -150,7 +149,7 @@ class TestLeaseRow:
 
     def test_a_viewer_gets_no_checkbox_or_kebab(self):
         cells = _cells(_render("_lease_rows.html", leases=[_lease()], current_user=User("viewer")))[0]
-        assert [m for m, _ in cells] == ["secondary", "primary", "hide", "secondary", "hide", "secondary"]
+        assert [m for m, _ in cells] == ["secondary", "primary", "third", "secondary", "hide", "secondary"]
 
     def test_the_empty_state_row_spans_the_line(self):
         cells = _cells(_render("_lease_rows.html", leases=[]))[0]
@@ -200,7 +199,7 @@ class TestReservationRow:
             None,
             "secondary",
             "primary",
-            "hide",
+            "third",  # Q248 (V51): the MAC is the phone card's third line
             "secondary",
             "secondary",
             "hide",
@@ -252,18 +251,19 @@ class TestDeviceRow:
 
     def test_a_named_device_shows_its_name_and_hides_the_hostname(self):
         cells = self._cells()
+        # Q248 (V51): the MAC, the subnet and the status are the phone card's third line
         assert [m for m, _ in cells] == [
             None,
-            "hide",
+            "third",
             "primary",
             "hide",
             "secondary",
             "hide",
-            "hide",
+            "third",
             "badge",
             "hide",
             "secondary",
-            "hide",
+            "third",
             "trailing",
         ]
 
@@ -285,7 +285,8 @@ class TestDeviceRow:
             search="",
         )
         assert '<span class="phone-only">2 h ago</span>' in html
-        assert 'class="mono hide-tablet warn"' in html
+        # Q248 (V13): Last seen is the column the list is sorted by, so no width drops it
+        assert 'class="mono warn"' in html
 
     def test_a_duid_only_row_keeps_its_hostname_and_badge(self):
         duid = {"duid_hex": "00ff", "hostname": "v6-only", "subnet_name": "Prod", "addresses": [], "last_expire": NOW}
@@ -343,7 +344,8 @@ class TestSourceShape:
     def test_type_chips_are_a_chip_row(self):
         assert 'id="type-filter-bar" class="chip-row' in _src("devices.html")
 
-    def test_stale_days_moved_into_the_filter_bar_with_a_label(self):
+    def test_stale_days_sits_beside_the_filter_bar_with_a_label(self):
+        # (Q248, V35: beside the bar, no longer inside it, where the phone counted it as a filter)
         src = _src("devices.html")
         assert 'aria-label="Stale after (days)"' in src
         assert "page-header-flex" not in src and 'class="page-header" style' not in src

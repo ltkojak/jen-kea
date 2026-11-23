@@ -22,8 +22,6 @@ never pays for seven tabs' worth of work when the caller looked at one.
 import hashlib
 import logging
 import re
-import secrets
-from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from flask import Blueprint, render_template, request
@@ -161,6 +159,15 @@ def _built_inputs(view, *, fetch_log: bool = True) -> dict:
     return built
 
 
+def _lease_subnet_name(lease, subnet_map) -> str | None:
+    """The name of the subnet the current lease is in, from the caller's own subnet map: None for no lease, and for a subnet that map does not hold (Q248, V20)."""
+    try:
+        sid = int((lease or {}).get("subnet_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return (subnet_map.get(sid) or {}).get("name") or None
+
+
 def _explain_run(view, subnet_id, built):
     """explain() for the view's own subnet, with the pool-occupancy and holder lookups bound to this caller's scope."""
     cfg = dhcp4_config()
@@ -174,6 +181,7 @@ def _explain_run(view, subnet_id, built):
         lease=view.lease,
         reservations=view.reservations,
         accessible_ids=None if current_user.all_subnets else set(get_accessible_subnet_map()),
+        lease_subnet_name=_lease_subnet_name(view.lease, get_accessible_subnet_map()),
     )
 
 
@@ -264,8 +272,6 @@ def client_page():
     tab = request.args.get("tab", "overview")
     if tab not in tabs:
         tab = "overview"
-
-    investigation_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(3)
 
     subject = None
     view = None
@@ -372,6 +378,7 @@ def client_page():
         chosen_subnet=chosen_subnet,
         chosen_how=chosen_how,
         subnet_choices=get_accessible_subnet_map(),
+        subnet6_choices=accessible_subnet6_map(),  # Q248 (V32): the names the IPv6 rows print, from the caller's own map
         alert=alert,
         trace_allowed=trace_allowed,
         config_result=config_result,
@@ -379,5 +386,4 @@ def client_page():
         dns_results=dns_results,
         dns_note=dns_note,
         dns_error=dns_error,
-        investigation_id=investigation_id,
     )

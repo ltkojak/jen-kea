@@ -183,7 +183,9 @@ class TestMaintenanceRoutes:
         assert r.status_code in (301, 302, 308)
         c, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="maint_admin1")
         r = c.get("/servers/ha/maintenance", follow_redirects=True)
-        assert b"SuperAdmin access required." in r.data
+        assert (
+            b"Superadmin access required for /servers/ha/maintenance." in r.data
+        )  # Q248 (V47): a refusal names the page
 
     def test_recent_auth_required(self, logged_in_client, monkeypatch):
         _wire(monkeypatch, _Kea())

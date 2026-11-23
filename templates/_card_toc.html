@@ -11,12 +11,25 @@
   below can run unconditionally and just toggle a class. Q210 (Y2): `screen and` is
   not decoration - a portrait page prints about 703 px wide, and without it this
   block hid 17 card bodies of a printed Settings page.
+
+  Q248 (V38) - the jump list is one plain line under the page's tabs, "On this page:"
+  and a text link per card: `toc` names EVERY card of the page in the order the cards
+  come, each with the card's own title (tests/test_q248_c2.py renders every Settings
+  page and compares the line with the cards). It was a second row of pills under the
+  pills. A phone does not show it: the cards fold there and a folded card's header is
+  its own link. Paper does not show it either.
 #}
 {% if toc and toc|length > 2 %}
-<div class="card-toc" aria-label="On this page">
+<nav class="page-jump" aria-label="On this page">
+  <span class="page-jump-label">On this page:</span>
   {% for anchor, label in toc %}<a href="#{{ anchor }}">{{ label }}</a>{% endfor %}
-</div>
+</nav>
 <style>
+.page-jump { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; margin: -4px 0 16px; font-size: var(--fs-sm); color: var(--text-muted); }
+@media print { .page-jump { display: none; } }
+@media screen and (max-width: 768px) {
+  .page-jump { display: none; }
+}
 @media screen and (max-width: 768px) {
   .card[data-collapsible] > .card-header {
     cursor: pointer;
@@ -28,7 +41,10 @@
     flex: none;
   }
   .card[data-collapsible].collapsed > .card-header::after { content: "\25B8"; }
-  .card[data-collapsible].collapsed > :not(.card-header) { display: none; }
+  /* Q248 (V55): !important, because a card's child that carries an inline `display` (Kea6's "Enable IPv6 support" row, the Brand Icons form, the Message
+     Templates legend) beat this rule and stayed on show in a card whose arrow said closed; and a closed card is as tall as its header. */
+  .card[data-collapsible].collapsed > :not(.card-header) { display: none !important; }
+  .card[data-collapsible].collapsed > .card-header { margin-bottom: 0; }
 }
 </style>
 <script nonce="{{ csp_nonce }}">
@@ -51,7 +67,7 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     });
-    document.querySelectorAll('.card-toc a[href^="#"]').forEach(function(link) {
+    document.querySelectorAll('.page-jump a[href^="#"]').forEach(function(link) {
         link.addEventListener('click', function() {
             var card = document.getElementById(link.getAttribute('href').slice(1));
             if (card) card.classList.remove('collapsed');

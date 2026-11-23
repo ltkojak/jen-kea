@@ -51,6 +51,7 @@ from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
 from jen.services import kea_config_edit as _edit
 from jen.services import kea_config_view as _view
+from jen.services.reltime import plural as _plural
 
 # ── dataclasses ──────────────────────────────────────────────────────────────
 
@@ -996,8 +997,8 @@ def to_kea(plan: Plan, existing_dhcp4_cfg: dict | None, subnet_names: dict, sele
 
         report.append(
             f"scope {scope.name}: mapped to subnet {jen_id} ({mapped.subnet['subnet']}), "
-            f"{len(mapped.subnet['pools'])} pool(s), {len(mapped.classes)} class(es), "
-            f"{len(scope.reservations)} reservation(s)"
+            f"{_plural(len(mapped.subnet['pools']), 'pool')}, {_plural(len(mapped.classes), 'class', 'classes')}, "
+            f"{_plural(len(scope.reservations), 'reservation')}"
         )
 
     # v5.28.0 (Q24, F6) — option 81 is dropped independently by every

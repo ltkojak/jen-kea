@@ -2,8 +2,8 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.3.6",
-    "description": "Scan your subnets and account for every device on them: Kea lease or reservation, the subnet's own gateway/DNS/Kea/Jen addresses, an IPAM Lite entry, a device Jen has seen, or one you marked known — only what's left is unknown, and only a new unknown alerts. Vendor from the MAC, scheduled scans, since-last-scan changes, one-click reservation or IPAM entry, CSV export. A new unknown host also reaches the Timeline, and the last-seen results are in Jen's global search. Needs nmap on the Jen host (Settings → Plugins can install it).",
+    "version": "1.3.7",
+    "description": "Scan your subnets and account for every device on them: Kea lease or reservation, the subnet's own gateway/DNS/Kea/Jen addresses, an IPAM Lite entry, a device Jen has seen, or one you marked known — only what's left is unknown, and only a new unknown alerts. Vendor from the MAC, scheduled scans, since-last-scan changes, one-click reservation or IPAM entry, CSV export. A new unknown host also reaches the Timeline, and the last-seen results are in Jen's global search. Needs nmap on the Jen host: the Docker image has it, a systemd install can add it from Settings - Plugins, and anywhere else you install it yourself.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
     "tags": [
@@ -66,8 +66,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS nd_settings (subnet_id INT PRIMARY KEY, every_hours INT NOT NULL DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.3.6",
-    "sha256": "92e4bced5faf47737f749c78bb2ab01ed9a7d94c8d100135bbb805ceb0a3169d",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.3.7",
+    "sha256": "200258efc997d83e7d5e47dd3b1b0e8cde4d8595b73ae7415da9259d54310828",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery",
     "os_packages": [
@@ -78,7 +78,7 @@
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.8.4",
+    "version": "1.8.5",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Alerts on new conflicts, a JSON API for entries and next-free, and a global search provider. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -177,8 +177,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS ipam_conflict_state (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_kind ENUM('kea','ipam') NOT NULL, subnet_id INT NOT NULL, first_detected DATETIME DEFAULT CURRENT_TIMESTAMP, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uniq_conflict (ip, subnet_kind, subnet_id))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.8.4",
-    "sha256": "cd0d54f9750722e7405d773c8bb361cf023e47040dd3ea2873b00b1f09a41eb9",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.8.5",
+    "sha256": "7a81c5b613c16d9cd5f219aca33b5184c90c35691ad689f16f48436ae5917cd0",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam",
     "plugin_api": 3
@@ -186,7 +186,7 @@
   {
     "id": "watchdog",
     "name": "Host Watchdog",
-    "version": "1.1.4",
+    "version": "1.1.5",
     "description": "Probes chosen hosts on a schedule and alerts when one stops answering, and again when it comes back — the gap Network Discovery leaves, since it only alerts on a new unknown host appearing. Ping (unprivileged ICMP) or TCP connect, added from a Kea reservation, an IPAM Lite entry, or any IP. 7-day uptime, per-target history, a JSON API.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -225,8 +225,8 @@
         "sql": "ALTER TABLE wd_checks ADD INDEX idx_target_checked (target_id, checked_at)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.1.4",
-    "sha256": "afa51121a261a1579f9468706385534f25c2076da49a7434eb641f91d25fd8f7",
+    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.1.5",
+    "sha256": "10f44136e08fdf888598cb7fdab838adf14792e0ed5fe0010f61b12a560f130b",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-watchdog/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-watchdog",
     "os_packages": [
@@ -237,7 +237,7 @@
   {
     "id": "dns-sync",
     "name": "Local DNS Sync",
-    "version": "1.1.5",
+    "version": "1.1.6",
     "description": "Pushes DHCP names into Pi-hole or AdGuard Home local DNS so hostnames like nas.lan resolve without Kea DDNS — Jen only ever touches records it created itself (a ledger), and an Unbound export is offered for setups with no API.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -266,8 +266,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS ds_records (id INT AUTO_INCREMENT PRIMARY KEY, target_id INT NOT NULL, name VARCHAR(63) NOT NULL, ip VARCHAR(15) NOT NULL, source ENUM('lease','reservation','ipam') NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY ux_target_name (target_id, name))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.1.5",
-    "sha256": "7cfb400f27508ccdf8d1d0623e3e4cf29e0a1572131918f4b1cfd0902bf53641",
+    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.1.6",
+    "sha256": "8692d4fabe67b38b9f12d57cb84e63a98859a5b4cc1e73ec56e910e4a12a78a6",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-dns-sync/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-dns-sync",
     "plugin_api": 3
@@ -275,7 +275,7 @@
   {
     "id": "switchport",
     "name": "Switch Port Locator",
-    "version": "1.1.5",
+    "version": "1.1.6",
     "description": "Answers the one question Client Investigation can't: which switch port is this MAC on? Polls managed switches' MAC address tables over SNMP (BRIDGE-MIB / Q-BRIDGE-MIB) every 10 minutes, resolves the port name and alias (IF-MIB), and auto-detects uplinks by MAC count so trunk ports never look like where a device “lives”. Alerts when a known MAC's port changes.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -319,8 +319,8 @@
         "sql": "ALTER TABLE sp_ports ADD COLUMN mac_count INT NOT NULL DEFAULT 0"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.1.5",
-    "sha256": "a31a26258a78a31d55cb663a2600ad97cb2af5e67d28ac3ec28d81d55f7a2492",
+    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.1.6",
+    "sha256": "ccbbb2808ff5933a21e79d15e5bc286fb58ee5c712513a8aa8b2fa8ecb4dd554",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-switchport/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-switchport",
     "os_packages": [
@@ -331,8 +331,8 @@
   {
     "id": "wol",
     "name": "Wake & Actions",
-    "version": "1.2.0",
-    "description": "Wake-on-LAN from any lease, reservation, or device row, plus a favorites list for the hosts you wake often. Sends a standard magic packet (with optional SecureOn password) to both the subnet's directed broadcast and 255.255.255.255.",
+    "version": "1.2.1",
+    "description": "Wake-on-LAN from any lease, reservation, or device row, plus a list of saved hosts for the ones you wake often. Sends a standard magic packet (with optional SecureOn password) to both the subnet's directed broadcast and 255.255.255.255.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
     "tags": [
@@ -359,8 +359,8 @@
         "sql": "ALTER TABLE wol_hosts MODIFY COLUMN secureon TEXT NULL"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.2.0",
-    "sha256": "16e635efdd9e90619abe95ec1b24936b945c544d0bc466d83c7f28ec2e466b35",
+    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.2.1",
+    "sha256": "c13f6b9c69abeaae6ddf3276509d9157b9f3c727beb4303e523f33c8fdb970fc",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-wol/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-wol",
     "plugin_api": 3
@@ -368,7 +368,7 @@
   {
     "id": "presence",
     "name": "Presence",
-    "version": "1.2.8",
+    "version": "1.2.9",
     "description": "Publishes tracked devices' online/offline state to Home Assistant (webhook), MQTT, or any HTTP endpoint, so the house can react to a phone joining or leaving. Opt-in per MAC — nothing is published for a device you haven't chosen to track.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -402,8 +402,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS pr_sinks (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, kind ENUM('ha_webhook','mqtt','http') NOT NULL, url VARCHAR(255) NOT NULL, credential TEXT, topic_prefix VARCHAR(100) NOT NULL DEFAULT 'jen/presence', retain TINYINT(1) NOT NULL DEFAULT 1, discovery TINYINT(1) NOT NULL DEFAULT 0, enabled TINYINT(1) NOT NULL DEFAULT 1, last_error VARCHAR(300) NULL)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.2.8",
-    "sha256": "b3497151f7e65ca02095b7ae839c869419abaeae36a851d074b549a2225006ca",
+    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.2.9",
+    "sha256": "c5da2f9c19d5e322a400faf7f96de78ccd5c53c56671cd7498fb717f67745958",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-presence/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-presence",
     "plugin_api": 3

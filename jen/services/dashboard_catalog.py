@@ -35,6 +35,7 @@ import jen.services.health as __health
 import jen.services.onboarding as __onboarding
 import jen.services.packet_health as __packet_health
 from jen import extensions
+from jen.services.reltime import plural as __plural
 
 logger = logging.getLogger(__name__)
 
@@ -256,3 +257,55 @@ def getting_started_widget(user, is_superadmin: bool) -> dict | None:
     """The nav pill's own cached count (5-minute TTL) — never a fresh Kea
     round trip just because this widget is on the dashboard too."""
     return __onboarding.cached_pill(user, is_superadmin)
+
+
+def attention_widget(checks, server_statuses, accessible_subnets) -> list[dict]:
+    """Q248 - the lines of the dashboard's "Needs attention" card, each `{"kind", "level", "text", "url"}`: a Kea server that does not answer, a Health check that
+    FAILS, a pool near exhaustion or over the alert threshold. An empty list is "nothing needs attention" and the page draws no card.
+
+    Presentation only, and the caller's own: `checks` is the run the route made with the caller's subnet filter and `unrestricted` flag (the lines are the rows Health
+    shows that account, no more), `server_statuses` is the read that run used, and `accessible_subnets` is the caller's own subnet map - a pool is named from it and
+    from nothing else, so a subnet the account may not see has no line, no name and no part in any count. Every link is to a page any signed-in account may open
+    (Kea servers, Health, the subnet's leases).
+
+    A server that is down and a pool that is full are each said once: where a server line or a pool line is drawn, the Health row for the same fact
+    (`kea_reachable`, `pool_utilization`) is not drawn beside it."""
+    lines = []
+    down = [s for s in (server_statuses or []) if not s.get("up")]
+    for s in down:
+        name = __health._server_name(s.get("server") or {})
+        lines.append(
+            {"kind": "server", "level": "fail", "text": f"Kea server {name} is not reachable", "url": "/servers"}
+        )
+    pools = []
+    try:
+        pools = __health.pools_needing_attention(accessible_subnets.keys())
+    except Exception as e:
+        # the Health row for pool use says the read failed, and is drawn below as any failing row is
+        logger.warning(f"dashboard attention widget: {e}")
+    said = set()
+    if down:
+        said.add("kea_reachable")
+    if pools:
+        said.add("pool_utilization")
+    for c in checks or []:
+        if c.status != "fail" or c.id in said:
+            continue
+        text = f"{c.title}: {c.detail}" if c.detail else c.title
+        lines.append({"kind": "health", "level": "fail", "text": text, "url": f"/health-center#check-{c.id}"})
+    for p in pools:
+        info = accessible_subnets[p["subnet_id"]]
+        where = f"{info['name']} ({info['cidr']})"
+        if p["level"] == "crit":
+            text = f"{where}: {__plural(p['free'], 'address', 'addresses')} left in the pool"
+        else:
+            text = f"{where}: {p['pct']:.0f}% of the pool is in use (the alert threshold is {p['threshold']}%)"
+        lines.append(
+            {
+                "kind": "pool",
+                "level": "fail" if p["level"] == "crit" else "warn",
+                "text": text,
+                "url": f"/leases?subnet={p['subnet_id']}",
+            }
+        )
+    return lines

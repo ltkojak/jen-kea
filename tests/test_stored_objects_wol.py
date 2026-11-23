@@ -183,7 +183,7 @@ class TestQ171AWakeStampsOnlyAFavoriteTheCallerMaySee:
             follow_redirects=True,
         )
         body = r.get_data(as_text=True)
-        assert "That favorite is not yours to change." in body
+        assert "That saved host is not yours to change." in body
         assert "subnet you can access" not in body
         assert_no_marker(body)
 
@@ -198,7 +198,7 @@ class TestQ171FixupOneRefusalForAFavoriteThatIsNotTheCallers:
         )
         body = r.get_data(as_text=True)
         assert_no_marker(body, ignore=(mac,))
-        return "That favorite is not yours to change." in body, "subnet you can access" in body
+        return "That saved host is not yours to change." in body, "subnet you can access" in body
 
     def test_a_hidden_favorite_and_a_hidden_mac_get_the_same_answer(self, pclient, db, stored_objects):
         from tests.test_authz_matrix import B2_MAC

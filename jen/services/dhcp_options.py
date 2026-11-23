@@ -133,20 +133,22 @@ def validate(opt_type: str, data: str) -> str | None:
         return None if _ipv4(data) else "must be an IPv4 address"
     if opt_type == "ip-list":
         bad = [p for p in _split(data) if not _ipv4(p)]
-        return f"not IPv4 address(es): {', '.join(bad)}" if bad else None
+        return f"not {'an IPv4 address' if len(bad) == 1 else 'IPv4 addresses'}: {', '.join(bad)}" if bad else None
     if opt_type == "ip-pair-list":
         parts = _split(data)
         if not parts or len(parts) % 2:
             return "must be an even number of IPv4 addresses (destination, router, …)"
         bad = [p for p in parts if not _ipv4(p)]
-        return f"not IPv4 address(es): {', '.join(bad)}" if bad else None
+        return f"not {'an IPv4 address' if len(bad) == 1 else 'IPv4 addresses'}: {', '.join(bad)}" if bad else None
     if opt_type == "string":
         return None
     if opt_type == "fqdn":
         return None if _FQDN_RE.match(data) else "must be a valid domain name"
     if opt_type == "fqdn-list":
         bad = [p for p in _split(data) if not _FQDN_RE.match(p)]
-        return f"not valid domain name(s): {', '.join(bad)}" if bad else None
+        return (
+            f"not {'a valid domain name' if len(bad) == 1 else 'valid domain names'}: {', '.join(bad)}" if bad else None
+        )
     if opt_type == "boolean":
         return None if data.lower() in ("true", "false") else "must be true or false"
     if opt_type == "uint8":

@@ -77,13 +77,14 @@ class TestChecklistRows:
         row = next(r for r in summary["rows"] if r["title"] == "Kea is reachable")
         assert row["done"] is False
 
-    def test_control_transport_ca_mode_below_30_counts_as_done(self):
+    def test_control_transport_ca_mode_below_30_is_a_warning_not_a_tick(self):
+        # Q248 (V26): the row used to be ticked ("fine for now") while Health showed the same check as WARN
         ctx = _ctx(kea_connection_mode="ca")
         ctx["checks"]["kea32_control_transport"] = _check("kea32_control_transport", "warn", "before you upgrade")
         summary = onboarding.checklist(ctx)
         row = next(r for r in summary["rows"] if "Control transport" in r["title"])
-        assert row["done"] is True
-        assert "fine for now" in row["detail"]
+        assert row["done"] is False and row["warn"] is True
+        assert row["detail"] == "before you upgrade" and row["link"] == "/health-center"
 
     def test_control_transport_direct_mode_warn_is_not_done(self):
         ctx = _ctx()

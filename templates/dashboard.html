@@ -27,6 +27,15 @@
     </div>
 </div>
 
+{# Q248 - "Needs attention": the first thing on the page, and drawn only when there is something in it (the script below fills it from
+   /api/dashboard/catalog-data?widgets=attention and takes `hidden` off; with nothing to say it stays out of the page). Each line is a link to where the thing
+   is handled. It is not one of the widgets a person arranges or switches off. The lines are built by dashboard_catalog.attention_widget() for the signed-in
+   account: nothing in them names a subnet that account may not see. #}
+<div id="attention-card" class="card attention-card hidden" role="region" aria-labelledby="attention-title">
+    <div class="card-header"><span class="card-title" id="attention-title">{{ icon("triangle-alert") }} Needs attention</span></div>
+    <ul class="attention-list" id="attention-list"></ul>
+</div>
+
 <!-- Customize panel -->
 <div id="dash-customize" style="display:none;" class="card">
     <div class="card-header"><span class="card-title">{{ icon("settings") }} Customize Dashboard</span></div>
@@ -82,12 +91,15 @@
                 <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active|number if s.active is number else s.active }}</div>
             </div>
         </div>
-        <div class="stat-meta stat-detail" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic|number if s.dynamic is number else s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations|number if s.reservations is number else s.reservations }} reserved</div>
+        {# Q248 (V19): "reserved" is said of LEASES only - the active leases that are not dynamic. The number of reservations is a different count (a reservation need not hold a lease),
+           so it reads "reservations" and sits on the pool line, apart from the split of the active leases. #}
+        <div class="stat-meta stat-detail" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic|number if s.dynamic is number else s.dynamic }} dynamic &nbsp;·&nbsp; {{ (s.active - s.dynamic)|number if (s.active is number and s.dynamic is number) else '…' }} reserved</div>
         <div class="util-bar u-d2c171">
             <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%;transition:width 0.5s ease;"></div>
         </div>
-        <div class="u-96ad60 stat-detail">
+        <div class="u-96ad60 stat-detail stat-pool-line">
             <span class="u-749148" id="util-pct-{{ subnet_id }}"></span>
+            <span class="u-749148" id="stat-res-{{ subnet_id }}">{{ s.reservations|plural('reservation') if s.reservations is number else '… reservations' }}</span>
         </div>
         {% if s.routers or s.dns_servers %}
         <div class="stat-extra" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;">
@@ -111,7 +123,7 @@
                 <span class="badge badge-tone-blue u-41ccf8">v6</span>
                 <span class="mono u-749148">{{ s6.cidr }}</span>
             </div>
-            <div class="u-749148" id="stat6-meta-{{ s6.id }}">{{ s6.active|number }} active &nbsp;·&nbsp; {{ s6.reserved|number }} reserved</div>
+            <div class="u-749148" id="stat6-meta-{{ s6.id }}">{{ s6.active|number }} active &nbsp;·&nbsp; {{ s6.reserved|plural('reservation') }}</div>
         </div>
         {% endfor %}
     </div>
@@ -124,7 +136,7 @@
                 <div class="stat-value" id="stat6-active-{{ s6.id }}">{{ s6.active|number }}</div>
             </div>
         </div>
-        <div class="stat-meta" id="stat6-meta-{{ s6.id }}">{{ s6.active|number }} active &nbsp;·&nbsp; {{ s6.reserved|number }} reserved</div>
+        <div class="stat-meta" id="stat6-meta-{{ s6.id }}">{{ s6.active|number }} active &nbsp;·&nbsp; {{ s6.reserved|plural('reservation') }}</div>
     </div>
     {% endfor %}
     </div>
@@ -150,13 +162,18 @@
                 <div class="u-1d385c">Pool Used</div>
                 <div class="u-c2569f" id="total-pct">—</div>
             </div>
+            {# Q248 (V19): the reservations that exist, after the split of the active leases and not part of it #}
+            <div>
+                <div class="u-1d385c">Reservations{% if ipv6_summary %} <span class="badge u-c55bdf">v4</span>{% endif %}</div>
+                <div class="u-c2569f" id="total-reservations">—</div>
+            </div>
             {% if ipv6_summary %}
             <div>
                 <div class="u-1d385c">Active <span class="badge badge-tone-blue u-d1f783">v6</span></div>
                 <div class="u-37e8cf">{{ ipv6_summary.active|number }}</div>
             </div>
             <div>
-                <div class="u-1d385c">Reserved <span class="badge badge-tone-blue u-d1f783">v6</span></div>
+                <div class="u-1d385c">Reservations <span class="badge badge-tone-blue u-d1f783">v6</span></div>
                 <div class="u-c2569f">{{ ipv6_summary.reserved|number }}</div>
             </div>
             {% endif %}
@@ -229,7 +246,7 @@
         <div class="card-header">
             <span class="card-title">{{ icon("clock") }} Recently Issued Leases</span>
             <div class="u-01ef7f">
-                <select id="recent-hours" class="u-30e741">
+                <select id="recent-hours" class="u-30e741" aria-label="Time range of recently issued leases">
                     <option value="0.5">Last 30 min</option>
                     <option value="1">Last 1 hour</option>
                     <option value="4">Last 4 hours</option>
@@ -280,6 +297,19 @@
 /* v5.54.0 (Q61) — panel widths + Arrange mode. Page-specific (dashboard.html only). */
 .dash-widgets { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .dash-widgets > div { flex: 1 1 100%; min-width: 0; }
+/* Q248: the "Needs attention" card - one line a thing, each a link; the left edge takes the color of the worst line */
+.attention-card { border-left: 3px solid var(--warning); }
+.attention-card.attention-fail { border-left-color: var(--danger); }
+.attention-list { list-style: none; margin: 0; padding: 0; }
+.attention-line { display: flex; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.attention-line:first-child { border-top: 0; padding-top: 0; }
+.attention-line:last-child { padding-bottom: 0; }
+.attention-line .ico { flex: none; position: relative; top: 2px; }
+.attention-line a { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.attention-line a::after { content: " \203A"; color: var(--text-muted); }
+.attention-line a:hover, .attention-line a:hover::after { color: var(--primary); }
+/* Q248 (V19): the pool line of a subnet card - its use on the left, the number of reservations on the right */
+.stat-pool-line { display: flex; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; }
 .dash-widgets > div.dw-half { flex: 1 1 calc(50% - 8px); }
 .dash-widgets > div.dw-third { flex: 1 1 calc(33.333% - 11px); }
 @media screen and (max-width: 900px) { .dash-widgets > div.dw-third { flex: 1 1 calc(50% - 8px); } }
@@ -311,6 +341,9 @@ body.dash-compact #dash-subnet_stats .stat-detail,
 body.dash-compact #dash-subnet_stats .stat-extra { display: none; }
 body.dash-compact #dash-subnet_stats .stat-value { font-size: 22px; margin: 2px 0; }
 body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
+/* Q248 (V17) - Packet Health is a two-column table whose second cell is a long sentence: the table gave that cell all the room and broke the server's name
+   ("Kea Server" / "1") in a card that was mostly empty. The name is one line beside its notes; a phone's rowlist puts it on its own line anyway. */
+@media screen and (min-width: 769px) { #dash-packet_health td[data-m="primary"] { white-space: nowrap; width: 1%; padding-right: 24px; } }
 </style>
 <div id="dash-server_status" class="hidden">
     <div class="card">
@@ -801,10 +834,61 @@ function loadCatalogWidget(id, render) {
     var el = widgetEl(id);
     var body = el && el.querySelector('.dash-cat-body');
     if (!body) return;
-    jenFetch('/api/dashboard/catalog-data?widgets=' + id)
-        .then(function(r) { return r.json(); })
-        .then(function(data) { body.innerHTML = render(data[id]); })
-        .catch(function() { body.innerHTML = '<p class="u-6f1339">Could not load.</p>'; });
+    fetchCatalog(id,
+        function(value) { body.innerHTML = render(value); },
+        function() { body.innerHTML = '<p class="u-6f1339">Could not load.</p>'; });
+}
+
+// Q248: three things on this page read the Health checks - the "Needs attention" card and the Readiness and DDNS Errors widgets - and the server runs the checks once
+// for a request that names several of them. So the ones asked for in the same turn leave as ONE request; every other widget keeps a request of its own, as before
+// (a fast widget does not wait for the Health run).
+var HEALTH_BACKED = { attention: true, readiness: true, ddns_errors: true };
+var healthBatch = null;
+function fetchCatalog(id, done, fail) {
+    if (!HEALTH_BACKED[id]) {
+        jenFetch('/api/dashboard/catalog-data?widgets=' + id)
+            .then(function(r) { return r.json(); })
+            .then(function(data) { done(data[id]); })
+            .catch(fail);
+        return;
+    }
+    if (!healthBatch) {
+        healthBatch = [];
+        setTimeout(function() {
+            var batch = healthBatch;
+            healthBatch = null;
+            var ids = [];
+            batch.forEach(function(b) { if (ids.indexOf(b.id) === -1) ids.push(b.id); });
+            jenFetch('/api/dashboard/catalog-data?widgets=' + ids.join(','))
+                .then(function(r) { return r.json(); })
+                .then(function(data) { batch.forEach(function(b) { b.done(data[b.id]); }); })
+                .catch(function() { batch.forEach(function(b) { b.fail(); }); });
+        }, 0);
+    }
+    healthBatch.push({ id: id, done: done, fail: fail });
+}
+
+// ── Needs attention (Q248) ────────────────────────────────────────────────────
+// The card is in the page, hidden, and is shown only while the server has a line for it. Each line is {kind, level, text, url}, built on the server for this account;
+// the text is escaped here and the address is one of the three the server writes (Kea servers, a Health row, a subnet's leases). A read that fails changes nothing:
+// the card says what needs attention, never that it could not ask.
+function loadAttention() {
+    var card = document.getElementById('attention-card');
+    var list = document.getElementById('attention-list');
+    if (!card || !list) return;
+    fetchCatalog('attention', function(lines) {
+        if (!lines || !lines.length) {
+            card.classList.add('hidden');
+            list.innerHTML = '';
+            return;
+        }
+        list.innerHTML = lines.map(function(l) {
+            return '<li class="attention-line" data-kind="' + escapeHtml(l.kind) + '">' + (STATUS_ICO[l.level] || STATUS_ICO.warn) +
+                '<a href="' + escapeHtml(l.url) + '">' + escapeHtml(l.text) + '</a></li>';
+        }).join('');
+        card.classList.toggle('attention-fail', lines.some(function(l) { return l.level === 'fail'; }));
+        card.classList.remove('hidden');
+    }, function() {});
 }
 
 function loadForecast() {
@@ -833,7 +917,8 @@ function loadReadiness() {
         var html = '<p class="small mb-2">' + (STATUS_ICO[d.status] || '') + ' ' + escapeHtml(d.line) + '</p>';
         html += '<table class="rowlist"><tbody>' + d.rows.map(function(c) {
             return '<tr><td data-m="primary">' + (STATUS_ICO[c.status] || '') + ' ' + escapeHtml(c.title) + '</td>' +
-                '<td data-m="secondary">' + escapeHtml(c.detail) + '</td></tr>';
+                '<td data-m="secondary">' + escapeHtml(c.detail) +
+                (c.link ? ' <a href="' + escapeHtml(c.link) + '">' + escapeHtml(c.link_label || 'Open') + '</a>' : '') + '</td></tr>';
         }).join('') + '</tbody></table>';
         return html;
     });
@@ -876,7 +961,7 @@ function loadDdnsErrors() {
         // generic sentence above swallowing which of three reasons applies.
         if (d.status === 'skip') {
             return '<p class="small">' + escapeHtml(d.detail) +
-                (d.fix_url ? ' <a href="' + escapeHtml(d.fix_url) + '">Fix &rarr;</a>' : '') + '</p>';
+                (d.fix_url ? ' <a class="fix-link" href="' + escapeHtml(d.fix_url) + '">Fix &rarr;</a>' : '') + '</p>';
         }
         return '<p class="small">' + (STATUS_ICO[d.status] || '') + ' ' + escapeHtml(d.detail) + '</p>';
     });
@@ -921,20 +1006,26 @@ function updateStats() {
             if (!data.subnets) return;
 
             // Per-subnet cards
-            var totalActive = 0, totalDynamic = 0, totalReserved = 0;
+            // Q248 (V19): "reserved" counts LEASES (the active ones that are not dynamic); the reservations that exist are a count of their own, labeled "reservations"
+            var totalActive = 0, totalDynamic = 0, totalReserved = 0, totalReservations = 0;
             var totalPool = 0, totalUsed = 0, usedUnknown = false;
             Object.keys(data.subnets).forEach(function(id) {
                 var s = data.subnets[id];
+                var reservedLeases = Math.max(0, (s.active || 0) - (s.dynamic || 0));
+                var reservations = s.reservations || 0;
                 totalActive   += s.active   || 0;
                 totalDynamic  += s.dynamic  || 0;
-                totalReserved += s.reservations || 0;
+                totalReserved += reservedLeases;
+                totalReservations += reservations;
 
                 var activeEl = document.getElementById('stat-active-' + id);
                 var metaEl   = document.getElementById('stat-meta-'   + id);
+                var resEl    = document.getElementById('stat-res-'    + id);
                 var utilEl   = document.getElementById('util-'        + id);
                 var pctEl    = document.getElementById('util-pct-'    + id);
                 if (activeEl) activeEl.textContent = Number(s.active || 0).toLocaleString('en-US');
-                if (metaEl)   metaEl.textContent = 'Active leases · ' + Number(s.dynamic || 0).toLocaleString('en-US') + ' dynamic · ' + Number(s.reservations || 0).toLocaleString('en-US') + ' reserved';
+                if (metaEl)   metaEl.textContent = 'Active leases · ' + Number(s.dynamic || 0).toLocaleString('en-US') + ' dynamic · ' + Number(reservedLeases).toLocaleString('en-US') + ' reserved';
+                if (resEl)    resEl.textContent = Number(reservations).toLocaleString('en-US') + (reservations === 1 ? ' reservation' : ' reservations');
 
                 var poolSize = (data.pool_sizes && data.pool_sizes[id]) || POOL_SIZES[id] || 0;
                 totalPool += poolSize;
@@ -960,7 +1051,7 @@ function updateStats() {
             if (data.subnets6) {
                 Object.keys(data.subnets6).forEach(function(id) {
                     var s6 = data.subnets6[id];
-                    var meta = Number(s6.active || 0).toLocaleString('en-US') + ' active · ' + Number(s6.reserved || 0).toLocaleString('en-US') + ' reserved';
+                    var meta = Number(s6.active || 0).toLocaleString('en-US') + ' active · ' + Number(s6.reserved || 0).toLocaleString('en-US') + ((s6.reserved || 0) === 1 ? ' reservation' : ' reservations');
                     var active6El = document.getElementById('stat6-active-' + id);
                     var meta6El   = document.getElementById('stat6-meta-'   + id);
                     if (active6El) active6El.textContent = Number(s6.active || 0).toLocaleString('en-US');
@@ -977,6 +1068,8 @@ function updateStats() {
             if (ta) ta.textContent = Number(totalActive).toLocaleString('en-US');
             if (td) td.textContent = Number(totalDynamic).toLocaleString('en-US');
             if (tr) tr.textContent = Number(totalReserved).toLocaleString('en-US');
+            var trs = document.getElementById('total-reservations');
+            if (trs) trs.textContent = Number(totalReservations).toLocaleString('en-US');
             if (totalPool > 0 && usedUnknown) {
                 if (tp) tp.textContent = 'unavailable';
                 if (tf) tf.style.width = '0%';
@@ -1290,7 +1383,15 @@ function setRefreshInterval(ms) {
         .then(function(d) { applyDashPrefs(d); })
         .catch(function() {
             applyDashPrefs({v: 2, panels: [{id: 'subnet_stats', w: 'full'}, {id: 'recent_leases', w: 'full'}, {id: 'server_status', w: 'half'}], subnets: {order: [], pinned: [], hidden: []}, compact: false});
-        });
+        })
+        // Q248: asked in the same turn as the widgets the preferences just started, so it shares their Health run
+        .then(loadAttention);
+    // ... and again every five minutes while the page is in view and auto-refresh is not Off (the card of a dashboard left open must not go on saying what was true an hour ago)
+    setInterval(function() {
+        var sel = document.getElementById('refreshInterval');
+        if (document.hidden || (sel && sel.value === '0')) return;
+        loadAttention();
+    }, 300000);
 
     // Restore refresh interval
     var saved = '30000';

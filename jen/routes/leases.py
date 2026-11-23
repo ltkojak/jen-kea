@@ -22,9 +22,20 @@ from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 from jen.services.pools import parse_pool
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("leases", __name__)
+
+# Q248 (addition 5) - the two conditions the summary line's counts link to, each ONE MORE condition of the list's own query (fixed text; the one value is a parameter).
+#: "expires within the hour": the condition the summary has counted with since Q206, on the one clock every connection runs in (UTC)
+EXPIRING_SOON = "l.expire <= NOW() + INTERVAL 1 HOUR"
+#: "reserved": the lease's client has a reservation - what the summary's "N reserved" has counted since Q206 ...
+RESERVED_ANY = "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr)"
+#: ... in a subnet the caller may see (Q206, SP-1: a hidden subnet's reservation never changes a visible answer). The parameter is the caller's own subnet ids, "1,3".
+RESERVED_VISIBLE = (
+    "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND FIND_IN_SET(h.dhcp4_subnet_id, %s))"
+)
 
 
 def _JEN_VERSION():
@@ -45,6 +56,9 @@ def leases():
     minutes = request.args.get("minutes", "")
     search = __auth.sanitize_search(request.args.get("search", "").strip())
     show_expired = request.args.get("expired", "0") == "1"
+    # Q248 (addition 5): the two filters of the live list. The history has neither a count nor a mark for them, so it has neither filter.
+    reserved_only = request.args.get("reserved") == "1" and not show_expired
+    expiring_only = request.args.get("expiring") == "1" and not show_expired
     sort = request.args.get("sort", "expires")
     direction = request.args.get("dir", "desc")
     if direction not in ("asc", "desc"):
@@ -116,13 +130,26 @@ def leases():
                     where.append("(inet_ntoa(l.address) LIKE %s OR l.hostname LIKE %s OR HEX(l.hwaddr) LIKE %s)")
                     s = f"%{search}%"
                     params += [s, s, s.replace(":", "")]
+                # Q248 (addition 5): each filter is one more condition of this same `where` - inside the subnet restriction above, counted by the same COUNT, paged by
+                # the same LIMIT. "Reserved" asks about the hosts table, so it carries the caller's scope itself: a restricted account's filter matches a reservation
+                # only in a subnet it may see, which is what its "N reserved" counts.
+                if expiring_only:
+                    where.append(EXPIRING_SOON)
+                if reserved_only:
+                    if current_user.all_subnets:
+                        where.append(RESERVED_ANY)
+                    else:
+                        where.append(RESERVED_VISIBLE)
+                        params.append(
+                            ",".join(str(int(i)) for i in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+                        )
                 where_str = " AND ".join(where) if where else "1=1"
                 cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str}", params)
                 total = cur.fetchone()["cnt"]
                 if not show_expired and total:
                     # Q206 (AV4): the summary line says how many of THIS filtered set expire within the hour - the same `where`, one more condition, one clock (every connection runs in UTC)
                     cur.execute(
-                        f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str} AND l.expire <= NOW() + INTERVAL 1 HOUR",
+                        f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str} AND {EXPIRING_SOON}",
                         params,
                     )
                     expiring_soon = cur.fetchone()["cnt"]
@@ -137,7 +164,8 @@ def leases():
                            HEX(l.hwaddr) AS mac_hex, l.subnet_id, l.state,
                            l.expire,
                            (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained,
-                           l.expire AS expires
+                           l.expire AS expires,
+                           ({EXPIRING_SOON}) AS expires_soon
                     FROM lease4 l WHERE {where_str}
                     ORDER BY {sort_col} {direction}
                     {limit_clause}
@@ -175,6 +203,8 @@ def leases():
                         }
             for lease in leases_list:
                 lease["has_reservation"] = lease["mac"].replace(":", "").upper() in reserved_macs
+                # Q248 (addition 5): the row's "Reserved" mark is what the summary counts - a reservation the caller may see - never `has_reservation`, which reads them all
+                lease["reserved"] = lease["mac"].replace(":", "").upper() in reserved_visible
     except Exception as e:
         logger.error(f"Could not load leases: {e}")
         flash("Could not load leases. Check server logs for details.", "error")
@@ -205,6 +235,8 @@ def leases():
         "expiring_soon": expiring_soon,
         "reserved_count": len(reserved_visible),
         "minutes_applied": minutes_applied,
+        "reserved_only": reserved_only,
+        "expiring_only": expiring_only,
     }
     if request.headers.get("HX-Request") == "true" and request.headers.get("HX-History-Restore-Request") != "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the
@@ -310,7 +342,7 @@ def delete_stale_leases():
                 cur.execute(f"DELETE FROM lease4 WHERE {' AND '.join(where)}", params)
                 deleted = cur.rowcount
             db.commit()
-        flash(f"Deleted {deleted} expired/stale lease(s).", "success")
+        flash(f"Deleted {_plural(deleted, 'expired/stale lease')}.", "success")
         __user.audit("DELETE_STALE_LEASES", "leases", f"Deleted {deleted}")
     except Exception as e:
         logger.error(f"Error deleting stale leases: {e}")
@@ -419,7 +451,7 @@ def bulk_release_leases():
         return redirect(url_for("leases.leases"))
 
     flash(
-        f"Released {released} lease(s)." + (f" {errors} failed or skipped." if errors else ""),
+        f"Released {_plural(released, 'lease')}." + (f" {errors} failed or skipped." if errors else ""),
         "success" if errors == 0 else "warning",
     )
     __user.audit("BULK_RELEASE_LEASES", "leases", f"Released={released} Errors={errors} by {current_user.username}")

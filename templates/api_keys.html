@@ -3,6 +3,15 @@
 {% block content %}
 {% from '_icons.html' import icon_trash, icon_pause, icon_dots %}
 {% from '_settings_subtabs.html' import subtabs %}
+<style>
+    /* Q248 (V15) - the form was a row aligned to the BOTTOM: Key Name and Access sat low beside the tall subnet list with an empty block above them, and Generate Key hung
+       at the far right. A grid aligned to the top: Key Name and Access in the first column, Subnet Access in the second, the button under the fields at the left. */
+    .apikey-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 24px; align-items: start; max-width: 960px; }
+    .apikey-form .form-group { margin: 0; }
+    .apikey-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .apikey-submit { grid-column: 1 / -1; justify-self: start; }
+    @media screen and (max-width: 768px) { .apikey-form { grid-template-columns: minmax(0, 1fr); } }
+</style>
 <div class="page-header">
     <h1>{{ icon("key-round", "ico-lg") }} API Keys</h1>
     <p>Manage API keys for integrations with Home Assistant, Zabbix, and similar tools. A key reads unless you tick <em>Allow writes</em>.</p>
@@ -32,20 +41,22 @@
     <div class="card-header">
         <span class="card-title">Create New API Key</span>
     </div>
-    <form method="POST" action="/settings/api-keys/create" class="u-82d601"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group u-9e0402">
+    <form method="POST" action="/settings/api-keys/create" class="apikey-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="apikey-col">
+        <div class="form-group">
             <label for="f-name">Key Name</label>
             <input id="f-name" type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required aria-describedby="f-name-hint">
             <div class="form-hint" id="f-name-hint">A descriptive name so you know what this key is used for.</div>
         </div>
-        <div class="form-group" style="margin:0;min-width:160px;">
+        <div class="form-group">
             <label>Access</label>
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer;">
                 <input type="checkbox" name="can_write" value="1"> Allow writes
             </label>
             <div class="form-hint">Off = read-only. On = may create/delete reservations, edit device names and owners, and set subnet notes — within its subnet scope.</div>
         </div>
-        <div class="form-group u-9e0402">
+        </div>
+        <div class="form-group">
             <label id="f-subnet_ids-label">Subnet Access</label>
             {# Q247 (U9) - a list of checkboxes, not a multi-select a phone cannot extend: the same field name and values, so the route reads what it always read #}
             <div id="f-subnet_ids" class="check-list" role="group" tabindex="-1" aria-labelledby="f-subnet_ids-label" aria-describedby="f-subnet_ids-hint">
@@ -58,13 +69,13 @@
             </div>
             <div class="form-hint" id="f-subnet_ids-hint">
                 {% if can_grant_all_subnets %}
-                Tick the subnets this key may use. "All Subnets" = unrestricted. A key's access is set here, independent of who creates it.
+                Tick All Subnets for an unrestricted key, or the subnets this key may use - not both. With nothing ticked no key is created. A key's access is set here, independent of who creates it.
                 {% else %}
                 Tick one or more. Limited to the subnets your own account can access.
                 {% endif %}
             </div>
         </div>
-        <button type="submit" class="btn btn-primary u-49f14f">{{ icon("key-round") }} Generate Key</button>
+        <button type="submit" class="btn btn-primary apikey-submit">{{ icon("key-round") }} Generate Key</button>
     </form>
 </div>
 
@@ -115,17 +126,17 @@
             </td>
             <td data-m="trailing" class="u-49cd09">
                 <div class="action-menu">
-                    <input type="checkbox" id="am-key-{{ k.id }}" class="action-menu-toggle">
+                    <input type="checkbox" id="am-key-{{ k.id }}" class="action-menu-toggle" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="Actions for {{ k.name }}">
                     <label for="am-key-{{ k.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
-                    <div class="action-menu-dropdown">
+                    <div class="action-menu-dropdown" role="menu">
                         {% if k.active %}
                         <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="button" class="action-menu-item" data-confirm="Revoke this key? Any integrations using it will stop working.">{{ icon_pause() }}Revoke key</button>
+                            <button type="button" class="action-menu-item" role="menuitem" data-confirm="Revoke this key? Any integrations using it will stop working. This cannot be undone." data-confirm-label="Revoke">{{ icon_pause() }}Revoke key</button>
                         </form>
                         <div class="action-menu-divider"></div>
                         {% endif %}
                         <form method="POST" action="/settings/api-keys/delete/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="button" class="action-menu-item danger" data-confirm="Delete this key permanently?">{{ icon_trash() }}Delete key</button>
+                            <button type="button" class="action-menu-item danger" role="menuitem" data-confirm="Delete this key? This cannot be undone." data-confirm-label="Delete">{{ icon_trash() }}Delete key</button>
                         </form>
                     </div>
                 </div>
@@ -150,23 +161,4 @@
         You can see and manage only the API keys you've created yourself. A superadmin can see and manage every key.{% endif %}
     </p>
 </div>
-{% endblock %}
-{% block scripts %}
-// Q247 (U9) - "All Subnets" and a named subnet are one or the other: ticking a subnet unticks All (the route reads "all" beside
-// anything as unrestricted), and ticking All unticks the rest.
-(function() {
-    var box = document.getElementById('f-subnet_ids');
-    if (!box) return;
-    box.addEventListener('change', function(e) {
-        var t = e.target;
-        if (t === box || t.name !== 'subnet_ids') return;
-        if (t.checked) {
-            box.querySelectorAll('input[name="subnet_ids"]').forEach(function(c) {
-                if (c !== t && (t.value === 'all' || c.value === 'all')) c.checked = false;
-            });
-        }
-        // a field error is printed under the list itself: a change to any box in it ends the error the way a change to an input does
-        if (box.getAttribute('aria-invalid') === 'true') box.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-})();
 {% endblock %}

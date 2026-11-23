@@ -66,6 +66,7 @@ from jen.services import events as _events
 from jen.services import kea_api_config as _api
 from jen.services import kea_host as _host
 from jen.services.kea_authoring import conf_path_for as _conf_path_for
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 
@@ -752,7 +753,9 @@ def _run_change_unlocked(
 
         if committed:
             names = ", ".join(d.name for d in committed)
-            lines.append(("error", f"↩️ reverted {len(committed)} server(s) that had already been updated: {names}"))
+            lines.append(
+                ("error", f"↩️ reverted {_plural(len(committed), 'server')} that had already been updated: {names}")
+            )
         return ChangeSetResult("aborted", res.get("code", "error"), lines)
 
     # ── Phase 4: restart (every apply succeeded) ──────────────────────

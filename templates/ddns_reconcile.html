@@ -33,12 +33,11 @@
 <div class="card">
     <div class="card-header"><span class="card-title">Results — {{ total|number }} checked</span></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
-        <a href="?limit={{ limit }}" class="badge" style="{% if not verdict_filter %}background:var(--primary);color:white;{% endif %}">All ({{ total|number }})</a>
+        <a href="?limit={{ limit }}" class="badge{% if not verdict_filter %} badge-accent{% endif %}">All ({{ total|number }})</a>
         {% for v in verdicts %}
-        <a href="?limit={{ limit }}&verdict={{ v }}"
-           class="badge"
-           style="{% if verdict_filter == v %}background:var(--primary);color:white;{% elif v == 'ok' %}background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);{% elif v == 'multiple-a' %}background:var(--surface2);color:var(--text-muted);{% else %}background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning);{% endif %}">
-            {{ v }} ({{ counts.get(v, 0) }})
+        <a href="?limit={{ limit }}&verdict={{ v }}" title="{{ v }}"
+           class="badge {% if verdict_filter == v %}badge-accent{% elif v == 'ok' %}badge-reserved{% elif v == 'multiple-a' %}badge-muted{% else %}badge-warning{% endif %}">
+            {{ verdict_labels.get(v, v) }} ({{ counts.get(v, 0) }})
         </a>
         {% endfor %}
         <a href="/ddns/reconcile?format=csv&limit={{ limit }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}" class="btn btn-secondary btn-sm u-6d0006">{{ icon("download") }} Export CSV</a>
@@ -47,7 +46,7 @@
     {% if not results %}
     <div class="u-c92bea">
         {% if total == 0 %}No reservations or active leases with a hostname to check.
-        {% else %}No rows match the "{{ verdict_filter }}" filter.{% endif %}
+        {% else %}No rows match the "{{ verdict_labels.get(verdict_filter, verdict_filter) }}" filter.{% endif %}
     </div>
     {% else %}
     <div class="table-wrap">
@@ -72,13 +71,15 @@
             <td class="mono hide-tablet" data-m="hide">{{ r.expected_ptr }}</td>
             <td class="mono hide-tablet" data-m="hide">{{ r.observed_ptr or '—' }}</td>
             <td data-m="badge">
-                {% if r.verdict == 'ok' %}<span class="badge" style="background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);">✓ ok</span>
-                {% elif r.verdict == 'multiple-a' %}<span class="badge u-d6f005"  title="Several A records can be intentional — review, don't assume it's wrong">{{ r.verdict }}</span>
-                {% else %}<span class="badge u-9741b3">{{ r.verdict }}</span>{% endif %}
+                {% if r.verdict == 'ok' %}<span class="badge badge-reserved">✓ {{ verdict_labels.get('ok', 'ok') }}</span>
+                {% elif r.verdict == 'multiple-a' %}<span class="badge u-d6f005"  title="Several A records can be intentional — review, don't assume it's wrong">{{ verdict_labels.get(r.verdict, r.verdict) }}</span>
+                {% else %}<span class="badge badge-warning" title="{{ r.verdict }}">{{ verdict_labels.get(r.verdict, r.verdict) }}</span>{% endif %}
             </td>
             <td data-m="secondary">
                 {% if r.verdict != 'ok' %}
-                <a href="/reservations?search={{ r.ip }}" class="u-6cb285">Fix in Kea</a>
+                {# Q248 (V29): the link says where it goes - Jen's own list, searched by the row's address. It used to promise a fix in Kea, under a page that says nothing here is written to Kea. #}
+                {% if r.source == 'lease' %}<a href="/leases?search={{ r.ip|urlencode }}" class="u-6cb285">Open Lease</a>
+                {% else %}<a href="/reservations?search={{ r.ip|urlencode }}" class="u-6cb285">Open Reservation</a>{% endif %}
                 {% if current_user.all_subnets %}
                 &nbsp;·&nbsp;
                 <a href="/ddns?tab=verify&hostname={{ r.name|urlencode }}&ip={{ r.ip|urlencode }}" class="u-6cb285">re-verify</a>

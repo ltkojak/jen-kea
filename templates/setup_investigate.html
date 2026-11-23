@@ -8,19 +8,21 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card u-834fcd">
+<div class="card u-834fcd setup-card">
     {% if leases %}
-    <table class="table">
+    {# Q248 (V16): on a phone the six columns were 632 px inside a 390 px screen and Investigate, the page's one action, was cut off. The rowlist pattern (docs/ui.md):
+       the address and the button on line one, the name, MAC and subnet under them. #}
+    <table class="table rowlist">
         <thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Subnet</th><th>Obtained</th><th></th></tr></thead>
         <tbody>
         {% for l in leases %}
         <tr>
-            <td class="mono">{{ l.ip }}</td>
-            <td>{{ l.hostname | hostname or "—" }}</td>
-            <td class="mono">{{ l.mac }}</td>
-            <td>{{ l.subnet_name }}</td>
-            <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
-            <td>
+            <td class="mono" data-m="primary">{{ l.ip }}</td>
+            <td data-m="secondary">{{ l.hostname | hostname or "—" }}</td>
+            <td class="mono" data-m="secondary">{{ l.mac }}</td>
+            <td data-m="secondary">{{ l.subnet_name }}</td>
+            <td class="mono u-5872de" data-m="hide">{{ l.obtained|utctime }}</td>
+            <td data-m="trailing">
                 <form method="POST" action="/setup/investigate/visit">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="mac" value="{{ l.mac }}">
@@ -33,10 +35,6 @@
     </table>
     {% else %}
     <p class="u-c92bea">No active leases yet — once a client picks one up, it'll show here.</p>
-    <form method="POST" action="/setup/investigate/visit">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-primary">Finish setup</button>
-    </form>
     {% endif %}
 
     {% if all_resolved %}
@@ -45,5 +43,6 @@
         {% if elapsed_seconds is not none %} — took {{ (elapsed_seconds // 60)|plural('minute') }}{% endif %}.
     </div>
     {% endif %}
+    {% include "_setup_nav.html" %}
 </div>
 {% endblock %}

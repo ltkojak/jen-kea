@@ -10,6 +10,14 @@
 .sp-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
 .sp-dialog{width:min(460px,94vw);max-height:90vh;overflow-y:auto}
 .sp-hidden{display:none}
+{% if not switches %}
+/* v1.1.6 - the card of first steps, shown in place of the list of switches while there is none */
+.first-run h3{font-size:15px;margin-bottom:12px}
+.first-run ol{padding-left:22px}
+.first-run li{margin-bottom:10px;line-height:1.6}
+.first-run li:last-child{margin-bottom:0}
+.first-run .btn{margin-left:8px}
+{% endif %}
 </style>
 
 <div class="page-header flex items-center between wrap gap-3">
@@ -18,7 +26,7 @@
         <p>Which switch port is this MAC on? Polls managed switches' MAC tables over SNMP.</p>
     </div>
     {% if is_admin %}
-    <button id="sp-add-btn" class="btn btn-primary">{{ icon("plus") }} Add Switch</button>
+    <button type="button" id="sp-add-btn" class="btn btn-primary sp-add-open">{{ icon("plus") }} Add Switch</button>
     {% endif %}
 </div>
 
@@ -26,6 +34,9 @@
 <div class="alert alert-info">{{ icon("info") }} Switch Port Locator tracks IPv4-identified MACs only.</div>
 {% endif %}
 
+{# v1.1.6 - Locate has nothing to search until a switch exists, so it is not drawn then. A MAC that was asked for (the
+   "Find switch port" action on a lease, a reservation or a device, or a typed address) still gets its answer. #}
+{% if switches or query_mac %}
 <div class="card">
     <form method="GET" action="{{ url_for('switchport.index') }}" class="flex gap-2 items-center wrap">
         <input type="text" name="mac" value="{{ query_mac }}" placeholder="aa:bb:cc:dd:ee:ff" class="mono sp-mac-input" autocomplete="off">
@@ -48,6 +59,7 @@
         {% endif %}
     {% endif %}
 </div>
+{% endif %}
 
 {% for s in switches %}
 <div class="card">
@@ -115,7 +127,17 @@
 </div>
 {% endfor %}
 {% if not switches %}
-<div class="card center muted">No switches configured yet. {% if is_admin %}Add one above.{% endif %}</div>
+{# v1.1.6 - no switch yet: the first steps, in place of a one-line empty card #}
+<div class="card first-run">
+    <h3>Getting started</h3>
+    <ol>
+        <li>Add a switch: a name, its address and its SNMP community (SNMPv2c; read-only is enough).
+            {% if is_admin %}<button type="button" class="btn btn-sm btn-primary sp-add-open">{{ icon("plus") }} Add Switch</button>
+            {% else %}<span class="muted">Adding a switch needs an admin.</span>{% endif %}</li>
+        <li>Jen then polls each switch's MAC table over SNMP every 10 minutes and shows here which port a MAC is on.</li>
+        <li>Its alert, "Switch Port: device moved", is set under {% if is_admin %}<a href="/settings/alerts">Settings - Alerts</a>{% else %}Settings - Alerts{% endif %}: tick it on the channels that should get it.</li>
+    </ol>
+</div>
 {% endif %}
 
 {% if is_admin %}
@@ -166,7 +188,10 @@ function _spModal(id, show) {
     document.getElementById(id).style.display = show ? 'flex' : 'none';
 }
 {% if is_admin %}
-document.getElementById('sp-add-btn').addEventListener('click', function() { _spModal('sp-add-modal', true); });
+// the header's button and, on a page with no switch yet, the one in the first step
+document.querySelectorAll('.sp-add-open').forEach(function(btn) {
+    btn.addEventListener('click', function() { _spModal('sp-add-modal', true); });
+});
 document.getElementById('sp-add-close-btn').addEventListener('click', function() { _spModal('sp-add-modal', false); });
 document.getElementById('sp-add-cancel-btn').addEventListener('click', function() { _spModal('sp-add-modal', false); });
 document.getElementById('sp-add-modal').addEventListener('click', function(e) { if (e.target === this) _spModal('sp-add-modal', false); });

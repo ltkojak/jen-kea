@@ -1,4 +1,4 @@
-{% from '_hostname.html' import hostname_or_none %}
+{% from '_hostname.html' import hostname_clip %}
 {# Q206 (AV4): the count lives in the swap, so a filter change updates it #}
 <p class="results-summary">{{ total|plural('reservation') }}</p>
 <div class="card u-41d7d7">
@@ -14,7 +14,7 @@
     <tbody>
     {% for h in hosts6 %}
     <tr>
-        <td data-m="primary">{{ hostname_or_none(h.hostname) }}</td>
+        <td data-m="primary">{{ hostname_clip(h.hostname) }}</td>
         <td class="hide-mobile u-bca09b"  data-m="hide">{{ h.duid_hex or '—' }}</td>
         <td data-m="secondary">
             {% for r in h.reservations %}
@@ -30,7 +30,7 @@
         {% if current_user.role in ('superadmin','admin') %}
         <td data-m="trailing">
             <form method="POST" action="/reservations/delete6" class="u-cccfa4"
-                  data-confirm="Delete the IPv6 reservation for DUID {{ h.duid_hex }}? This cannot be undone.">
+                  data-confirm="Delete the IPv6 reservation for DUID {{ h.duid_hex }}? This cannot be undone." data-confirm-label="Delete">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="subnet_id" value="{{ h.subnet_id }}">
                 <input type="hidden" name="duid" value="{{ h.duid_hex }}">

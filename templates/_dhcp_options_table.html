@@ -31,7 +31,7 @@
             <td class="u-492c8f">
                 {{ r.name }}
                 {% if r.custom %}<span class="badge u-d6f005">custom</span>{% endif %}
-                {% if r.managed %}<span class="badge u-5fdac8"  title="Owned by the Edit Subnet form">managed by Edit form</span>{% endif %}
+                {% if r.managed %}<span class="badge badge-warning" title="Owned by the Edit Subnet form">managed by Edit form</span>{% endif %}
             </td>
             <td  class="mono u-6259b6">{{ r.data }}</td>
             <td style="padding:6px;white-space:nowrap;">
@@ -39,7 +39,7 @@
                 <a href="/subnets/edit/{{ key }}" class="btn btn-sm btn-secondary">Edit form →</a>
                 {% else %}
                 <form method="POST" action="{{ url_for('subnets.dhcp_options_remove') }}" class="u-cccfa4"
-                      data-confirm="Remove {{ r.name }} (code {{ r.code }}) from this level? Kea restarts.">
+                      data-confirm="Remove {{ r.name }} (code {{ r.code }}) from this level? Kea restarts." data-confirm-label="Remove">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="level" value="{{ level }}">
                     <input type="hidden" name="key" value="{{ key }}">

@@ -82,6 +82,7 @@ class TestUserManagement:
                 "username": "testuser",
                 "password": "testpass123",
                 "role": "viewer",
+                "subnet_ids": ["all"],
             },
             follow_redirects=True,
         )
@@ -97,7 +98,13 @@ class TestUserManagement:
         """Q215: `/users/add` refuses a timeout the way edit and set-timeout do. It used to create the account on the global timeout without a word, so the person who typed 9999 believed it applied."""
         r = logged_in_client.post(
             "/users/add",
-            data={"username": "badtimeout", "password": "testpass123", "role": "viewer", "timeout": timeout},
+            data={
+                "username": "badtimeout",
+                "password": "testpass123",
+                "role": "viewer",
+                "timeout": timeout,
+                "subnet_ids": ["all"],
+            },
             follow_redirects=True,
         )
         assert r.status_code == 200 and b"Timeout must be 1" in r.data
@@ -109,7 +116,13 @@ class TestUserManagement:
         for name, timeout, expected in (("okminutes", "45", 45), ("noneblank", "", None)):
             logged_in_client.post(
                 "/users/add",
-                data={"username": name, "password": "testpass123", "role": "viewer", "timeout": timeout},
+                data={
+                    "username": name,
+                    "password": "testpass123",
+                    "role": "viewer",
+                    "timeout": timeout,
+                    "subnet_ids": ["all"],
+                },
                 follow_redirects=True,
             )
             db.commit()  # a fresh read view: the connection is REPEATABLE READ with autocommit off, and the route committed on another connection
@@ -141,7 +154,9 @@ class TestUserManagement:
         db.commit()
         # Try to create same user via route
         r = logged_in_client.post(
-            "/users/add", data={"username": "dupuser", "password": "pass456", "role": "viewer"}, follow_redirects=True
+            "/users/add",
+            data={"username": "dupuser", "password": "pass456", "role": "viewer", "subnet_ids": ["all"]},
+            follow_redirects=True,
         )
         assert r.status_code == 200
         # Should still only have 1 dupuser
@@ -351,7 +366,7 @@ class TestOidcUsersPage:
         user_id = self._seed_oidc_user(db, role="admin")
         r = logged_in_client.post(
             f"/users/edit/{user_id}",
-            data={"role": "viewer", "timeout": ""},
+            data={"role": "viewer", "timeout": "", "subnet_ids": ["all"]},
             follow_redirects=True,
         )
         assert r.status_code == 200
@@ -366,7 +381,12 @@ class TestOidcUsersPage:
             before = cur.fetchone()["password"]
         logged_in_client.post(
             f"/users/edit/{user_id}",
-            data={"role": "admin", "new_password": "brandnewpass123", "confirm_password": "brandnewpass123"},
+            data={
+                "role": "admin",
+                "new_password": "brandnewpass123",
+                "confirm_password": "brandnewpass123",
+                "subnet_ids": ["all"],
+            },
             follow_redirects=True,
         )
         with db.cursor() as cur:

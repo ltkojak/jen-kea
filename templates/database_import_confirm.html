@@ -1,17 +1,21 @@
 {% extends "base.html" %}
 {% block title %}Confirm Import{% endblock %}
 {% block content %}
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
     <h1>{{ icon("upload", "ico-lg") }} Confirm Import</h1>
     <p>Review what's in this file before anything is changed.</p>
 </div>
+
+{# Q248 (V38): the tabs of Databases, with Import current #}
+{{ subtabs(nav.subtabs['databases'], 'import') }}
 
 <!-- Big clear DB label -->
 <div class="card" style="border-left:6px solid {% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};margin-bottom:20px;">
     <div class="u-95fd83">
         <span style="font-size:32px;">{% if meta.database == 'jen' %}{{ icon("circle", "ico-dot ico-success") }}{% else %}{{ icon("circle", "ico-dot ico-warning") }}{% endif %}</span>
         <div>
-            <div style="font-size:18px;font-weight:700;color:{% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};">
+            <div style="font-size:18px;font-weight:700;color:{% if meta.database == 'jen' %}var(--primary-ink){% else %}var(--warning-ink){% endif %};">
                 This is a <strong>{{ meta.database | upper }} DATABASE</strong> export
             </div>
             <div style="font-size:13px;color:var(--text-muted);margin-top:4px;">
@@ -71,7 +75,7 @@
                 <label class="u-dbfa94">
                     <input type="checkbox" name="tables" value="{{ tbl }}" checked>
                     <code>{{ tbl }}</code>
-                    {% if tbl == 'users' %}<span style="color:var(--danger);font-size:10px;"> {{ icon("triangle-alert") }} will overwrite accounts</span>{% endif %}
+                    {% if tbl == 'users' %}<span style="color:var(--danger-ink);font-size:10px;"> {{ icon("triangle-alert") }} will overwrite accounts</span>{% endif %}
                 </label>
                 {% endfor %}
             </div>

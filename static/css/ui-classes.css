@@ -2,7 +2,7 @@
    v5.53.0 (Q60): the static inline styles that used to sit on individual elements. Each rule
    doubles its selector so it keeps the precedence the inline style had over one-class rules.
    New markup should use the tokens and utilities in base.html (docs/ui.md), not add classes here. */
-.u-0051c0.u-0051c0{color:var(--warning);font-size:12px}
+.u-0051c0.u-0051c0{color:var(--warning-ink);font-size:12px}
 .u-012c80.u-012c80{margin-top:12px;display:flex;gap:8px;align-items:center}
 .u-0131c8.u-0131c8{font-size:13px;white-space:nowrap}
 .u-015a5e.u-015a5e{display:flex;align-items:center;gap:8px}
@@ -11,7 +11,6 @@
 .u-02dd14.u-02dd14{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
 .u-046678.u-046678{width:100%}
 .u-054de4.u-054de4{font-size:12px;color:var(--text-muted);margin-bottom:8px}
-.u-08a316.u-08a316{background:color-mix(in srgb, var(--danger) 18%, transparent);color:var(--danger)}
 .u-08e866.u-08e866{padding:8px;margin:0}
 .u-0ebced.u-0ebced{font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
 .u-0fd874.u-0fd874{max-width:420px}
@@ -21,7 +20,7 @@
 .u-12c424.u-12c424{font-family:monospace;margin-top:6px}
 .u-138602.u-138602{color:var(--text-muted);text-align:center;padding:12px}
 .u-150502.u-150502{text-align:right;padding:4px 8px}
-.u-15f77e.u-15f77e{margin-top:4px;font-size:10px;color:var(--warning)}
+.u-15f77e.u-15f77e{margin-top:4px;font-size:10px;color:var(--warning-ink)}
 .u-160b06.u-160b06{font-weight:600;font-size:13px}
 .u-17bb92.u-17bb92{width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8)}
 .u-18b307.u-18b307{padding:8px;white-space:nowrap}
@@ -57,7 +56,6 @@
 .u-3de8f9.u-3de8f9{display:flex;gap:8px;flex-wrap:wrap}
 .u-3ed0d2.u-3ed0d2{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap}
 .u-3efc98.u-3efc98{display:flex;gap:10px}
-.u-3f3a6c.u-3f3a6c{white-space:pre-wrap;word-break:break-all}
 .u-400bbf.u-400bbf{font-size:9px;color:var(--text-muted)}
 .u-41ccf8.u-41ccf8{font-size:9px;padding:1px 5px}
 .u-41d7d7.u-41d7d7{padding:0}
@@ -70,34 +68,33 @@
 .u-46cec8.u-46cec8{margin-left:4px}
 .u-48a0d2.u-48a0d2{max-width:680px}
 .u-492c8f.u-492c8f{padding:6px}
-.u-497726.u-497726{color:var(--danger)}
+.u-497726.u-497726{color:var(--danger-ink)}
 .u-49cd09.u-49cd09{display:flex;gap:6px}
 .u-49f14f.u-49f14f{margin-bottom:20px}
 .u-4a724c.u-4a724c{max-width:360px}
 .u-4e420a.u-4e420a{margin-bottom:6px}
 .u-4ff818.u-4ff818{font-size:18px}
 .u-503124.u-503124{font-size:13px;color:var(--text-muted);margin-bottom:16px}
-.u-52df2b.u-52df2b{color:var(--warning)}
+.u-52df2b.u-52df2b{color:var(--warning-ink)}
 .u-5694e6.u-5694e6{color:var(--text-muted);font-size:11px}
 .u-56f435.u-56f435{margin-top:12px}
 .u-581be4.u-581be4{width:90px}
 .u-5872de.u-5872de{color:var(--text-muted)}
 .u-58b17f.u-58b17f{font-size:13px;color:var(--text-muted)}
 .u-59eddc.u-59eddc{flex:1;min-width:0}
-.u-5a4529.u-5a4529{color:var(--success)}
+.u-5a4529.u-5a4529{color:var(--success-ink)}
 .u-5d8d64.u-5d8d64{color:var(--text-muted);font-weight:400}
 .u-5d9b49.u-5d9b49{font-size:11px;color:var(--text-muted);margin-top:3px}
 .u-5dd2a6.u-5dd2a6{margin-left:8px}
 .u-5e0faa.u-5e0faa{font-size:13px}
 .u-5f0ff9.u-5f0ff9{background:var(--surface2);padding:2px 6px;border-radius:3px}
 .u-5f26fb.u-5f26fb{padding:4px 8px;font-size:12px}
-.u-5fdac8.u-5fdac8{background:var(--surface2);color:var(--warning)}
 .u-6125e5.u-6125e5{font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px}
 .u-6259b6.u-6259b6{padding:6px;word-break:break-all}
 .u-6745f5.u-6745f5{font-size:22px;line-height:1}
 .u-69957c.u-69957c{display:flex;justify-content:space-between;align-items:flex-start}
 .u-69be76.u-69be76{padding:16px 20px 12px}
-.u-69cda4.u-69cda4{color:var(--warning);font-weight:600}
+.u-69cda4.u-69cda4{color:var(--warning-ink);font-weight:600}
 .u-6be0d8.u-6be0d8{text-align:left}
 .u-6be502.u-6be502{margin:0;padding-left:20px;font-size:13px}
 .u-6caa47.u-6caa47{border-color:var(--border);margin:18px 0}
@@ -140,7 +137,6 @@
 .u-95cc13.u-95cc13{width:100%;font-size:13px}
 .u-95fd83.u-95fd83{display:flex;align-items:center;gap:12px}
 .u-96ad60.u-96ad60{margin-top:4px}
-.u-9741b3.u-9741b3{background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning)}
 .u-97445a.u-97445a{flex:1}
 .u-9aa3cd.u-9aa3cd{font-size:20px;font-weight:700;color:var(--primary)}
 .u-9b96ce.u-9b96ce{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
@@ -172,7 +168,7 @@
 .u-bbc1fe.u-bbc1fe{max-width:120px}
 .u-bca09b.u-bca09b{font-family:monospace;font-size:12px}
 .u-bd72d7.u-bd72d7{font-size:12px;color:var(--text-muted);margin-top:4px}
-.u-be83f6.u-be83f6{border:1px solid var(--danger);color:var(--danger);background:transparent}
+.u-be83f6.u-be83f6{border:1px solid var(--danger);color:var(--danger-ink);background:transparent}
 .u-bf5dd8.u-bf5dd8{font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px}
 .u-c00d39.u-c00d39{margin-top:3px}
 .u-c046bf.u-c046bf{background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;border:1px solid var(--border);overflow-x:auto;white-space:pre-wrap;word-break:break-all}
@@ -180,7 +176,6 @@
 .u-c0a2eb.u-c0a2eb{font-size:13px;color:var(--text-muted);margin-bottom:14px}
 .u-c1fafc.u-c1fafc{margin:6px 0}
 .u-c2569f.u-c2569f{font-size:24px;font-weight:700}
-.u-c4d0b1.u-c4d0b1{background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1}
 .u-c55bdf.u-c55bdf{font-size:8px;padding:0 4px;background:var(--surface2);color:var(--text-muted)}
 .u-c5c798.u-c5c798{cursor:pointer;color:var(--text-muted)}
 .u-c61833.u-c61833{color:var(--text-muted);white-space:nowrap}
@@ -196,13 +191,13 @@
 .u-d46224.u-d46224{margin-top:0}
 .u-d53a7a.u-d53a7a{padding:24px;max-width:640px}
 .u-d579dc.u-d579dc{max-width:100px}
-.u-d5881b.u-d5881b{color:var(--success);font-size:12px}
+.u-d5881b.u-d5881b{color:var(--success-ink);font-size:12px}
 .u-d6f005.u-d6f005{background:var(--surface2);color:var(--text-muted)}
 .u-d6f2af.u-d6f2af{margin-top:14px}
 .u-d77151.u-d77151{font-weight:600;margin-bottom:8px}
 .u-d7df59.u-d7df59{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px;border-radius:6px;cursor:pointer;min-width:52px;border:1px solid var(--border)}
 .u-d8c022.u-d8c022{padding:8px 0}
-.u-d92d40.u-d92d40{font-size:12px;color:var(--success)}
+.u-d92d40.u-d92d40{font-size:12px;color:var(--success-ink)}
 .u-da12f2.u-da12f2{margin-bottom:12px}
 .u-db4728.u-db4728{background:var(--surface2);padding:1px 6px;border-radius:3px}
 .u-dbfa94.u-dbfa94{font-size:12px;cursor:pointer}
@@ -231,7 +226,6 @@
 .u-fdc279.u-fdc279{margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px}
 .u-fdf33f.u-fdf33f{margin-bottom:8px}
 .u-fe7b49.u-fe7b49{margin-top:6px}
-.u-ff2ba4.u-ff2ba4{width:100%;min-height:90px}
 .u-ffd20f.u-ffd20f{align-self:flex-end}
 @media screen and (max-width:768px){
 .u-911b26.u-911b26{grid-template-columns:1fr}

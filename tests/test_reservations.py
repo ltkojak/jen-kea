@@ -307,7 +307,8 @@ class TestAddReservationAddressMustBeInSubnet:
             data={"subnet_id": "1", "mac": "aa:bb:cc:dd:ee:ff", "ip": "192.0.2.50", "hostname": "x"},
         )
         assert r.status_code == 400
-        assert calls == []
+        # Q248: the form drawn again shows the subnet's pools, which is one read of Kea's configuration; the write is what Kea must never see
+        assert [c for c in calls if c != "config-get"] == []
 
     def test_an_address_inside_the_subnet_is_never_refused_on_this_ground(
         self, logged_in_client, mock_kea_reservations

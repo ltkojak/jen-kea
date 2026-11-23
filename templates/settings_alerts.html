@@ -7,7 +7,7 @@
     <p>Notification channels, thresholds and templates — plus the Prometheus hook. Delivery history is under <a href="/settings/logs?tab=alerts">Logs → Alert log</a>.</p>
 </div>
 
-{% set toc = [('al-global', 'Thresholds'), ('al-channels', 'Channels'), ('al-templates', 'Templates'), ('al-metrics', 'Prometheus')] %}
+{% set toc = [('al-global', 'Global Alert Settings'), ('al-channels', 'Alert Channels'), ('al-templates', 'Message Templates'), ('al-metrics', 'Prometheus Metrics')] %}
 {% include '_card_toc.html' %}
 
 <div class="settings-cols">
@@ -28,8 +28,10 @@
             </div>
             <div class="form-group">
                 <label for="f-summary_time">Daily Summary Time</label>
-                <input id="f-summary_time" type="time" name="summary_time" value="{{ summary_time }}" class="u-7a96d9" aria-describedby="f-summary_time-hint">
-                <div class="form-hint" id="f-summary_time-hint">Time to send the daily summary, in UTC (HH:MM)</div>
+                {# Q248 (V40): a text field for a 24-hour time. The browser's own time control was drawn unlike every other field and showed "07:00 AM" under help that says UTC and HH:MM;
+                   the route refuses anything that is not HH:MM beside this field and saves nothing. #}
+                <input id="f-summary_time" type="text" inputmode="numeric" name="summary_time" value="{{ summary_time }}" pattern="([01][0-9]|2[0-3]):[0-5][0-9]" placeholder="07:00" maxlength="5" autocomplete="off" title="A 24-hour time as HH:MM, for example 07:00" class="u-7a96d9" aria-describedby="f-summary_time-hint">
+                <div class="form-hint" id="f-summary_time-hint">When the daily summary is sent: a 24-hour time in UTC, as HH:MM (for example 07:00 or 18:30)</div>
             </div>
             <div class="form-group">
                 <label for="f-reserved_lease_mode">Reserved Device Notifications</label>
@@ -82,21 +84,21 @@ var JEN_CHANNELS = {
                 {% if ch.enabled %}
                 <span class="badge badge-reserved">Enabled</span>
                 {% else %}
-                <span class="badge u-9741b3">Disabled</span>
+                <span class="badge badge-warning">Disabled</span>
                 {% endif %}
             </div>
             <div class="action-menu">
-                <input type="checkbox" id="am-chan-{{ ch.id }}" class="action-menu-toggle">
+                <input type="checkbox" id="am-chan-{{ ch.id }}" class="action-menu-toggle" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="Actions for {{ ch.channel_name }}">
                 <label for="am-chan-{{ ch.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
-                <div class="action-menu-dropdown">
+                <div class="action-menu-dropdown" role="menu">
                     <form method="POST" action="/settings/alerts/test-channel/{{ ch.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="action-menu-item">{{ icon_test() }}Send test</button>
+                        <button type="submit" class="action-menu-item" role="menuitem">{{ icon_test() }}Send test</button>
                     </form>
-                    <button type="button" class="action-menu-item edit-channel-btn"
+                    <button type="button" class="action-menu-item edit-channel-btn" role="menuitem"
                         data-id="{{ ch.id }}">{{ icon_edit() }}Edit channel</button>
                     <div class="action-menu-divider"></div>
-                    <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" data-confirm="Delete this alert channel?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Delete channel</button>
+                    <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" data-confirm="Delete this alert channel? This cannot be undone." data-confirm-label="Delete"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="action-menu-item danger" role="menuitem">{{ icon_trash() }}Delete channel</button>
                     </form>
                 </div>
             </div>
@@ -165,12 +167,12 @@ var JEN_CHANNELS = {
                 <input type="hidden" name="alert_type" value="{{ atype }}">
                 <textarea name="template_text" rows="3" aria-label="{{ label }} message template" class="al-tpl-text">{{ tpl }}</textarea>
                 <div class="al-tpl-actions">
-                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                    <button type="submit" class="btn btn-sm btn-primary">Save Template</button>
                 </div>
             </form>
             <form method="POST" action="/settings/alerts/reset-template" class="al-tpl-reset"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="alert_type" value="{{ atype }}">
-                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template?">Reset to default</button>
+                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template? This cannot be undone." data-confirm-label="Reset">Reset to default</button>
             </form>
         </div>
     </details>
@@ -196,12 +198,12 @@ var JEN_CHANNELS = {
                 <input type="hidden" name="alert_type" value="{{ atype }}">
                 <textarea name="template_text" rows="3" aria-label="{{ label }} message template" class="al-tpl-text">{{ tpl }}</textarea>
                 <div class="al-tpl-actions">
-                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                    <button type="submit" class="btn btn-sm btn-primary">Save Template</button>
                 </div>
             </form>
             <form method="POST" action="/settings/alerts/reset-template" class="al-tpl-reset"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="alert_type" value="{{ atype }}">
-                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template?">Reset to default</button>
+                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template? This cannot be undone." data-confirm-label="Reset">Reset to default</button>
             </form>
         </div>
     </details>
@@ -237,7 +239,7 @@ var JEN_CHANNELS = {
             </div>
 
             <div class="form-group">
-                <label class="u-015a5e">
+                <label class="check-label u-015a5e">
                     <input type="checkbox" name="enabled" id="channelEnabled"> Enable this channel
                 </label>
             </div>
@@ -261,7 +263,7 @@ var JEN_CHANNELS = {
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-smtp_host">SMTP Host</label>
-                        <input id="f-smtp_host" type="text" name="smtp_host" placeholder="smtp.gmail.com">
+                        <input id="f-smtp_host" type="text" name="smtp_host" placeholder="smtp.gmail.com" autocapitalize="off" spellcheck="false">
                     </div>
                     <div class="form-group">
                         <label for="f-smtp_port">SMTP Port</label>
@@ -289,12 +291,12 @@ var JEN_CHANNELS = {
                     </div>
                 </div>
                 <div class="form-group">
-                    <label class="u-015a5e">
+                    <label class="check-label u-015a5e">
                         <input type="checkbox" name="use_tls" id="f-use_tls" checked> Use STARTTLS
                     </label>
                 </div>
                 <div class="form-group">
-                    <label class="u-015a5e">
+                    <label class="check-label u-015a5e">
                         <input type="hidden" name="tls_verify_shown" value="1"><input type="checkbox" name="tls_verify" id="f-tls_verify" checked aria-describedby="f-tls_verify-hint"> Verify the server's certificate
                     </label>
                     <div class="form-hint" id="f-tls_verify-hint">With STARTTLS on, Jen checks the SMTP server's certificate and name before it sends the password. Untick this only for a server whose certificate cannot be verified, such as a self-signed one. Without STARTTLS the user name and password travel in clear text.</div>

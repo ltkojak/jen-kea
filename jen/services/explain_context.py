@@ -44,6 +44,7 @@ from jen.services import explain_inputs as _inputs
 from jen.services import kea_log_inputs as _li
 from jen.services import log_tail as _log_tail
 from jen.services import pools as _pools
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +475,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     if not_checked:
         view["not_checked"] = not_checked
         if view.get("state") == "error" and not view.get("transaction"):
-            view["message"] = f"{len(not_checked)} server(s) could not be checked in time. " + (
+            view["message"] = f"{_plural(len(not_checked), 'server')} could not be checked in time. " + (
                 view.get("message") or ""
             )
     if len(_log_cache) > 256:
@@ -493,9 +494,10 @@ def clear_log_cache() -> None:
     _log_tail.clear()  # the shared 3 s read below this per-MAC cache (v5.68.0-beta.17, Q152)
 
 
-def run(cfg, built: dict, *, subnet_id, lease, reservations, accessible_ids=None) -> dict:
+def run(cfg, built: dict, *, subnet_id, lease, reservations, accessible_ids=None, lease_subnet_name=None) -> dict:
     """explain() with the lookups wired: the client and class list from `explain_inputs.build()`, the pool and holder
-    lookups bound to this caller's scope."""
+    lookups bound to this caller's scope. `lease_subnet_name` (Q248, V20): the name of the lease's subnet, passed only for a
+    subnet the caller may see."""
     return _explain.explain(
         cfg,
         built["client"],
@@ -505,6 +507,7 @@ def run(cfg, built: dict, *, subnet_id, lease, reservations, accessible_ids=None
         assigned_classes=built["assigned"],
         pool_used=pool_used,
         holder_of=lambda ip, mac: holder_of(ip, mac, accessible_ids),
+        lease_subnet_name=lease_subnet_name,
     )
 
 

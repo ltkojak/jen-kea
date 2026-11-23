@@ -1,31 +1,52 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="{{ theme_default if theme_default is defined else 'dark' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Error {{ code }} — Jen</title>
+    <title>{{ "Page not found" if code == 404 else "Error " ~ code }} — Jen</title>
     <link rel="icon" href="/favicon.ico">
     <style>
-        :root[data-theme="dark"] { color-scheme: dark; --bg:#0d0d0d; --surface:#141414; --border:#2a2a2a; --text:#e0e0e0; --text-muted:#666; --primary:#00b4d8; --danger:#e74c3c; --radius:6px; }
-        :root[data-theme="light"] { color-scheme: light; --bg:#f0f2f5; --surface:#ffffff; --border:#dee2e6; --text:#212529; --text-muted:#6c757d; --primary:#0077b6; --danger:#dc3545; --radius:6px; }
+        /* Q248 (V47) - the standalone error page. It is drawn for a person who is not signed in (and for a request nobody reads: a fetch, an htmx swap), so it does not
+           extend base.html; it has the sign-in card's shape (the same width, logo and spacing) and the install's default theme: the token blocks below are the ones
+           base.html prints (jen/__init__.py inject_theme). The first rule is the fallback for a render with no theme at hand. */
+        :root { color-scheme: dark; --bg:#0d0d0d; --surface:#141414; --surface2:#1c1c1c; --border:#2a2a2a; --text:#e0e0e0; --text-muted:#8c8c8c; --primary:#00b4d8; --danger:#e74c3c; --warning:#f39c12; --radius:6px; }
+        {% for _theme_id, _theme_css in (theme_css if theme_css is defined else []) %}{{ _theme_css | safe }}{% endfor %}
         * { box-sizing:border-box; margin:0; padding:0; }
         body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; }
-        .box { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:48px; max-width:480px; text-align:center; }
-        .code { font-size:72px; font-weight:700; color:var(--danger); line-height:1; margin-bottom:16px; }
-        .msg { font-size:16px; color:var(--text-muted); margin-bottom:28px; }
-        .btn { display:inline-block; padding:10px 24px; background:var(--primary); color:#fff; border-radius:var(--radius); text-decoration:none; font-weight:600; }
-        .btn:hover { opacity:0.9; }
+        .wrap { width:100%; max-width:400px; padding:20px; }
+        .box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:44px 40px 36px; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,0.35); }
+        .logo-img { height:72px; width:auto; max-width:100%; margin-bottom:24px; }
+        .rule { height:1px; background:var(--border); margin:0 -40px 28px; }
+        h1 { font-size:20px; font-weight:600; margin-bottom:8px; }
+        .code { font-size:12px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
+        .msg { font-size:14px; color:var(--text-muted); line-height:1.5; margin-bottom:24px; overflow-wrap:anywhere; }
+        .msg code { color:var(--text); font-family:monospace; font-size:13px; }
+        .btn { display:block; padding:12px; border:1px solid var(--primary); color:var(--text); border-radius:7px; text-decoration:none; font-size:14px; font-weight:600; }
+        .btn:hover { background:var(--surface2); }
+        .btn:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
         .hint { font-size:12px; color:var(--text-muted); margin-top:16px; }
         .alert { border:1px solid var(--border); border-left:3px solid var(--danger); border-radius:var(--radius); padding:10px 14px; margin-bottom:12px; font-size:14px; text-align:left; }
-        .alert-warning { border-left-color:var(--primary); }
+        .alert-warning { border-left-color:var(--warning); }
+        @media screen and (max-width: 480px) { .box { padding:32px 24px 28px; } .rule { margin:0 -24px 24px; } }
     </style>
-    <script nonce="{{ csp_nonce }}">(function(){var s='dark';try{s=localStorage.getItem('jen-theme-pick')==='light'?'light':'dark';}catch(e){}document.documentElement.setAttribute('data-theme',s);})();</script>
+    {# a signed-in person keeps the theme they picked (the same key and the same resolver as base.html); signed out, the install's default stands #}
+    {% if current_user is defined and current_user.is_authenticated and theme_presets is defined %}
+    <script nonce="{{ csp_nonce }}">(function(){var ids={{ theme_presets | map(attribute=0) | list | tojson }},p=null;try{p=localStorage.getItem('jen-theme-pick');}catch(e){}if(p==='system')p=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';if(p&&ids.indexOf(p)!==-1)document.documentElement.setAttribute('data-theme',p);})();</script>
+    {% endif %}
     <link rel="stylesheet" href="/static/css/print.css?v={{ jen_version }}" media="print">
 </head>
 <body>
+<div class="wrap">
 <div class="box">
-    <div class="code">{{ code }}</div>
+    <img src="/static/icons/jen-logo-wide.png" alt="Jen" class="logo-img">
+    <div class="rule"></div>
+    {% if code == 404 %}
+    <h1>Page not found</h1>
+    <div class="msg">Jen has no page at <code>{{ asked if asked is defined else request.path }}</code>.</div>
+    {% else %}
+    <div class="code">Error {{ code }}</div>
     <div class="msg">{{ message }}</div>
+    {% endif %}
     {# Q215 (Z6): a pending field error or flash is consumed by the next FULL page whatever it is (FIELD-001: a message never outlives one full page); this page has no field to put it under, so it prints plain, as login, force_password_change and mfa_challenge do #}
     {# only a navigation consumes them: an htmx swap or a fetch (a status poll, a Stay signed in click) that gets this page is not a page anyone reads, and would eat a message meant for the next one #}
     {% if not request.headers.get('HX-Request') and request.headers.get('Sec-Fetch-Mode', 'navigate') in ('navigate', 'nested-navigate') %}
@@ -38,10 +59,15 @@
     {% endfor %}
     {% endwith %}
     {% endif %}
-    <a href="/" class="btn">← Back to Dashboard</a>
+    {% if current_user is defined and current_user.is_authenticated %}
+    <a href="/" class="btn">Go to the dashboard</a>
+    {% else %}
+    <a href="/login" class="btn">Sign in</a>
+    {% endif %}
     {% if code == 500 %}
     <div class="hint">Check Jen logs: <code>sudo journalctl -u jen -n 30</code></div>
     {% endif %}
+</div>
 </div>
 </body>
 </html>

@@ -9,7 +9,7 @@
 
 {{ subtabs(nav.subtabs['system'], 'system') }}
 
-{% set toc = [('sys-updates', 'Jen Updates'), ('sys-plugins', 'Plugins'), ('sys-ports', 'Ports & Threads'), ('sys-restart', 'Restart'), ('sys-retention', 'Retention'), ('sys-config-history', 'Kea Config History')] %}
+{% set toc = [('sys-updates', 'Jen Updates'), ('sys-plugins', 'Plugins'), ('sys-ports', 'Ports & Threads'), ('sys-restart', 'Restart Jen'), ('sys-support', 'Support bundle'), ('sys-grafana', 'Grafana dashboard'), ('sys-retention', 'Audit Log Retention'), ('sys-config-history', 'Kea Config History')] %}
 {% include '_card_toc.html' %}
 
 <div class="settings-cols">
@@ -19,6 +19,9 @@
         <span class="card-title">{{ icon("upload") }} Jen Updates</span>
         <span class="u-865c33">Running v{{ jen_version }} · {{ update_channel }} channel</span>
     </div>
+    {% if running_prerelease and update_channel == 'stable' %}
+    <p class="u-f0aa70" id="update-prerelease-note">This build is a pre-release, and the stable channel offers stable releases only: the next update offered will be the first stable release newer than this build.</p>
+    {% endif %}
     <div id="update-status" class="u-f0aa70">
         Click "Check for Updates" to see if a newer version is available on the {{ update_channel }} channel.
     </div>
@@ -31,7 +34,7 @@
                 <option value="stable" {% if update_channel == 'stable' %}selected{% endif %}>Stable</option>
                 <option value="beta" {% if update_channel == 'beta' %}selected{% endif %}>Beta</option>
             </select>
-            <button type="submit" class="btn btn-sm btn-secondary">Save</button>
+            <button type="submit" class="btn btn-sm btn-primary">Save Channel</button>
         </form>
         {% else %}
         <span>Release channel: <strong>{{ update_channel }}</strong></span>
@@ -96,7 +99,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("puzzle") }} Plugins</span>
         {% if current_user.role == 'superadmin' %}
-        <a href="/settings/plugins" class="btn btn-sm btn-secondary">Open plugin manager →</a>
+        <a href="/settings/plugins" class="btn btn-sm btn-secondary">Manage plugins</a>
         {% endif %}
     </div>
     {% if plugins %}
@@ -106,7 +109,8 @@
         <tbody>
         {% for p in plugins %}
         <tr>
-            <td data-m="primary"><strong>{{ p.name }}</strong><div class="u-865c33">{{ p.description }}</div></td>
+            {# Q248 (V42): the name, the version and the status; what a plugin does is said once, whole, in the plugin manager #}
+            <td data-m="primary"><strong>{{ p.name }}</strong></td>
             <td data-m="secondary" class="u-86abda">v{{ p.version }}</td>
             <td data-m="badge" class="nowrap">
                 {% if not p.version_ok %}<span class="u-0051c0">{{ icon("triangle-alert") }} Jen version mismatch</span>
@@ -150,13 +154,13 @@
             {% if ssl_configured %}
             <div class="form-group">
                 <label>HTTPS Port</label>
-                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" class="u-21e8bb">
+                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" class="u-21e8bb" aria-label="HTTPS Port">
                 <div class="form-hint">Default: 8443</div>
             </div>
             {% else %}
             <div class="form-group">
                 <label>HTTPS Port <span class="u-5d8d64">(not active)</span></label>
-                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" class="u-21e8bb" disabled>
+                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" class="u-21e8bb" aria-label="HTTPS Port" disabled>
                 <div class="form-hint">Configure SSL first to enable HTTPS</div>
             </div>
             {% endif %}
@@ -177,7 +181,7 @@
 <div class="card" id="sys-restart">
     <div class="card-header">
         <span class="card-title">{{ icon("refresh-cw") }} Restart Jen</span>
-        {% if restart_pending %}<span class="badge u-9741b3">Restart pending</span>{% endif %}
+        {% if restart_pending %}<span class="badge badge-warning">Restart pending</span>{% endif %}
     </div>
     {% if is_systemd_host and current_user.role != 'superadmin' %}
     <p class="u-ec76a1">Only a superadmin restarts Jen.</p>
@@ -202,10 +206,12 @@
         This is the <strong>redacted</strong> one, safe to attach to a bug report — the recovery bundle (Settings → Databases) is not.
     </p>
     {% if current_user.role == 'superadmin' %}
+    <div class="btn-row">
     <form method="POST" action="/settings/system/support-bundle" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-secondary">{{ icon("life-buoy") }} Download support bundle</button>
     </form>
     <a href="https://github.com/ltkojak/jen-kea/issues/new?title={{ ('v' ~ jen_version ~ ': ') | urlencode }}" target="_blank" rel="noopener" class="btn btn-secondary">{{ icon("bug") }} Report an issue</a>
+    </div>
     {% else %}
     <span class="u-865c33">A superadmin can download it from here.</span>
     {% endif %}
@@ -233,10 +239,10 @@
                 <label for="f-audit_retention_days">Keep audit log entries for (days)</label>
                 <input id="f-audit_retention_days" type="number" name="audit_retention_days"
                        value="{{ audit_retention_days }}" min="0" max="3650" aria-describedby="f-audit_retention_days-hint">
-                <div class="form-hint" id="f-audit_retention_days-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count|number }}</strong> entries — <a href="/settings/logs">view</a>.</div>
+                <div class="form-hint" id="f-audit_retention_days-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count|number }}</strong> {% if audit_log_count == 1 %}entry{% else %}entries{% endif %} — <a href="/settings/logs">view</a>.</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>
+        <button type="submit" class="btn btn-primary">{{ icon("save") }} Save Audit Retention</button>
     </form>
 </div>
 
@@ -254,7 +260,7 @@
                 <div class="form-hint" id="f-config_revision_keep-hint">Every Kea config Jen writes is saved so you can diff and restore it (Servers → Config history). Older revisions beyond this count are pruned.</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>
+        <button type="submit" class="btn btn-primary">{{ icon("save") }} Save Config History</button>
     </form>
 </div>
 </div>
@@ -276,13 +282,13 @@ function checkForUpdates() {
 
             var channel = d.channel ? ' on the ' + d.channel + ' channel' : '';
             if (d.status === 'up_to_date') {
-                status.style.color = 'var(--success)';
+                status.style.color = 'var(--success-ink)';
                 status.textContent = '✓ You are running the latest version' + channel + ' (v' + d.current + ').';
                 document.getElementById('update-form').style.display = 'none';
                 document.getElementById('release-notes-link').style.display = 'none';
 
             } else if (d.status === 'update_available') {
-                status.style.color = 'var(--warning)';
+                status.style.color = 'var(--warning-ink)';
                 status.textContent = 'Jen v' + d.latest + (d.prerelease ? ' (pre-release)' : '') + ' is available' + channel + ' (published ' + d.published + '). You are running v' + d.current + '.';
                 var uv = document.getElementById('update-version');
                 if (uv) uv.value = d.latest;
@@ -296,14 +302,14 @@ function checkForUpdates() {
                 status.textContent = 'No releases published yet on GitHub' + channel + '.';
 
             } else {
-                status.style.color = 'var(--danger)';
+                status.style.color = 'var(--danger-ink)';
                 status.textContent = '✗ Could not check for updates: ' + (d.message || 'unknown error');
             }
         })
         .catch(function(e) {
             btn.disabled = false;
             btn.textContent = 'Check for Updates';
-            status.style.color = 'var(--danger)';
+            status.style.color = 'var(--danger-ink)';
             status.textContent = '✗ Network error: ' + e.message;
         });
 }

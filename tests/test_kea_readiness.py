@@ -156,7 +156,7 @@ class TestControlTransport:
         monkeypatch.setattr(extensions, "D2_API_URL", "http://a:8053")
         ctx = _ctx(dhcp4_config={"dhcp-ddns": {"enable-updates": True}})
         c = health._kea32_control_transport(ctx)
-        assert c.status == "ok" and "2 daemon(s)" in c.detail
+        assert c.status == "ok" and "2 daemons" in c.detail
 
 
 class TestHelperVersion:
@@ -197,7 +197,7 @@ class TestRemovedKeysCheck:
             ],
         }
         c = health._kea32_removed_keys(_ctx(dhcp4_config=cfg))
-        assert c.status == "warn" and "7 key(s)" in c.detail and "and 4 more" in c.detail
+        assert c.status == "warn" and "7 keys" in c.detail and "and 4 more" in c.detail
         assert c.fix_url == "/servers"
 
     def test_unavailable_config_skips(self, single_ca):

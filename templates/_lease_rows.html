@@ -4,12 +4,13 @@
 {% from '_icons.html' import icon_trash, icon_pin, icon_dots %}
 {% from '_empty.html' import empty_state %}
 {% from '_copy.html' import copy_cell %}
+{% from '_hostname.html' import hostname_clip %}
 {% for l in leases %}
 <tr>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td>
         {% if not l.has_reservation %}
-        <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}" aria-label="Select {{ l.ip }}">
+        <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}" form="bulk-form" aria-label="Select {{ l.ip }}">
         {% else %}
         <input type="checkbox" class="row-checkbox" disabled title="Reserved - the address is not released from here" aria-label="Reserved - the address is not released from here">
         {% endif %}
@@ -17,35 +18,44 @@
     {% endif %}
     {# Q206 (AV7): the IP used to link to a search for itself, on the page it was printed on; it is a copy control now, and the row's way on is Investigate and the action menu #}
     <td class="mono" data-m="secondary">{{ copy_cell(l.ip) }}</td>
+    {# Q248 (V12): the name is a .clip - one line, cut at the column's width, whole in its title; what follows it keeps its size #}
     <td class="nw-d" data-m="primary">
-        {% if l.hostname | hostname %}{{ l.hostname | hostname }}{% else %}<span class="muted">no hostname</span>{% endif %}
+        <div class="clip-row">
+        {{ hostname_clip(l.hostname) }}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
+        {# Q248 (addition 5): the row shows what the summary counts - `reserved` is a reservation the caller may see, on the live list #}
+        {% if not show_expired and l.get('reserved') %}<span class="badge badge-reserved row-mark">Reserved</span>{% endif %}
         {# the action menu (which carries Investigate) is an admin's, and only on a live list: everyone else gets the link beside the name (Q134's rule: every row that names a client) #}
         {% if show_expired or current_user.role not in ('superadmin','admin') %}{{ investigate_link(l.mac, "icon") }}{% endif %}
+        </div>
     </td>
-    <td class="mono hide-mobile" data-m="hide">{{ copy_cell(l.mac) }}</td>
+    {# Q248 (V51): on a phone the MAC is the card's third line - this same cell, so it is still the copy control #}
+    <td class="mono" data-m="third">{{ copy_cell(l.mac) }}</td>
     <td data-m="secondary">{{ subnet_badge(l.subnet_id, l.subnet_name, link=True) }}</td>
-    <td class="mono muted hide-mobile" data-m="hide">{{ l.obtained|utcfmt }}</td>
-    <td class="mono muted hide-tablet" data-m="secondary"><span class="desk-only" title="{{ l.expire|reltext }}">{{ l.expire|utcfmt }}</span><span class="phone-only">{{ l.expire|relfmt }}</span></td>
+    {# Q248 (V13): under 1280 px the list drops Obtained (it is Expires less the lease time, and nothing sorts by it by default) and keeps Expires, the column it is sorted by #}
+    <td class="mono muted hide-mobile hide-below-1280" data-m="hide">{{ l.obtained|utcfmt }}</td>
+    {# Q248 (addition 5): the expiry reads as a relative time on the desktop too; the exact moment is its title, in the reader's zone or in UTC as they picked (the
+       rewriter in base.html), and in UTC with no script #}
+    <td class="mono muted nowrap" data-m="secondary"><span title="{{ l.expire|utcfmt|striptags }}">{{ l.expire|relfmt }}</span>{% if not show_expired and l.get('expires_soon') %} <span class="badge badge-stale row-mark">Expires soon</span>{% endif %}</td>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td data-m="trailing">
         <div class="action-menu">
-            <input type="checkbox" id="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-toggle">
+            <input type="checkbox" id="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-toggle" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="Actions for {{ (l.hostname | hostname) or l.ip }}">
             <label for="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
-            <div class="action-menu-dropdown">
+            <div class="action-menu-dropdown" role="menu">
                 <div class="action-menu-item disabled mono">{{ copy_cell(l.mac) }}</div>
                 {{ investigate_link(l.mac) }}
                 {% if l.has_reservation %}
-                <a href="/reservations?search={{ l.mac }}" class="action-menu-item">{{ icon_pin() }}View reservation</a>
+                <a href="/reservations?search={{ l.mac }}" class="action-menu-item" role="menuitem">{{ icon_pin() }}View reservation</a>
                 {% else %}
-                <a href="/reservations/add?ip={{ l.ip|urlencode }}&mac={{ l.mac|urlencode }}&hostname={{ l.hostname|urlencode }}&subnet_id={{ l.subnet_id|urlencode }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
-                <a href="/tools/explain?mac={{ l.mac }}&subnet={{ l.subnet_id }}&hostname={{ l.hostname|urlencode }}" class="action-menu-item">{{ icon("compass") }} Why this address?</a>
-                <a href="/timeline?mac={{ l.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>
-                {% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}<a href="/tools/trace?mac={{ l.mac }}" class="action-menu-item">{{ icon("search-code") }} Trace in Kea log</a>{% endif %}
+                <a href="/reservations/add?ip={{ l.ip|urlencode }}&mac={{ l.mac|urlencode }}&hostname={{ l.hostname|urlencode }}&subnet_id={{ l.subnet_id|urlencode }}" class="action-menu-item" role="menuitem">{{ icon_pin() }}Create reservation</a>
+                <a href="/tools/explain?mac={{ l.mac }}&subnet={{ l.subnet_id }}&hostname={{ l.hostname|urlencode }}" class="action-menu-item" role="menuitem">{{ icon("compass") }} Why this address?</a>
+                <a href="/timeline?mac={{ l.mac }}" class="action-menu-item" role="menuitem">{{ icon("clock") }} Timeline</a>
+                {% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}<a href="/tools/trace?mac={{ l.mac }}" class="action-menu-item" role="menuitem">{{ icon("search-code") }} Trace in Kea log</a>{% endif %}
                 <div class="action-menu-divider"></div>
-                <form method="POST" action="/leases/release" data-confirm="Release lease for {{ l.ip }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <form method="POST" action="/leases/release" data-confirm="Release lease for {{ l.ip }}?" data-confirm-label="Release"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="ip" value="{{ l.ip }}">
-                    <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Release lease</button>
+                    <button type="submit" class="action-menu-item danger" role="menuitem">{{ icon_trash() }}Release lease</button>
                 </form>
                 {% endif %}
                 {% set p_actions = plugin_row_actions('lease', l, current_user.role) %}
@@ -54,10 +64,10 @@
                 {% for pa in p_actions %}
                 {% if pa.method == 'POST' %}
                 <form method="POST" action="{{ pa.href }}" class="contents"{% if pa.confirm %} data-confirm="{{ pa.confirm }}"{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="action-menu-item">{{ nav_icon(pa.icon) }}{{ pa.label }}</button>
+                    <button type="submit" class="action-menu-item" role="menuitem">{{ nav_icon(pa.icon) }}{{ pa.label }}</button>
                 </form>
                 {% else %}
-                <a href="{{ pa.href }}" class="action-menu-item"{% if pa.confirm %} data-confirm="{{ pa.confirm }}"{% endif %}>{{ nav_icon(pa.icon) }}{{ pa.label }}</a>
+                <a href="{{ pa.href }}" class="action-menu-item" role="menuitem"{% if pa.confirm %} data-confirm="{{ pa.confirm }}"{% endif %}>{{ nav_icon(pa.icon) }}{{ pa.label }}</a>
                 {% endif %}
                 {% endfor %}
                 {% endif %}
@@ -70,9 +80,13 @@
 <tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}" data-m="full">
     {# Q206 (AV6): with a filter in force the empty row names it and offers the way out; with none, the sentence stays what it always was #}
     {% set window = minutes_applied|default(none) %}
-    {% if search or window is not none or subnet_filter_name %}
+    {% set only_reserved = reserved_only|default(false) %}
+    {% set only_expiring = expiring_only|default(false) %}
+    {% if search or window is not none or subnet_filter_name or only_reserved or only_expiring %}
     {% set minute_words = {'5': '5 minutes', '15': '15 minutes', '30': '30 minutes', '60': 'hour', '360': '6 hours', '1440': '24 hours'} %}
     {% set what = 'No ' ~ ('expired' if show_expired else 'active') ~ ' leases'
+        ~ (' with a reservation' if only_reserved else '')
+        ~ (' expiring within the hour' if only_expiring else '')
         ~ (' match “' ~ search ~ '”' if search else '')
         ~ (' in ' ~ subnet_filter_name if subnet_filter_name else '')
         ~ ((' from the last ' ~ (minute_words.get(window|string) or (window ~ ' minutes')) if window > 0 else ' in the selected time window') if window is not none else '') %}

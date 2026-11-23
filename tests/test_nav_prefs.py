@@ -231,7 +231,7 @@ class TestTheRoutes:
         r = logged_in_client.get("/navigation")
         body = r.get_data(as_text=True)
         assert r.status_code == 200
-        assert "Top row favorites (0 of 5)" in body and "Phone bar (0 of 4)" in body
+        assert "Top row favorites (0 of 5)" in body and "Phone bar (the default pages)" in body
         assert "No favorites yet." in body and "The phone bar shows its default pages." in body
 
     def test_add_stores_and_the_next_page_shows_it(self, logged_in_client, clean_nav, db):

@@ -155,7 +155,8 @@ there's nothing to harden into.
 
 **Plugin programs are in the image (v5.65.10).** Network Discovery needs `nmap`, Host Watchdog `ping` and
 Switch Port Locator `snmpbulkwalk`; the image installs `nmap`, `iputils-ping` and `snmp`, the three packages
-the plugin installer allow-lists on a real host. The Plugins page's `apt install` hint does not apply inside a
+the plugin installer allow-lists on a real host. From 7.2.0-beta.6 it also installs `iproute2`, for the `ip` command Jen
+reads the container's own addresses with. The Plugins page's `apt install` hint does not apply inside a
 container; rebuild the image instead. **Updates and restarts are the container's job:** the Update and Restart
 buttons are hidden here, because they drive the `jen` systemd service that a container does not have.
 
@@ -215,9 +216,17 @@ server's `authorized_keys`, same as a bare-metal install.
 A wake packet is a broadcast. On Docker's default bridge network, which the shipped compose files use, a
 broadcast from the container reaches the Docker bridge and not your LAN, so the Wake & Actions plugin sends its
 packet and nothing wakes. From Wake & Actions 1.2.0 the page says so when it sends ("arrives only if a router
-forwards directed broadcasts"). To make Wake work, give the container an address on the LAN: run it with host
+forwards directed broadcasts"), in an image that has the `ip` command (7.2.0-beta.6 and later; see below). To make Wake work, give the container an address on the LAN: run it with host
 networking (`network_mode: host` in place of the `ports:` list) or attach it to a macvlan network on the LAN's
 interface. Nothing else in Jen needs either.
+
+With an address on the LAN a wake is answered as sent, with no warning. Jen learns the container's addresses from the
+`ip` command, which the image carries from 7.2.0-beta.6 (package `iproute2`). An image built from an earlier release
+has no `ip`: Wake & Actions 1.2.0 there gives the warning on every wake, host networking or not, and its audit row says
+`on_link=no` while the packet is on the LAN. Wake & Actions 1.2.1 answers the plain sentence and audits
+`on_link=unknown` when the host has no `ip` command, because without it Jen cannot tell. That holds on the default
+bridge network too, where the warning of 1.2.0 was true: an image built before 7.2.0-beta.6 with Wake & Actions 1.2.1
+gives no warning there. Rebuild the image to get the real answer in both cases.
 
 ## Kea host helper updates (v5.66.0+)
 

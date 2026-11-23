@@ -37,9 +37,11 @@ import jen.services.alerts as __alerts
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
 import jen.services.mfa as __mfa
+import jen.services.reltime as __reltime
 import jen.services.session_timeout as __session_timeout
 import jen.services.setting_bounds as __alerts_bounds
 import jen.services.text as _text
+import jen.version as __version
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 
@@ -178,7 +180,9 @@ def settings():
 
     audit = _count("SELECT COUNT(*) AS cnt FROM audit_log")
     if audit is not None:
-        hints["logs"] = [(f"{audit} audit entries", "muted")]
+        hints["logs"] = [
+            (__reltime.plural(audit, "audit entry", "audit entries"), "muted")
+        ]  # Q248 (V21): "1 audit entry"
 
     has_logo = any(os.path.exists(f"{extensions.NAV_LOGO_PATH}.{e}") for e in ("png", "svg", "jpg", "jpeg", "webp"))
     hints["appearance"] = [("Custom logo", "muted")] if has_logo else []
@@ -210,6 +214,8 @@ def settings_system():
         worker_threads=extensions.WORKER_THREADS,
         restart_pending=__user.get_global_setting("restart_pending", "false") == "true",
         update_channel=extensions.UPDATE_CHANNEL,
+        # Q248 (V27): a pre-release running on the stable channel is said in words - the header read "v7.2.0-beta.5 · stable channel" and left the reader to work it out
+        running_prerelease=__version.is_prerelease(_JEN_VERSION()),
         audit_retention_days=audit_retention_days,
         audit_log_count=audit_log_count if audit_log_count is not None else "?",
         config_revision_keep=__user.get_global_setting("config_revision_keep", "50"),
@@ -335,6 +341,9 @@ def settings_appearance():
         # the (id, name) pairs inject_theme() hands every page.
         theme_all_presets=_theme.PRESETS,
         theme_token_names=list(_theme.TOKENS),
+        # Q248 (V4) - the live preview draws what a SAVED custom palette would: the names a theme derives from its tokens, with the values
+        # a custom palette is given (its --on-accent is recomputed in the page from the accent being typed)
+        theme_custom_derived=_theme.derived_vars(_theme.PRESETS["dark"]["tokens"], preset=False),
     )
 
 

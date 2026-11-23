@@ -8,7 +8,7 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card u-d53a7a">
+<div class="card u-d53a7a setup-card">
     <h3 class="u-d46224">Download a recovery bundle</h3>
     <p id="recovery-done-note"{% if not recovery.fresh %} hidden{% endif %}>{{ icon('circle-check') }} <span id="recovery-done-text">Downloaded {{ recovery.size|number }} bytes at {{ recovery.at }}{% if recovery.excluded_audit_history %} (audit history excluded){% endif %}.</span></p>
     <form id="recovery-bundle-form" method="POST" action="/settings/databases/recovery-bundle" autocomplete="off" data-download data-initial-at="{{ recovery.at }}">
@@ -74,6 +74,7 @@
             </form>
         </div>
     </div>
+    {% include "_setup_nav.html" %}
 </div>
 
 <script nonce="{{ csp_nonce }}">

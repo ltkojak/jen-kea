@@ -1090,9 +1090,7 @@ class TestOsPackages:
         monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
         (requests_dir / "network-discovery.deps.result").write_text("ok\n")
         results = plugins_svc.consume_plugin_results()
-        assert results == [
-            {"id": "network-discovery", "action": "deps", "ok": True, "detail": "OS package(s) installed"}
-        ]
+        assert results == [{"id": "network-discovery", "action": "deps", "ok": True, "detail": "OS packages installed"}]
         assert not (requests_dir / "network-discovery.deps.result").exists()
         with db.cursor() as cur:
             cur.execute(
@@ -1244,11 +1242,17 @@ class TestDepsRoute:
         monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
         monkeypatch.setattr(plugins_svc, "fetch_registry", lambda: ([], ""))
         body = logged_in_client.get("/settings/plugins").data
-        assert b"needs on the Jen host: nmap" in body
+        # Q248 (V42): what the host is missing is a sentence under the status; the command, where there is no Install button, is in a box beside a Copy button
+        assert b"Needs nmap on the Jen host." in body
         assert b'action="/settings/plugins/deps/nd"' in body
         monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: False)
         body = logged_in_client.get("/settings/plugins").data
-        assert b"sudo apt install nmap" in body and b'action="/settings/plugins/deps/nd"' not in body
+        assert b"Needs nmap on the Jen host:" in body
+        assert (
+            b'<code id="plugin-cmd-nd">sudo apt install nmap</code>' in body
+            and b'data-copy-target="plugin-cmd-nd"' in body
+        )
+        assert b'action="/settings/plugins/deps/nd"' not in body
 
     def test_route_is_superadmin_only(self, client, db, tmp_path, monkeypatch):
         from tests.conftest import restricted_client

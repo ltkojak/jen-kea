@@ -135,7 +135,7 @@ capability shipped in. What Jen is for, in five sentences, is the README's
 - Per-channel configuration and test
 
 ## Security & Access Control
-- Three-tier role system: SuperAdmin / Admin / Viewer
+- Three-tier role system: Superadmin / Admin / Viewer
 - Subnet-level access control per user
 - MFA — TOTP authenticator apps (secrets encrypted at rest) and passkeys / WebAuthn as a second factor (v5.31.0)
 - Step-up auth — changing your own MFA re-asks for your password (v5.17.0)

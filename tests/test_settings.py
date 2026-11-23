@@ -588,7 +588,7 @@ class TestTheDailySummaryTimeIsHHMMInUtc:
 
     def test_the_label_says_utc(self, logged_in_client):
         body = logged_in_client.get("/settings/alerts").get_data(as_text=True)
-        assert "in UTC (HH:MM)" in body and "server local time" not in body
+        assert "a 24-hour time in UTC, as HH:MM" in body and "server local time" not in body
 
 
 class TestAWriteDuringAReloadIsNotHidden:

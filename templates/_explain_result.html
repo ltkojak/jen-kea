@@ -17,7 +17,7 @@
     </div>
     <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-end;">
         <div>
-            <div style="font-size:24px;font-weight:700;color:{% if result.answer.ip %}var(--primary){% else %}var(--warning){% endif %};" class="mono">{{ result.answer.ip or 'no address' }}</div>
+            <div style="font-size:24px;font-weight:700;color:{% if result.answer.ip %}var(--primary-ink){% else %}var(--warning-ink){% endif %};" class="mono">{{ result.answer.ip or 'no address' }}</div>
             <div class="u-865c33">{{ result.answer.how }}</div>
         </div>
         <div>
@@ -116,7 +116,7 @@
         {% for c in result.classes %}
         <tr>
             <td class="mono">{{ c.name }}</td>
-            <td style="font-size:12px;{% if c.matched %}color:var(--success){% elif c.matched is none %}color:var(--warning){% else %}color:var(--text-muted){% endif %};">
+            <td style="font-size:12px;{% if c.matched %}color:var(--success-ink){% elif c.matched is none %}color:var(--warning-ink){% else %}color:var(--text-muted){% endif %};">
                 {% if not c.evaluable %}not evaluable{% elif c.matched %}matched{% elif c.matched is none %}undecided{% else %}no{% endif %}
             </td>
             <td class="mono" style="font-size:11px;word-break:break-all;">{{ c.expression or '—' }}</td>

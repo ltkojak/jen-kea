@@ -23,6 +23,7 @@ from jen.services.access import admin_required as _admin_required
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.forms import flash_field
+from jen.services.reltime import plural as _plural
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,13 @@ def _session_looser(enabled: str, minutes: int) -> bool:
 
 #: (Q227, AM3) the three sentences of the lockout controls, named so a test and the page read the same words
 PERMANENT_IS_A_SUPERADMINS = "Only a superadmin can set a lockout that lasts until it is cleared (0 minutes)."
-CLEARED_SENTENCE = "Cleared {attempts} failed login attempt(s) and ended {lockouts} permanent lockout(s)."
+
+
+def cleared_sentence(attempts: int, lockouts: int) -> str:
+    """What the Clear button did, each count with the noun that agrees with it (Q248, V36: it read "1 failed login attempt(s)")."""
+    return f"Cleared {_plural(attempts, 'failed login attempt')} and ended {_plural(lockouts, 'permanent lockout')}."
+
+
 OIDC_ISSUER_CHANGED = "The issuer changed - enter the client secret again."
 OIDC_CLIENT_CHANGED = "The client ID changed - enter the client secret again."
 #: (Q229) the refusal of an issuer that is not a plain address
@@ -176,7 +183,7 @@ def clear_lockouts():
             db.commit()
         # (Q226, AL22 and the review's note) an ADMIN's act, kept so: it resets counters and ends lockouts (a locked-out colleague is the common case), changes no stored policy, and is
         # audited; the ratchet (RBAC-003) is about policy. (Q227, AM3) The flash and the audit row say what it did: it said "All login attempt records cleared." and named no lockout
-        flash(CLEARED_SENTENCE.format(attempts=attempts, lockouts=lockouts), "success")
+        flash(cleared_sentence(attempts, lockouts), "success")
         __user.audit(
             "CLEAR_LOCKOUTS", "settings", f"login attempts cleared={attempts} permanent lockouts ended={lockouts}"
         )

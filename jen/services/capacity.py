@@ -36,6 +36,8 @@ from __future__ import annotations
 import math
 from datetime import date, datetime, timedelta, timezone
 
+from jen.services.reltime import plural as _plural
+
 WINDOW_DAYS = 30
 MIN_DAYS = 7
 HORIZON_DAYS = 365
@@ -226,7 +228,7 @@ def projection_note(f: dict, min_days: int = MIN_DAYS) -> str:
         return "No projection: this subnet has no pool."
     if f.get("trend") == "insufficient":
         need = max(1, min_days - int(f.get("days") or 0))
-        return f"No projection yet: {need} more day(s) of history needed."
+        return f"No projection yet: {_plural(need, 'more day')} of history needed."
     return ""
 
 

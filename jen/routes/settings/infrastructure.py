@@ -34,6 +34,7 @@ from jen.services.access import diagnostic_surface
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.forms import flash_field
+from jen.services.reltime import plural as _plural
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -2581,7 +2582,7 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result, pr
         dropped_record = __tls.discard_local_record(server.get("id"), service)
         if dropped_record["failed"]:
             flash(
-                f"The failed attempt left certificate files for {daemon} on {name} that no socket references, and {len(dropped_record['failed'])} file(s) of Jen's own copy of them could not be removed "
+                f"The failed attempt left certificate files for {daemon} on {name} that no socket references, and {_plural(len(dropped_record['failed']), 'file')} of Jen's own copy of them could not be removed "
                 f"({', '.join(sorted({f[1] for f in dropped_record['failed']}))}) - they may still be on disk; fix the certificate folder's permissions and use Forget stale records.",
                 "warning",
             )
@@ -3300,7 +3301,7 @@ def rotate_kea_ca():
         flash(
             "Jen keeps certificate copies for "
             + ", ".join(inventory.stale)
-            + ", for server(s) that are no longer configured; they are ignored.",
+            + ", for servers that are no longer configured; they are ignored.",
             "info",
         )
     trust = __tls.trust_kind()  # Q190 (AF1): how the CA bundle relates to Jen's CA, by certificate identity - what may be rewritten after the promotion follows from it
@@ -3709,7 +3710,7 @@ def rotate_kea_ca():
                     if other_open:
                         details.append(f"{', '.join(other_open)}: left in a state recorded on Servers")
                     flash(
-                        f"The recovery did not complete: {len(left)} of {len(targets)} daemon(s) were left in a state that needs it repeated - {'; '.join(details)} (each recorded on Servers). "
+                        f"The recovery did not complete: {len(left)} of {_plural(len(targets), 'daemon')} {'was' if len(left) == 1 else 'were'} left in a state that needs it repeated - {'; '.join(details)} (each recorded on Servers). "
                         + (f"Not changed: {', '.join(untouched)}. " if untouched else "")
                         + f"Jen's CA is still damaged ({ca_now_why}). Rotate again with the acknowledgment to re-issue them all; the https setup stays refused until the CA is replaced.",
                         "error",
@@ -3837,7 +3838,7 @@ def rotate_kea_ca():
     __user.audit(
         "ROTATE_KEA_CA",
         "kea_api",
-        f"ok: {len(targets)} server certificate(s) re-issued"
+        f"ok: {_plural(len(targets), 'server certificate')} re-issued"
         + (" (replaced a damaged CA: acknowledged)" if recovery else ""),
     )
     return back
@@ -3976,7 +3977,7 @@ def forget_stale_kea_records():
         __user.audit(
             "FORGET_STALE_KEA_RECORDS",
             "kea_api",
-            "0 record(s) forgotten on the operator's word: "
+            "0 records forgotten on the operator's word: "
             + "; ".join(
                 part
                 for part in (
@@ -4003,13 +4004,13 @@ def forget_stale_kea_records():
     if parked:
         # Q198 (AN2): a record for a server that is configured is PARKED, not stale - its daemon may still present that certificate; it is dropped when the socket is removed, or on the operator's word
         flash(
-            f"Kept {len(parked)} parked record(s): {', '.join(parked)}. The daemon on that server may still hold the certificate, so Jen keeps its copy and watches its expiry; remove the socket under Settings → Kea to drop it, "
+            f"Kept {_plural(len(parked), 'parked record')}: {', '.join(parked)}. The daemon on that server may still hold the certificate, so Jen keeps its copy and watches its expiry; remove the socket under Settings → Kea to drop it, "
             "or tick the box beside Forget stale records to say no daemon presents it any more.",
             "info",
         )
     for ident, failed in report["incomplete"]:
         flash(
-            f"{len(failed)} file(s) of the record {ident} could not be removed ({', '.join(sorted({f[1] for f in failed}))}) - Jen's copy may still be on disk; fix the certificate folder's permissions and forget it again.",
+            f"{_plural(len(failed), 'file')} of the record {ident} could not be removed ({', '.join(sorted({f[1] for f in failed}))}) - Jen's copy may still be on disk; fix the certificate folder's permissions and forget it again.",
             "error",
         )
     if report["skipped"]:
@@ -4027,7 +4028,7 @@ def forget_stale_kea_records():
             _record_incident(
                 word_server,
                 word_svc,
-                f"forget incomplete: {', '.join(sorted({f[0] for f in failed}))} remain(s) on the operator's word to forget a parked certificate record",
+                f"forget incomplete: {', '.join(sorted({f[0] for f in failed}))} {'remains' if len({f[0] for f in failed}) == 1 else 'remain'} on the operator's word to forget a parked certificate record",
                 "record-forgotten",
                 detail="A forget of Jen's record for this socket was started on the operator's word and did not finish: Jen still holds some of its files. Press Forget stale records again (with the box) under Settings → Kea.",
             )
@@ -4036,7 +4037,7 @@ def forget_stale_kea_records():
             __user.audit(
                 "FORGET_STALE_KEA_RECORDS",
                 "kea_api",
-                "0 record(s) forgotten; NOT fully removed: "
+                "0 records forgotten; NOT fully removed: "
                 + ", ".join(f"{i} ({'/'.join(sorted({f[0] for f in failed}))})" for i, failed in report["incomplete"]),
             )
         if not report["parked"] and not report["skipped"] and not report["incomplete"]:
@@ -4046,13 +4047,13 @@ def forget_stale_kea_records():
     flash(
         "Forgot Jen's own copy of "
         + (
-            f"{len(stale_only)} certificate record(s) for server(s) that are no longer configured: {', '.join(stale_only)}"
+            f"{_plural(len(stale_only), 'certificate record')} for servers that are no longer configured: {', '.join(stale_only)}"
             if stale_only
             else ""
         )
         + ("; " if stale_only and on_word else "")
         + (
-            f"{len(on_word)} PARKED record(s), on your word that no daemon presents them any more: {', '.join(on_word)} (recorded on Servers; their expiry is no longer watched)"
+            f"{_plural(len(on_word), 'PARKED record')}, on your word that no daemon presents them any more: {', '.join(on_word)} (recorded on Servers; their expiry is no longer watched)"
             if on_word
             else ""
         )
@@ -4062,7 +4063,7 @@ def forget_stale_kea_records():
     __user.audit(
         "FORGET_STALE_KEA_RECORDS",
         "kea_api",
-        f"{len(forgotten)} record(s): {', '.join(forgotten)}"
+        f"{_plural(len(forgotten), 'record')}: {', '.join(forgotten)}"
         + (f"; parked, on the operator's word: {', '.join(on_word)}" if on_word else "")
         + (
             "; NOT fully removed: "
@@ -4538,7 +4539,7 @@ def remove_direct_socket(server_id, service):
         if dropped_record["failed"]:
             # Q199 (AO5): the record is forgotten only when its files are gone
             flash(
-                f"{len(dropped_record['failed'])} file(s) of Jen's copy of this socket's certificate could not be removed "
+                f"{_plural(len(dropped_record['failed']), 'file')} of Jen's copy of this socket's certificate could not be removed "
                 f"({', '.join(sorted({f[1] for f in dropped_record['failed']}))}) - they may still be on disk; fix the certificate folder's permissions and use Forget stale records.",
                 "error",
             )
@@ -5253,15 +5254,15 @@ def save_extra_servers():
             dropped.append((gone_id, gone_host, present))
     for gone_id, gone_host, present in dropped:
         flash(
-            f"Removed server {gone_id} ({gone_host}): its certificate record(s) {', '.join(present)} were dropped; the daemon may still present the certificate - remove its socket by hand if it is still running.",
+            f"Removed server {gone_id} ({gone_host}): its certificate record{'' if len(present) == 1 else 's'} {', '.join(present)} {'was' if len(present) == 1 else 'were'} dropped; the daemon may still present the certificate - remove its socket by hand if it is still running.",
             "warning",
         )
     for ident, failed in incomplete:
         flash(
-            f"{len(failed)} file(s) of the record {ident} could not be removed ({', '.join(sorted({f[1] for f in failed}))}) - Jen's copy may still be on disk; fix the certificate folder's permissions and forget it again.",
+            f"{_plural(len(failed), 'file')} of the record {ident} could not be removed ({', '.join(sorted({f[1] for f in failed}))}) - Jen's copy may still be on disk; fix the certificate folder's permissions and forget it again.",
             "error",
         )
-    flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
+    flash(f"Additional servers saved — {_plural(count, 'extra server')} configured.", "success")
     for url, host in zip(api_urls, ssh_hosts, strict=False):
         mismatch = __host_match.api_ssh_mismatch(url, host)
         if mismatch:

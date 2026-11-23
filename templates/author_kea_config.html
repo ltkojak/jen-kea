@@ -36,7 +36,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 {% elif autodetected_interfaces %}
 <div class="alert alert-info">{{ icon("info") }} No sibling Kea config found to pull settings from — interfaces below were autodetected from this server's live network config. Review before continuing.</div>
 {% else %}
-<div class="alert alert-warning">{{ icon("triangle-alert") }} No sibling Kea config found and no interfaces could be autodetected — fill in the interface name(s) manually below.</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} No sibling Kea config found and no interfaces could be autodetected — fill in the interface names manually below.</div>
 {% endif %}
 
 <div class="form-hint u-fdf33f" data-author-draft-note role="status" hidden>{{ icon("info") }} This form was restored from a draft kept in this browser tab (nothing is stored on the server). <a href="#" id="discard-draft">Discard draft</a></div>
@@ -99,7 +99,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         <div class="form-row">
             <div class="form-group">
                 <label for="f-db-host">DB Host</label>
-                <input type="text" name="db_host" id="f-db-host" value="{{ detected.lease_db_host or default_db.host }}">
+                <input type="text" name="db_host" id="f-db-host" value="{{ detected.lease_db_host or default_db.host }}" autocapitalize="off" spellcheck="false">
             </div>
             <div class="form-group">
                 <label for="f-db-user">DB Username</label>
@@ -244,7 +244,7 @@ async function showPreview() {
                 line += '<div class="u-cf10f6">interfaces: ' + escapeHtml(s.interfaces.join(', ')) + '</div>';
             }
             if (s.warning) {
-                line += '<div style="color:var(--warning);margin-left:20px;"><svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> ' + escapeHtml(s.warning) + '</div>';
+                line += '<div style="color:var(--warning-ink);margin-left:20px;"><svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> ' + escapeHtml(s.warning) + '</div>';
             }
             if (s.missing_binary) {
                 // v5.22.0 (Q18) — data-missing-binary + the delegated
@@ -267,7 +267,7 @@ async function showPreview() {
         }).join('');
         applyBtn.disabled = !data.all_passed;
         if (!data.all_passed) {
-            serversDiv.innerHTML += '<div class="u-a43081">Fix the error(s) above before writing — Kea would reject this configuration.</div>';
+            serversDiv.innerHTML += '<div class="u-a43081">Fix the errors above before writing — Kea would reject this configuration.</div>';
         }
         serversDiv.querySelectorAll('[data-ok]').forEach(function(el) {
             el.style.color = el.getAttribute('data-ok') === '1' ? 'var(--success)' : 'var(--danger)';
@@ -289,17 +289,17 @@ async function installBinary(btn, binary) {
         });
         var data = await resp.json();
         if (data.ok) {
-            statusEl.style.color = 'var(--success)';
+            statusEl.style.color = 'var(--success-ink)';
             statusEl.textContent = 'Installed — re-running Preview & Validate…';
             await showPreview();
         } else {
-            statusEl.style.color = 'var(--danger)';
+            statusEl.style.color = 'var(--danger-ink)';
             var msg = (data.servers || []).map(function(s) { return s.name + ': ' + (s.output || 'failed'); }).join(' | ');
             statusEl.textContent = (msg || data.error || 'Install failed.');
             btn.disabled = false;
         }
     } catch (e) {
-        statusEl.style.color = 'var(--danger)';
+        statusEl.style.color = 'var(--danger-ink)';
         statusEl.textContent = e.message;
         btn.disabled = false;
     }
@@ -315,7 +315,7 @@ async function installBinary(btn, binary) {
             if (sel.value === '0.0.0.0') {
                 var w = document.createElement('div');
                 w.className = 'f-bind-warn';
-                w.style.cssText = 'color:var(--danger);font-size:12px;margin-top:4px;';
+                w.style.cssText = 'color:var(--danger-ink);font-size:12px;margin-top:4px;';
                 w.textContent = 'Binds the control API on every interface. Only do this on an isolated management network.';
                 group.appendChild(w);
             }

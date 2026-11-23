@@ -706,7 +706,7 @@ class TestDdnsReconcileRoute:
         restricted_client(client, db, allowed_subnets=None, role="viewer", username="reconcile_viewer1")
         r = client.get("/ddns/reconcile", follow_redirects=True)
         assert r.status_code == 200
-        assert b"Admin access required." in r.data
+        assert b"Admin access required for /ddns/reconcile." in r.data  # Q248 (V47): a refusal names the page
 
     def test_reservation_and_lease_rows_both_appear(self, logged_in_client, db, mock_kea, monkeypatch):
         from jen import extensions

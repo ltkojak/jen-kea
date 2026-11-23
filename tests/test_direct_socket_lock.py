@@ -2413,7 +2413,7 @@ ssh_host = 10.0.0.6
         assert os.path.lexists(kt.server_copy_path(2, "dhcp4"))
         self._save(**self._rows())
         texts = " ".join(t for _s, t in tls_world["flashes"])
-        assert "Removed server 2 (10.0.0.6): its certificate record(s) 2-dhcp4 were dropped" in texts, texts
+        assert "Removed server 2 (10.0.0.6): its certificate record 2-dhcp4 was dropped" in texts, texts
         assert (
             "the daemon may still present the certificate - remove its socket by hand if it is still running" in texts
         )
@@ -2471,9 +2471,9 @@ ssh_host = 10.0.0.6
         self._save(**self._rows())
         monkeypatch.setattr(os, "unlink", real)
         texts = " ".join(t for _s, t in tls_world["flashes"])
-        assert "1 file(s) of the record 2-dhcp4 could not be removed (PermissionError)" in texts, texts
+        assert "1 file of the record 2-dhcp4 could not be removed (PermissionError)" in texts, texts
         assert any("NOT fully removed: 2-dhcp4" in str(a) for a in tls_world["audits"]), tls_world["audits"]
-        assert "its certificate record(s) 2-dhcp4 were dropped" not in texts, (
+        assert "its certificate record 2-dhcp4 was dropped" not in texts, (
             "(second pass, F5) a record that could not be removed is not also said to be dropped"
         )
         assert not any("records dropped with removed servers: 2-dhcp4" in str(a) for a in tls_world["audits"]), (

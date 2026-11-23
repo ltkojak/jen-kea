@@ -9,11 +9,15 @@
         <button type="button" id="reservations-bulk-delete-btn" class="btn btn-sm btn-danger-outline">{{ icon("trash") }} Delete Selected</button>
         {% endif %}
     </div>
+{# Q248 - the bulk form ends HERE, after its bar, and each row's checkbox names it (form="bulk-form"). It used to wrap the whole table, and a row's own form (its action
+   menu's Release / Remove / a plugin's POST action) is not allowed inside another form: the browser dropped the inner <form> tag, so the row's button was a button of
+   the bulk form and posted the BULK action, with no confirmation. #}
+</form>
 <div class="card flush">
 <div class="table-wrap">
 <table class="sortable rowlist">
     <thead><tr>
-        <th class="col-check"><input type="checkbox" id="selectAll"></th>
+        <th class="col-check"><input type="checkbox" id="selectAll" aria-label="Select all rows"></th>
         <th{% if sort=='ip' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page|urlencode }}&status={{ status_filter|urlencode }}" hx-get="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page|urlencode }}&status={{ status_filter|urlencode }}" hx-target="#reservations-results" hx-push-url="true" class="th-link">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th{% if sort=='hostname' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page|urlencode }}&status={{ status_filter|urlencode }}" hx-get="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page|urlencode }}&status={{ status_filter|urlencode }}" hx-target="#reservations-results" hx-push-url="true" class="th-link">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th class="hide-mobile"{% if sort=='mac' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page|urlencode }}&status={{ status_filter|urlencode }}" hx-get="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page|urlencode }}&status={{ status_filter|urlencode }}" hx-target="#reservations-results" hx-push-url="true" class="th-link">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
@@ -46,7 +50,6 @@
 </table>
 </div>
 </div>
-</form>
 
 {% if pages > 1 %}
 <div class="pagination">

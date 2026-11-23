@@ -2744,7 +2744,7 @@ class TestAFailedRecoverySaysWhatHappened:
         texts = lab.texts()
         assert "Kea CA rotated" not in texts, "an injected failure is never a success"
         assert "The recovery did not complete" in texts, texts
-        counted = re.search(r"(\d) of 2 daemon\(s\) were left in a state that needs it repeated - ([^;]*)", texts)
+        counted = re.search(r"(\d) of 2 daemons (?:was|were) left in a state that needs it repeated - ([^;]*)", texts)
         assert counted or "no daemon was changed" in texts, texts
         if counted:
             assert int(counted.group(1)) >= 1 and ("kea-dhcp4" in counted.group(2)), counted.group(0)
@@ -2856,7 +2856,7 @@ class TestTheSecondPassOfQ193:
         texts = lab.texts()
         assert "kea-a kea-dhcp4: the replacement CA's certificate is installed" in texts, texts
         assert "standby kea-dhcp4: the helper refused the replacement certificate" in texts, texts
-        assert "2 of 2 daemon(s) were left in a state that needs it repeated" in texts and "Not changed" not in texts
+        assert "2 of 2 daemons were left in a state that needs it repeated" in texts and "Not changed" not in texts
         by_server = {r[0]: (r[3], r[5]) for r in lab.incident_records}
         assert by_server[1] == ("tls-not-restored", infra._RECOVERY_CUT_OFF)
         assert by_server[2][0] == "remote-unknown"
@@ -2866,7 +2866,7 @@ class TestTheSecondPassOfQ193:
         lab.refuse.add((1, "install-tls", 1))
         _rotate({"acknowledge_damaged_ca": "1"})
         texts = lab.texts()
-        assert "1 of 2 daemon(s) were left in a state that needs it repeated" in texts, texts
+        assert "1 of 2 daemons was left in a state that needs it repeated" in texts, texts
         assert "Not changed: standby kea-dhcp4." in texts, texts
         assert "replacement CA's certificate is installed" not in texts
 
@@ -3503,7 +3503,7 @@ class TestTheSmallOnesOfQ195:
         evidence = kea_tls._initialized_evidence()
         assert "holds" not in evidence and "certificate directory exists" in evidence, evidence
         pathlib.Path(kea_tls.SSL_DIR, "kea-servers", "1-dhcp4.crt").write_text("x", encoding="ascii")
-        assert "holds 1 file(s)" in kea_tls._initialized_evidence()
+        assert "holds 1 file for" in kea_tls._initialized_evidence()
         lab.hosts.clear()
         lab.begin()
 
@@ -4529,7 +4529,7 @@ class TestTheStaleRecords:
             "stale record for server 77 kea-dhcp4 (its server is no longer configured): Rotate ignores it" in row.detail
         ), row.detail
         assert "forget it under Settings → Kea to clear this" in row.detail
-        assert "2 server certificate(s) valid" in row.detail, "the stale copy is not counted as a valid certificate"
+        assert "2 server certificates valid" in row.detail, "the stale copy is not counted as a valid certificate"
         assert row.status != "fail" or "expired" not in row.detail, "a stale record's expiry is not a warning"
 
     def test_rotate_ignores_it(self, lab):
@@ -4891,7 +4891,7 @@ class TestStaleIsAFactAboutTheDaemon:
     def test_health_counts_and_names_a_parked_record(self, lab):
         self._park_server_2(lab)
         row = health._kea_tls_expiry({})
-        assert "2 server certificate(s) valid" in row.detail, (
+        assert "2 server certificates valid" in row.detail, (
             "the parked record is counted: its daemon may still present it"
         )
         assert "parked record for standby kea-dhcp4" in row.detail and "stale record" not in row.detail, row.detail
@@ -4947,9 +4947,7 @@ class TestStaleIsAFactAboutTheDaemon:
         with app.test_request_context(method="POST"):
             inspect.unwrap(infra.forget_stale_kea_records)()
         texts = lab.texts()
-        assert (
-            "Kept 1 parked record(s): 2-dhcp4" in texts and "remove the socket under Settings → Kea to drop it" in texts
-        )
+        assert "Kept 1 parked record: 2-dhcp4" in texts and "remove the socket under Settings → Kea to drop it" in texts
         assert "There were no stale certificate records" not in texts and os.path.lexists(
             kea_tls.server_copy_path(2, "dhcp4")
         )
@@ -5543,7 +5541,7 @@ class TestACleanupReportsWhatHappened:
         monkeypatch.setattr(os, "unlink", failing)
         _forget()
         texts = lab.texts()
-        assert "1 file(s) of the record 9-dhcp4 could not be removed (PermissionError)" in texts, texts
+        assert "1 file of the record 9-dhcp4 could not be removed (PermissionError)" in texts, texts
         assert "Jen's copy may still be on disk" in texts
         assert "placeholder" not in texts and "placeholder" not in " ".join(str(a) for a in lab.audits)
         assert any("NOT fully removed: 9-dhcp4" in str(a) for a in lab.audits), lab.audits

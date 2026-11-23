@@ -76,6 +76,15 @@ def _load_lease(mac_hex: str) -> dict | None:
     return leases[0] if leases else None
 
 
+def _lease_subnet_name(lease, subnet_map) -> str | None:
+    """The name of the subnet the current lease is in, from the caller's own subnet map: None for no lease, and for a subnet that map does not hold (Q248, V20)."""
+    try:
+        sid = int((lease or {}).get("subnet_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return (subnet_map.get(sid) or {}).get("name") or None
+
+
 @bp.route("/tools/explain")
 @login_required
 @diagnostic_surface(subject="client")
@@ -156,6 +165,8 @@ def explain_page():
                 lease=lease,
                 reservations=reservations,
                 accessible_ids=None if current_user.all_subnets else set(subnet_map),
+                # Q248 (V20): `lease` is the usable one (a subnet this account may see), and `subnet_map` holds only such subnets, so the name is one the caller may read
+                lease_subnet_name=_lease_subnet_name(lease, subnet_map),
             )
             if not result.get("ok"):
                 say(result.get("error", "Could not explain this client."))

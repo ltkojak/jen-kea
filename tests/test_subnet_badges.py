@@ -18,10 +18,11 @@ from jen.services import subnet_tones, theme
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BASE = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
 
-#: the exact text of the name rules the maintainer's own subnets used (templates/base.html, v5.69.4): `.badge-production` (primary) and `.badge-iot` (success). blue and green are these
-#: declarations byte for byte, so the maintainer's blue and green never drift.
-OLD_PRODUCTION = "background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary);"
-OLD_IOT = "background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success);"
+#: the name rules the maintainer's own subnets used (templates/base.html, v5.69.4) were `.badge-production` (primary) and `.badge-iot` (success): 18% of the token, and the token as
+#: the text. Q248 (V6) changed two words in each, on purpose and in every tone alike: the chip is mixed into `--tint-base` (the preset's surface; `transparent` for a custom palette) and
+#: the text is the token's INK (the token itself wherever that reads at 4.5:1 on the chip - Dark's blue and green are the same two colors they were). tests/test_q248_c1.py measures them.
+OLD_PRODUCTION = "background: color-mix(in srgb, var(--primary) 18%, var(--tint-base)); color: var(--primary-ink);"
+OLD_IOT = "background: color-mix(in srgb, var(--success) 18%, var(--tint-base)); color: var(--success-ink);"
 
 
 def _rule(selector):
@@ -89,13 +90,13 @@ class TestThePinnedDeclarationsAndTheSevenTones:
         assert subnet_tones.TONES == ("blue", "green", "red", "orange", "yellow", "purple", "mono")
         for tone in subnet_tones.TONES:
             rule = _rule(f".badge-tone-{tone}")
-            assert "color-mix(in srgb," in rule and "18%, transparent" in rule, (tone, rule)
+            assert "color-mix(in srgb," in rule and "18%, var(--tint-base)" in rule, (tone, rule)
         assert len(set(re.findall(r"\.badge-tone-(\w+)\s*\{", BASE))) == 7
 
     def test_red_orange_and_mono_use_the_themes_own_tokens(self):
         assert "var(--danger)" in _rule(".badge-tone-red") and "var(--warning)" in _rule(".badge-tone-orange")
         mono = _rule(".badge-tone-mono")
-        assert "color: var(--text);" in mono and "color-mix(in srgb, var(--text) 18%, transparent)" in mono
+        assert "color: var(--text);" in mono and "color-mix(in srgb, var(--text) 18%, var(--tint-base))" in mono
 
     def test_the_default_is_blue_and_only_a_known_tone_is_valid(self):
         assert subnet_tones.DEFAULT_TONE == "blue"
@@ -118,12 +119,16 @@ class TestThePinnedDeclarationsAndTheSevenTones:
     @pytest.mark.parametrize("preset", sorted(theme.PRESETS))
     @pytest.mark.parametrize(("hue", "tone"), [("#e6b400", "yellow"), ("#a371f7", "purple")])
     def test_the_fixed_hues_read_in_every_preset(self, preset, hue, tone):
-        """yellow and purple are fixed hues mixed 50% toward the preset's own text color, on an 18% tint of the hue over the preset's surface: the label keeps a legible ratio on a light and on a dark preset."""
+        """yellow and purple are fixed hues on an 18% tint of the hue over the preset's surface. Q248 (V6): the label keeps the preset's own `--tone-keep` of the hue and takes the rest
+        from `--tone-pole` (black or white), and the floor is 4.5:1 (it was 50% toward the text color and 3:1: #e6b400 read 3.5:1 on Retro)."""
         tokens = theme.PRESETS[preset]["tokens"]
-        text, surface = self._full(tokens["text"]), self._full(tokens["surface"])
-        label = self._mix(hue, text, 50)
+        derived = theme.derived_vars(tokens)
+        surface = self._full(tokens["surface"])
+        label = self._mix(hue, derived["--tone-pole"], int(derived["--tone-keep"].rstrip("%")))
         chip = self._mix(hue, surface, 18)
-        assert theme.contrast_ratio(label, chip) >= 3.0, (preset, tone, label, chip, theme.contrast_ratio(label, chip))
+        assert theme.contrast_ratio(label, chip) >= 4.5, (preset, tone, label, chip, theme.contrast_ratio(label, chip))
+        rule = _rule(f".badge-tone-{tone}")
+        assert f"color: color-mix(in srgb, {hue} var(--tone-keep), var(--tone-pole));" in rule, rule
 
     @pytest.mark.parametrize("preset", sorted(theme.PRESETS))
     def test_mono_is_the_texts_own_color_on_a_tint_of_itself(self, preset):
@@ -317,9 +322,10 @@ class TestTheHint:
             r'<div class="alert alert-info alert-flash" id="tone-hint" role="note" hidden>(.*?)</div>', page, re.S
         )
         assert m, "the hint is on the administrator's page"
-        assert "Click a subnet's name on its card to choose its badge color - the badge is the picker." in m.group(
+        # Q248 (V44): the page is a list of rows and the badge sits beside the name, so the hint names the badge
+        assert "Click a subnet's badge to choose its color - the badge is the picker." in m.group(
             1
-        ) or "Click a subnet&#39;s name" in m.group(1)
+        ) or "Click a subnet&#39;s badge to choose its color - the badge is the picker." in m.group(1)
         assert 'class="alert-close" aria-label="Dismiss"' in m.group(1)
         assert "data-autofade" not in m.group(0), "a hint waits to be read"
 

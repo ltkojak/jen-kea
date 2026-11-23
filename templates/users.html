@@ -6,9 +6,9 @@
 <div class="page-header u-1bcfaf">
     <div>
         <h1>{{ icon("user", "ico-lg") }} Users</h1>
-        <p>User management is restricted to SuperAdmins.</p>
+        <p>User management is restricted to Superadmins.</p>
     </div>
-    <button class="btn btn-primary" id="add-user-btn">＋ Add User</button>
+    <button type="button" class="btn btn-primary" id="add-user-btn" aria-haspopup="dialog">＋ Add User</button>
 </div>
 
 {{ subtabs(nav.subtabs['security'], 'users') }}
@@ -39,7 +39,7 @@
         </td>
         <td data-m="badge">
             {% if u.role == 'superadmin' %}
-            <span style="color:var(--warning);font-weight:600;font-size:12px;">{{ icon("star") }} SuperAdmin</span>
+            <span style="color:var(--warning);font-weight:600;font-size:12px;">{{ icon("star") }} Superadmin</span>
             {% elif u.role == 'admin' %}
             <span style="color:var(--primary);font-weight:600;font-size:12px;">{{ icon("wrench") }} Admin</span>
             {% else %}
@@ -59,18 +59,20 @@
                 {{ names | join(', ') or '—' }}
             {% endif %}
         </td>
+        {# Q248 (addition 8) - the account's second factor in words: each method it has, or "None" (a phone row has no column heading, so it says what the words are about) #}
         <td data-m="secondary" class="u-6cb285">
-            {% if u.mfa_enrolled %}
-            <span class="u-5a4529">✓ Enrolled</span>
+            <span class="phone-only">MFA: </span>
+            {% if u.mfa_methods %}
+            <span class="u-5a4529">{{ u.mfa_methods | join(', ') }}</span>
             {% else %}
-            <span class="u-5872de">—</span>
+            <span class="u-5872de">None</span>
             {% endif %}
         </td>
         <td data-m="hide" class="u-865c33">
             {% if u.own_minutes %}{{ u.own_minutes }}m{% else %}{{ global_timeout }}m (global){% endif %}
         </td>
         <td data-m="trailing">
-            <button class="btn btn-sm btn-secondary edit-user-btn"
+            <button type="button" class="btn btn-sm btn-secondary edit-user-btn" data-user-id="{{ u.id }}" aria-haspopup="dialog"
                 data-user='{{ {"id": u.id, "username": u.username, "role": u.role, "subnet_ids": u.subnet_ids, "timeout": u.session_timeout, "mfa": u.mfa_enrolled, "is_self": (u.id == current_user.id), "is_oidc": (u.auth_provider == "oidc"), "external_id": (u.external_id or "")} | tojson }}'>{{ icon("pencil") }} Edit</button>
         </td>
     </tr>
@@ -84,18 +86,20 @@
 <div class="card" style="margin-top:16px;background:var(--surface2);font-size:12px;color:var(--text-muted);">
     <div class="u-6f3b9b">Role Reference</div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-        <div><strong class="u-52df2b">{{ icon("star") }} SuperAdmin</strong><br>Full access to all subnets and all settings. Manages users and roles. Cannot be subnet-restricted.</div>
+        <div><strong class="u-52df2b">{{ icon("star") }} Superadmin</strong><br>Full access to all subnets and all settings. Manages users and roles. Cannot be subnet-restricted.</div>
         <div><strong class="u-dc2e42">{{ icon("wrench") }} Admin</strong><br>Full management on assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
         <div><strong class="u-f045bb">{{ icon("eye") }} Viewer</strong><br>Read-only access to assigned subnets. Cannot access Settings or Database.</div>
     </div>
 </div>
 
 <!-- ── ADD USER MODAL ─────────────────────────────────────────────────── -->
-<div id="add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;">
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(480px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
+{# Q248 (V3) - a real dialog: role, aria-modal and its title; window.jenDialog (base.html) moves focus to the first field, keeps Tab inside, closes on Escape, makes the
+   page behind inert and gives focus back to the button that opened it. A form the server refused opens it again with what was typed (never a password). #}
+<div id="add-modal" class="jen-dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="add-modal-title" hidden>
+<div class="jen-modal">
     <div class="u-24c1b8">
-        <h3 class="u-116966">＋ Add User</h3>
-        <button data-close-modal="add-modal" class="u-c4d0b1" aria-label="Close">✕</button>
+        <h3 class="u-116966" id="add-modal-title">＋ Add User</h3>
+        <button type="button" data-dialog-close class="jen-modal-close" aria-label="Close">✕</button>
     </div>
     <form method="POST" action="/users/add"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
@@ -104,7 +108,7 @@
         </div>
         <div class="form-group">
             <label for="f-password">Password</label>
-            <input id="f-password" type="password" name="password" required autocomplete="new-password" class="u-046678" aria-describedby="f-password-hint">
+            <input id="f-password" type="password" name="password" required minlength="8" autocomplete="new-password" class="u-046678" aria-describedby="f-password-hint">
             <div class="form-hint" id="f-password-hint">Minimum 8 characters</div>
         </div>
         <div class="form-group">
@@ -112,38 +116,39 @@
             <select name="role" id="add-role" class="u-046678">
                 <option value="viewer">Viewer — read-only on assigned subnets</option>
                 <option value="admin">Admin — manage assigned subnets</option>
-                <option value="superadmin">SuperAdmin — full access, all subnets</option>
+                <option value="superadmin">Superadmin — full access, all subnets</option>
             </select>
         </div>
         <div class="form-group" id="add-subnet-group">
-            <label>Subnet Access</label>
-            <select name="subnet_ids" multiple class="u-ff2ba4">
-                <option value="all" selected>All Subnets</option>
+            <label id="f-subnet_ids-label">Subnet Access</label>
+            {# Q248 (V41) - the API key form's list of checkboxes (Q247, U9), not a multi-select a phone cannot extend: the same field name and values #}
+            <div id="f-subnet_ids" class="check-list" role="group" tabindex="-1" aria-labelledby="f-subnet_ids-label" aria-describedby="f-subnet_ids-hint">
+                <label><input type="checkbox" name="subnet_ids" value="all" checked> All Subnets</label>
                 {% for sid, info in subnet_map.items() %}
-                <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
+                <label><input type="checkbox" name="subnet_ids" value="{{ sid }}"> {{ info.name }} ({{ info.cidr }})</label>
                 {% endfor %}
-            </select>
-            <div class="form-hint">Ctrl/Cmd+click for multiple. "All Subnets" = unrestricted.</div>
+            </div>
+            <div class="form-hint" id="f-subnet_ids-hint">Tick All Subnets, or the subnets this account may use - not both.</div>
         </div>
         <div class="form-group">
-            <label>Session Timeout (minutes)</label>
-            <input type="number" name="timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" class="u-046678">
-            <div class="form-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
+            <label for="f-timeout">Session Timeout (minutes)</label>
+            <input id="f-timeout" type="number" name="timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" class="u-046678" aria-describedby="f-timeout-hint">
+            <div class="form-hint" id="f-timeout-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
         </div>
-        <div style="display:flex;gap:10px;margin-top:8px;">
+        <div class="jen-modal-actions">
             <button type="submit" class="btn btn-primary">Add User</button>
-            <button type="button" class="btn btn-secondary" data-close-modal="add-modal">Cancel</button>
+            <button type="button" class="btn btn-secondary" data-dialog-close>Cancel</button>
         </div>
     </form>
 </div>
 </div>
 
 <!-- ── EDIT USER MODAL ────────────────────────────────────────────────── -->
-<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;">
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(520px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
+<div id="edit-modal" class="jen-dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title" hidden>
+<div class="jen-modal">
     <div class="u-24c1b8">
-        <h3 class="u-116966">{{ icon("pencil") }} Edit User: <span id="edit-username-label" class="u-dc2e42"></span></h3>
-        <button data-close-modal="edit-modal" class="u-c4d0b1" aria-label="Close">✕</button>
+        <h3 class="u-116966" id="edit-modal-title">{{ icon("pencil") }} Edit User: <span id="edit-username-label" class="u-dc2e42"></span></h3>
+        <button type="button" data-dialog-close class="jen-modal-close" aria-label="Close">✕</button>
     </div>
 
     <form id="edit-form" method="POST" action=""><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -154,28 +159,28 @@
             <select name="role" id="edit-role" class="u-046678" aria-describedby="edit-role-oidc-hint">
                 <option value="viewer">Viewer — read-only on assigned subnets</option>
                 <option value="admin">Admin — manage assigned subnets</option>
-                <option value="superadmin">SuperAdmin — full access, all subnets</option>
+                <option value="superadmin">Superadmin — full access, all subnets</option>
             </select>
-            <div class="form-hint" id="edit-role-oidc-hint" style="display:none;color:var(--warning);">Role is managed by the identity provider — it's recomputed from group membership on every SSO login.</div>
+            <div class="form-hint warn" id="edit-role-oidc-hint" hidden>Role is managed by the identity provider — it's recomputed from group membership on every SSO login.</div>
         </div>
 
         <!-- Subnet Access -->
         <div class="form-group" id="edit-subnet-group">
-            <label for="edit-subnets">Subnet Access</label>
-            <select name="subnet_ids" id="edit-subnets" multiple class="u-ff2ba4">
-                <option value="all">All Subnets</option>
+            <label id="f-edit-subnet_ids-label">Subnet Access</label>
+            <div id="f-edit-subnet_ids" class="check-list" role="group" tabindex="-1" aria-labelledby="f-edit-subnet_ids-label" aria-describedby="f-edit-subnet_ids-hint">
+                <label><input type="checkbox" name="subnet_ids" value="all"> All Subnets</label>
                 {% for sid, info in subnet_map.items() %}
-                <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
+                <label><input type="checkbox" name="subnet_ids" value="{{ sid }}"> {{ info.name }} ({{ info.cidr }})</label>
                 {% endfor %}
-            </select>
-            <div class="form-hint">Ctrl/Cmd+click for multiple. "All Subnets" = unrestricted.</div>
+            </div>
+            <div class="form-hint" id="f-edit-subnet_ids-hint">Tick All Subnets, or the subnets this account may use - not both.</div>
         </div>
 
         <!-- Timeout -->
         <div class="form-group">
-            <label for="edit-timeout">Session Timeout (minutes)</label>
-            <input type="number" name="timeout" id="edit-timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" class="u-046678">
-            <div class="form-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
+            <label for="f-edit-timeout">Session Timeout (minutes)</label>
+            <input type="number" name="timeout" id="f-edit-timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" class="u-046678" aria-describedby="f-edit-timeout-hint">
+            <div class="form-hint" id="f-edit-timeout-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
         </div>
 
         <hr class="u-6caa47">
@@ -187,18 +192,19 @@
                 <div class="u-054de4">Leave blank to keep current password.</div>
             </div>
             <div class="form-group">
-                <label for="edit-new-pw">New Password</label>
-                <input type="password" name="new_password" id="edit-new-pw" autocomplete="new-password" placeholder="Enter new password…" class="u-046678">
+                <label for="f-edit-new_password">New Password</label>
+                <input type="password" name="new_password" id="f-edit-new_password" minlength="8" autocomplete="new-password" placeholder="Enter new password…" class="u-046678" aria-describedby="f-edit-new_password-hint">
+                <div class="form-hint" id="f-edit-new_password-hint">Minimum 8 characters</div>
             </div>
             <div class="form-group">
-                <label for="edit-confirm-pw">Confirm New Password</label>
-                <input type="password" name="confirm_password" id="edit-confirm-pw" autocomplete="new-password" placeholder="Confirm new password…" class="u-046678">
+                <label for="f-edit-confirm_password">Confirm New Password</label>
+                <input type="password" name="confirm_password" id="f-edit-confirm_password" minlength="8" autocomplete="new-password" placeholder="Confirm new password…" class="u-046678">
             </div>
         </div>
 
-        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+        <div class="jen-modal-actions">
             <button type="submit" class="btn btn-primary">Save Changes</button>
-            <button type="button" class="btn btn-secondary" data-close-modal="edit-modal">Cancel</button>
+            <button type="button" class="btn btn-secondary" data-dialog-close>Cancel</button>
         </div>
     </form>
 
@@ -208,7 +214,7 @@
     <div class="u-da12f2">
         <label class="u-b9037b">Single Sign-On</label>
     </div>
-    <div id="edit-sso-linked" style="font-size:13px;margin-bottom:10px;display:none;color:var(--text-muted);"></div>
+    <div id="edit-sso-linked" class="md muted mb-2" hidden></div>
     <form id="link-sso-form" method="POST" action=""
           data-confirm="Link this account to SSO? Local username/password login will be disabled for it immediately.">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -226,7 +232,7 @@
     </div>
     <div id="edit-mfa-status" style="font-size:13px;margin-bottom:10px;"></div>
     <form id="reset-mfa-form" method="POST" action=""
-          data-confirm="Reset MFA for this user? They will need to re-enroll on next login."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          data-confirm="Reset MFA for this user? They will need to re-enroll on next login. This cannot be undone." data-confirm-label="Reset"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" id="reset-mfa-btn" class="btn btn-sm btn-secondary">{{ icon("lock") }} Reset MFA Enrollment</button>
     </form>
 
@@ -237,7 +243,7 @@
         <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--danger);">Danger Zone</label>
         <div class="u-d2c171">
             <form id="delete-form" method="POST" action=""
-                  data-confirm="Delete this user? This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  data-confirm="Delete this user? This cannot be undone." data-confirm-label="Delete"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger">{{ icon("trash") }} Delete User</button>
             </form>
         </div>
@@ -246,124 +252,106 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
-var _subnetMap = {{ subnet_map | tojson }};
+// Q248 (V3, V41) - Add User and Edit User are dialogs (window.jenDialog, base.html): focus goes in, Tab stays in, Escape closes, focus goes back to the button that opened
+// one. The subnet lists are checkboxes; base.html's one .check-list handler keeps All Subnets and a named subnet apart.
+// FORM_BACK is what a form the server refused held (jen/routes/users.py `_keep_user_form`): the dialog opens again with it, and the field's message lands beside its field.
+var FORM_BACK = {{ form_back | tojson }};
 
-function openAddModal() {
-    document.getElementById('add-modal').style.display = 'flex';
-    toggleAddSubnets();
+function tickSubnets(listId, subnetIds) {
+    // `subnetIds` is the list the account stores, or what a refused form had ticked: null (or no list at all) is All Subnets
+    var wanted = (subnetIds || []).map(String);
+    document.querySelectorAll('#' + listId + ' input[name="subnet_ids"]').forEach(function(box) {
+        box.checked = subnetIds ? wanted.indexOf(box.value) !== -1 : box.value === 'all';
+    });
 }
 
-function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSelf, isOidc, externalId) {
-    document.getElementById('edit-username-label').textContent = username;
-    document.getElementById('edit-form').action = '/users/edit/' + id;
-    document.getElementById('reset-mfa-form').action = '/mfa/admin-reset/' + id;
-    document.getElementById('delete-form').action = '/users/delete/' + id;
-    document.getElementById('link-sso-form').action = '/users/link-sso/' + id;
+function toggleAddSubnets() {
+    document.getElementById('add-subnet-group').hidden = document.getElementById('add-role').value === 'superadmin';
+}
 
-    // Set role
-    document.getElementById('edit-role').value = role;
+function toggleEditSubnets() {
+    document.getElementById('edit-subnet-group').hidden = document.getElementById('edit-role').value === 'superadmin';
+}
+
+function openAddModal(opener) {
+    toggleAddSubnets();
+    jenDialog.open(document.getElementById('add-modal'), opener);
+}
+
+function openEditModal(u, opener) {
+    document.getElementById('edit-username-label').textContent = u.username;
+    document.getElementById('edit-form').action = '/users/edit/' + u.id;
+    document.getElementById('reset-mfa-form').action = '/mfa/admin-reset/' + u.id;
+    document.getElementById('delete-form').action = '/users/delete/' + u.id;
+    document.getElementById('link-sso-form').action = '/users/link-sso/' + u.id;
+
+    document.getElementById('edit-role').value = u.role;
     toggleEditSubnets();
 
     // v5.25.0 (Q21) — an OIDC-linked account's role/password come from
     // the identity provider: hide the password-reset section, show why
     // the role select is disabled, and swap the "Link to SSO" form for
     // a plain status line since it's already linked.
-    document.getElementById('edit-role-oidc-hint').style.display = isOidc ? '' : 'none';
-    document.getElementById('edit-password-section').style.display = isOidc ? 'none' : '';
+    document.getElementById('edit-role-oidc-hint').hidden = !u.is_oidc;
+    document.getElementById('edit-password-section').hidden = !!u.is_oidc;
     var ssoLinked = document.getElementById('edit-sso-linked');
-    var ssoForm = document.getElementById('link-sso-form');
-    if (isOidc) {
-        ssoLinked.textContent = 'Linked to SSO (external ID: ' + externalId + ')';
-        ssoLinked.style.display = '';
-        ssoForm.style.display = 'none';
-    } else {
-        ssoLinked.style.display = 'none';
-        ssoForm.style.display = '';
-    }
+    ssoLinked.textContent = u.is_oidc ? 'Linked to SSO (external ID: ' + u.external_id + ')' : '';
+    ssoLinked.hidden = !u.is_oidc;
+    document.getElementById('link-sso-form').hidden = !!u.is_oidc;
 
-    // Set subnet selections
-    var sel = document.getElementById('edit-subnets');
-    for (var i = 0; i < sel.options.length; i++) {
-        var opt = sel.options[i];
-        if (!subnetIds) {
-            opt.selected = opt.value === 'all';
-        } else {
-            opt.selected = subnetIds.indexOf(parseInt(opt.value)) !== -1;
-        }
-    }
-
-    // Set timeout
-    var ti = document.getElementById('edit-timeout');
-    ti.value = timeout || '';
+    // the account's stored subnets (All Subnets when it stores none) and its timeout
+    tickSubnets('f-edit-subnet_ids', u.subnet_ids);
+    document.getElementById('f-edit-timeout').value = u.timeout || '';
 
     // MFA status
     var mfaEl = document.getElementById('edit-mfa-status');
-    var mfaBtn = document.getElementById('reset-mfa-btn');
-    if (mfaEnrolled) {
-        mfaEl.innerHTML = '<span class="u-5a4529">✓ MFA is enrolled.</span> Reset to force re-enrollment.';
-        mfaBtn.disabled = false;
-    } else {
-        mfaEl.innerHTML = '<span class="u-5872de">MFA is not enrolled.</span>';
-        mfaBtn.disabled = true;
-    }
+    mfaEl.textContent = '';
+    var state = document.createElement('span');
+    state.className = u.mfa ? 'ok' : 'muted';
+    state.textContent = u.mfa ? '✓ MFA is enrolled.' : 'MFA is not enrolled.';
+    mfaEl.appendChild(state);
+    if (u.mfa) mfaEl.appendChild(document.createTextNode(' Reset to force re-enrollment.'));
+    document.getElementById('reset-mfa-btn').disabled = !u.mfa;
 
-    // Hide delete for self
-    document.getElementById('delete-section').style.display = isSelf ? 'none' : '';
+    // Hide delete for self; no role change for self, or for an SSO-managed account
+    document.getElementById('delete-section').hidden = !!u.is_self;
+    document.getElementById('edit-role').disabled = !!(u.is_self || u.is_oidc);
 
-    // Disable role change for self, or for an SSO-managed account
-    document.getElementById('edit-role').disabled = isSelf || isOidc;
-
-    document.getElementById('edit-modal').style.display = 'flex';
+    jenDialog.open(document.getElementById('edit-modal'), opener);
 }
 
-function closeModal(id) {
-    document.getElementById(id).style.display = 'none';
-    // Clear password fields on close
-    if (id === 'edit-modal') {
-        document.getElementById('edit-new-pw').value = '';
-        document.getElementById('edit-confirm-pw').value = '';
-    }
-}
-
-function toggleAddSubnets() {
-    var role = document.getElementById('add-role').value;
-    document.getElementById('add-subnet-group').style.display =
-        role === 'superadmin' ? 'none' : '';
-}
-
-function toggleEditSubnets() {
-    var role = document.getElementById('edit-role').value;
-    document.getElementById('edit-subnet-group').style.display =
-        role === 'superadmin' ? 'none' : '';
-}
-
-// Close modal on backdrop click
-['add-modal','edit-modal'].forEach(function(id) {
-    document.getElementById(id).addEventListener('click', function(e) {
-        if (e.target === this) closeModal(id);
-    });
+// a closed Edit User dialog never keeps a typed password
+document.getElementById('edit-modal').addEventListener('jen:dialog-close', function() {
+    document.getElementById('f-edit-new_password').value = '';
+    document.getElementById('f-edit-confirm_password').value = '';
 });
 
-// Close on Escape
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        closeModal('add-modal');
-        closeModal('edit-modal');
-    }
-});
-
-// v5.22.0 (Q18) — converted from inline on*= handlers.
-document.getElementById('add-user-btn').addEventListener('click', openAddModal);
+document.getElementById('add-user-btn').addEventListener('click', function() { openAddModal(this); });
 document.querySelectorAll('.edit-user-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-        var u = JSON.parse(btn.dataset.user);
-        openEditModal(u.id, u.username, u.role, u.subnet_ids, u.timeout, u.mfa, u.is_self, u.is_oidc, u.external_id);
-    });
-});
-document.querySelectorAll('[data-close-modal]').forEach(function(el) {
-    el.addEventListener('click', function() { closeModal(el.getAttribute('data-close-modal')); });
+    btn.addEventListener('click', function() { openEditModal(JSON.parse(btn.dataset.user), btn); });
 });
 document.getElementById('add-role').addEventListener('change', toggleAddSubnets);
 document.getElementById('edit-role').addEventListener('change', toggleEditSubnets);
+
+// A form the server refused: its dialog opens again with what was typed (the username, the role, the ticked subnets, the timeout - never a password). This runs while the
+// page is still loading, so base.html's field-error script, which runs once the page has loaded, finds the field on screen and puts the message beside it.
+(function() {
+    if (!FORM_BACK) return;
+    if (FORM_BACK.form === 'add') {
+        document.getElementById('f-username').value = FORM_BACK.username || '';
+        if (FORM_BACK.role) document.getElementById('add-role').value = FORM_BACK.role;
+        tickSubnets('f-subnet_ids', FORM_BACK.subnet_ids || []);
+        document.getElementById('f-timeout').value = FORM_BACK.timeout || '';
+        openAddModal(document.getElementById('add-user-btn'));
+    } else if (FORM_BACK.form === 'edit') {
+        var btn = document.querySelector('.edit-user-btn[data-user-id="' + String(parseInt(FORM_BACK.id, 10)) + '"]');
+        if (!btn) return;
+        openEditModal(JSON.parse(btn.dataset.user), btn);
+        var role = document.getElementById('edit-role');
+        if (FORM_BACK.role && !role.disabled) { role.value = FORM_BACK.role; toggleEditSubnets(); }
+        tickSubnets('f-edit-subnet_ids', FORM_BACK.subnet_ids || []);
+        document.getElementById('f-edit-timeout').value = FORM_BACK.timeout || '';
+    }
+})();
 </script>
 {% endblock %}

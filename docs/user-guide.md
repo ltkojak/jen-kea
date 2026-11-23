@@ -10,7 +10,11 @@ A fresh install with Kea not yet connected lands a superadmin on `/setup`
 right after the forced password change — six steps, each skippable and
 resumable from [Getting started](#getting-started-v5390) later. The
 six-dot progress indicator at the top of every step shows what's done,
-skipped, or still open.
+skipped, or still open: a finished step carries a tick. **Back** and **Next**
+at the foot of each step move between the steps without recording anything
+(a step is ticked by its own action, and **Skip for now** is how a step is
+passed over on purpose); the last step has **Finish**, which ends the wizard
+on the dashboard.
 
 1. **Connect** — the Kea API URL, credentials, and Kea's own database
    connection. An **Advanced TLS** expander (collapsed unless you
@@ -83,13 +87,18 @@ skipped, or still open.
 
 The dashboard is the first page you see after logging in. It gives you a live overview of your entire DHCP infrastructure at a glance.
 
+### Needs attention
+
+When something needs you, a **Needs attention** card is the first thing on the page; when nothing does, the card is not drawn at all. It lists a Kea server that does not answer, each Health check that fails, and each pool that is near exhaustion or over the alert threshold. Every line is a link to the page where the thing is handled: Kea servers, the check's own row on the Health page, or the subnet's leases. The card shows only what your account may see: a subnet you have no access to is never named or counted, and the Health lines are the rows the Health page shows you. It is read again every five minutes while the page is open and auto-refresh is on. It is not one of the widgets you arrange or switch off.
+
 ### Subnet Utilization Cards
 
 Each configured subnet has a card showing:
 
 - **Active leases** — total number of devices currently holding a lease
 - **Dynamic** — devices using a dynamically assigned address (no reservation)
-- **Reserved** — devices with a static reservation
+- **Reserved** — devices holding a lease on an address that is reserved for them (active leases minus dynamic)
+- **Reservations** — on the pool line, the number of reservations that exist in the subnet, whether or not the device holds a lease now. It is a count of its own: it is not part of the active leases and does not add up with them
 
 The utilization bar at the bottom of each card fills as the subnet's pools fill (v5.68.0-beta.18). A subnet is judged **as a whole over all of
 its pools**: the capacity is every pool added together (ranges and CIDR pools alike - two ranges of 50 and 60 addresses are 110, not 60), and what
@@ -123,7 +132,7 @@ The small dot in the top right navigation bar shows whether Jen can reach the Ke
 
 ### IPv6 (v5.45.0)
 
-With IPv6 enabled (Settings → Infrastructure), the subnet grid shows IPv6 alongside IPv4 rather than as a separate section: a small **v4**/**v6** tag on each card tells you which is which, and an IPv6 subnet that's paired with one of your IPv4 subnets (configured in `jen.config`'s `[subnets6]` section) nests inside that same card instead of getting a card of its own — an unpaired IPv6 subnet still gets its own card. IPv6 has no pool-size concept comparable to IPv4's, so its cards show active leases and reservations only, with no utilization bar. The Total Summary widget adds IPv6 active/reserved numbers to the same row, tagged the same way.
+With IPv6 enabled (Settings → Infrastructure), the subnet grid shows IPv6 alongside IPv4 rather than as a separate section: a small **v4**/**v6** tag on each card tells you which is which, and an IPv6 subnet that's paired with one of your IPv4 subnets (configured in `jen.config`'s `[subnets6]` section) nests inside that same card instead of getting a card of its own — an unpaired IPv6 subnet still gets its own card. IPv6 has no pool-size concept comparable to IPv4's, so its cards show active leases and reservations only, with no utilization bar. The Total Summary widget adds the IPv6 active leases and reservations to the same row, tagged the same way.
 
 ### Customize and Arrange (v5.54.0)
 
@@ -151,6 +160,12 @@ The Leases page shows all active dynamic leases — devices that received an IP 
 
 **Show History** — toggle to show expired leases instead of active ones. Useful for seeing what was on your network recently.
 
+**Reserved and expiring leases** — a lease whose client has a reservation carries a small **Reserved** mark in its row, and a lease inside its last hour carries **Expires soon**. The line above the table counts both ("45 active leases · 2 expire within the hour · 3 reserved"), and each count is a link: click it to list only those leases. The filter then shows as a chip in the same line (**Reserved only**, **Expiring soon only**); click the chip to take it away, or **Clear** to drop every filter. A search, a sort and a page change keep it. On a phone the two are checkboxes in the **Filters** sheet and are counted on its button. The history has neither.
+
+**Expires** — the column says how long a lease has left ("in 22 h", "in 6 d"). Hover over it for the exact time, in your browser's time zone or in UTC as you chose in the Display menu.
+
+**Long names and narrow windows** — a hostname, a device name, an owner or a note that does not fit its column is cut with an ellipsis; hover over it for the whole text, or open the row's Investigate page. A list never scrolls sideways: in a narrower window it shows fewer columns, and always keeps the column it is sorted by and the row's menu. Leases shows Obtained from 1280 px up; Devices shows Type from 1280 px and First Seen, Owner and the IPv6 addresses from 1440 px. On a wide monitor the four list pages (Leases, Reservations, Devices, Logs) use up to 1,800 px; forms and settings stay 1,400 px wide.
+
 **Sorting and paging** — click a column heading to sort, or a page number to move on: the table changes where it is, without reloading the page, and Back returns to the previous sort. The heading the list is sorted by is announced to screen readers; Ctrl-click (or Cmd-click) a heading to open that sort in a new tab. Devices and Reservations work the same way.
 
 ### Converting a Lease to a Reservation
@@ -171,6 +186,8 @@ The **🗑️ Delete Stale** button removes expired leases from the database. Ke
 
 Click **🗺️ IP Map** to see a visual grid of the selected subnet showing which addresses are free, dynamically leased, or reserved. Hover over any cell to see the hostname and lease type.
 
+For an admin, a free address on the map is a link: select it and the Add Reservation form opens with that subnet and that address filled in. A viewer's free addresses are not links.
+
 ---
 
 ## Reservations
@@ -190,11 +207,13 @@ Click **+ Add Reservation** and fill in:
 | DNS Override | No | Comma-separated IPs — overrides the subnet's default DNS servers for this device |
 | Notes | No | Free-text notes stored in Jen's database |
 
+Under the IP Address field the form shows the chosen subnet's range and its pool or pools, for example "Subnet 10.10.5.0/24 - pool 10.10.5.100 - 10.10.5.200", and the line follows the Subnet field when you change it. If Kea's configuration cannot be read the line shows the range alone. A reservation may be inside or outside a pool; the line is there so you can see which you are choosing.
+
 Jen checks for duplicate IPs and MACs before adding — you'll get a clear error if a conflict exists.
 
 ### Editing a Reservation
 
-Click **✏️** to edit a reservation. You can change the hostname, DNS override, and notes. The IP address and MAC address cannot be changed through the edit form — delete and recreate the reservation to change these.
+Click **✏️** to edit a reservation. You can change the hostname, DNS override, and notes. The IP address and MAC address cannot be changed through the edit form — delete and recreate the reservation to change these. The edit page has a **Delete Reservation** button for that: it asks "Delete the reservation for 10.10.5.20? This cannot be undone." with the reservation's own address, and after the delete you are on the Reservations list.
 
 ### Deleting a Reservation
 
@@ -214,7 +233,7 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 ## Getting started (v5.39.0)
 
-**Getting started** (admins; the nav pill, or `/getting-started`) is the first-hour checklist: each row is one thing worth having in place — SSH and the Kea host helper current, HTTPS, MFA on your account, an alert channel, a backup, a second server for HA — with a **Fix** link on any that isn't. The pill in the top bar shows `done/total` until everything is green. A superadmin can hide the pill for the whole install with **Dismiss the nav reminder**; the page itself stays available.
+**Getting started** (admins; the nav pill, or `/getting-started`) is the first-hour checklist: each row is one thing worth having in place — SSH and the Kea host helper current, HTTPS, MFA on your account, an alert channel, a backup, a second server for HA — with a **Fix** link on any that isn't. A row reads a Health check as Health shows it: the *Control transport ready for 3.2* row is ticked only when that check passes, and a warning there is drawn with the warning mark and an **Open Health** link (it is not counted as done). The pill in the top bar shows `done/total` until everything is green. A superadmin can hide the pill for the whole install with **Dismiss the nav reminder**; the page itself stays available.
 
 ## Investigating a client (v5.63.0, front door in v5.68.0)
 
@@ -292,7 +311,7 @@ An admin who may see every subnet gets a *config changes to this* link beside ea
 
 ### Trace a client (v5.48.0)
 
-Trace — reachable at **Network → Explain → "What Kea logged"**, or as the Investigate page's Trace tab. Explain predicts what Kea *should* do; Trace shows what it *did*: Jen reads the tail of the Kea server's `kea-dhcp4` log (through the same helper `tail-log` op the DDNS log tab uses — no packet capture, nothing installed), keeps the lines that name the client's MAC, and shows them in plain English grouped into exchanges — DISCOVER → offer → REQUEST → ACK, a NAK, a release or a decline. Lines are grouped when they are less than two seconds apart. Above the timeline, Explain's answer for the same client ("Jen expects subnet 3, 10.0.1.55") sits next to it so the two can be compared.
+Trace — reachable at **Network → Explain → "What Kea logged"**, or as the Investigate page's Trace tab. The page of its own sits under **Network → Investigate** and starts with a link back to it. Explain predicts what Kea *should* do; Trace shows what it *did*: Jen reads the tail of the Kea server's `kea-dhcp4` log (through the same helper `tail-log` op the DDNS log tab uses — no packet capture, nothing installed), keeps the lines that name the client's MAC, and shows them in plain English grouped into exchanges — DISCOVER → offer → REQUEST → ACK, a NAK, a release or a decline. Lines are grouped when they are less than two seconds apart. Above the timeline, Explain's answer for the same client ("Jen expects subnet 3, 10.0.1.55") sits next to it so the two can be compared.
 
 **Watch this client for 10 minutes** re-reads the log every 3 seconds, then stops on its own (or when you leave the page).
 
@@ -323,12 +342,12 @@ A user restricted to some subnets sees only rows in their subnets; a row Jen cou
 Under the core facts on the Overview, **What else Jen knows** carries one card per plugin that has something to say about this client — a plugin that has nothing to say about it adds nothing, and the heading is absent when no plugin does. The seven bundled plugins each contribute:
 
 - **Switch Port Locator** — the switch and port the client's MAC was last seen on, its VLAN, and whether it moved.
-- **Presence** — its state (online or offline), when it was last seen, and the sink it is published to.
+- **Presence** — its state (online or offline), when it was last seen, and the destination it is published to.
 - **Network Discovery** — what the newest finished scan saw: open ports, vendor, the hostname it answered with.
 - **IPAM Lite** — whether the client's address is designated, and to what; the next free address when the subnet is unmanaged.
 - **Host Watchdog** — whether the host answers, since when, and how many checks in a row have failed.
-- **DNS Sync** — the records that carry its name on each DNS target, and whether they match its lease or reservation.
-- **Wake & Actions** — whether it is a favorite, whether a SecureOn password is set, and when it was last woken.
+- **DNS Sync** — the records that carry its name on each DNS server, and whether they match its lease or reservation.
+- **Wake & Actions** — whether it is a saved host, whether a SecureOn password is set, and when it was last woken.
 
 A card whose subject needs a look (a host that is down, a record that does not match) says **Needs a look**, and its one sentence is also added to the line at the top of the page under **Worth a look**. A plugin that cannot answer right now shows "unavailable" for its card and nothing else on the page changes. What a card shows follows the same rule as the rest of the page: a user restricted to some subnets sees a plugin's card only for a client in a subnet they may see, and a client outside them is the ordinary "No client matched" answer.
 
@@ -366,7 +385,12 @@ The Subnets page shows the live configuration of all subnets pulled directly fro
 
 ### Reading Subnet Information
 
-Each subnet card shows:
+The page is a list, one row per subnet you may see: the subnet's name, its badge and its CIDR, the pool's usage bar with its figures ("22 of 121 (18%)"),
+the lease time, the gateway and the number of DHCP options. Click a row (or press Enter or Space on its name) to open it in place; more than one row can be
+open, and **Expand All** / **Collapse All** at the top right of the list opens or closes every row. The rows you leave open, and Expand All, are remembered
+by your browser. On a phone a row is a short card - the name, the badge, the CIDR and the bar - that opens the same way.
+
+An open row shows:
 
 - **Lease Duration** — how long devices hold their lease before needing to renew
 - **Renew Timer (T1)** — when devices first attempt to renew their lease
@@ -376,7 +400,7 @@ Each subnet card shows:
 
 ### Editing a Subnet
 
-If SSH is configured in Settings, an **✏️ Edit** button appears on each subnet card. Click it to edit:
+If SSH is configured in Settings, an **✏️ Edit** button appears in each subnet's open row. Click it to edit:
 
 - **Address pool** range
 - **Valid lifetime** (lease duration in seconds)
@@ -400,6 +424,17 @@ Below that is the forecast: the highest active-lease count in the last
 30 days and the day it happened, the trend in leases per day, and — when
 the trend is rising — roughly when it reaches 90 % of the pool, with the
 date.
+
+**The axis fits the lines.** A chart's vertical axis ends at the next round
+step above the largest value it draws, so a subnet that uses twenty of 121
+addresses is read on an axis of 25, not of 120. The pool's size is the dashed
+*Pool Size* line when it is inside that range; when it is far above the lines
+the chart's card says it in words instead ("Pool: 121 addresses"). Tick
+**Scale to Pool** beside the time range to run every axis up to the pool, the
+way the page always drew it; your browser remembers the choice. A legend
+entry is drawn as its line is drawn - its color, dashed where the line is
+dashed. On a phone the date labels are short ("Nov 15") and there are fewer
+of them.
 
 **The chart.** Each chart draws *Pool used* (the leases inside the pools -
 the series the forecast is fitted on, recorded from the first snapshot taken
@@ -451,7 +486,7 @@ as for IPv4 (set at the bottom of the page).
 
 ### Reconcile (v5.47.0)
 
-**Network → DDNS → Reconcile** checks every reservation and active lease that carries a hostname against DNS — does the name resolve to that IP, and does the IP resolve back to the name — and gives each row a verdict (`ok`, `missing-forward`, `wrong-forward`, `missing-ptr`, `wrong-ptr`, `stale-ptr`, `multiple-a`, `lookup-failed`). It is read-only and subnet-restricted; nothing is written to DNS or Kea. `lookup-failed` means the resolver could not answer — it says nothing about the record. Filter by verdict or export CSV; the admin guide has the full table.
+**Network → DDNS → Reconcile** checks every reservation and active lease that carries a hostname against DNS — does the name resolve to that IP, and does the IP resolve back to the name — and gives each row a verdict (`ok`, `missing-forward`, `wrong-forward`, `missing-ptr`, `wrong-ptr`, `stale-ptr`, `multiple-a`, `lookup-failed`; the page says each in words, such as "No address record" or "Wrong reverse name", and the CSV carries the names). It is read-only and subnet-restricted; nothing is written to DNS or Kea. `lookup-failed` means the resolver could not answer — it says nothing about the record. Filter by verdict or export CSV; the admin guide has the full table.
 
 ## Configuration Doctor (v5.40.0)
 
@@ -532,13 +567,17 @@ Each entry shows the timestamp, username, action type, the affected entity (usua
 
 The log is paginated — 50 entries per page.
 
+Beside the search field you can narrow the log by **action**, by **user** and by **day** (From and To). The two lists offer the actions and the users the log holds now. A day is a whole day in UTC, the clock the Timestamp column is printed on: From 2026-11-01 To 2026-11-01 is every event of that day. The filters combine with the search and with each other, stay set while you page, and **Clear filters** removes them all.
+
 ---
 
 ## Theme (v5.56.1)
 
-Click the palette icon in the top right navigation bar (or **Theme** in the phone's More sheet) to pick a look: Dark, Light, High contrast, Phosphor, Slate (cool blue), Ember (warm), Retro (the early-nineties desktop), or Custom once an install has defined one. Your pick is saved in your browser and persists between sessions — it never affects what anyone else sees. It's a preference of that browser, not of your Jen account: if two people share a browser, they share the pick.
+Click the palette icon in the top right navigation bar (the **Display** menu; **Display** in the phone's More sheet) to pick a look: Dark, Light, High contrast, Phosphor, Slate (cool blue), Ember (warm), Retro (the early-nineties desktop), or Custom once an install has defined one. Each row shows a small sample of its colors. Your pick is saved in your browser and persists between sessions — it never affects what anyone else sees. It's a preference of that browser, not of your Jen account: if two people share a browser, they share the pick.
 
-At the top of the menu, **Install default (\<name\>)** switches back to whatever the install's superadmin has set as the default look (Settings → Appearance → Theme), for anyone who hasn't picked one for themselves. A checkmark shows which one is currently active — on a preset only if you've actually chosen it, on **Install default** otherwise.
+The themes are listed once. The first row is the install's default look, marked **(default)** (for example *Dark (default)*): pick it to follow whatever the install's superadmin has set (Settings → Appearance → Theme), now and after a later change. **Match My System** shows Dark when your operating system asks for a dark look and Light when it asks for a light one, and follows it when it changes. A checkmark shows which row is active.
+
+The same menu has two more choices, both kept in the browser like the theme: **Display Times** (*Local Browser Time* or *UTC Time*) and **Table Rows** (*Comfortable*, or *Compact* for shorter rows on the list pages of a desktop). The menu works from the keyboard: Tab to the palette button, Space or Enter to open it, the arrow keys to move, Enter to pick, Escape to close. The account menu beside it and each row's action menu work the same way.
 
 ---
 
@@ -656,12 +695,14 @@ To upload a custom icon, enter an icon name (e.g. `amazon`, `mydevice`) and sele
 
 The top row holds Dashboard, Management, Network, Settings and About (a viewer has no Settings). Those are fixed. After them you can keep up to five **favorites**: pages you want one click away, such as a plugin's page that otherwise sits under Network.
 
-- **From the page itself.** At the right end of a section's tabs is a button that reads **Add to top row**. Click it and the page you are on appears in the top row. On a page that is already a favorite the button reads **Remove from top row**.
+- **From the page itself.** At the right end of a section's tabs is a button that reads **Add to top row**. Click it and the page you are on appears in the top row, and a message says "Added Reports to the top row." On a page that is already a favorite the button reads **Remove from top row**.
 - **From one place.** Open your account menu (your avatar, top right) and choose **Customize navigation**. The page has two lists, *Top row favorites* and *Phone bar*. Each has the same controls: pick a page and **Add**, move an entry up or down, remove it, or **Reset to default**.
 
 The **phone bar** is the row of buttons along the bottom of the screen on a phone. Choose up to four pages for it; **More** is always the last button, so every page stays reachable. With nothing chosen the bar shows its default pages. On a phone your favorites are the first group in the More menu, and **Customize navigation** is among your account links there.
 
-When the window is too narrow for the words, favorites show their icon alone; hover one to read its name.
+The top row is fitted to the window. When there is not room for everything, favorites show their icon alone first (hover one to read its name), then About leaves the row (it is always in your account menu), then Getting started shows its icon alone. Nothing is ever drawn over anything else.
+
+On a phone, the magnifier in the top bar opens the search field; **Esc** or the magnifier again puts it away. Under **Settings**, the **Find a setting** box filters the groups as you type ("SMTP", "certificate", "backup"); **Esc** clears it.
 
 These choices belong to your account, not to the browser: they follow you to every device you sign in from, and nobody else sees them. A favorite is a shortcut and nothing more. If your role or subnet access changes, or a plugin is switched off, a page you can no longer open is not shown; it comes back by itself when the page does.
 
@@ -672,7 +713,7 @@ These choices belong to your account, not to the browser: they follow you to eve
 Jen is fully usable on iPhone and iPad.
 
 ### iPhone
-A tab bar along the bottom holds Dashboard, Leases, Reservations, Settings (a viewer, who has no Settings page, sees Devices there) and **More**. You can choose your own four pages for it (see *Customize navigation* above). More opens a sheet that lists every page grouped as on desktop — Management, Network, Settings, plugins — with search, the theme picker, your account links and Logout. The top bar keeps the logo, the Kea status dot and your avatar. The section sub-tabs sit below it, scroll sideways, and start with the current page in view. Tables that have been converted show one two-line row per item; pages not yet converted still show per-row cards, so there is no horizontal scrolling either way.
+A tab bar along the bottom holds Dashboard, Leases, Reservations, Settings (a viewer, who has no Settings page, sees Devices there) and **More**. You can choose your own four pages for it (see *Customize navigation* above). More opens a sheet that lists every page grouped as on desktop — Management, Network, Settings, plugins — with search, the theme picker, your account links and Sign Out. The top bar keeps the logo, the Kea status dot and your avatar. The section sub-tabs sit below it, scroll sideways, and start with the current page in view. Tables that have been converted show one two-line row per item; pages not yet converted still show per-row cards, so there is no horizontal scrolling either way. On Leases, Reservations and Devices a third line carries the MAC address (tap it to copy it); a device's third line also shows its subnet and whether it is dynamic, reserved or stale.
 
 ### iPad
 The full desktop navigation is shown. Some lower-priority columns (MAC addresses, timestamps) are hidden on narrower iPad screens to keep tables readable — they are still available on desktop.
@@ -744,11 +785,11 @@ Watchdog needs `ping` on the Jen host for ICMP targets (`iputils-ping` — Setti
 
 Kea's own DDNS integration assumes a BIND-style DNS server. If your network instead runs Pi-hole or AdGuard Home, Local DNS Sync pushes DHCP names into it so `nas.lan` resolves on the LAN without touching Kea's DDNS settings at all.
 
-Open **Network → DNS Sync** and click **Add Target**: give it a name, pick Pi-hole or AdGuard Home, the server's URL and credentials (a Pi-hole password, or `user:pass` for AdGuard Home's admin login), a domain suffix (e.g. `lan`), which sources feed it — active leases, reservations, and IPAM Lite entries, in that order of priority when more than one names the same address — and which subnets it should watch. A target starts paused: click **Preview** to see exactly what it would add, change, or remove before anything is sent, and enable it once that looks right. A paused target can be previewed as many times as you like; it only ever goes live after you've looked.
+Open **Network → DNS Sync** and click **Add DNS Server**: give it a name, pick Pi-hole or AdGuard Home, the server's URL and credentials (a Pi-hole password, or `user:pass` for AdGuard Home's admin login), a domain suffix (e.g. `lan`), which sources feed it — active leases, reservations, and IPAM Lite entries, in that order of priority when more than one names the same address — and which subnets it should watch. A target starts paused: click **Preview** to see exactly what it would add, change, or remove before anything is sent, and enable it once that looks right. A paused target can be previewed as many times as you like; it only ever goes live after you've looked.
 
-Once enabled, a target syncs automatically a few seconds after a related lease or reservation change, and again on a 15-minute schedule regardless, so nothing is missed. Local DNS Sync only ever touches records it created itself — anything already on your DNS server that it didn't add is left alone, even if it looks unrelated to any current device. That includes a record you made yourself with the very name and address Jen wants: Jen does not take it over, and Preview lists it under **Already on the server, left alone**. Credentials are stored encrypted and are never shown again once saved.
+Once enabled, a DNS server syncs automatically a few seconds after a related lease or reservation change, and again on a 15-minute schedule regardless, so nothing is missed. Local DNS Sync only ever touches records it created itself — anything already on your DNS server that it didn't add is left alone, even if it looks unrelated to any current device. That includes a record you made yourself with the very name and address Jen wants: Jen does not take it over, and Preview lists it under **Already on the server, left alone**. Credentials are stored encrypted and are never shown again once saved.
 
-If your resolver is Unbound instead — which has no API to push to — each target's row offers an **Export Unbound local-data** download with the same records in Unbound's own config syntax, to include by hand.
+If your resolver is Unbound instead — which has no API to push to — each DNS server's row offers an **Export Unbound local-data** download with the same records in Unbound's own config syntax, to include by hand.
 
 ### Switch Port Locator (v5.60.0)
 
@@ -766,7 +807,7 @@ Switch Port Locator needs `snmpbulkwalk` on the Jen host (package `snmp` — Set
 
 Every Lease, Reservation, and Device row gains a **Wake** action: click it, confirm the MAC it's about to wake, and Jen sends a standard Wake-on-LAN magic packet straight away — no separate tool needed to get a sleeping machine back online.
 
-Open **Management → Wake** to see and manage a list of favorites: hosts you wake often enough to want one click from a dedicated page instead of hunting them down on Leases or Reservations. Add one by MAC address (reservations you can access appear in the picker as you type), with an optional label, an optional IP that is kept with it (the subnet comes from the MAC), and an optional SecureOn password for hardware that expects one. Each favorite remembers when it was last woken and by whom.
+Open **Management → Wake** to see and manage a list of saved hosts: hosts you wake often enough to want one click from a dedicated page instead of hunting them down on Leases or Reservations. Save one by MAC address with **Save Host** (reservations you can access appear in the picker as you type), with an optional label, an optional IP that is kept with it (the subnet comes from the MAC), and an optional SecureOn password for hardware that expects one. Each saved host remembers when it was last woken and by whom.
 
 A wake packet goes out to both the target subnet's own broadcast address and the general broadcast address, which covers the common case of Jen and its targets sharing the same network; a target on a different network needs directed broadcast allowed on the router between them. Jen won't send more than one wake packet to the same MAC within five seconds, however it was triggered.
 
@@ -774,20 +815,20 @@ A wake packet goes out to both the target subnet's own broadcast address and the
 
 Track a device and Jen tells the rest of your house when it comes and goes — a phone leaving for work, a laptop waking up on the desk — by publishing its online/offline state to Home Assistant, MQTT, or any HTTP endpoint that can receive one.
 
-Nothing is published for a device you haven't explicitly tracked. Open **Management → Presence** and either use **Track a device** (pick from recent leases and devices you can access) or the **Track presence** action on any Lease or Device row. A tracked device's state comes from two places: an active Kea lease means it's online right away, and a background check every five minutes catches everything else — a device has to be missed three times in a row before Jen calls it offline, so one skipped check never flags it by mistake. For a device on a network the Jen host is on, a check that did not see the device asks it first: Jen sends it one small UDP datagram and counts it as there when it answers the host's ARP question within nine seconds.
+Nothing is published for a device you haven't explicitly tracked. Open **Management → Presence** and either use **Track Device** (pick from recent leases and devices you can access) or the **Track presence** action on any Lease or Device row. A tracked device's state comes from two places: an active Kea lease means it's online right away, and a background check every five minutes catches everything else — a device has to be missed three times in a row before Jen calls it offline, so one skipped check never flags it by mistake. For a device on a network the Jen host is on, a check that did not see the device asks it first: Jen sends it one small UDP datagram and counts it as there when it answers the host's ARP question within nine seconds.
 
-Add a sink under **Sinks** to actually receive the updates:
+Add a destination under **Publish To** to actually receive the updates:
 
 - **Home Assistant webhook** — the URL from a webhook-triggered automation in Home Assistant
 - **MQTT** — publishes the state and a few details (IP, hostname, since when) to your own broker, with an optional Home Assistant auto-discovery message so a tracked device shows up as a device tracker with no extra setup on the Home Assistant side
 - **Generic HTTP** — a plain JSON POST to any endpoint of your choosing
 
-Each sink has a **Send test** button to confirm it's reachable before relying on it. Passwords and tokens are stored encrypted and never shown again once saved.
+Each destination has a **Send Test** button to confirm it's reachable before relying on it. Passwords and tokens are stored encrypted and never shown again once saved.
 
-Every sink receives the state of every tracked device, whichever subnet it is in, so adding, pausing, testing and removing a sink is a **superadmin** action (since 5.65.5); an administrator scoped to some subnets can track devices in their own subnets but cannot configure where the updates go.
+Every destination receives the state of every tracked device, whichever subnet it is in, so adding, pausing, testing and removing a destination is a **superadmin** action (since 5.65.5); an administrator scoped to some subnets can track devices in their own subnets but cannot configure where the updates go.
 
 ### Network Discovery (v5.30.0)
 
 Scans a subnet with `nmap` and accounts for every live host: a Kea lease or reservation, the subnet's own infrastructure addresses, an IPAM Lite entry, a device Jen has seen, or one you marked *known*. Only a host that is none of those is *unknown*, and only an unknown host the previous scan had not seen sends a Rogue Device alert. Scans run from **Network → Discovery** or on a schedule; the results page shows the latest completed scan and says so when a newer one failed or is still running.
 
-**Known** and **Forget** on a result row are for an administrator who can see every subnet (since 5.65.9). The known list has no subnet, so marking a host known silences its alert on every subnet; an administrator scoped to some subnets does not see the buttons and is refused if the request is made anyway. Starting a scan still needs only an administrator with access to that subnet.
+**Mark Known** and **Forget Host** on a result row are for an administrator who can see every subnet (since 5.65.9). The known list has no subnet, so marking a host known silences its alert on every subnet; an administrator scoped to some subnets does not see the buttons and is refused if the request is made anyway. Starting a scan still needs only an administrator with access to that subnet.

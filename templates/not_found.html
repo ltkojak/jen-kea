@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{# Q248 (V47) - the 404 page for a signed-in person: the normal page (top row, theme), the address that was asked for and the way back. jen/__init__.py's 404 handler
+   renders it for a navigation only; a fetch, an htmx swap and a signed-out request get the standalone error.html. `asked` is the request's path alone (no query). #}
+{% block title %}Page not found{% endblock %}
+{% block content %}
+<style>
+    .not-found { max-width: 560px; margin: 48px auto; padding: 32px; text-align: center; }
+    .not-found h1 { font-size: var(--fs-xl); margin-bottom: 8px; }
+    .not-found p { color: var(--text-muted); margin-bottom: 20px; overflow-wrap: anywhere; }
+    .not-found code { color: var(--text); }
+</style>
+<div class="card not-found">
+    <h1>Page not found</h1>
+    <p>Jen has no page at <code>{{ asked }}</code>. The address may be mistyped, or the page may have moved in a newer release.</p>
+    <a href="/" class="btn btn-primary">{{ icon("house") }} Go to the dashboard</a>
+</div>
+{% endblock %}

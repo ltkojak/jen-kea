@@ -7,6 +7,10 @@
         <span id="selectedCount" class="muted md">0 selected</span>
         <button type="button" id="devices-bulk-delete-btn" class="btn btn-sm btn-danger-outline">{{ icon("trash") }} Remove Selected</button>
     </div>
+{# Q248 - the bulk form ends HERE, after its bar, and each row's checkbox names it (form="bulk-form"). It used to wrap the whole table, and a row's own form (its action
+   menu's Release / Remove / a plugin's POST action) is not allowed inside another form: the browser dropped the inner <form> tag, so the row's button was a button of
+   the bulk form and posted the BULK action, with no confirmation. #}
+</form>
 {% endif %}
 <div class="card flush">
 <div class="table-wrap">
@@ -14,20 +18,20 @@
     <thead><tr>
         {% set base = '&search=' ~ (search|urlencode) ~ ('&stale=1' if show_stale else '') ~ '&subnet=' ~ (subnet_filter|urlencode) ~ '&per_page=' ~ (per_page|urlencode) ~ ('&type=' ~ (type_filter|urlencode) if type_filter else '') %}
         {% if current_user.role in ('superadmin','admin') %}
-        <th class="col-check"><input type="checkbox" id="selectAll"></th>
+        <th class="col-check"><input type="checkbox" id="selectAll" aria-label="Select all rows"></th>
         {% endif %}
         <th class="hide-mobile"{% if sort=='mac' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th{% if sort=='device_name' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=device_name&dir={{ 'desc' if sort=='device_name' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=device_name&dir={{ 'desc' if sort=='device_name' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Device Name{% if sort=='device_name' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th class="hide-tablet"{% if sort=='owner' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Owner{% if sort=='owner' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-below-1440"{% if sort=='owner' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Owner{% if sort=='owner' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th{% if sort=='last_ip' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=last_ip&dir={{ 'desc' if sort=='last_ip' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=last_ip&dir={{ 'desc' if sort=='last_ip' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Last IP{% if sort=='last_ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         {% if ipv6_enabled and subnet6_map %}
-        <th class="hide-mobile">IPv6</th>
+        <th class="hide-mobile hide-below-1440">IPv6</th>
         {% endif %}
         <th{% if sort=='hostname' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th class="hide-mobile"{% if sort=='subnet' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th>Type</th>
-        <th class="hide-mobile"{% if sort=='first_seen' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">First Seen{% if sort=='first_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th class="hide-tablet"{% if sort=='last_seen' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Last Seen{% if sort=='last_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-below-1280">Type</th>
+        <th class="hide-mobile hide-below-1440"{% if sort=='first_seen' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">First Seen{% if sort=='first_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th{% if sort=='last_seen' %} aria-sort="{{ 'ascending' if direction=='asc' else 'descending' }}"{% endif %}><a href="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-get="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" hx-target="#devices-results" hx-push-url="true" class="th-link">Last Seen{% if sort=='last_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th class="hide-mobile">Status</th>
         <th></th>
     </tr></thead>
@@ -37,9 +41,6 @@
 </table>
 </div>
 </div>
-{% if current_user.role in ('superadmin','admin') %}
-</form>
-{% endif %}
 
 {% if pages > 1 %}
 <div class="pagination">

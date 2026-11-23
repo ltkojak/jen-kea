@@ -47,10 +47,10 @@ class TestHelperVersionPhrasing:
         assert kea_host.helper_version_label(None, 5) == "not recorded"
 
     def test_fleet_phrase(self):
-        assert kea_host.helper_version_phrase([4], 5) == "1/1 host(s) on helper v4 (v5 available)"
-        assert kea_host.helper_version_phrase([5, 5], 5) == "2/2 host(s) on helper v5"
+        assert kea_host.helper_version_phrase([4], 5) == "1/1 host on helper v4 (v5 available)"
+        assert kea_host.helper_version_phrase([5, 5], 5) == "2/2 hosts on helper v5"
         assert kea_host.helper_version_phrase([4, 5, None], 5) == (
-            "1/3 host(s) on helper v4 (v5 available); 1/3 host(s) on helper v5; 1/3 host(s) with no helper recorded"
+            "1/3 hosts on helper v4 (v5 available); 1/3 hosts on helper v5; 1/3 hosts with no helper recorded"
         )
         assert kea_host.helper_version_phrase([], 5) == ""
 

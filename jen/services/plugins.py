@@ -832,7 +832,7 @@ def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str)
         # v5.30.0 (Q30, A1) — nothing of Jen's own changes: the plugin
         # checks for its binary at call time (shutil.which), so no restart
         # and no DB row either.
-        return "OS package(s) installed", "PLUGIN_DEPS", "root-run OS package install completed"
+        return "OS packages installed", "PLUGIN_DEPS", "root-run OS package install completed"
 
     if action == "install":
         manifest = next((p for p in discover_plugins() if p["id"] == plugin_id), None)
@@ -1601,11 +1601,18 @@ def self_heal_missing_tables(manifest: dict) -> list[str]:
     with contextlib.suppress(Exception):
         from jen.services import events as _events
 
-        _events.emit("plugin.schema_repaired", detail=f"{plugin_id}: recreated table(s) {', '.join(missing)}")
+        _events.emit(
+            "plugin.schema_repaired",
+            detail=f"{plugin_id}: recreated {'table' if len(missing) == 1 else 'tables'} {', '.join(missing)}",
+        )
     with contextlib.suppress(Exception):
         from jen.models.user import audit as _audit
 
-        _audit("PLUGIN_SCHEMA_REPAIRED", plugin_id, f"missing table(s) recreated: {', '.join(missing)}")
+        _audit(
+            "PLUGIN_SCHEMA_REPAIRED",
+            plugin_id,
+            f"missing {'table' if len(missing) == 1 else 'tables'} recreated: {', '.join(missing)}",
+        )
     return missing
 
 

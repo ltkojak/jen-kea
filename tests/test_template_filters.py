@@ -152,15 +152,15 @@ class TestPlural:
         assert reltime.plural(3, "entry", "entries") == "3 entries"
 
     def test_no_template_prints_a_bare_s_in_brackets_for_a_count_except_the_ones_a_test_pins(self):
-        """AU10: the `(s)` sites became `|plural`. The left ones are named: the Windows import review's "active lease(s) in the file" (tests/test_isc_dhcp_import_wizard.py asserts that wording),
-        the JavaScript error lines, the docs strings and the words that are not a count (`value(s)`, `control(s)`)."""
+        """AU10: the `(s)` sites became `|plural`. Q248 (V36) took the last ones: the Windows import review's "active lease(s) in the file" and "client class(es)", the lockout
+        card's "account name(s), address(es)", and the JavaScript error lines; the pattern now also sees a count closed by `</strong>`, a noun of up to three words and `(es)`."""
         import pathlib
 
         root = pathlib.Path(__file__).resolve().parent.parent / "templates"
         offenders = []
         for path in sorted(root.glob("*.html")):
             for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if re.search(r"\{\{[^}]*\}\}\s+[A-Za-z-]+\(s\)", line) and "active lease(s)" not in line:
+                if re.search(r"\{\{[^}]*\}\}(?:</strong>)?\s+(?:[A-Za-z-]+\s+){0,2}[A-Za-z-]+\((?:s|es)\)", line):
                     offenders.append(f"{path.name}:{n}")
         assert not offenders, offenders
 
@@ -222,6 +222,7 @@ class TestNoBareCountInATemplate:
         ("_device_badge.html", "device_badge("): "a macro call: `size='sm'` is the badge's size, not a number printed",
         ("_device_rows.html", "empty_state("): "a macro call carrying a sentence",
         ("_lease_rows.html", "empty_state("): "a macro call carrying a sentence",
+        ("logs.html", "empty_state("): "a macro call carrying a sentence (Q248, V21)",
         ("_ip_version_control.html", "ip_version_control("): "a macro call (the word `leases` is a URL)",
         ("leases.html", "ip_version_control("): "a macro call (the word `leases` is a URL)",
         ("api_keys.html", "last_used"): "a timestamp through |utcfmt",

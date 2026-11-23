@@ -172,7 +172,7 @@
 <div class="alert alert-warning">
     {{ icon("triangle-alert") }} <strong>HA mode not configured.</strong>
     Multiple servers are defined but HA mode is not set — Jen will always use the first Kea server for config and subnet editing.
-    {% if current_user.role in ('admin', 'superadmin') %}<a href="/settings/kea#kea-servers" style="color:var(--warning);text-decoration:underline;margin-left:8px;">Configure HA →</a>{% endif %}
+    {% if current_user.role in ('admin', 'superadmin') %}<a href="/settings/kea#kea-servers" style="color:var(--warning-ink);text-decoration:underline;margin-left:8px;">Configure HA →</a>{% endif %}
 </div>
 {% endif %}
 
@@ -185,7 +185,7 @@
         {% if s.up %}
         <span class="badge badge-reserved">● Online</span>
         {% else %}
-        <span class="badge u-08a316">● Offline</span>
+        <span class="badge badge-danger">● Offline</span>
         {% endif %}
     </div>
     <table class="u-046678">
@@ -242,7 +242,7 @@
         {% if s.up %}
         <span class="badge badge-reserved">● Online</span>
         {% else %}
-        <span class="badge u-08a316">● Offline</span>
+        <span class="badge badge-danger">● Offline</span>
         {% endif %}
     </div>
     <table class="u-a1fa25">
@@ -412,7 +412,7 @@
         <div><span class="badge badge-dynamic">partner-down</span><br><span class="u-2bb516">Partner unreachable — this server operating alone</span></div>
         <div><span class="badge badge-dynamic">waiting</span><br><span class="u-2bb516">Starting up, waiting for partner sync</span></div>
         <div><span class="badge badge-dynamic">syncing</span><br><span class="u-2bb516">Synchronizing lease database with partner</span></div>
-        <div><span class="badge u-08a316">terminated</span><br><span class="u-2bb516">HA terminated — manual intervention required</span></div>
+        <div><span class="badge badge-danger">terminated</span><br><span class="u-2bb516">HA terminated — manual intervention required</span></div>
     </div>
 </div>
 {% endif %}

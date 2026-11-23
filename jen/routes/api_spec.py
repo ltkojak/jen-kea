@@ -360,6 +360,8 @@ def build_spec(version: str, base_url: str = "") -> dict:
                         "fix_hint": {"type": "string"},
                         "fix_url": {"type": "string"},
                         "elapsed_ms": {"type": "integer"},
+                        "link": {"type": "string"},
+                        "link_label": {"type": "string"},
                     },
                 },
                 "HealthSummary": {

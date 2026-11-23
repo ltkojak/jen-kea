@@ -23,6 +23,7 @@ import jen.services.passkeys as __passkeys
 import jen.services.session_timeout as __session_timeout
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.reltime import plural as _plural
 from jen.services.text import is_whole
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ def _complete_pending_login(user):
     session["login_id"] = (
         __session_timeout.new_login_id()
     )  # Q210, AZ9 b: one label per sign-in (the browser's cross-tab key)
-    __user.audit("LOGIN", "auth", f"User {user.username} logged in (after MFA enrollment)")
+    __user.audit("LOGIN", "auth", f"User {user.username} signed in (after MFA enrollment)")
 
 
 def _remaining_mfa_factor_count(user_id, excluding_method_id=None, excluding_cred_id=None):
@@ -134,7 +135,7 @@ def mfa_verify():
         return redirect(url_for("mfa_routes.mfa_enroll"))
     locked, remaining = __auth.is_mfa_locked_out(pending_id)
     if locked:
-        flash(f"Too many failed codes. Try again in {remaining} minute(s).", "error")
+        flash(f"Too many failed codes. Try again in {_plural(remaining, 'minute')}.", "error")
         factors = __mfa.user_factors(pending_id)
         return render_template(
             "mfa_challenge.html",
@@ -515,7 +516,7 @@ def passkey_login_begin():
         return _json_error("no sign-in in progress", 401)
     locked, remaining = __auth.is_mfa_locked_out(pending_id)
     if locked:
-        return _json_error(f"Too many failed codes. Try again in {remaining} minute(s).", 429)
+        return _json_error(f"Too many failed codes. Try again in {_plural(remaining, 'minute')}.", 429)
     try:
         options_json, state = __passkeys.begin_authentication(pending_id, request)
     except __passkeys.PasskeyError as e:
@@ -534,7 +535,7 @@ def passkey_login_finish():
         return _json_error("no sign-in in progress", 401)
     locked, remaining = __auth.is_mfa_locked_out(pending_id)
     if locked:
-        return _json_error(f"Too many failed codes. Try again in {remaining} minute(s).", 429)
+        return _json_error(f"Too many failed codes. Try again in {_plural(remaining, 'minute')}.", 429)
     body, bad = __api_auth.json_object_body()  # a JSON array used to reach body.get and 500 (v5.65.10)
     if bad:
         return _json_error("expected a JSON object", 400)
@@ -656,7 +657,7 @@ def revoke_all_trusted_devices():
                 cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (current_user.id,))
                 deleted = cur.rowcount
             db.commit()
-        flash(f"All {deleted} trusted device(s) revoked.", "success")
+        flash(f"All {_plural(deleted, 'trusted device')} revoked.", "success")
         __user.audit("REVOKE_ALL_TRUSTED_DEVICES", "auth", current_user.username)
     except Exception as e:
         logger.error(f"Error revoking all trusted devices for {current_user.username}: {e}")

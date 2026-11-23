@@ -36,7 +36,7 @@
     {% if not rows %}
     <p class="u-41e804">No difference from the previous revision.</p>
     {% else %}
-    <pre class="u-6dc1d1"><code>{% for row in rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
+    <pre class="u-6dc1d1"><code>{% for row in rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success-ink);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger-ink);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
     <p style="color:var(--text-muted);font-size:12px;padding:8px 12px 0;margin:0;">Secrets are masked; a change to a masked value does not show here.</p>
     {% endif %}
 </div>

@@ -1,8 +1,17 @@
 {% extends "base.html" %}
 {% block title %}MFA Enrollment{% endblock %}
+{% from "_copy.html" import copy_button %}
 {% block content %}
+<style>
+    /* Q248 (V16) - the QR code and the form side by side left the fields 82 px on a phone; below 600 px the code sits above the form, each the full width */
+    .mfa-enroll-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 24px; align-items: start; }
+    .mfa-enroll-qr { text-align: center; }
+    @media screen and (max-width: 600px) { .mfa-enroll-grid { grid-template-columns: minmax(0, 1fr); } }
+    /* V48: the passkey's name field grows to the row, so its example is not cut on a phone */
+    .passkey-name-group { flex: 1 1 240px; max-width: 420px; }
+</style>
 <div class="page-header">
-    <h1>{{ icon("lock", "ico-lg") }} Two-Factor Authentication</h1>
+    <h1>{{ icon("lock", "ico-lg") }} Multi-Factor Authentication</h1>
     <p>Secure your account with an additional verification step</p>
 </div>
 
@@ -22,7 +31,7 @@
             <div class="u-865c33">Enrolled {{ m.created_at|utcdate if m.created_at else '' }} · Last used {{ m.last_used|utcdate if m.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_totp"><input type="hidden" name="mfa_id" value="{{ m.id }}">
-            <button type="submit" class="btn btn-sm btn-danger" data-confirm="Remove this authenticator?">Remove</button>
+            <button type="submit" class="btn btn-sm btn-danger" data-confirm="Remove this authenticator? This cannot be undone." data-confirm-label="Remove">Remove</button>
         </form>
     </div>
     {% endfor %}
@@ -33,7 +42,7 @@
             <div class="u-865c33">Enrolled {{ p.created_at|utcdate if p.created_at else '' }} · Last used {{ p.last_used|utcdate if p.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_passkey"><input type="hidden" name="cred_id" value="{{ p.id }}">
-            <button type="submit" class="btn btn-sm btn-danger" data-confirm="Remove this passkey?">Remove</button>
+            <button type="submit" class="btn btn-sm btn-danger" data-confirm="Remove this passkey? This cannot be undone." data-confirm-label="Remove">Remove</button>
         </form>
     </div>
     {% endfor %}
@@ -53,15 +62,18 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("hash") }} Enroll Authenticator App (TOTP)</span></div>
     <p class="u-42b3ef">Works with Google Authenticator, Authy, 1Password, Bitwarden, and any TOTP app.</p>
-    <div style="display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:start;">
-        <div>
+    <div class="mfa-enroll-grid">
+        <div class="mfa-enroll-qr">
             <img src="data:image/png;base64,{{ qr_b64 }}" alt="QR code to scan with your authenticator app" style="border:8px solid white;border-radius:4px;width:180px;height:180px;">
             <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:6px;">Scan with your app</div>
         </div>
         <div>
             <div class="u-da12f2">
                 <div class="stat-label u-c81ce4">Or enter manually:</div>
-                <div class="mono" style="background:var(--surface2);padding:8px 12px;border-radius:var(--radius);font-size:13px;border:1px solid var(--border);word-break:break-all;">{{ secret }}</div>
+                <div class="copy-row">
+                    <div class="mono copy-box copy-box--wrap" id="totp-secret">{{ secret }}</div>
+                    {{ copy_button("totp-secret", what="the secret") }}
+                </div>
             </div>
             <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="action" value="enroll">
@@ -89,7 +101,7 @@
         This browser can't create a passkey here. Passkeys need a browser with WebAuthn support <em>and</em> a secure page — https, or http on localhost. If you reached Jen over plain http on a LAN address, set up HTTPS under Settings → Security first.
     </div>
     <div id="passkey-form" class="u-82d601">
-        <div class="form-group u-116966">
+        <div class="form-group u-116966 passkey-name-group">
             <label for="passkey-name">Passkey name (optional)</label>
             <input type="text" id="passkey-name" maxlength="100" placeholder="Work laptop, YubiKey 5C…" style="min-width:220px;">
         </div>

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Device Inventory{% endblock %}
+{% block content_class %}content--wide{% endblock %}
 {% block content %}
 {% from '_sort_controls.html' import sort_controls %}
 <div class="page-header">
@@ -25,7 +26,7 @@
             <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="search" value="{{ search }}" placeholder="Search address, hostname, DUID..." class="search-w" data-m="primary">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search devices" title="Search by address, hostname or DUID" aria-label="Search by address, hostname or DUID" class="search-w" data-m="primary">
         <button type="submit" class="btn btn-secondary">Filter</button>
         <a href="/devices?view=v6" class="btn btn-secondary">Clear</a>
     </form>
@@ -36,6 +37,9 @@
 {% else %}
 
 <!-- Filter bar — HTMX live filtering -->
+{# Q248 (V35): the "Stale after N days" form is a setting, not a filter. It sat inside the filter bar, so the phone's button counted its number as a filter that was set
+   and read "Filters (1)" with none set. It is now beside the bar, on the same line on a desktop and under the search on a phone. #}
+<div class="devices-filter-row">
 <div class="filter-bar">
     <form method="GET" class="contents"
           hx-get="/devices"
@@ -49,7 +53,8 @@
             <option value="{{ sid }}" {% if subnet_filter|string == sid|string %}selected{% endif %}>{{ info.name }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." class="search-w" data-m="primary">
+        {# Q248 (V48): the placeholder is two words that fit the field; what it used to list is the field's title and its accessible name #}
+        <input type="text" name="search" value="{{ search }}" placeholder="Search devices" title="Search by MAC address, name, owner or IP address" aria-label="Search by MAC address, name, owner or IP address" class="search-w" data-m="primary">
         <label class="flex items-center gap-2 muted md">
             <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %}>
             Stale only
@@ -66,9 +71,10 @@
         <a href="/devices" class="btn btn-sm btn-secondary">Clear</a>
         {% endif %}
     </form>
+</div>
     {# the route refuses everyone below admin, so the form is not offered to them (v5.69.0-beta.4, Q173) #}
     {% if current_user.role in ('admin', 'superadmin') %}
-    <form method="POST" action="/devices/settings" class="flex items-center gap-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/devices/settings" class="flex items-center gap-2 devices-stale"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <span class="muted small">Stale after</span>
         <input type="number" name="stale_days" value="{{ stale_days }}" min="1" max="365" class="w-70" aria-label="Stale after (days)">
         <span class="muted small">days</span>
@@ -211,7 +217,14 @@ document.getElementById('type-filter-bar').addEventListener('click', function(e)
         </div>
     </div>
 </div>
-<style>.icon-picker-option:hover { border-color: var(--primary); }</style>
+<style>.icon-picker-option:hover { border-color: var(--primary); }
+/* Q248 (V35): the filter bar and, beside it, the stale-days setting */
+.devices-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+.devices-filter-row > .filter-bar { margin-bottom: 0; }
+.devices-stale input.w-70 { width: 70px; min-width: 0; }
+.devices-stale .btn-sm { width: auto; }
+@media screen and (max-width: 768px) { .devices-filter-row > .filter-bar { flex: 1 1 100%; } }
+</style>
 {% endif %}
 
 {% endblock %}
@@ -354,7 +367,7 @@ function confirmBulkDelete() {
     if (n === 0) { jenToast('No devices selected.', 'info'); return false; }
     jenConfirm(`Remove ${n} ${n === 1 ? 'device' : 'devices'} from inventory? This cannot be undone.`, function() {
         document.getElementById('bulk-form').submit();
-    });
+    }, 'Remove');
     return false;
 }
 

@@ -35,7 +35,12 @@ def _run():
 
         __caps.invalidate()
     checks = __health.run_checks(
-        {"subnet_filter": current_user.can_access_subnet, "unrestricted": current_user.all_subnets}
+        {
+            "subnet_filter": current_user.can_access_subnet,
+            "unrestricted": current_user.all_subnets,
+            "admin": current_user.role
+            in ("superadmin", "admin"),  # Q248 (V28): a viewer's rows name no admin-only page
+        }
     )
     return {
         "checks": checks,

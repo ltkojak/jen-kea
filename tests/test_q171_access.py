@@ -485,8 +485,10 @@ class TestAddUserFailsClosed:
         r = logged_in_client.post(
             "/users/add",
             data={"username": "q171_bad_ids", "password": "longenough1", "role": "viewer", "subnet_ids": ["1", "x1"]},
+            follow_redirects=True,
         )
-        assert r.status_code == 400
+        # Q248 (V3): the refusal goes back to the Users page, where the dialog opens again with the message beside the list (it used to answer 400 with the page itself)
+        assert r.status_code == 200 and r.request.path == "/settings/users"
         assert "Subnet ids must be numbers." in r.get_data(as_text=True)
         assert self._count(db, "q171_bad_ids") == 0
 
@@ -636,7 +638,7 @@ class TestAFailedSelfServicePasswordChangeReturnsToTheProfile:
         db.commit()
         r = c.post("/users/change-password", data=form, follow_redirects=True)
         body = r.get_data(as_text=True)
-        assert "SuperAdmin access required" not in body
+        assert "Superadmin access required" not in body
         assert any(
             s in body
             for s in (

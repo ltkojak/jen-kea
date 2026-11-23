@@ -20,7 +20,7 @@ from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
 from jen.services import client_subject as __subject
 from jen.services import pools as __pools
-from jen.services.access import diagnostic_surface
+from jen.services.access import diagnostic_surface, refusal_sentence
 from jen.services.api_auth import RATE_LIMIT_MESSAGE, json_object_body, write_rate_limited
 from jen.services.api_auth import api_auth as _api_auth
 from jen.services.api_auth import key_subnet_ids as _api_key_subnet_ids
@@ -1005,7 +1005,7 @@ def api_v1_openapi():
 @login_required
 def api_keys():
     if current_user.role not in ("superadmin", "admin"):
-        flash("Admin access required.", "error")
+        flash(refusal_sentence("Admin"), "error")
         return redirect(url_for("dashboard.dashboard"))
     keys = []
     try:
@@ -1060,7 +1060,7 @@ def api_keys():
 @login_required
 def api_keys_create():
     if current_user.role not in ("superadmin", "admin"):
-        flash("Admin access required.", "error")
+        flash(refusal_sentence("Admin"), "error")
         return redirect(url_for("dashboard.dashboard"))
     name = request.form.get("name", "").strip()[:100]
     if not name:
@@ -1073,13 +1073,23 @@ def api_keys_create():
     # the creating user can themselves see: for a subnet-restricted admin,
     # any "all" selection or any subnet id outside their own access is
     # dropped server-side, regardless of what the submitted form contains
-    # — the <select> only offers their own subnets in the first place, but
+    # — the form only offers their own subnets in the first place, but
     # this clamp holds even against a hand-crafted request.
     import json as _json
 
     subnet_ids_raw = request.form.getlist("subnet_ids")
     if current_user.all_subnets:
-        if not subnet_ids_raw or "all" in subnet_ids_raw:
+        # (Q248, BH1 and BH2) an unrestricted key is made ONLY by "all" alone. Nothing ticked used to read as "all" (one
+        # click on the form: untick All Subnets, tick nothing), and "all" beside a subnet id read as "all" too (what a
+        # browser sends when the page's script did not run and a subnet was ticked). Both are refused: the key a person
+        # gets is never wider than the boxes that were ticked.
+        if not subnet_ids_raw:
+            flash_field("subnet_ids", "Tick All Subnets or at least one subnet. No key was created.")
+            return redirect(url_for("api.api_keys"))
+        if "all" in subnet_ids_raw:
+            if any(s != "all" for s in subnet_ids_raw):
+                flash_field("subnet_ids", "Tick All Subnets or named subnets, not both. No key was created.")
+                return redirect(url_for("api.api_keys"))
             subnet_access = None
         else:
             # (Q226, AL19) the shape its siblings have: refused whole for a value that is not a whole number (DEF-003), never None for an all-garbage selection, each id once, in order
@@ -1128,7 +1138,7 @@ def api_keys_create():
 @login_required
 def api_keys_revoke(key_id):
     if current_user.role not in ("superadmin", "admin"):
-        flash("Admin access required.", "error")
+        flash(refusal_sentence("Admin"), "error")
         return redirect(url_for("dashboard.dashboard"))
     try:
         with jen_db() as db, db.cursor() as cur:
@@ -1161,7 +1171,7 @@ def api_keys_revoke(key_id):
 @login_required
 def api_keys_delete(key_id):
     if current_user.role not in ("superadmin", "admin"):
-        flash("Admin access required.", "error")
+        flash(refusal_sentence("Admin"), "error")
         return redirect(url_for("dashboard.dashboard"))
     try:
         with jen_db() as db, db.cursor() as cur:

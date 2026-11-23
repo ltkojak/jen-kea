@@ -34,6 +34,7 @@ from flask import flash, g, has_request_context
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
 from jen.services.auth import valid_log_path
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 
@@ -340,10 +341,10 @@ def helper_version_phrase(versions, shipped: int | None = None) -> str:
     parts = []
     for v in sorted({v for v in versions if isinstance(v, int)}):
         n = sum(1 for x in versions if x == v)
-        parts.append(f"{n}/{total} host(s) on helper {helper_version_label(v, shipped)}")
+        parts.append(f"{n}/{_plural(total, 'host')} on helper {helper_version_label(v, shipped)}")
     unknown = sum(1 for x in versions if not isinstance(x, int))
     if unknown:
-        parts.append(f"{unknown}/{total} host(s) with no helper recorded")
+        parts.append(f"{unknown}/{_plural(total, 'host')} with no helper recorded")
     return "; ".join(parts)
 
 
@@ -1626,7 +1627,7 @@ def _sudo_l_summary(listing: str) -> str:
         (line for line in lines[max(python3_indices) + 1 :] if "ALL" in line and "NOPASSWD" not in line),
         None,
     )
-    summary = "python3 rule(s) on this host: " + "; ".join(python3_lines)
+    summary = f"python3 {'rule' if len(python3_lines) == 1 else 'rules'} on this host: " + "; ".join(python3_lines)
     if later_blanket:
         summary += f" — a LATER rule may override it: {later_blanket}"
     return summary

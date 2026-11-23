@@ -98,12 +98,18 @@ class TestSentences:
             "reverse-proxy level</span>"
         ) in re.sub(r"\s+", " ", html)
 
-    def test_a_plugins_description_is_not_cut(self, logged_in_client):
+    def test_a_plugins_description_is_not_cut(self, logged_in_client, monkeypatch):
         import json
         import pathlib
 
-        html = logged_in_client.get("/settings/system").get_data(as_text=True)
-        assert "[:80]" not in pathlib.Path("templates/settings_system.html").read_text(encoding="utf-8")
+        from jen.services import plugins as plugins_svc
+
+        # Q248 (V42): a plugin's whole description is on the Plugin Manager page now (Settings - System lists the name, the version and the
+        # status); neither template cuts one
+        monkeypatch.setattr(plugins_svc, "fetch_registry", lambda: ([], ""))
+        html = logged_in_client.get("/settings/plugins").get_data(as_text=True)
+        for name in ("settings_system.html", "plugins.html"):
+            assert "[:80]" not in pathlib.Path("templates", name).read_text(encoding="utf-8"), name
         manifest = json.loads(pathlib.Path("plugins/ipam/manifest.json").read_text(encoding="utf-8"))
         if "IPAM Lite" in html:  # the unit suite runs with no plugin directory; the page then lists none
             assert manifest["description"][:120] in html.replace("&#39;", "'").replace("&amp;", "&")

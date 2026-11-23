@@ -127,7 +127,9 @@ def test_reconcile_with_limit_one_renders_one_verdict_row(logged_in_page, base_u
     page.goto(f"{base_url}/ddns/reconcile?limit=1")
     rows = page.locator("table.rowlist tbody tr")
     expect(rows).to_have_count(1)
-    expect(rows.first).to_contain_text("ok")
+    expect(rows.first).to_contain_text(
+        "OK"
+    )  # Q248 a2 (V55): the page says a verdict in words ("OK"), the name `ok` is the filter's and the CSV's
 
 
 def test_getting_started_dismiss_button_is_a_real_link_style_and_clears_the_pill(logged_in_page, base_url):

@@ -157,7 +157,8 @@ class TestSearchToInvestigate:
         assert "aa:bb:cc:dd:ee:01" in page.locator(q_input).input_value().lower()
 
         for tab in ("Explain", "Trace", "Timeline", "Dns", "Config", "Overview"):
-            page.locator(".badge", has_text=tab).first.click()
+            # Q248 (V38): the views are tabs in the one in-page tab style (they were status badges)
+            page.locator("nav.page-tabs .page-tab", has_text=tab).first.click()
             page.wait_for_load_state("networkidle")
             assert f"tab={tab.lower()}" in page.url
             assert "aabbccddee01" in page.locator(q_input).input_value().lower().replace(":", "")

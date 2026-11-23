@@ -19,13 +19,13 @@
             </div>
             <div class="form-group">
                 <label for="f-duid">DUID *</label>
-                <input id="f-duid" type="text" name="duid" placeholder="00:03:00:01:aa:bb:cc:dd:ee:ff" value="{{ prefill.duid if prefill else '' }}" required aria-describedby="f-duid-hint">
+                <input id="f-duid" type="text" name="duid" placeholder="00:03:00:01:aa:bb:cc:dd:ee:ff" value="{{ prefill.duid if prefill else '' }}" required aria-describedby="f-duid-hint" autocapitalize="off" autocomplete="off" spellcheck="false">
                 <div class="form-hint" id="f-duid-hint">Hex, with or without colons — Jen normalizes it.</div>
             </div>
         </div>
         <div class="form-group">
             <label for="f-hostname">Hostname</label>
-            <input id="f-hostname" type="text" name="hostname" placeholder="device-name" value="{{ prefill.hostname if prefill else '' }}">
+            <input id="f-hostname" type="text" name="hostname" placeholder="device-name" value="{{ prefill.hostname if prefill else '' }}" autocapitalize="off" spellcheck="false">
         </div>
         <div class="form-row">
             <div class="form-group">

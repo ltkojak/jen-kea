@@ -2,6 +2,8 @@
 {% block title %}Saved Searches{% endblock %}
 {% block content %}
 {% from '_icons.html' import icon_trash %}
+{# Q248 (addition 4): a detail page keeps its parent's strip and has one way back, here #}
+<a class="back-link" href="/leases">&larr; Leases</a>
 <div class="page-header">
     <h1>{{ icon("bookmark", "ico-lg") }} Saved Searches & Filters</h1>
     <p>Your saved page filters — accessible from the filter bar on Leases and Reservations pages</p>
@@ -29,7 +31,7 @@
         <td data-m="trailing" class="u-49cd09">
             <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">{{ icon("play") }} Load</a>
             <form method="POST" action="/saved-searches/delete/{{ s.id }}" class="u-cccfa4"
-                  data-confirm="Delete this saved filter?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  data-confirm="Delete this saved filter? This cannot be undone." data-confirm-label="Delete"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del" title="Delete" aria-label="Delete">{{ icon_trash() }}</button>
             </form>
         </td>

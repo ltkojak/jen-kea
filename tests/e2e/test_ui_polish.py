@@ -300,7 +300,7 @@ class TestAX10TheBadgeIsThePickerHint:
         page.goto(f"{base_url}/subnets")
         hint = page.locator("#tone-hint")
         expect(hint).to_be_visible()
-        expect(hint).to_contain_text("Click a subnet's name on its card to choose its badge color")
+        expect(hint).to_contain_text("Click a subnet's badge to choose its color")
         hint.get_by_role("button", name="Dismiss").click()
         expect(hint).to_be_hidden()
         page.reload()

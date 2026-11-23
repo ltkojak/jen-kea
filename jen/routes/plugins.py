@@ -3,7 +3,7 @@ jen/routes/plugins.py
 ─────────────────────
 Settings → Plugins routes.
 Browse the registry, install, enable/disable, and uninstall plugins.
-SuperAdmin-only (v4.4.2): installing/enabling a plugin runs arbitrary
+Superadmin-only (v4.4.2): installing/enabling a plugin runs arbitrary
 Python (plugin.py's register(app)) with the full privileges of the Jen
 process — DB credentials, sudoers-permitted commands, everything. That's
 a much bigger blast radius than a subnet-restricted admin was ever meant

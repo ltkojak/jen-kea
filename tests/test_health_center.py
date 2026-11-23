@@ -314,7 +314,8 @@ class TestConfigDoctorCheck:
         cfg = {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "reservation-mode": "out-of-pool"}]}
         c = health._config_doctor(_ctx(dhcp4_config=cfg))
         assert c.status == "warn"
-        assert "/tools/doctor" in c.detail
+        # Q248 (V28): the page is carried as a link, never printed in the sentence
+        assert c.link == "/tools/doctor" and c.link_label == "Open Doctor" and "/tools/doctor" not in c.detail
 
     def test_fail_when_any_fail_finding(self, monkeypatch):
         monkeypatch.setattr(health, "_doctor_hosts", list)
@@ -641,7 +642,7 @@ class TestReportsForecastCard:
         self._seed(db, 1, [10, 20])
         body = logged_in_client.get("/reports?days=30").data.decode()
         assert self._forecast_json(body)["1"]["projection"] == []
-        assert "No projection yet: 5 more day(s) of history needed." in body
+        assert "No projection yet: 5 more days of history needed." in body
         # the dataset is only pushed when there IS a projection, and is never added hidden
         assert "if (proj.length) {\n            datasets.push({" in body
         assert "hidden: proj.length" not in body
@@ -806,7 +807,9 @@ class TestDnsReconcileCheck:
         scoped = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True), unrestricted=False))
         assert scoped.status == "skip" and "4242" not in scoped.detail and "mismatched" not in scoped.detail
         full = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
-        assert "42/4242" in full.detail  # the unrestricted view is unchanged
+        assert (
+            "42/4,242 names mismatched" in full.detail
+        )  # the unrestricted view is unchanged (Q248, V36: the count agrees and is grouped)
 
     def test_unparseable_summary_skips_not_raises(self, db):
         from jen.models.user import set_global_setting
@@ -1590,24 +1593,24 @@ class TestKeaTlsExpiry:
         self._wire(monkeypatch, copies=[("1", "dhcp4", 1700), ("2", "dhcp4", 1650), ("1", "d2", 1600)])
         c = health._kea_tls_expiry(_ctx())
         assert c.status == "ok"
-        assert "3 server certificate(s)" in c.detail and "1500" in c.detail
+        assert "3 server certificates valid" in c.detail and "1,500 days" in c.detail
 
     def test_a_server_cert_within_90_days_warns_and_names_it(self, monkeypatch):
         self._wire(monkeypatch, copies=[("1", "dhcp4", 1700), ("2", "dhcp6", 45)])
         c = health._kea_tls_expiry(_ctx())
         assert c.status == "warn"
-        assert "kea-b kea-dhcp6 expires in 45 day(s)" in c.detail
+        assert "kea-b kea-dhcp6 expires in 45 days" in c.detail
         assert "kea-a" not in c.detail
 
     def test_within_14_days_fails(self, monkeypatch):
         self._wire(monkeypatch, client=10)
         c = health._kea_tls_expiry(_ctx())
-        assert c.status == "fail" and "client certificate expires in 10 day(s)" in c.detail
+        assert c.status == "fail" and "client certificate expires in 10 days" in c.detail
 
     def test_expired_fails_and_says_so(self, monkeypatch):
         self._wire(monkeypatch, copies=[("1", "dhcp4", -3)])
         c = health._kea_tls_expiry(_ctx())
-        assert c.status == "fail" and "kea-a kea-dhcp4 expired 3 day(s) ago" in c.detail
+        assert c.status == "fail" and "kea-a kea-dhcp4 expired 3 days ago" in c.detail
 
     def test_client_cert_not_signed_by_the_current_ca_fails(self, monkeypatch):
         self._wire(monkeypatch, client_ok=False)
@@ -1666,7 +1669,7 @@ class TestKeaTlsExpiry:
         )
         c = health._kea_tls_expiry(_ctx())
         assert c.status == "ok", (c.status, c.detail)
-        assert "1 server certificate(s)" in c.detail and "expired" not in c.detail
+        assert "1 server certificate valid" in c.detail and "expired" not in c.detail
         assert "stale record for kea-b kea-dhcp4 (its server is no longer configured): Rotate ignores it" in c.detail
         assert "forget it under Settings → Kea to clear this" in c.detail
 
@@ -1674,19 +1677,19 @@ class TestKeaTlsExpiry:
         """Q198 (AN2): a record for a CONFIGURED server whose endpoint is not https now is parked - its daemon may still present the certificate - so it is counted and its expiry is watched."""
         self._wire(monkeypatch, copies=[("1", "dhcp4", 1700), ("2", "dhcp4", 45)], parked=["2-dhcp4"])
         c = health._kea_tls_expiry(_ctx())
-        assert c.status == "warn" and "kea-b kea-dhcp4 expires in 45 day(s)" in c.detail, c.detail
+        assert c.status == "warn" and "kea-b kea-dhcp4 expires in 45 days" in c.detail, c.detail
         assert "parked record for kea-b kea-dhcp4" in c.detail and "stale record" not in c.detail
         assert "remove the socket under Settings → Kea to drop it" in c.detail
 
     def test_an_expired_parked_record_fails(self, monkeypatch):
         self._wire(monkeypatch, copies=[("2", "dhcp4", -3)], parked=["2-dhcp4"])
         c = health._kea_tls_expiry(_ctx())
-        assert c.status == "fail" and "kea-b kea-dhcp4 expired 3 day(s) ago" in c.detail, c.detail
+        assert c.status == "fail" and "kea-b kea-dhcp4 expired 3 days ago" in c.detail, c.detail
 
     def test_a_live_endpoints_copy_is_still_counted_when_another_is_stale(self, monkeypatch):
         self._wire(monkeypatch, copies=[("1", "dhcp4", 45), ("2", "dhcp4", 1700)], stale=["2-dhcp4"])
         c = health._kea_tls_expiry(_ctx())
-        assert c.status == "warn" and "kea-a kea-dhcp4 expires in 45 day(s)" in c.detail
+        assert c.status == "warn" and "kea-a kea-dhcp4 expires in 45 days" in c.detail
 
     def test_registered_in_the_jen_group(self):
         assert "kea_tls_expiry" in health.CHECK_IDS

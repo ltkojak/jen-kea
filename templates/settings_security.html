@@ -9,8 +9,8 @@
 
 {{ subtabs(nav.subtabs['security'], 'policies') }}
 
-{% set toc = [('sec-mfa', 'MFA Policy'), ('sec-session', 'Sessions'), ('sec-ratelimit', 'Rate Limiting'), ('sec-ssl', 'SSL Certificate')] %}
-{% if current_user.role == 'superadmin' %}{% set toc = toc + [('sec-sso', 'Single Sign-On')] %}{% endif %}
+{% set toc = [('sec-mfa', 'Multi-Factor Authentication'), ('sec-session', 'Session Timeout'), ('sec-ratelimit', 'Login Rate Limiting'), ('sec-ssl', 'SSL Certificate')] %}
+{% if current_user.role == 'superadmin' %}{% set toc = toc[:1] + [('sec-sso', 'Single Sign-On (OIDC)')] + toc[1:] %}{% endif %}
 {% include '_card_toc.html' %}
 
 <div class="settings-cols">
@@ -19,7 +19,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("lock") }} Multi-Factor Authentication</span>
         {% if mfa_mode == 'off' %}
-        <span class="badge u-9741b3">Disabled</span>
+        <span class="badge badge-warning">Disabled</span>
         {% elif mfa_mode == 'optional' %}
         <span class="badge badge-dynamic">Optional</span>
         {% elif mfa_mode == 'required_admins' %}
@@ -34,7 +34,7 @@
             {# v5.69.0-beta.2 (Q171 fixup, G5): an admin may make the policy stricter, never less strict - an option ranked below the current policy is disabled for them #}
             {% set mfa_rank = {'off': 0, 'optional': 1, 'required_admins': 2, 'required_all': 3} %}
             {% set mfa_floor = mfa_rank.get(mfa_mode, 1) if current_user.role != 'superadmin' else 0 %}
-            <select name="mfa_mode" style="max-width:280px;">
+            <select name="mfa_mode" aria-label="MFA Policy" style="max-width:280px;">
                 <option value="off" {% if mfa_mode=='off' %}selected{% endif %} {% if mfa_rank['off'] < mfa_floor %}disabled{% endif %}>Off — MFA not required{% if mfa_rank['off'] < mfa_floor %} (superadmin only){% endif %}</option>
                 <option value="optional" {% if mfa_mode=='optional' %}selected{% endif %} {% if mfa_rank['optional'] < mfa_floor %}disabled{% endif %}>Optional — users can enroll if they want{% if mfa_rank['optional'] < mfa_floor %} (superadmin only){% endif %}</option>
                 <option value="required_admins" {% if mfa_mode=='required_admins' %}selected{% endif %} {% if mfa_rank['required_admins'] < mfa_floor %}disabled{% endif %}>Required for Admins{% if mfa_rank['required_admins'] < mfa_floor %} (superadmin only){% endif %}</option>
@@ -55,15 +55,15 @@
     <div class="card-header">
         <span class="card-title">{{ icon("id-card") }} Single Sign-On (OIDC)</span>
         {% if oidc.enabled %}<span class="badge badge-reserved">Enabled</span>
-        {% else %}<span class="badge u-9741b3">Disabled</span>{% endif %}
+        {% else %}<span class="badge badge-warning">Disabled</span>{% endif %}
     </div>
     <p class="u-c0a2eb">
-        Let users log in through an external identity provider (Authentik, Keycloak, Entra ID, Okta…),
+        Let users sign in through an external identity provider (Authentik, Keycloak, Entra ID, Okta…),
         with roles mapped from a claim. Local accounts keep working either way.
     </p>
     <form data-guard-unsaved method="POST" action="/settings/save-oidc"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-            <label><input type="checkbox" name="enabled" value="1" class="u-30e741" {% if oidc.enabled %}checked{% endif %}> Enable single sign-on</label>
+            <label class="check-label"><input type="checkbox" name="enabled" value="1" class="u-30e741" {% if oidc.enabled %}checked{% endif %}> Enable single sign-on</label>
         </div>
         <div class="form-row">
             <div class="form-group">
@@ -97,7 +97,7 @@
         <div class="form-group">
             <label for="f-role_map">Role Mapping</label>
             <input id="f-role_map" type="text" name="role_map" value="{{ oidc.role_map }}" placeholder="superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer" class="u-046678" aria-describedby="f-role_map-hint">
-            <div class="form-hint" id="f-role_map-hint">Kea role → claim value(s), <code>;</code>-separated pairs; each right side may be a <code>,</code>-separated list.</div>
+            <div class="form-hint" id="f-role_map-hint">Jen role → claim values, <code>;</code>-separated pairs; each right side may be a <code>,</code>-separated list.</div>
         </div>
         <div class="form-row">
             <div class="form-group">
@@ -105,7 +105,7 @@
                 <select id="f-default_role" name="default_role" class="u-046678" aria-describedby="f-default_role-hint">
                     <option value="viewer" {% if oidc.default_role == 'viewer' %}selected{% endif %}>Viewer</option>
                     <option value="admin" {% if oidc.default_role == 'admin' %}selected{% endif %}>Admin</option>
-                    <option value="superadmin" {% if oidc.default_role == 'superadmin' %}selected{% endif %}>SuperAdmin</option>
+                    <option value="superadmin" {% if oidc.default_role == 'superadmin' %}selected{% endif %}>Superadmin</option>
                     <option value="none" {% if oidc.default_role == 'none' %}selected{% endif %}>None — deny unmapped users</option>
                 </select>
                 <div class="form-hint" id="f-default_role-hint">Used when a user's groups match nothing in the mapping above.</div>
@@ -135,10 +135,10 @@
             <div class="form-hint" id="f-subnet_map_default-hint">Only matters once Subnet Mapping above is non-blank.</div>
         </div>
         <div class="form-group">
-            <label><input type="checkbox" name="auto_create" value="1" class="u-30e741" {% if oidc.auto_create %}checked{% endif %}> Automatically create an account on first SSO login</label>
+            <label class="check-label"><input type="checkbox" name="auto_create" value="1" class="u-30e741" {% if oidc.auto_create %}checked{% endif %}> Automatically create an account on first SSO login</label>
         </div>
         <div class="form-group">
-            <label><input type="checkbox" name="local_login" value="1" class="u-30e741" {% if oidc.local_login %}checked{% endif %}> Keep the local username/password form on the login page</label>
+            <label class="check-label"><input type="checkbox" name="local_login" value="1" class="u-30e741" {% if oidc.local_login %}checked{% endif %}> Keep the local username/password form on the login page</label>
             <div class="form-hint">If unchecked, the password form is hidden — <code>/login?local=1</code> is always available as an escape hatch.</div>
         </div>
         <button type="submit" class="btn btn-primary">Save Single Sign-On Settings</button>
@@ -151,7 +151,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("timer") }} Session Timeout</span>
         {% if session.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>
-        {% else %}<span class="badge u-9741b3">Disabled</span>{% endif %}
+        {% else %}<span class="badge badge-warning">Disabled</span>{% endif %}
     </div>
     <form data-guard-unsaved method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -169,7 +169,7 @@
                 <div class="form-hint" id="f-timeout_minutes-hint">0 = never expire. Per-user overrides are set on the Users tab.</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">Save Session Timeout</button>
     </form>
 </div>
 
@@ -178,7 +178,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("shield") }} Login Rate Limiting</span>
         {% if rl.mode == 'off' or rl.max_attempts == '0' %}
-        <span class="badge u-9741b3">Disabled</span>
+        <span class="badge badge-warning">Disabled</span>
         {% else %}
         <span class="badge badge-reserved">Enabled</span>
         {% endif %}
@@ -208,13 +208,13 @@
         <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:12px;display:flex;gap:24px;">
             <div><span class="stat-label">Failed attempts (last hour)</span><br><strong class="u-52df2b" id="rl-attempts-1h">{{ "could not be read" if rl_attempts_1h is none else rl_attempts_1h }}</strong></div>
             <div><span class="stat-label">Unique IPs affected</span><br><strong class="u-52df2b" id="rl-active-ips">{{ "could not be read" if rl_active_ips is none else rl_active_ips }}</strong></div>
-            <div><span class="stat-label">Permanent lockouts in force</span><br><strong class="u-52df2b" id="rl-permanent-lockouts">{% if rl_lockouts_username is none or rl_lockouts_ip is none %}could not be read - logins are refused while the lockout table cannot be read; the reason is in the Jen log{% else %}{{ rl_lockouts_username }} account name(s), {{ rl_lockouts_ip }} address(es){% endif %}</strong></div>
+            <div><span class="stat-label">Permanent lockouts in force</span><br><strong class="u-52df2b" id="rl-permanent-lockouts">{% if rl_lockouts_username is none or rl_lockouts_ip is none %}could not be read - logins are refused while the lockout table cannot be read; the reason is in the Jen log{% else %}{{ rl_lockouts_username|plural('account name') }}, {{ rl_lockouts_ip|plural('address', 'addresses') }}{% endif %}</strong></div>
         </div>
         <div class="u-a76d59">
-            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="submit" class="btn btn-primary">Save Rate Limiting</button>
         </div>
     </form>
-    <form method="POST" action="/settings/clear-lockouts" style="display:inline;margin-top:8px;" data-confirm="Clear every failed login attempt and end every permanent lockout? Every locked account name and address can log in again."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/clear-lockouts" class="mt-2" data-confirm="Clear every failed login attempt and end every permanent lockout? Every locked account name and address can sign in again."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">{{ icon("lock-open") }} Clear All Lockouts</button>
     </form>
 </div>
@@ -224,13 +224,13 @@
     <div class="card-header">
         <span class="card-title">{{ icon("lock") }} SSL Certificate</span>
         {% if ssl_configured %}<span class="badge badge-reserved">HTTPS Active — port {{ https_port }}</span>
-        {% else %}<span class="badge u-9741b3">HTTP Only — port {{ http_port }}</span>{% endif %}
+        {% else %}<span class="badge badge-warning">HTTP Only — port {{ http_port }}</span>{% endif %}
     </div>
     {% if ssl_configured and cert_info %}
     <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
         {% if cert_info.subject %}<div><div class="stat-label">Subject</div><div class="mono u-11a508">{{ cert_info.subject }}</div></div>{% endif %}
         {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono u-11a508">{{ cert_info.issuer }}</div></div>{% endif %}
-        {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
+        {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning-ink);">{{ cert_info.expires }}</div></div>{% endif %}
     </div>
     {% endif %}
     {# Q202 (AR6): removing and uploading Jen's own certificate restart Jen - a superadmin's, so an admin is not offered the forms.
@@ -238,7 +238,7 @@
        took that block's endif, so the upload form was drawn only where HTTPS was already on - for any admin - and a plain-HTTP install had no way to turn HTTPS on from this page #}
     {% if current_user.role == 'superadmin' %}
     {% if ssl_configured %}
-    <form method="POST" action="/settings/remove-cert" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/remove-cert" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode." data-confirm-label="Remove"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm u-87c136">{{ icon("trash") }} Remove Certificate</button>
     </form>
     {% endif %}

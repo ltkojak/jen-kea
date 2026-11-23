@@ -7,6 +7,8 @@
     .nav, .section-tabs-wrap, .filter-bar, .pagination, .btn, #jen-toasts, #jen-toasts-alert, .toast-stack, .alert-close, #kb-modal, #jen-confirm-overlay, #jen-prompt-overlay,
     #jen-session-overlay, .pw-toggle, .tone-menu, .tabbar, .sheet, .sheet-backdrop, .skip-link, #jen-progress, .bg-canvas, .card-toc { display: none !important; }
     .hide-mobile, .hide-tablet { display: table-cell !important; }
+    /* Q248 (V12): paper has no hover, so a value a list cuts to one line on the screen prints whole, on as many lines as it needs */
+    .clip { display: block !important; overflow: visible !important; max-width: none !important; word-break: normal; overflow-wrap: anywhere; -webkit-line-clamp: unset; line-clamp: unset; }
     table.rowlist { width: 100%; font-size: 10pt; }
     details > *:not(summary) { display: block; }
     a[href]::after { content: none !important; }

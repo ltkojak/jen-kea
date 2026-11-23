@@ -641,7 +641,7 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 
 | Role | Access |
 |---|---|
-| **SuperAdmin** | Full access to everything, all subnets, always — the only role that can manage users or use Database (export/import/backup/migrate) |
+| **Superadmin** | Full access to everything, all subnets, always — the only role that can manage users or use Database (export/import/backup/migrate) |
 | **Admin** | Full management on assigned subnets — the day-to-day DHCP estate: subnets, shared networks, options, classes, reservations, leases, DDNS naming and D2 configuration, alert channels. Settings except the Databases tools, user management and where Jen connects to Kea (see below). Can be restricted to specific subnets (**Settings → Access & Security → Users → subnet access**); unrestricted by default |
 | **Viewer** | Read-only access to Dashboard, Leases, Reservations, Subnets, DDNS, scoped to assigned subnets the same way as Admin |
 
@@ -662,7 +662,7 @@ Servers & HA card does that on purpose. A saved password also does not move with
 
 ### Adding Users
 
-Go to **Settings → Access & Security → Users → Add User**. Enter a username, password (minimum 8 characters), and select a role.
+Go to **Settings → Access & Security → Users → Add User**. Enter a username, password (minimum 8 characters), and select a role. Under **Subnet Access** tick **All Subnets**, or the subnets the account may use - not both; with nothing ticked the account is not created.
 
 ### Session Timeout
 
@@ -816,7 +816,7 @@ Every color in Jen's UI is a CSS token (`jen/services/theme.py`), not a hard-cod
 
 ### Choosing a theme
 
-Any logged-in user — any role — can pick their own look from the palette icon in the nav bar (desktop) or the **Theme** button in the phone's More sheet. The choice is per-browser (stored in `localStorage`), so it doesn't affect anyone else and doesn't need a page reload to take effect.
+Any logged-in user — any role — can pick their own look from the palette icon in the nav bar (the **Display** menu, desktop) or the **Display** button in the phone's More sheet. The choice is per-browser (stored in `localStorage`), so it doesn't affect anyone else and doesn't need a page reload to take effect. The first row of the list is the install's default, marked **(default)**; **Match My System** follows the operating system's light or dark setting.
 
 Seven presets ship with Jen:
 
@@ -832,13 +832,13 @@ A user who hasn't picked one gets the install's default theme, below.
 
 ### Times in your zone or in UTC (v5.70.0-beta.1)
 
-Jen stores and prints every moment as UTC. Beside the theme, the same palette menu has a **Times** choice - *In my browser's time zone* (the default) or *In UTC* - and the page shows every
+Jen stores and prints every moment as UTC. Beside the theme, the same Display menu has a **Display Times** choice - *Local Browser Time* (the default) or *UTC Time* - and the page shows every
 timestamp (lease obtained and expiry, last seen, the audit and alert logs, the dashboard's recent leases) in the one you pick. The UTC wording stays in the tooltip of a local time, and a page
 without JavaScript keeps showing UTC. Like the theme, the choice belongs to the browser, not the account.
 
 ### A subnet's badge color (v5.70.0-beta.1)
 
-On **Subnets**, an admin clicks a subnet's name badge to choose its color from seven (blue, green, red, orange, yellow, purple, mono); each swatch shows the subnet's own name in that color. The
+On **Subnets**, an admin clicks the badge beside a subnet's name to choose its color from seven (blue, green, red, orange, yellow, purple, mono); each swatch shows the subnet's own name in that color. The
 color is kept by subnet, beside the subnet's note, in Jen's own database - it is not an edit of Kea's config and restarts nothing. A subnet with no choice is blue, as every subnet was before.
 Wherever a subnet badge is shown (Leases, Devices, Reservations, the dashboard, Search) it is a link to that page filtered to the subnet.
 
@@ -856,6 +856,10 @@ the rest of the row opens the row's actions as before.
 The list pages show one summary line above the table, inside the part that changes when you filter, so it always matches what is listed: "212 active leases in IoT - 9 expire within the hour - 14
 reserved" on Leases. The reserved count is for the rows on the page shown when the list is paged. A search that matches nothing says so, names what you searched for, and offers **Clear
 filters**, which drops every filter and keeps your rows-per-page and sort order.
+
+On Leases the two counts are links: "9 expire within the hour" lists only those leases (`?expiring=1`) and "14 reserved" only the leases whose client has a reservation (`?reserved=1`). Each
+is one more condition of the list's own query, so it stays inside the subnets the account may see: a subnet-restricted account's "reserved" matches a reservation only in a subnet it may see,
+which is also what its count and its rows' **Reserved** marks say. The filters are kept by a search, a sort and a page change, can be saved with **Save Filter**, and do not apply to the history.
 
 The rows-per-page choice on Leases, Devices and Reservations is remembered in the browser, one value per page, in a small cookie named `jen_view` (it holds nothing but those choices, is not a
 secret, and is sent only to Jen). Show all, 50, 100 and 250 are the only values it accepts; anything else in it is ignored and rewritten. The history and stale-only views are not remembered:
@@ -926,20 +930,20 @@ SNMPv2c. A port with more than eight MACs is treated as an uplink and shown as "
 belongs to the subnet its management address is in: a subnet-scoped account sees and changes only switches
 addressed inside its own subnets, and a switch addressed by hostname is for accounts that can see every subnet.
 
-**Wake & Actions** — Wake-on-LAN from a lease, reservation or device row, and a favorites list. *Needs* nothing
-from the host beyond being able to send UDP broadcast on the target's subnet. *Stores* the favorites (and an
+**Wake & Actions** — Wake-on-LAN from a lease, reservation or device row, and a list of saved hosts. *Needs* nothing
+from the host beyond being able to send UDP broadcast on the target's subnet. *Stores* the saved hosts (and an
 optional SecureOn password) in its own `wol_hosts` table. *Sends* one standard magic packet per wake, to the subnet's
 directed broadcast address and the limited broadcast address, at most one per MAC every five seconds; every wake
 is audited with how it was sent and, for the API, the key's name. A wake toward a subnet the Jen host has no
 address in says that it arrives only if a router forwards directed broadcasts. The subnet of a wake or a new
-favorite is the one the MAC is in (its active lease, then its reservation, then the device's last known subnet), never a value in the request, and a MAC Jen has never seen is for accounts that can see every subnet.
+saved host is the one the MAC is in (its active lease, then its reservation, then the device's last known subnet), never a value in the request, and a MAC Jen has never seen is for accounts that can see every subnet.
 
 **Presence** — publishes tracked devices' online or offline state. *Needs* the Jen host's IPv4 neighbor table
 (`ip -4 neigh`, read every five minutes alongside lease events). *Stores* the devices you track, their current
-state, and your sinks (an MQTT password or HTTP bearer token is stored encrypted and never shown again) in its own
-`pr_*` tables. *Sends* every state change to each sink you configured: a Home Assistant webhook, MQTT, or any HTTP
+state, and your destinations (an MQTT password or HTTP bearer token is stored encrypted and never shown again) in its own
+`pr_*` tables. *Sends* every state change to each destination you configured: a Home Assistant webhook, MQTT, or any HTTP
 endpoint; nothing is published for a device you did not choose to track. Because every state change goes to every
-enabled sink, adding, pausing, testing and removing a sink is superadmin-only; other admins see the list
+enabled destination, adding, pausing, testing and removing a destination is superadmin-only; other admins see the list
 read-only. A device that is not on a segment the Jen host has an interface on cannot appear in its neighbor table,
 so its state follows lease events only, and the page says "lease-based" beside it.
 
@@ -1016,9 +1020,9 @@ and config-drift reported it as *missing from Kea*.
 
 On the **Subnets** page (admin, SSH configured):
 
-- Cards are grouped under a **Shared network: `<name>` · `<interface>`**
-  heading; nested cards carry a small **shared** chip.
-- The dropdown on each card **moves** the subnet between the top level and
+- Rows are grouped under a **Shared network: `<name>` · `<interface>`**
+  heading; a nested subnet's row carries a small **shared** chip.
+- The dropdown in a subnet's open row **moves** the subnet between the top level and
   any shared network — one Kea push and restart.
 - **New shared network** (bottom of the page) creates an empty one; add
   subnets to it from the Add Subnet form, or move existing ones in.
@@ -1044,7 +1048,7 @@ that point.
 
 ## DHCP Options (v5.18.0)
 
-**Subnets → Options** on a subnet card (or the "Options: N here · M
+**Subnets → Options** in a subnet's open row (the "Options: N here · M
 inherited" line) opens a catalog-driven editor for `option-data` at four
 levels — **global**, **shared network**, **subnet**, and **pool** — plus
 an "Effective options" view that shows, for a given subnet or pool,
@@ -1872,8 +1876,8 @@ Flags: `--no-stop` skips the stop/start (use it in Docker, or where Jen is not a
 
 Afterward:
 
-1. Confirm Jen is up and you can log in (the restore already started it and checked `/api/v1/health` if it was running; if it was stopped, start it: `sudo systemctl start jen`).
-2. Log in and go to **Settings → Kea → SSH** — run **Update helper** on each server. A helper-version mismatch right after a restore is expected, not a bug (this box's `jen-kea-helper` copy came from wherever `install.sh` last ran, not from the old box).
+1. Confirm Jen is up and you can sign in (the restore already started it and checked `/api/v1/health` if it was running; if it was stopped, start it: `sudo systemctl start jen`).
+2. Sign in and go to **Settings → Kea → SSH** — run **Update helper** on each server. A helper-version mismatch right after a restore is expected, not a bug (this box's `jen-kea-helper` copy came from wherever `install.sh` last ran, not from the old box).
 3. Check **Settings → Plugins** — every plugin you had installed came back enabled with its data intact (v5.66.0-beta.5: its own tables, not just its enabled/disabled row), but the plugin *code* was not re-copied; reinstall from the registry for anything the page flags as missing. A plugin whose code isn't on this machine at all is skipped and named in the restore's own output — its data stays in the bundle, untouched, and comes back the next time you restore *after* reinstalling it.
 4. **A bundle made before v5.66.0-beta.5 never contained any plugin's data to begin with** — only Jen's own core tables. Restoring one leaves every plugin exactly as this fresh install already has it (enabled with an empty schema, or not installed at all); there is nothing to recover for it. Take a fresh recovery bundle once you're on v5.66.0-beta.5 or later so the next restore actually covers plugin data too.
 5. Confirm HTTPS and the SSH connection to each Kea host still work — the restored certs/keys should just work if the new box's hostname and network position match the old one, but verify rather than assume.
@@ -1983,6 +1987,17 @@ seconds). Viewers can see it; a subnet-restricted user sees only their
 own subnets in the capacity checks. `/health-center/data` returns the
 same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 
+The page puts what needs you first: every check that fails and then every
+check that warns, whatever group it belongs to (each row names its group),
+under **Failures and warnings**; then each group's passing checks; and last
+one closed line, "16 checks were skipped (not applicable to this install)",
+which opens to show the skipped checks. An install with no HA, no DDNS and
+no SSH host skips a good part of the list, and those rows used to sit
+between the ones that matter. The JSON is not reordered: it lists every
+check, skipped ones included, in the fixed order of the table below. The
+dashboard's **Needs attention** card links each failing check to its row
+here.
+
 | Check | What it looks at | Where to fix it |
 |---|---|---|
 | **Kea servers reachable** | `version-get` per configured server | Settings → Kea; the server itself |
@@ -2021,8 +2036,8 @@ resets when you install a renewed one.
 
 ### Upgrading Kea (the 3.2 readiness group, v5.38.0)
 
-Kea 3.2 removes the Control Agent. The **Kea 3.2 readiness** group at
-the bottom of the Health Center is the plan for that upgrade: five
+Kea 3.2 removes the Control Agent. The **Kea 3.2 readiness** group of
+the Health Center is the plan for that upgrade: five
 checks that only report, never change anything, and `skip` wherever
 this install has nothing to look at (a single Docker box with no
 helper, no HA and no DDNS skips most of them). Settings → Kea shows
@@ -2110,8 +2125,10 @@ just what.
 Findings of the same kind (v5.50.0) are grouped: 68 reservations that
 sit inside a dynamic pool show as **one** row with a count and a
 "Show all" list, sharing the explanation once, instead of 68 near
-identical cards. The Health Center row reads "N note(s) of K kind(s)",
-and the JSON API keeps returning the flat findings.
+identical cards. The Health Center row reads "3 notes of 2 kinds" and
+carries a link, **Open Doctor**, for an admin (a check's JSON has the same
+link as `link` and `link_label`), and the JSON API keeps returning the flat
+findings.
 
 | Check | What it means |
 |---|---|
@@ -2453,18 +2470,18 @@ Verify checks one name at a time; **Reconcile** (Network → DDNS → Reconcile)
 
 Each row gets one verdict:
 
-| Verdict | Meaning |
-|---|---|
-| `ok` | Forward and reverse both resolve to what's expected. |
-| `missing-forward` | The resolver definitively said the name doesn't exist (NXDOMAIN / no data). |
-| `lookup-failed` | The resolver could not answer — a timeout, SERVFAIL or an unreachable server (v5.49.0-beta.2). This says nothing about whether the record exists; fix the resolver, then run Reconcile again. |
-| `wrong-forward` | The name resolves, but not to the IP Jen expects. |
-| `missing-ptr` | The resolver definitively said the IP has no PTR record. |
-| `wrong-ptr` | The PTR record points to a different name than expected. |
-| `stale-ptr` | The PTR record points to a name that belongs to a lease that has since expired elsewhere — DNS wasn't cleaned up when that name's lease ended. |
-| `multiple-a` | More than one A record exists for the name. Several A records are a legitimate design, so this is informational — review it, don't assume it's wrong. (Named `duplicate-a` before v5.49.0-beta.2.) |
+| Verdict | The page shows | Meaning |
+|---|---|---|
+| `ok` | OK | Forward and reverse both resolve to what's expected. |
+| `missing-forward` | No address record | The resolver definitively said the name doesn't exist (NXDOMAIN / no data). |
+| `lookup-failed` | Lookup failed | The resolver could not answer — a timeout, SERVFAIL or an unreachable server (v5.49.0-beta.2). This says nothing about whether the record exists; fix the resolver, then run Reconcile again. |
+| `wrong-forward` | Wrong address | The name resolves, but not to the IP Jen expects. |
+| `missing-ptr` | No reverse record | The resolver definitively said the IP has no PTR record. |
+| `wrong-ptr` | Wrong reverse name | The PTR record points to a different name than expected. |
+| `stale-ptr` | Stale reverse record | The PTR record points to a name that belongs to a lease that has since expired elsewhere — DNS wasn't cleaned up when that name's lease ended. |
+| `multiple-a` | Several addresses | More than one A record exists for the name. Several A records are a legitimate design, so this is informational — review it, don't assume it's wrong. (Named `duplicate-a` before v5.49.0-beta.2.) |
 
-Filter to one verdict with the badges above the table, or **Export CSV** for the current filter. A mismatched row has **Fix in Kea** (jumps to Reservations, searched by that row's IP) and **re-verify** (jumps to the Verify tab, pre-filled) links; an `ok` row has neither, there's nothing to do.
+The badges and the rows say the verdict in words (the second column); the name in the first column is what the filter's address and the CSV carry, and it is the badge's tooltip. Filter to one verdict with the badges above the table, or **Export CSV** for the current filter. A mismatched row has **Open Reservation** (or **Open Lease** for a row that came from a lease: Jen's own list, searched by that row's IP) and **re-verify** (jumps to the Verify tab, pre-filled) links; an `ok` row has neither, there's nothing to do.
 
 The Health Center's **DNS/DHCP names match** check (group DDNS) reads the summary from the last time someone ran this page — it never resolves anything itself, so it stays instant like every other Health check. It shows `skip` until DDNS is on and at least one Reconcile run has happened.
 

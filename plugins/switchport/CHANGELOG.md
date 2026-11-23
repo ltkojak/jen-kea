@@ -1,5 +1,29 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.1.6] - 2026-11-22
+
+Page polish from the look over the pages of Jen 7.2.0-beta.5. Nothing a poll does, stores or sends changes. `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged, and there is no migration.
+
+### Changed: a page with no switch yet shows the first steps (a first-run block on each empty plugin page, addition 11; plugin pages differ from each other, V52)
+
+On a fresh install the page showed a MAC field and a **Locate** button with no switch to search, and under it one line, *No switches configured yet. Add one above.* The page said in one sentence what the plugin is for. It did not say what a switch needs before it can be added, how often it is then read, or that the alert for a device that moves has to be ticked on a channel before anything is sent.
+
+Until the first switch exists the page now shows one card, *Getting started*, in place of that line:
+
+1. Add a switch: a name, its address and its SNMP community (SNMPv2c; read-only is enough). The step carries its own **Add Switch** button, which opens the same dialog as the one in the page header.
+2. Jen then polls each switch's MAC table over SNMP every 10 minutes and shows here which port a MAC is on.
+3. Its alert, "Switch Port: device moved", is set under Settings - Alerts: tick it on the channels that should get it.
+
+A viewer sees the same card without the button and without the link (adding a switch and the Alerts page both need an admin).
+
+### Changed: Locate is not drawn while there is nothing to search (V52)
+
+The MAC field and its button are left out of the page until there is a switch, in place of being shown at full strength with nothing behind them. One case keeps them: a MAC that was asked for. *Find switch port* on a lease, a reservation or a device opens this page with the MAC in the address, and that question still gets its answer (*No switch has reported ... yet.*, with the Investigate link) above the first steps.
+
+### Not changed
+
+The look-over asked for one back link on every page that is a detail of another (a way back on detail pages, addition 4). This plugin has one page: a switch's ports are a card on it, not a page of their own, so there is nothing to link back from. The **Add Switch** button was already in the page header at the right and every button was already in Title Case.
+
 ## [1.1.5] - 2026-10-12
 
 Fix and tidy-up from a whole-tree review of Jen's bundled plugins. `requires_jen` stays 5.68.0 (the Investigate macro and every `jen.plugin_api` name this release imports are in 5.68.0 and earlier).

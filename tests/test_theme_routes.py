@@ -199,12 +199,11 @@ class TestThemeDefaultDrivesThePage:
         ],
     )
     def test_the_picker_names_the_saved_default(self, logged_in_client, preset_id, name):
-        # v5.55.3 (Q66) — the picker's own "Install default (<name>)"
-        # entry, once per page (nav dropdown) plus once for the phone
-        # sheet — both server-rendered from theme_default_name, not |tojson'd.
+        # v5.55.3 (Q66) — the picker's own entry for the install's default, once per page (nav dropdown) plus once for the phone
+        # sheet — both server-rendered from theme_default_name, not |tojson'd. Q248 (T1): it reads "<name> (default)".
         logged_in_client.post("/settings/theme/default", data={"theme_default": preset_id})
         page = logged_in_client.get("/settings/appearance")
-        expected = f"Install default ({name})".encode()
+        expected = f"{name} (default)".encode()
         assert page.data.count(expected) == 2, (
             f"expected 2 occurrences (nav + sheet), found {page.data.count(expected)}"
         )

@@ -73,6 +73,7 @@ from jen.services.certs import (  # noqa: F401 - `write_atomically` is re-export
     commit_file_set,
     write_atomically,
 )
+from jen.services.reltime import plural as _plural
 
 logger = logging.getLogger(__name__)
 
@@ -844,7 +845,7 @@ def _initialized_evidence() -> str:
     ]  # (Q195 AK2 c: Jen's own probe files are not certificates its CA issued)
     # an EXISTING directory, even an empty one, is `commit_issued`'s: it is only made when a pair is issued
     return (
-        f"Jen holds {len(names)} file(s) for certificates its CA issued, so the CA existed - its files are gone, not never made"
+        f"Jen holds {_plural(len(names), 'file')} for certificates its CA issued, so the CA existed - its files are gone, not never made"
         if names
         else "Jen's certificate directory exists, so a CA issued into it"
     )
@@ -1637,7 +1638,7 @@ def client_state(judge_issuer: bool = True) -> tuple[str, str]:
         return "damaged", f"{pem_name} has expired"
     left = (cert.not_valid_after_utc - now).days
     if left <= 30:
-        return "expiring", f"{pem_name} expires in {left} day(s)"
+        return "expiring", f"{pem_name} expires in {_plural(left, 'day')}"
     return "ok", ""
 
 

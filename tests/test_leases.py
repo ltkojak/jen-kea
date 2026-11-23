@@ -489,7 +489,10 @@ class TestTheLeaseListQ205:
         assert page.index('action="/leases/delete-stale"') > page.index("</table>"), (
             "after the table, not in the filter bar above it"
         )
-        assert 'data-confirm="Delete all expired/stale leases from the database?"' in page
+        assert (
+            'data-confirm="Delete all expired/stale leases from the database? This cannot be undone." data-confirm-label="Delete"'
+            in page
+        )
         i = page.index('action="/leases/delete-stale"')
         assert "btn-danger" not in page[i : i + 400] and "btn-secondary" in page[i : i + 400], (
             "a quiet secondary control"
@@ -537,12 +540,14 @@ class TestTheLeaseListQ205:
         one = self._page(logged_in_client, "/leases?search=plain-host")
         assert "1 active lease" in one and "1 active leases" not in one
 
-    def test_au3_the_expiry_is_a_time_element_with_the_relative_form_as_its_title(self, logged_in_client, q205_rows):
+    def test_au3_the_expiry_is_a_time_element_with_the_exact_time_as_its_title(self, logged_in_client, q205_rows):
+        # Q248 (addition 5): the expiry reads as a relative time at every width; the exact UTC time is the title a page without script shows
         page = self._page(logged_in_client)
         assert re.search(
-            r'<span class="desk-only" title="in 1[23] d"><time datetime="[0-9T:-]+Z" data-jen-time="fmt"', page
+            r'<span title="20\d\d-\d\d-\d\d \d\d:\d\d UTC"><time datetime="[0-9T:-]+Z" data-jen-time="rel">in 1[23] d</time>',
+            page,
         )
-        assert page.count('data-jen-time="rel"') >= 3, "the phone column keeps its relative form"
+        assert page.count('data-jen-time="rel"') >= 3
         assert re.search(r">20\d\d-\d\d-\d\d \d\d:\d\d UTC</time>", page), "the server-rendered text is still UTC"
 
 

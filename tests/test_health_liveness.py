@@ -442,7 +442,7 @@ class TestTheDispatcherIsJudgedByWhatIsWaitingNow:
             c.status == "warn"
             and "stuck" in c.detail
             and "90 s" in c.detail
-            and "7 event(s) queued behind it" in c.detail
+            and "7 events queued behind it" in c.detail
         )
 
     def test_an_old_queued_event_behind_a_moving_dispatcher_warns_as_behind(self, started, monkeypatch):

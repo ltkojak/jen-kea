@@ -63,7 +63,9 @@ class TestTraceRoute:
         _servers(monkeypatch)
         restricted_client(client, db, allowed_subnets=None, role="viewer", username="trace_viewer1")
         r = client.get("/tools/trace", query_string={"mac": MAC}, follow_redirects=True)
-        assert b"Admin access required." in r.data
+        assert (
+            b"Admin access required for /tools/trace." in r.data
+        )  # Q248 (V47): a refusal names the page, never its query
 
     def test_blank_form_renders_without_reading_the_log(self, logged_in_client, monkeypatch):
         _servers(monkeypatch)

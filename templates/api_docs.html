@@ -1,10 +1,15 @@
 {% extends "base.html" %}
 {% block title %}API Documentation{% endblock %}
+{% from "_copy.html" import copy_button %}
 {% block content %}
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
     <h1>{{ icon("book-open", "ico-lg") }} REST API Documentation</h1>
     <p>Jen v{{ jen_version }} — integration API for Home Assistant, Zabbix, and custom scripts. Reads with any key; writes with a key that has <em>Allow writes</em>. Machine-readable: <a href="/api/v1/openapi.json">OpenAPI 3.0 document</a>.</p>
 </div>
+
+{# Q248 (V38): the tabs of Access & Security are on this page too (it had none, so there was no way back to the group); a viewer may open this page alone and is shown no row #}
+{{ subtabs(nav.subtabs['security'], 'api-docs') }}
 
 {% if keys %}
 <div class="card u-e25041">
@@ -16,14 +21,19 @@
         {% endfor %}
     </div>
     <div class="u-012c80">
-        <input type="text" id="apiKeyInput" placeholder="Paste your full API key here to pre-fill examples"
+        <input type="text" id="apiKeyInput" placeholder="Paste your full API key" aria-label="Your full API key, to fill in the examples" autocapitalize="off" autocomplete="off" spellcheck="false"
                style="flex:1;font-family:monospace;font-size:12px;">
         <button id="clear-api-key-btn" class="btn btn-sm btn-secondary">Clear</button>
     </div>
 </div>
 {% else %}
 <div class="card" style="border-style:dashed;">
+    {# Q248 (V25): the API key page is for an admin; an account it refuses is not sent there #}
+    {% if current_user.is_admin_or_above %}
     <p class="u-aad8e6">No API keys yet. <a href="/settings/api-keys">Create one</a> to get started.</p>
+    {% else %}
+    <p class="u-aad8e6">Ask an administrator for an API key.</p>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -36,7 +46,7 @@
         <pre class="code-block">Authorization: Bearer YOUR_API_KEY</pre>
         <p class="u-8a77e5"><strong class="u-f045bb">Response format:</strong> All responses are JSON. Errors return <code class="mono-box">{"error": "message"}</code> with an appropriate HTTP status code.</p>
         <p class="u-8a77e5"><strong class="u-f045bb">Read keys and write keys.</strong> A key without <em>Allow writes</em> can only read. A key with it may also create and delete reservations, edit device names and owners, and set subnet notes, always within the key's subnet scope. The API never edits Kea's configuration files.</p>
-        <p class="u-8a77e5"><strong class="u-f045bb">Subnet scope:</strong> each key has its own subnet access, set independently when the key is created (<a href="/settings/api-keys">manage keys</a>) — it is not tied to whoever created it. A key restricted to specific subnets returns empty results / 404s for anything outside its scope, the same as if that data didn't exist.</p>
+        <p class="u-8a77e5"><strong class="u-f045bb">Subnet scope:</strong> each key has its own subnet access, set independently when the key is created{% if current_user.is_admin_or_above %} (<a href="/settings/api-keys">manage keys</a>){% endif %} — it is not tied to whoever created it. A key restricted to specific subnets returns empty results / 404s for anything outside its scope, the same as if that data didn't exist.</p>
     </div>
 </div>
 
@@ -207,17 +217,17 @@
         "desc": "The same read-only checks the Health Center page runs, as JSON — scoped to the key's subnet access exactly like a restricted viewer's page load.",
         "params": [],
         "example_path": "/api/v1/health/checks",
-        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ok": 20, "warn": 1, "fail": 0, "skip": 4},\n  "checks": [\n    {\n      "id": "kea_reachable",\n      "title": "Kea servers reachable",\n      "group": "kea",\n      "status": "ok",\n      "detail": "1/1 servers reachable",\n      "fix_hint": "",\n      "fix_url": "",\n      "elapsed_ms": 12\n    }\n  ]\n}'
+        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ok": 20, "warn": 1, "fail": 0, "skip": 4},\n  "checks": [\n    {\n      "id": "kea_reachable",\n      "title": "Kea servers reachable",\n      "group": "kea",\n      "status": "ok",\n      "detail": "1/1 servers reachable",\n      "fix_hint": "",\n      "fix_url": "",\n      "elapsed_ms": 12,\n      "link": "",\n      "link_label": ""\n    }\n  ]\n}'
     },
     {
         "method": "GET",
         "path": "/api/v1/health/readiness",
         "title": "Kea 3.2 Readiness",
         "auth": true,
-        "desc": "Just the five-check readiness group — the same summary Settings → Kea shows as \"Ready for Kea 3.2\" or \"N action(s) before upgrading\".",
+        "desc": "Just the five-check readiness group — the same summary Settings → Kea shows as \"Ready for Kea 3.2\" or \"3 actions before upgrading to Kea 3.2\".",
         "params": [],
         "example_path": "/api/v1/health/readiness",
-        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ready": false, "actions": 1, "checked": 3},\n  "checks": [\n    {\n      "id": "kea32_control_transport",\n      "title": "Control transport ready for 3.2",\n      "group": "readiness",\n      "status": "warn",\n      "detail": "Control Agent mode — set up a direct socket before Kea 3.2",\n      "fix_hint": "Settings → Kea",\n      "fix_url": "/settings/kea",\n      "elapsed_ms": 8\n    }\n  ]\n}'
+        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ready": false, "actions": 1, "checked": 3},\n  "checks": [\n    {\n      "id": "kea32_control_transport",\n      "title": "Control transport ready for 3.2",\n      "group": "readiness",\n      "status": "warn",\n      "detail": "Control Agent mode — set up a direct socket before Kea 3.2",\n      "fix_hint": "Settings → Kea",\n      "fix_url": "/settings/kea",\n      "elapsed_ms": 8,\n      "link": "",\n      "link_label": ""\n    }\n  ]\n}'
     }
 ] %}
 
@@ -225,9 +235,9 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">
-            <span style="background:var(--primary);color:black;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-right:8px;">{{ ep.method }}</span>
+            <span style="background:var(--primary);color:var(--on-accent);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-right:8px;">{{ ep.method }}</span>
             <code class="u-433de3">{{ ep.path }}</code>
-            {% if not ep.auth %}<span style="background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">No auth required</span>{% endif %}
+            {% if not ep.auth %}<span style="background:color-mix(in srgb, var(--success) 18%, var(--tint-base));color:var(--success-ink);padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">No auth required</span>{% endif %}
         </span>
         <span class="u-58b17f">{{ ep.title }}</span>
     </div>
@@ -253,9 +263,10 @@
     </div>
     {% endif %}
 
-    <div class="u-911b26">
+    {# Q248 (V16): a grid column is as wide as its longest line unless it is told it may be narrower; the request's one long line pushed the block past its card on a phone #}
+    <div class="u-911b26 api-example">
         <div>
-            <div class="u-eb9d61">Request</div>
+            <div class="code-head"><div class="u-eb9d61">Request</div>{{ copy_button("req-" ~ loop.index, what="the request for " ~ ep.path) }}</div>
             <pre class="code-block" id="req-{{ loop.index }}">curl -s {% if ep.auth %}-H "Authorization: Bearer YOUR_KEY" {% endif %}\
   {{ base_url }}{{ ep.example_path }}</pre>
         </div>
@@ -278,7 +289,8 @@
     <div class="u-867774">
         <div class="u-d77151">Presence Detection (device tracker)</div>
         <div class="u-054de4">Detects if a device is home based on whether it has an active DHCP lease. Replace the MAC with your phone's MAC address.</div>
-        <pre class="code-block"># configuration.yaml
+        <div class="code-head code-head--end">{{ copy_button("ha-presence", what="the presence example") }}</div>
+        <pre class="code-block" id="ha-presence"># configuration.yaml
 rest:
   - resource: "{{ base_url }}/api/v1/devices/aa:bb:cc:dd:ee:ff"
     headers:
@@ -290,8 +302,8 @@ rest:
     </div>
 
     <div class="u-867774">
-        <div class="u-d77151">Subnet Utilization Sensor</div>
-        <pre class="code-block"># configuration.yaml
+        <div class="code-head"><div class="u-d77151">Subnet Utilization Sensor</div>{{ copy_button("ha-utilization", what="the utilization example") }}</div>
+        <pre class="code-block" id="ha-utilization"># configuration.yaml
 rest:
   - resource: "{{ base_url }}/api/v1/subnets"
     headers:
@@ -304,8 +316,8 @@ rest:
     </div>
 
     <div>
-        <div class="u-d77151">Kea Health Check</div>
-        <pre class="code-block"># configuration.yaml
+        <div class="code-head"><div class="u-d77151">Kea Health Check</div>{{ copy_button("ha-health", what="the health check example") }}</div>
+        <pre class="code-block" id="ha-health"># configuration.yaml
 rest:
   - resource: "{{ base_url }}/api/v1/health"
     binary_sensor:
@@ -362,6 +374,12 @@ rest:
     color: var(--text);
     line-height: 1.6;
 }
+/* Q248 (V16, addition 10) - a code block never widens its card, and a block that is meant to be pasted has a Copy button over its right corner */
+.api-example > div { min-width: 0; }
+.code-block { max-width: 100%; }
+.code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; min-height: 24px; }
+.code-head > div { margin-bottom: 0; }
+.code-head--end { justify-content: flex-end; }
 .mono-box {
     background: var(--surface2);
     border: 1px solid var(--border);

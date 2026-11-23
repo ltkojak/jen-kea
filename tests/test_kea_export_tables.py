@@ -217,7 +217,9 @@ class TestTheCard:
         assert heading in _card(), "the Select Tables heading and its row are the Jen card's, character for character"
         assert "style=" not in heading, "by class: tools/extract_inline_styles.py turned the shared styles into classes"
         form = _card()[_card().index("<form") :]
-        assert form.count("style=") == 2, "the two it had: the warning and the button"
+        # Q248 (V4): the button's own style named a fixed black for its text; the color is the theme's now (.btn-warning) and the width that was left is a class
+        assert form.count("style=") == 1, "the one it has: the warning (the button had one until Q248)"
+        assert 'class="btn btn-warning u-046678"' in form and "color:black" not in form
 
     def test_an_all_box_follows_its_boxes(self):
         script = PAGE[PAGE.rindex("<script") :]
