@@ -9,9 +9,11 @@
             <div class="hc-title">{{ c.title }}{% if group_label %} <span class="hc-group-tag">{{ group_label }}</span>{% endif %}</div>
             {# Q248 (V28): a page the detail refers to is a link, never an address printed as text #}
             {% if c.detail %}<div class="hc-detail">{{ c.detail }}{% if c.link %} <a class="hc-link" href="{{ c.link }}">{{ c.link_label or 'Open' }}</a>{% endif %}</div>{% endif %}
+            {# Q251: the hint is a sentence of the row, under its detail; the link beside the row is two words. As the link's own text a long hint took half the row. #}
+            {% if c.fix_url and c.fix_url != c.link and c.status in ('warn', 'fail') and c.fix_hint %}<div class="hc-hint">{{ c.fix_hint }}</div>{% endif %}
         </div>
         {% if c.fix_url and c.fix_url != c.link and c.status in ('warn', 'fail') %}
-        <a class="hc-fix" href="{{ c.fix_url }}">{{ c.fix_hint or 'Fix' }} &rarr;</a>
+        <a class="hc-fix" href="{{ c.fix_url }}">Fix &rarr;</a>
         {% endif %}
     </div>
 {% endmacro %}

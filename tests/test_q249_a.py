@@ -226,7 +226,7 @@ class TestThePureEdit:
             ("", ""),
             (None, ""),
             (7, ""),
-            ("NONE", ""),
+            ("NONE", "NONE"),  # (Q251) Kea's own word for a logger that writes nothing
         ],
     )
     def test_which_severities_write_no_line_for_a_command(self, severity, want):
@@ -591,10 +591,14 @@ class TestTheProof:
         )
         before_file = copy.deepcopy(daemon.file)
         post(logged_in_client, output="file")
-        assert flashes(logged_in_client) == [
-            f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. "
-            f"Check that {LOG} is writable by the account kea-dhcp4 runs as."
-        ]
+        assert (
+            flashes(logged_in_client)
+            == [
+                f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. "
+                f"The running kea-dhcp4 added no line of its own to {LOG} in the seconds Jen watched. Check that the file is writable by the account "
+                "kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."  # (Q251) what was seen, then what to check
+            ]
+        )
         assert daemon.file == before_file and running_options(daemon) == [PACKAGED]
         assert host.ops().count("apply-config") == 2 and host.ops().count("service") == 2
         assert host.ops().count("tail-log") == 1 + klt.LOG_OUTPUT_TRIES

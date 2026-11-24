@@ -22,6 +22,9 @@ from jen.services.access import diagnostic_surface
 logger = logging.getLogger(__name__)
 bp = Blueprint("doctor", __name__)
 
+#: (Q251) the findings whose Fix link is to the Kea logging card of Settings - Kea (`config_doctor._check_logger_output`)
+_KEA_LOGGING_CARD_FINDINGS = ("logger-no-file", "logger-pattern-no-timestamp")
+
 
 @bp.route("/tools/doctor")
 @login_required
@@ -46,6 +49,12 @@ def doctor_page():
         )
     else:
         findings = __doctor.diagnose(None, jen_config=extensions.cfg)  # (CRED-003 reads Jen's own file, not Kea's)
+
+    if current_user.role != "superadmin":
+        # (Q251) the two logger findings send their reader to the Kea logging card of Settings - Kea, which is drawn for a superadmin only: an admin
+        # keeps the finding's sentence (it says who can choose a file) and is handed no link to a card the page does not show them - the rule of Health's
+        # "log file missing" row. `config_doctor` is pure and knows no role, so it is done here, where the findings meet a person.
+        findings = [{**f, "fix_url": ""} if f["id"] in _KEA_LOGGING_CARD_FINDINGS else f for f in findings]
 
     counts = {"fail": 0, "warn": 0, "info": 0}
     for f in findings:

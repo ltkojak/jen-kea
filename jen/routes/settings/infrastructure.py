@@ -640,6 +640,10 @@ def settings_kea():
             logger.warning(f"readiness summary: {e}")
     from jen.services.kea_host import CONFIG_WRITE_MIN_HELPER_BUILD
 
+    # Q249: the Kea logging card - one block per server, from what each RUNNING daemon says (`config-get`); a superadmin's card, so nobody else pays for the reads
+    kea_logging = (
+        [__klt.log_output_card(s) for s in extensions.KEA_SERVERS or []] if current_user.role == "superadmin" else []
+    )
     return render_template(
         "settings_kea.html",
         readiness=readiness,
@@ -656,12 +660,9 @@ def settings_kea():
         direct_socket_supported=direct_socket_supported,
         kea_ca=_kea_ca_summary(),
         config_cards=_config_cards(),
-        # Q249: the Kea logging card - one block per server, from what each RUNNING daemon says (`config-get`); a superadmin's card, so nobody else pays for the reads
-        kea_logging=(
-            [__klt.log_output_card(s) for s in extensions.KEA_SERVERS or []]
-            if current_user.role == "superadmin"
-            else []
-        ),
+        kea_logging=kea_logging,
+        # Q251: the SSH card's "Kea log path" is the fallback for a server whose logger names no file; it is a field only while some server needs it
+        log_path_field=__klt.log_path_field_needed(kea_logging),
         config_write_min_build=CONFIG_WRITE_MIN_HELPER_BUILD,
         # v5.10.3 — id + name only; the real server dicts carry passwords.
         # v5.11.0 — plus ssh_host + the persisted jen-kea-helper status

@@ -599,17 +599,55 @@ def _log_tail(server: dict, path: str) -> tuple[list | None, str]:
     return None, "no-helper" if res.get("code") == "no-helper" else str(res.get("detail") or res.get("code") or "error")
 
 
-def _kea_wrote(tail: list, before: list) -> bool:
-    """Did kea-dhcp4 itself add a line? A line of `tail` that was not in `before` and that names the daemon's logger (`kea-dhcp4`). The file output this card writes carries
-    no `pattern`, so every line Kea writes there has Kea's default shape, `<date> <time> <LEVEL> [kea-dhcp4.<part>/<pid>.<tid>] ...`. A line some OTHER writer of the file
-    added (Q250: the tail of a file another process appends to moved whether kea-dhcp4 could write it or not) proves nothing."""
+#: Kea's default line shape, `<date> <time> <LEVEL> [kea-dhcp4.<part>/<pid>.<tid>] ...`: the bracket that names the logger and the process that wrote the line
+_KEA_LINE = re.compile(r"\[kea-dhcp4(?:\.[A-Za-z0-9_.-]+)?/(\d+)(?:\.[0-9A-Fa-fx]+)?\]")
+
+
+def _line_pid(line) -> int | None:
+    """The process id in a line of Kea's default shape that names the `kea-dhcp4` logger, else None."""
+    found = _KEA_LINE.search(line) if isinstance(line, str) else None
+    return int(found.group(1)) if found else None
+
+
+def _daemon_pid(server: dict) -> int | None:
+    """The process id of the RUNNING kea-dhcp4 on `server`, from the daemon's own `status-get` answer; None when it did not say. Asking is also the harmless command of the
+    proof: every command makes a daemon at INFO or below write a line."""
+    from jen.services import kea as _kea
+
+    reply = _kea.kea_command("status-get", server=server)
+    arguments = reply.get("arguments") if isinstance(reply, dict) and reply.get("result") == 0 else None
+    pid = arguments.get("pid") if isinstance(arguments, dict) else None
+    return pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else None
+
+
+def _kea_wrote(tail: list, before: list, pid: int | None) -> bool:
+    """Did THIS kea-dhcp4 add a line? A line of `tail` that was not in `before`, has Kea's default shape and carries the process id the running daemon answered
+    (`_daemon_pid`). The file output this card writes carries no `pattern`, so every line Kea writes there has that shape. A line some OTHER writer of the file added
+    proves nothing (Q250: a plain writer; Q251: a line that only imitates the logger's name, and the real lines of a second kea-dhcp4), and with no process id to compare
+    (`pid` None) no line proves anything."""
+    if pid is None:
+        return False
     seen = Counter(before)
     for line in tail:
         if seen[line] > 0:
             seen[line] -= 1
-        elif _edit.INVESTIGATION_LOGGER in line:
+        elif _line_pid(line) == pid:
             return True
     return False
+
+
+def _kea_wrote_before(before: list) -> bool:
+    """Does the tail read BEFORE the change hold a line of Kea's own shape (any process id: the daemon may have been restarted since)? The evidence that the file the
+    logger names is one kea-dhcp4 has really written (Q251): the configuration naming a file says nothing about whether Kea may write it."""
+    return any(_line_pid(line) is not None for line in before)
+
+
+def _record_read(server: dict, path: str) -> None:
+    """A change that stands on a file Jen just read is a successful read of that server's log: say so in the Problems sweep's own record, so Health's row and the
+    dashboard's banner follow at once and not at the next sweep (Q251). Never raises (`client_problems.note_read` does its own catching)."""
+    from jen.services import client_problems as _problems
+
+    _problems.note_read(server, path)
 
 
 def _write_path(server: dict) -> str:
@@ -666,6 +704,15 @@ def log_output_card(server: dict, timeout: int = 3) -> dict:
         + (" The outputs it has now are replaced." if replaces else ""),
     )
     return card
+
+
+def log_path_field_needed(cards: list) -> bool:
+    """Q251 - is the SSH card's "Kea log path" a field on this render? It is the fallback for a server whose `kea-dhcp4` logger names no file Jen may read
+    (`log_path_for`). False only when there is at least one server Jen reads a log from (SSH configured) and EVERY such server's running daemon answered and names
+    its own file: then the setting decides nothing and the page names the Kea logging card instead. `cards` is `log_output_card`'s answers; a daemon that did not
+    answer, a logger with no file and an empty list all keep the field."""
+    reading = [c for c in cards if c.get("has_ssh")]
+    return not reading or not all(c.get("readable") and c.get("reads_from") == "from Kea's logger" for c in reading)
 
 
 def _result(ok: bool, code: str, level: str, lines: list, **extra) -> dict:
@@ -739,7 +786,6 @@ def _forget_reader_paths() -> None:
 
 def _change_held(server: dict, name: str, choice: str, path: str, maxsize: int, maxver: int) -> dict:
     """`change_log_output` after its fields were judged, with the server held: every read and write of the change."""
-    from jen.services import kea as _kea
     from jen.services import kea_changeset as _cs
 
     wants_file = choice != "journal"
@@ -753,9 +799,13 @@ def _change_held(server: dict, name: str, choice: str, path: str, maxsize: int, 
         )
     if investigation_blocks_log_output(server, cfg):
         return _result(False, "investigation", "error", [investigation_sentence(name)])
-    already = path in logger_file_outputs(
-        cfg
-    )  # the logger wrote to this file before the change: nothing about the file is new
+    named = path in logger_file_outputs(cfg)  # the logger already names this file: nothing about the file is new
+    described_now = _edit.describe_logger_output(cfg)
+    had = {o.get("output") for o in described_now["options"] if isinstance(o, dict)} or {"stdout"}
+    keeps = {o["output"] for o in _edit.logger_output_options(choice, path, maxsize, maxver)}
+    takes_away = bool(
+        had - keeps
+    )  # an output Kea writes to now is dropped: after the change the file is all that is left of it
     old = _edit.logger_output_words(_edit.describe_logger_output(cfg))
     new = _edit.logger_output_words({"options": _edit.logger_output_options(choice, path, maxsize, maxver)})
     _after, code = _edit.set_logger_output(cfg, choice, path, maxsize, maxver)
@@ -801,57 +851,106 @@ def _change_held(server: dict, name: str, choice: str, path: str, maxsize: int, 
             return _result(False, "nochange", "info", ["Nothing to change."], old=old, new=new)
         if result.last_code == "investigation":
             return _result(False, "investigation", "error", [investigation_sentence(name)])
+        if result.status == "rollback_failed":
+            # (Q251) the change set could not undo its own change: the new output may stand in the file or in the daemon, unproven. Nothing more is sent (the change set
+            # already tried, and recorded its own incident); the answer says what Kea runs now, and the route writes the audit row INV-017 promises.
+            _forget_reader_paths()
+            now_cfg, _why = running_logger_config(server)
+            runs = (
+                _edit.logger_output_words(_edit.describe_logger_output(now_cfg))
+                if now_cfg is not None
+                else "something Jen could not read"
+            )
+            return _result(
+                False,
+                "change-failed",
+                "error",
+                lines
+                + [
+                    f"The change on {name} failed part way and could not be undone, so nothing was proven. {name} now writes its log to {runs}. See the Kea Servers page, then choose again."
+                ],
+                old=old,
+                new=new,
+                now=runs,
+            )
         return _result(False, "refused", "error", lines or [f"{name}: the change was not applied."], old=old, new=new)
     _forget_reader_paths()
     if not wants_file:
         return _result(True, "ok", "success", lines, old=old, new=new)
 
-    # the proof: the daemon is asked a harmless command (every command logs COMMAND_RECEIVED), and kea-dhcp4 must have added a line to the file
+    # the proof: the daemon is asked a harmless command (every command logs COMMAND_RECEIVED) whose answer carries its process id, and a line of Kea's own shape with THAT
+    # process id must have been added to the file
     is_there = False
     for attempt in range(LOG_OUTPUT_TRIES):
-        _kea.kea_command("config-get", server=server)  # the reply is not read: only the line it makes Kea write matters
+        pid = _daemon_pid(server)
         tail, state = _log_tail(server, path)
         is_there = tail is not None and state != NOT_THERE
-        if tail and _kea_wrote(tail, before):
+        if tail and _kea_wrote(tail, before, pid):
+            _record_read(server, path)
             return _result(True, "ok", "success", lines + [f"Kea is writing to {path} on {name}."], old=old, new=new)
         if attempt < LOG_OUTPUT_TRIES - 1:
             _proof_sleep(1)
 
-    # A logger above INFO writes no line for a command, so a tail that did not move is not evidence either way. Two things are (Q250): a file the logger ALREADY wrote to
-    # before this change (nothing about the file is new: it stands, and says what was not checked), and a file that was not there and now is (Kea made it). A new output
-    # on a file that was already there proves neither - measured: Kea accepts a file it may not write and then logs nowhere - so it is put back like any unproven change.
+    # A logger above INFO writes no line for a command, so a tail that did not move is not evidence either way. Two things are: a file the logger already NAMED
+    # (nothing about the file is new: it stands, and says what was not checked), and a file that was not there and now is (Kea made it). Q251: the name is enough
+    # only while the change takes no output away - Kea then writes everywhere it wrote before. A change that DROPS an output (the journal and a file, to the file
+    # alone) leaves the file as all there is, and a file Kea was pointed at and could never write holds no line of Kea's: there the file must hold lines kea-dhcp4
+    # wrote. Anything else proves neither - measured: Kea accepts a file it may not write and then logs nowhere - so it is put back like any unproven change.
     severity = _edit.logger_severity_above_info(cfg)
-    if severity and already:
+    if severity and named and (not takes_away or _kea_wrote_before(before)):
+        _record_read(server, path)
         return _result(
             True,
             "unchecked",
             "warning",
-            [
-                f"Kea accepted the change on {name}. Its severity is {severity}, so it wrote no line Jen could check; {path} is the file it wrote to before this change."
+            lines
+            + [
+                f"Kea accepted the change on {name}. Its severity is {severity}, so it wrote no line Jen could check; "
+                + (
+                    f"{path} already holds lines kea-dhcp4 wrote before this change."
+                    if takes_away
+                    else f"{path} is a file its logger already named, and this change takes no output away."
+                )
             ],
             old=old,
             new=new,
             note=f" (not checked: severity {severity})",
         )
     if severity and not was_there and is_there:
+        _record_read(server, path)
         return _result(
             True,
             "created",
             "success",
             lines
             + [
-                f"Kea created {path} on {name}. Its severity is {severity}, so it has written no line yet; the file fills when Kea next logs at that level."
+                f"Kea created {path} on {name}. Its severity is {severity}, so it has written no line yet; "
+                + (
+                    "the file stays empty until the severity is changed."
+                    if severity == "NONE"
+                    else "the file fills when Kea next logs at that level."
+                )
             ],
             old=old,
             new=new,
             note=f" (proven by the file Kea created: severity {severity})",
         )
-    cause = (
-        f"Its severity is {severity}, so Kea writes few lines, and {path} was already there, so Jen could not tell whether kea-dhcp4 may write it. "
-        "Choose a file name that does not exist yet: Kea creates it, and that is the proof."
-        if severity and was_there
-        else f"Check that {path} is writable by the account kea-dhcp4 runs as."
-    )
+    if severity and was_there:
+        cause = (
+            f"Its severity is {severity}, so Kea writes "
+            + ("nothing" if severity == "NONE" else "few lines")
+            + f", and {path} was already there"
+            + (" without a line kea-dhcp4 wrote" if named else "")
+            + ", so Jen could not tell whether kea-dhcp4 may write it. "
+            "Choose a file name that does not exist yet: Kea creates it, and that is the proof."
+        )
+    elif severity:
+        cause = f"Its severity is {severity}, and {path} was not created, so Jen could not tell whether kea-dhcp4 may write there."
+    else:
+        cause = (
+            f"The running kea-dhcp4 added no line of its own to {path} in the seconds Jen watched. Check that the file is writable by the account "
+            "kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."
+        )
 
     def put_back(current):
         return _edit.restore_logger_output(current, captured["snapshot"])

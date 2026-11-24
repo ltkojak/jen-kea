@@ -129,9 +129,9 @@ class TestDevicesActionMenu:
         # bare substring.
         assert "action-menu-item edit-btn" not in body
         assert b"Remove from inventory" not in resp.data
-        # But the reservation item should still be visible to a viewer —
-        # it's informational/a link, not a mutating action gated to admins.
-        assert b"Create reservation" in resp.data or b"Reservation exists" in resp.data
+        # (Q251) "Create reservation" opens /reservations/add, an admin's page: a viewer's menu does not offer it. This asserted the opposite ("a link, not
+        # a mutating action"); "Reservation exists", which is no link, stays for everyone (tests/test_q251_b.py).
+        assert b"Create reservation" not in resp.data and b"/reservations/add" not in resp.data
 
     def test_no_external_icon_font_or_cdn_reference(self, logged_in_client, db):
         """The whole point of inline SVG icons: zero network dependency,

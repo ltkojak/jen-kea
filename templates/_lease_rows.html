@@ -1,6 +1,6 @@
 {% from '_subnet_badge.html' import subnet_badge %}
 {% from '_device_badge.html' import device_badge %}
-{% from '_investigate.html' import investigate_link %}
+{% from '_investigate.html' import investigate_link, investigate_href %}
 {% from '_icons.html' import icon_trash, icon_pin, icon_dots %}
 {% from '_empty.html' import empty_state %}
 {% from '_copy.html' import copy_cell %}
@@ -46,7 +46,13 @@
                 <div class="action-menu-item disabled mono">{{ copy_cell(l.mac) }}</div>
                 {{ investigate_link(l.mac) }}
                 {% if l.has_reservation %}
+                {# (Q251) the Reservations list shows a reservation of a subnet; a client whose only reservation is Kea's GLOBAL one (subnet 0) has no row there,
+                   and the link opened an empty list. Its reservation is on its Investigate page. #}
+                {% if l.get('reservation_listed') %}
                 <a href="/reservations?search={{ l.mac }}" class="action-menu-item" role="menuitem">{{ icon_pin() }}View reservation</a>
+                {% else %}
+                <a href="{{ investigate_href(l.mac) }}" class="action-menu-item" role="menuitem">{{ icon_pin() }}View reservation (global)</a>
+                {% endif %}
                 {% else %}
                 <a href="/reservations/add?ip={{ l.ip|urlencode }}&mac={{ l.mac|urlencode }}&hostname={{ l.hostname|urlencode }}&subnet_id={{ l.subnet_id|urlencode }}" class="action-menu-item" role="menuitem">{{ icon_pin() }}Create reservation</a>
                 <a href="/tools/explain?mac={{ l.mac }}&subnet={{ l.subnet_id }}&hostname={{ l.hostname|urlencode }}" class="action-menu-item" role="menuitem">{{ icon("compass") }} Why this address?</a>

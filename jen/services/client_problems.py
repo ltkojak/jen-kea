@@ -584,6 +584,15 @@ def _note_server(server_id, ok: bool, error: str, now: datetime, path: str | Non
         logger.error(f"client_problems: could not record the read of server {server_id}: {type(e).__name__}: {e}")
 
 
+def note_read(server: dict, path: str) -> None:
+    """Q251 - a successful read of `server`'s log at `path` that the sweep did not make: the Kea logging card's proof (`kea_log_trace.change_log_output`) has just read
+    that file through the same helper op the sweep uses. Recorded exactly as a sweep's own good read (the time, no error, no misses, the path), so Health's "Problems
+    inbox sweep" row and the dashboard's banner stop saying the log is missing at once and not at the next sweep. Only the read is recorded: the watermark, the events
+    and the alerts stay the sweep's. A server with no SSH has no row to correct. Never raises (`_note_server`)."""
+    if server.get("ssh_host") and server.get("id") is not None:
+        _note_server(server.get("id"), True, "", _now().replace(microsecond=0), path)
+
+
 def _note_swept(now: datetime) -> None:
     from jen.models import db as __db
 

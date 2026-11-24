@@ -31,9 +31,16 @@ INJECT = """
 }
 """
 
-# a synthetic submit event never navigates, so the page stays put for the assertions
-FIRE = "() => document.getElementById('q99-form').dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}))"
-BAR_ACTIVE = "() => document.getElementById('jen-progress').classList.contains('active')"
+# A synthetic submit event never navigates, so the page stays put for the assertions.
+# (Q251) The dashboard these tests stand on makes htmx requests of its own, and each one starts and stops the same bar: read in a second `evaluate`, the bar's
+# state was sometimes the dashboard's (one of the five tests failed about one run in five, on the tag and on the release before it, a different one each time).
+# So the bar is reset, the event fired and the three facts read in ONE synchronous script: no request of the page can start or end between them.
+FIRE = """() => {
+    jenProgress.reset();
+    document.getElementById('q99-form').dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
+    const b = document.getElementById('q99-btn');
+    return {disabled: b.disabled, busy: b.getAttribute('aria-busy'), active: document.getElementById('jen-progress').classList.contains('active')};
+}"""
 
 
 class TestSubmitHandler:
@@ -41,26 +48,26 @@ class TestSubmitHandler:
         page = logged_in_page
         page.goto(f"{base_url}/")
         page.evaluate(INJECT, [{}, False])
-        page.evaluate(FIRE)
-        assert page.evaluate("() => document.getElementById('q99-btn').disabled") is True
-        assert page.evaluate(BAR_ACTIVE) is True
+        seen = page.evaluate(FIRE)
+        assert seen["disabled"] is True
+        assert seen["active"] is True
 
     def test_a_form_that_refused_its_own_submission_is_left_alone(self, logged_in_page, base_url):
         page = logged_in_page
         page.goto(f"{base_url}/")
         page.evaluate(INJECT, [{}, True])
-        page.evaluate(FIRE)
-        assert page.evaluate("() => document.getElementById('q99-btn').disabled") is False
-        assert page.evaluate("() => document.getElementById('q99-btn').getAttribute('aria-busy')") is None
-        assert page.evaluate(BAR_ACTIVE) is False
+        seen = page.evaluate(FIRE)
+        assert seen["disabled"] is False
+        assert seen["busy"] is None
+        assert seen["active"] is False
 
     def test_a_download_form_keeps_its_button_and_the_bar_stops_on_a_timer(self, logged_in_page, base_url):
         page = logged_in_page
         page.goto(f"{base_url}/")
         page.evaluate(INJECT, [{"data-download": ""}, False])
-        page.evaluate(FIRE)
-        assert page.evaluate("() => document.getElementById('q99-btn').disabled") is False
-        assert page.evaluate(BAR_ACTIVE) is True
+        seen = page.evaluate(FIRE)
+        assert seen["disabled"] is False
+        assert seen["active"] is True
         page.wait_for_function(
             "() => !document.getElementById('jen-progress').classList.contains('active')", timeout=6000
         )

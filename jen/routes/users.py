@@ -640,6 +640,11 @@ def set_user_role(user_id):
     return redirect(url_for("users.users"))
 
 
+#: (Q251) why a single sign-on account's Subnet Access is not edited: the Edit User dialog shows it where the boxes would be (templates/users.html holds the
+#: same words) and `set_user_subnets` refuses with it. "Subnet Mapping" is the field's label on the Access & Security page's Single Sign-On card.
+SSO_SUBNETS_SENTENCE = "Set by the identity provider at every sign-in (Subnet Mapping under Settings → Access & Security → Single Sign-On), so it is not edited here."
+
+
 @bp.route("/users/set-subnets/<int:user_id>", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -651,10 +656,14 @@ def set_user_subnets(user_id):
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
+                cur.execute("SELECT username, role, auth_provider FROM users WHERE id=%s", (user_id,))
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
+                    return redirect(url_for("users.users"))
+                if row["auth_provider"] == "oidc":
+                    # (Q251) as in `edit_user`: the identity provider sets a single sign-on account's subnets at every sign-in. Refused, nothing changed.
+                    flash(SSO_SUBNETS_SENTENCE, "error")
                     return redirect(url_for("users.users"))
                 # (Q249) a Superadmin is never restricted: its row stores NULL whatever the list says, as `add_user` and `edit_user` store it. The list used to
                 # be stored, and the Users page showed a scope the account does not have.
@@ -791,7 +800,12 @@ def edit_user(user_id):
                 # Subnet access. (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short; (Q248) nothing ticked is
                 # refused too. (Q249) with ONE exception: an account whose stored scope is already no subnets (what single sign-on stores for a sign-in whose
                 # groups match nothing, and what the dialog then shows: nothing ticked) keeps it. Its timeout could not be saved without granting it subnets.
-                if not subnet_ids_raw and role != "superadmin" and _stored_no_subnets(row["subnet_access"]):
+                # (Q251) a single sign-on account's subnets are the identity provider's too: `oidc.find_or_create_user` writes them again at every sign-in,
+                # so a scope saved here lasted until the account next signed in. The dialog offers no boxes for such an account; whatever is posted, the
+                # stored value goes back untouched (NULL stays NULL) and the rest of the form - the timeout - is saved.
+                if row["auth_provider"] == "oidc":
+                    ok, subnet_access = True, row["subnet_access"]
+                elif not subnet_ids_raw and role != "superadmin" and _stored_no_subnets(row["subnet_access"]):
                     ok, subnet_access = True, "[]"
                 else:
                     ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, role)

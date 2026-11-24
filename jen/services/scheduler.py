@@ -7,7 +7,7 @@ Started by the app factory after DB init.
 
 import contextlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,9 @@ _scheduler = None
 _start_error = (
     ""  # why the scheduler is not running, for the Health Center (v5.68.0-beta.19, Q154); empty when it started
 )
+
+#: (Q251) seconds after `start_scheduler` at which the Problems inbox sweep runs for the first time
+FIRST_PROBLEMS_SWEEP_S = 45
 
 #: the jobs `start_scheduler` registers - the Health Center's liveness row requires every one of them
 CORE_JOB_IDS = (
@@ -75,7 +78,9 @@ def start_scheduler(app):
         max_instances=1,
         coalesce=True,
     )
-    # v5.68.0-beta.5 (Q140): every five minutes, read each Kea server's log and the lease database for clients that had DHCP trouble
+    # v5.68.0-beta.5 (Q140): every five minutes, read each Kea server's log and the lease database for clients that had DHCP trouble.
+    # (Q251) An interval's first run is one whole interval after the start, so a restart of Jen left Health's "Problems inbox sweep" row saying what the last sweep
+    # before it had said for five more minutes; the first sweep now runs `FIRST_PROBLEMS_SWEEP_S` after the start and every five minutes from there.
     _scheduler.add_job(
         _run_client_problems_sweep,
         IntervalTrigger(minutes=5),
@@ -84,6 +89,7 @@ def start_scheduler(app):
         args=[app],
         max_instances=1,
         coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=FIRST_PROBLEMS_SWEEP_S),
     )
     # Q216 (AA12): every hour, re-read the FACTS about each server whose changes go over the daemon's API (the consent is never re-asked; a fact it does not cover closes the gate)
     _scheduler.add_job(

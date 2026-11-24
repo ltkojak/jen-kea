@@ -2170,9 +2170,11 @@ def check_stale_reservation_alerts(cur) -> None:
         stale_rows = jcur.fetchall()
     live = set()
     for row in stale_rows:
-        # the reservation is by hardware address (identifier type 0): the same bytes as another identifier type would be another client
+        # the reservation is by hardware address (identifier type 0): the same bytes as another identifier type would be another client.
+        # (Q251) and it is an IPv4 one: a row with no IPv4 subnet id is an IPv6 reservation, which this alert (an address, a subnet) is not about
         cur.execute(
-            "SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id FROM hosts WHERE dhcp_identifier=UNHEX(%s) AND dhcp_identifier_type=0",
+            "SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id FROM hosts WHERE dhcp_identifier=UNHEX(%s) AND dhcp_identifier_type=0 "
+            "AND dhcp4_subnet_id IS NOT NULL",
             (row["mac"].replace(":", ""),),
         )
         res = cur.fetchone()

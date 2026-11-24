@@ -561,11 +561,14 @@ def macs_for_hostname(hostname: str, accessible_ids=None) -> set[str]:
                 "WHERE hostname=%s AND dhcp_identifier_type=0",
                 (hostname,),
             )
-            # A GLOBAL reservation (no subnet: dhcp4_subnet_id 0 or NULL) belongs to no subnet a caller can be
-            # scoped out of, and `authorize()` keeps it for everyone; the hostname lookup used to drop it for a
-            # scoped caller, so a client known only by a global reservation was findable by MAC but not by name.
+            # A GLOBAL reservation (dhcp4_subnet_id 0) belongs to no subnet a caller can be scoped out of, and
+            # `authorize()` keeps it for everyone, so its client is found by name as it is by MAC. A row whose
+            # dhcp4_subnet_id is NULL is an IPv6 reservation, not a global one (Q251): it is judged like any row
+            # of a subnet - kept for an unrestricted caller only. Read as "no subnet, so global" it handed a
+            # restricted caller a second MAC for the name, and the page answered "More than one client uses that
+            # hostname" about a reservation outside the caller's subnets.
             macs |= {
-                _hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"] and (not r["subnet_id"] or keep(r["subnet_id"]))
+                _hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"] and (r["subnet_id"] == 0 or keep(r["subnet_id"]))
             }
     except Exception as e:
         logger.error(f"client_subject: hostname lease/reservation lookup failed for {hostname!r}: {e}")

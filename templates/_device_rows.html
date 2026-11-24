@@ -66,7 +66,8 @@
                 {% endif %}
                 {% if d.has_reservation %}
                 <span class="action-menu-item disabled">{{ icon_pin() }}Reservation exists</span>
-                {% else %}
+                {# (Q251) /reservations/add is an admin's page: a viewer's menu does not offer it #}
+                {% elif current_user.role in ('superadmin','admin') %}
                 <a href="/reservations/add?mac={{ d.mac|urlencode }}&ip={{ (d.last_ip or '')|urlencode }}&hostname={{ (d.last_hostname or '')|urlencode }}&subnet_id={{ (d.last_subnet_id or '')|urlencode }}" class="action-menu-item" role="menuitem">{{ icon_pin() }}Create reservation</a>
                 {% endif %}
                 <a href="/timeline?mac={{ d.mac }}" class="action-menu-item" role="menuitem">{{ icon("clock") }} Timeline</a>

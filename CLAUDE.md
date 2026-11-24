@@ -474,6 +474,10 @@ carry that exact suffix (the box would re-install itself forever).
 
 1. **Never run `git push` or `git tag` without explicitly asking first and getting a
    clear yes** — even when confident the change is correct.
+   **Delegated on "go".** When the maintainer says "go" on a filed Q in Fable's chat, the builder session Fable starts (HANDOFF.md rule 12)
+   pushes `main` and tags without asking again. It still shows each command before running it, holds the tag until CI is green, never pushes a
+   branch, and never tags a plain `vX.Y.Z` without the maintainer's "promote". A question the builder has goes back to Fable, not to the
+   maintainer.
 2. **Deploy is always the full six-line git block** — `cd`, tar extract (if applicable),
    `git add`, `git commit`, `git push`, `git tag`, tag push. Never abbreviate or skip a
    step, and always show the exact commands before running them.

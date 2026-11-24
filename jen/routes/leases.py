@@ -44,6 +44,14 @@ RESERVED_ANY = "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr
 RESERVED_VISIBLE = "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND (h.dhcp4_subnet_id = 0 OR FIND_IN_SET(h.dhcp4_subnet_id, %s)))"
 
 
+def _stored_subnet_ids(account) -> str:
+    """Q251 - the subnet ids an account that does not see every subnet STORES, as the "1,3" `RESERVED_VISIBLE` is given: the same list
+    `User.can_access_subnet` answers from (`subnet_access_list`), so the Reserved filter and the row's Reserved mark ask one set."""
+    return ",".join(
+        str(i) for i in (account.subnet_access_list or []) if isinstance(i, int) and not isinstance(i, bool)
+    )
+
+
 def _JEN_VERSION():
     from jen import JEN_VERSION
 
@@ -107,6 +115,7 @@ def leases():
     total = 0
     expiring_soon = 0
     reserved_visible = set()
+    reserved_listed = set()
     minutes_applied = None
     try:
         with __db.kea_db() as db:
@@ -145,9 +154,10 @@ def leases():
                         where.append(RESERVED_ANY)
                     else:
                         where.append(RESERVED_VISIBLE)
-                        params.append(
-                            ",".join(str(int(i)) for i in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-                        )
+                        # (Q251) the account's STORED subnet ids, the list `can_access_subnet` (and so the row's mark, `sees_reservation_in`) reads. This was
+                        # the stored list cut to Jen's subnet map: an account scoped to a subnet the map does not name read "1 reserved" above a filter
+                        # that listed nothing.
+                        params.append(_stored_subnet_ids(current_user))
                 where_str = " AND ".join(where) if where else "1=1"
                 cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str}", params)
                 total = cur.fetchone()["cnt"]
@@ -209,11 +219,21 @@ def leases():
                             for row in host_rows
                             if sees_reservation_in(current_user, row["subnet_id"])
                         }
+                        # (Q251) of those, the ones the Reservations list can show: it lists a reservation of a subnet (an id above 0), never Kea's global
+                        # ones. A client reserved only globally has "View reservation (global)" in its menu, to its Investigate page.
+                        reserved_listed = {
+                            row["mac_hex"].upper()
+                            for row in host_rows
+                            if row["subnet_id"]
+                            and row["subnet_id"] > 0
+                            and sees_reservation_in(current_user, row["subnet_id"])
+                        }
             for lease in leases_list:
                 # Q248 (addition 5): the row's "Reserved" mark is what the summary counts - a reservation the caller may see. (Q250) `has_reservation`, which the
                 # admin's checkbox and menu read, is the same answer.
                 lease["reserved"] = lease["mac"].replace(":", "").upper() in reserved_visible
                 lease["has_reservation"] = lease["reserved"]
+                lease["reservation_listed"] = lease["mac"].replace(":", "").upper() in reserved_listed
     except Exception as e:
         logger.error(f"Could not load leases: {e}")
         flash("Could not load leases. Check server logs for details.", "error")
@@ -435,10 +455,7 @@ def bulk_release_leases():
                 for ip in ips:
                     try:
                         cur.execute(
-                            "SELECT l.subnet_id FROM lease4 l "
-                            "LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id "
-                            "AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0 "
-                            f"WHERE inet_ntoa(l.address)=%s AND {active_lease4('l')} AND h.host_id IS NULL",  # nosec B608 - a fixed constant
+                            f"SELECT l.subnet_id, HEX(l.hwaddr) AS mac_hex FROM lease4 l WHERE inet_ntoa(l.address)=%s AND {active_lease4('l')}",  # nosec B608 - a fixed constant
                             (ip,),
                         )
                         row = cur.fetchone()
@@ -446,6 +463,16 @@ def bulk_release_leases():
                             errors += 1
                             continue
                         if not current_user.can_access_subnet(row["subnet_id"]):
+                            errors += 1
+                            continue
+                        # (Q251) "reserved" is the rule of the row's checkbox (`sees_reservation_in` over the client's IPv4 `hosts` rows, the query of the
+                        # list): this asked only for a reservation in the lease's OWN subnet, so a hand-made post released the lease of a client with a
+                        # global reservation, whose box the page disables.
+                        cur.execute(
+                            "SELECT dhcp4_subnet_id AS subnet_id FROM hosts WHERE HEX(dhcp_identifier)=%s AND dhcp4_subnet_id IS NOT NULL",
+                            (row["mac_hex"] or "",),
+                        )
+                        if any(sees_reservation_in(current_user, h["subnet_id"]) for h in cur.fetchall()):
                             errors += 1
                             continue
                         cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))

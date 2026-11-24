@@ -21,3 +21,9 @@
 {%- endif -%}
 {%- endif -%}
 {%- endmacro %}
+
+{# (Q251) the address alone, for a link to the same page under a name of its own: the Leases row's "View reservation (global)" - a global reservation has no
+   row on the Reservations list, and Investigate shows it. One file writes the address, so the two cannot drift. #}
+{% macro investigate_href(who) -%}
+/client?q={{ who|urlencode }}
+{%- endmacro %}

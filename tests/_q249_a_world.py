@@ -56,6 +56,7 @@ class KeaHost:
         self.writes_log = True
         self.quiet = False
         self.existing = {}  # path -> lines a file already holds (and Kea is not adding to)
+        self.line_pid = None  # (Q251) the process id in the lines written; None is the daemon's own (`status-get`), a number is some OTHER kea-dhcp4
         self.calls = []
         self.missing = False  # the helper is not installed
         self.test_refusal = None  # Kea's own text from `kea-dhcp4 -t`
@@ -81,8 +82,9 @@ class KeaHost:
             return list(self.existing.get(path) or [])  # there (Kea made it, or it was there), and no line was added
         if self.writes_log and path in self._file_outputs():
             received = len(self.daemon.commands)
+            pid = self.daemon.pid if self.line_pid is None else self.line_pid
             return [
-                f"2026-11-23 14:15:{n % 60:02d}.000 INFO  [kea-dhcp4.commands/8.1] COMMAND_RECEIVED Received command 'config-get' ({n})"
+                f"2026-11-23 14:15:{n % 60:02d}.000 INFO  [kea-dhcp4.commands/{pid}.1] COMMAND_RECEIVED Received command 'status-get' ({n})"
                 for n in range(received)
             ]
         return self.existing.get(path)

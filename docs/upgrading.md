@@ -10,6 +10,24 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.9: a proof that is the running Kea's own line, a banner that follows the fix, and the fixes of the pass on 7.2.0-beta.8
+
+One step (7.2.0-beta.9). No migration, no helper build and no new setting. Nothing to do; these behave differently and are worth knowing.
+
+**Kea logging.** The card's three choices are renamed: "Logging to the system journal (Kea's default, not readable by Jen)", "Logging to file (Readable by Jen)" and "Logging to the system journal and to file (Readable by Jen)"; 7.2.0-beta.8 called the second one "A file Jen can read". Nothing stored changes. A change to a file now stands only on a line the running kea-dhcp4 wrote (Jen asks the daemon `status-get` and looks for its process id in the line); lines some other program writes to the file, a second kea-dhcp4 among them, no longer count. With a logger at WARN, ERROR, FATAL or NONE, dropping the journal from beside a file (the journal-and-file choice changed to the file alone) stands only when that file already holds Kea's lines; otherwise it is put back, and a file name that does not exist yet is the way through, as before.
+
+**The Problems inbox sweep.** A change that stands on a file clears Health's "Problems inbox sweep" row and the dashboard's banner at once. The sweep's first run is 45 seconds after Jen starts; it was five minutes.
+
+**The Kea log path field.** On Settings → Kea → SSH the field is replaced by "Not needed: Kea names the file itself" while every server Jen reads a log from names its own log file. The stored value is kept and the field returns when a server's logger names no file.
+
+**Health.** The link beside a failing row reads "Fix"; its hint is a line under the row's detail.
+
+**Words a script may match.** The audit detail of a change that failed part way and could not be undone ends "(the change failed part way, was not proven and could not be undone)". The message of a change that was put back now reads "The running kea-dhcp4 added no line of its own to ... in the seconds Jen watched. Check that the file is writable by the account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile." where 7.2.0-beta.8 read "Check that ... is writable by the account kea-dhcp4 runs as."
+
+**Reservations.** On Leases, a client whose only reservation is a global one has "View reservation (global)" in its menu, which opens its Investigate page; 7.2.0-beta.8 opened an empty Reservations list. A viewer's Devices menu no longer offers "Create reservation". A bulk release posted by hand for a client with a global reservation is refused, as the page's disabled box already said. The stale-reservation alert no longer fires for an IPv6-only reservation.
+
+**Single sign-on accounts.** Edit User no longer offers Subnet Access for an account that signs in through single sign-on, and a save keeps its stored subnets: they are set at every sign-in from the identity provider's groups (Subnet Mapping under Settings → Access & Security → Single Sign-On). If you narrowed such an account by hand, that narrowing was already undone at its next sign-in; set the Subnet Mapping to make it last.
+
 ## 7.2.0-beta.8: the top row from edge to edge, one change of Kea's logging at a time, and the fixes of the pass on 7.2.0-beta.7
 
 One step (7.2.0-beta.8). No migration, no helper build and no new setting. Nothing to do; these behave differently and are worth knowing.

@@ -422,8 +422,8 @@ _NEEDS_V4_SUBNET = re.compile(
     r"|FIND_IN_SET\((?:h\.)?dhcp4_subnet_id"
 )
 _READS_EVERY_ROW = {
-    # the stale-reservation alert asks whether ANY reservation row is kept for a device that has not been seen: it is about the reservation, not about a lease
-    "jen/services/alerts.py": 1,
+    # (Q251) jen/services/alerts.py left this list: the stale-reservation alert requires an IPv4 subnet now. It was excused with "it is about the reservation,
+    # not about a lease", and it told of an IPv6 reservation as an IPv4 one with no address and no subnet. The list is empty.
     # (Q250) jen/services/client_subject.py left this list: `load_reservations4` requires an IPv4 subnet now. It was excused with "a global one is kept for
     # everyone", and the row with no IPv4 subnet it read became that global one.
 }

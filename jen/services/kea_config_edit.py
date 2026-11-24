@@ -1029,12 +1029,13 @@ def logger_severity_words(cfg) -> str:
     return text
 
 
-#: severities at which Kea writes no line for a command it receives (COMMAND_RECEIVED is INFO): a change of output cannot be proven by asking the daemon something
-LOGGER_SEVERITIES_ABOVE_INFO = ("WARN", "ERROR", "FATAL")
+#: severities at which Kea writes no line for a command it receives (COMMAND_RECEIVED is INFO): a change of output cannot be proven by asking the daemon something.
+#: NONE (Q251) is Kea's own word for a logger that writes nothing at all.
+LOGGER_SEVERITIES_ABOVE_INFO = ("WARN", "ERROR", "FATAL", "NONE")
 
 
 def logger_severity_above_info(cfg) -> str:
-    """`WARN`, `ERROR` or `FATAL` when the `kea-dhcp4` logger of `cfg` is set to one of them (compared without case), else "" - absent, INFO, DEBUG and anything else."""
+    """`WARN`, `ERROR`, `FATAL` or `NONE` when the `kea-dhcp4` logger of `cfg` is set to one of them (compared without case), else "" - absent, INFO, DEBUG and anything else."""
     _section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
     entry = _logger_entry(loggers or [])
     severity = entry.get("severity") if entry is not None else None

@@ -287,9 +287,9 @@ _HOSTS_READS = {
     "jen/routes/devices.py": (1, 1, "the Devices list's mark"),
     "jen/routes/leases.py": (
         5,
-        3,
-        "the row's mark, the Reserved filter for every subnet and for the caller's (3). The bulk-release guard asks about the lease's OWN subnet, "
-        "which the route then checks the caller may access; the IP map reads one subnet the caller was checked for",
+        4,
+        "the row's mark, the Reserved filter for every subnet and for the caller's, and (Q251) the bulk-release guard, which asks the rule of the row's "
+        "checkbox (4); the IP map reads one subnet the caller was checked for",
     ),
     "jen/routes/reservations.py": (
         15,
@@ -360,7 +360,7 @@ class TestEveryReadOfHostsIsPlaced:
             "a query of the hosts table was added or removed: read it, and if its answer says a client has a reservation on a list or a card, "
             "hold it to access.sees_reservation_in before placing it on _HOSTS_READS"
         )
-        assert sum(found.values()) == 53 and sum(j for _n, j, _w in _HOSTS_READS.values()) == 5
+        assert sum(found.values()) == 53 and sum(j for _n, j, _w in _HOSTS_READS.values()) == 6
 
     def test_each_file_that_judges_asks_the_one_rule(self):
         for rel, (_n, judges, why) in _HOSTS_READS.items():
@@ -699,11 +699,12 @@ class TestASingleSignOnAccountsRoleComesFirst:
         assert r.status_code == 302
         assert _stored(db, uid) == ("admin", [1], 30)
 
-    def test_a_crafted_role_with_nothing_ticked_is_refused_for_a_single_sign_on_admin(self, logged_in_client, db):
-        """The role the subnets are judged for is the stored one: an admin with no box ticked is refused, where the posted Superadmin stored every subnet."""
+    def test_a_crafted_role_with_nothing_ticked_keeps_a_single_sign_on_admins_subnets(self, logged_in_client, db):
+        """The posted Superadmin stored every subnet. (Q251) A single sign-on account's subnets are the identity provider's: the dialog offers no box for one
+        (so nothing ticked is what it posts), the stored subnets are kept whatever is posted, and the timeout is saved. Q250 refused this form whole."""
         uid = _make_user(db, "q250b_oidc_none", "admin", "[1]", provider="oidc")
         logged_in_client.post(f"/users/edit/{uid}", data={"timeout": "30", "role": "superadmin"})
-        assert _stored(db, uid) == ("admin", [1], None)
+        assert _stored(db, uid) == ("admin", [1], 30)
 
     def test_a_local_admin_is_still_promoted(self, logged_in_client, db):
         uid = _make_user(db, "q250b_local", "admin", "[1]")

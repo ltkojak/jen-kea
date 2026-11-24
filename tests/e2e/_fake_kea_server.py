@@ -208,6 +208,7 @@ class StatefulKeaServer:
         self.running = copy.deepcopy(config if config is not None else TWO_SUBNET_DHCP4)
         self.file = copy.deepcopy(self.running)
         self.commands: list[str] = []
+        self.pid = 8  # (Q251) what `status-get` answers; a restart is a new process
         self.write_fails = None
         self.test_fails = None
         self.expand = None  # callable(section) -> section: what the daemon runs after `config-set` (Kea writes its defaults out: docs/ARCHITECTURE.md 3.17, row 08)
@@ -235,6 +236,7 @@ class StatefulKeaServer:
         with self.lock:
             self.running = copy.deepcopy(self.file)
             self.stopped = False
+            self.pid += 1
 
     def set_running(self, section: dict):
         """A second client's `config-set` (a hand edit on the daemon), without going through the wire."""
@@ -244,6 +246,8 @@ class StatefulKeaServer:
     def _answer(self, command: str, arguments: dict) -> dict:
         if command == "version-get":
             return {"result": 0, "text": self.version, "arguments": {"extended": self.version}}
+        if command == "status-get":
+            return {"result": 0, "arguments": {"pid": self.pid, "uptime": 60, "reload": 60}}
         if command == "config-get":
             args = {} if self.no_service_key else {self.key: copy.deepcopy(self.running)}
             if not self.no_digest:

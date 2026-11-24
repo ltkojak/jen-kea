@@ -293,6 +293,13 @@ def save_kea_logging(server_id):
             name,
             f"{name}: {result['old']} -> {result['now']} (the change was not proven and could not be put back)",
         )
+    elif result["code"] == "change-failed":
+        # (Q251) the change set failed part way and could not undo itself: its own CONFIG_ROLLBACK_FAILED row says so, and this row says what the logging is now
+        __user.audit(
+            "KEA_LOG_OUTPUT",
+            name,
+            f"{name}: {result['old']} -> {result['now']} (the change failed part way, was not proven and could not be undone)",
+        )
     if result["code"] not in ("bad-choice", "nochange", "busy", "no-write-path"):
         __caps.invalidate(server_id)
     return _back()  # the top of the page, where the message is; a field error goes back to the card, where the field is

@@ -228,7 +228,7 @@ class TestTheProofIsKeasOwnLine:
         ],
     )
     def test_what_counts_as_a_line_kea_added(self, before, tail, want):
-        assert klt._kea_wrote(tail, before) is want
+        assert klt._kea_wrote(tail, before, 81) is want  # (Q251) 81 is the process id the lines carry
 
     def test_a_file_another_process_appends_to_is_not_proof_and_the_change_is_put_back(
         self, server, daemon, host, monkeypatch
@@ -283,9 +283,9 @@ class TestAboveInfo:
         host.writes_log = False  # nothing was there before, nothing is there after
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back")
-        assert out["lines"] == [
+        assert out["lines"] == [  # (Q251) the cause is what was seen: at WARN, a file that was not created
             f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. "
-            f"Check that {LOG} is writable by the account kea-dhcp4 runs as."
+            f"Its severity is WARN, and {LOG} was not created, so Jen could not tell whether kea-dhcp4 may write there."
         ]
 
     def test_the_file_the_logger_already_wrote_to_stands_unchecked(self, server, daemon, host):
@@ -297,9 +297,11 @@ class TestAboveInfo:
         host.existing[LOG] = [KEA_LINE]
         out = klt.change_log_output(server, "both", LOG, MB10, 4)
         assert (out["ok"], out["code"], out["level"]) == (True, "unchecked", "warning"), out
-        assert out["lines"] == [
-            f"Kea accepted the change on kea-a. Its severity is WARN, so it wrote no line Jen could check; {LOG} is the file it wrote to before this change."
-        ]
+        assert out["lines"][
+            -1
+        ] == (  # (Q251) the sentence names the evidence, and the change set's own lines come before it
+            f"Kea accepted the change on kea-a. Its severity is WARN, so it wrote no line Jen could check; {LOG} is a file its logger already named, and this change takes no output away."
+        )
         assert out["note"] == " (not checked: severity WARN)"
         assert host.ops().count("apply-config") == 1
 

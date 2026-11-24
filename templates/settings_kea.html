@@ -437,10 +437,20 @@
                 <label for="f-kea_conf">Kea Config Path</label>
                 <input id="f-kea_conf" type="text" name="kea_conf" value="{{ infra.kea_conf }}">
             </div>
+            {# Q251: the path is the fallback for a server whose kea-dhcp4 logger names no file Jen may read. When every server's logger names its own file (the Kea
+               logging card below), there is nothing for the field to decide: its stored value is kept and the card is named instead. #}
+            {% if log_path_field %}
             <div class="form-group">
                 <label for="f-dhcp4_log_path" title="Where kea-dhcp4 writes its log when its logger has no file output of its own: a .log file under /var/log. Blank is the default shown. Jen reads the logger's own file first; Tools → Doctor says when there is none.">Kea log path</label>
                 <input id="f-dhcp4_log_path" type="text" name="dhcp4_log_path" value="{{ infra.dhcp4_log_path }}" placeholder="/var/log/kea/kea-dhcp4.log" class="mono" title="A .log file under /var/log; blank is the default. Jen reads the logger's own file output first.">
             </div>
+            {% else %}
+            <div class="form-group" data-log-path-from-kea>
+                <label>Kea log path</label>
+                <input type="hidden" name="dhcp4_log_path" value="{{ infra.dhcp4_log_path }}">
+                <div class="form-hint">Not needed: Kea names the file itself. See <a href="#kea-logging">Kea logging</a> on this page.</div>
+            </div>
+            {% endif %}
         </div>
         <button type="submit" class="btn btn-primary">Save SSH Config</button>
     </form>
@@ -556,9 +566,9 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="wm-modes" role="radiogroup" aria-label="Write the log of {{ k.name }} to">
                 <div class="stat-label">Write the log to</div>
-                <label class="wm-mode-label"><input type="radio" name="output" value="journal" {% if k.checked == 'journal' %}checked{% endif %}> <strong>The system journal (Kea's default)</strong><span class="form-hint">Kea logs to stdout and systemd keeps it. Jen cannot read it.</span></label>
-                <label class="wm-mode-label"><input type="radio" name="output" value="file" {% if k.checked == 'file' %}checked{% endif %}> <strong>A file Jen can read</strong><span class="form-hint">Kea writes the file below and rotates it itself.</span></label>
-                <label class="wm-mode-label"><input type="radio" name="output" value="both" {% if k.checked == 'both' %}checked{% endif %}> <strong>The system journal and a file</strong><span class="form-hint">Both of the above.</span></label>
+                <label class="wm-mode-label"><input type="radio" name="output" value="journal" {% if k.checked == 'journal' %}checked{% endif %}> <strong>Logging to the system journal (Kea's default, not readable by Jen)</strong><span class="form-hint">Kea logs to stdout and systemd keeps it. Read it on the Kea server with journalctl.</span></label>
+                <label class="wm-mode-label"><input type="radio" name="output" value="file" {% if k.checked == 'file' %}checked{% endif %}> <strong>Logging to file (Readable by Jen)</strong><span class="form-hint">Kea writes the file below and rotates it itself.</span></label>
+                <label class="wm-mode-label"><input type="radio" name="output" value="both" {% if k.checked == 'both' %}checked{% endif %}> <strong>Logging to the system journal and to file (Readable by Jen)</strong><span class="form-hint">Both of the above. Choose this when journalctl, or something that collects the journal, should keep seeing Kea's log while Jen reads the file.</span></label>
             </div>
             <div class="form-row kl-fields mt-3">
                 <div class="form-group">

@@ -293,6 +293,9 @@ class Walk:
         monkeypatch.setattr(kea_host, "test_config", lambda server, service, cfg, **kw: {"ok": True, "code": "ok"})
         monkeypatch.setattr(kea_host, "tail_log", self._tail_log)  # Q249: the log read of the Kea logging card's proof
         monkeypatch.setattr(_klt, "_proof_sleep", lambda seconds: None)
+        monkeypatch.setattr(
+            _klt, "_record_read", lambda server, path: None
+        )  # Q251: the sweep's record is the database's; the walk has none
         monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a, **k: None)
         monkeypatch.setattr(kea_host, "_record_revision_after_apply", lambda *a, **k: None)
         monkeypatch.setattr(kea_host, "_conf_path", lambda server, service: DEFAULT_CONF)
@@ -351,6 +354,10 @@ class Walk:
         if fake is None:
             return {"result": 1, "text": "no route to host", "transport": "connect"}
         arguments = kw.get("arguments") if kw.get("arguments") is not None else (args[1] if len(args) > 1 else None)
+        if (
+            command == "status-get"
+        ):  # Q251: the proof's harmless command; its process id is the one the tail's lines carry (`_tail_log`)
+            return {"result": 0, "arguments": {"pid": 1, "uptime": 60, "reload": 60}}
         reply = fake.kea_command(command, arguments=arguments)
         if command == "config-get" and reply.get("result") == 0:
             self.answered_get.add(fake.host)

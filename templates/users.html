@@ -167,13 +167,14 @@
         <!-- Subnet Access -->
         <div class="form-group" id="edit-subnet-group">
             <label id="f-edit-subnet_ids-label">Subnet Access</label>
-            <div id="f-edit-subnet_ids" class="check-list" role="group" tabindex="-1" aria-labelledby="f-edit-subnet_ids-label" aria-describedby="f-edit-subnet_ids-hint">
+            <div id="f-edit-subnet_ids" class="check-list" role="group" tabindex="-1" aria-labelledby="f-edit-subnet_ids-label" aria-describedby="f-edit-subnet_ids-hint edit-subnet-oidc-hint">
                 <label><input type="checkbox" name="subnet_ids" value="all"> All Subnets</label>
                 {% for sid, info in subnet_map.items() %}
                 <label><input type="checkbox" name="subnet_ids" value="{{ sid }}"> {{ info.name }} ({{ info.cidr }})</label>
                 {% endfor %}
             </div>
             <div class="form-hint" id="f-edit-subnet_ids-hint">Tick All Subnets, or the subnets this account may use - not both.</div>
+            <div class="form-hint warn" id="edit-subnet-oidc-hint" hidden>Set by the identity provider at every sign-in (Subnet Mapping under Settings → Access &amp; Security → Single Sign-On), so it is not edited here.</div>
         </div>
 
         <!-- Timeout -->
@@ -273,6 +274,15 @@ function toggleEditSubnets() {
     document.getElementById('edit-subnet-group').hidden = document.getElementById('edit-role').value === 'superadmin';
 }
 
+// (Q251) a single sign-on account's subnets are written by the identity provider at every sign-in: the dialog offers no boxes for one (hidden, and disabled so
+// none is posted) and says why in their place. The server keeps the stored subnets of such an account whatever is posted.
+function showSsoSubnets(isOidc) {
+    document.getElementById('f-edit-subnet_ids').hidden = isOidc;
+    document.getElementById('f-edit-subnet_ids-hint').hidden = isOidc;
+    document.getElementById('edit-subnet-oidc-hint').hidden = !isOidc;
+    document.querySelectorAll('#f-edit-subnet_ids input[name="subnet_ids"]').forEach(function(box) { box.disabled = isOidc; });
+}
+
 function openAddModal(opener) {
     toggleAddSubnets();
     jenDialog.open(document.getElementById('add-modal'), opener);
@@ -302,6 +312,7 @@ function openEditModal(u, opener) {
     // the account's stored subnets and its timeout: All Subnets when the row stores no list at all, nothing ticked for a stored scope of no subnets (Q249)
     tickSubnets('f-edit-subnet_ids', u.subnet_ids);
     document.getElementById('f-edit-timeout').value = u.timeout || '';
+    showSsoSubnets(!!u.is_oidc);
 
     // MFA status
     var mfaEl = document.getElementById('edit-mfa-status');

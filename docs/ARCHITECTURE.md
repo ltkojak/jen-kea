@@ -1954,7 +1954,11 @@ guessing that nothing changed underneath it.
 `kea-dhcp4` logger's `output-options` (the pure edit is `kea_config_edit.set_logger_output`) so Kea writes its log to the journal, to a file under `/var/log/kea`, or to both. It is
 a change set like any other - the server's own transport, preflight, Config history, revert - with one addition, because Kea answers "Configuration successful." for a file it may
 not write and then logs nothing: for a file choice the tail of the file is read through the helper's existing `tail-log` before the change and after it, and a tail with no new
-line of kea-dhcp4's own puts the previous logger back through a second change set (above INFO, where a command writes no line, the file Kea created is the proof instead). The
+line of the RUNNING kea-dhcp4's own - Kea's line shape carrying the process id the daemon answers on `status-get` (Q251) - puts the previous logger back through a second change
+set. Above INFO, where a command writes no line, there are two more outcomes: a file that was not there and that Kea created is the proof, and a file the logger already named
+stands and says it was not checked (`unchecked`) - on the name while the change takes no output away, and only on lines kea-dhcp4 wrote there when it drops one. A change set that fails part way and
+cannot undo itself is answered `change-failed` with what the daemon runs now and an audit row. A change that stands on a file is recorded as a read of that server's log
+(`client_problems.note_read`), so the Problems sweep's Health row follows at once. The
 write, the proof and the put-back are seconds apart and are two change sets, so the server is held across all three (`kea_log_trace.hold_log_output`, a set in the one serving
 process): a second save of that server and a turn-on of investigation logging for it are refused meanwhile, never queued. No new helper op, no `sudo` string, no `ssh` from a route. It is refused while investigation logging is on or
 unresolved for the server (the marker, Jen's record, or the host's session), because that restore may remove the whole logger entry.

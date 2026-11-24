@@ -291,6 +291,10 @@ def _check_duplicate_reservations(dhcp4_cfg, hosts) -> list[Finding]:
     by_address: dict[tuple, list] = {}
     for h in hosts or []:
         sid = h.get("subnet_id")
+        if sid is None:
+            # (Q251) a row with no IPv4 subnet id is an IPv6 reservation (Kea keeps both in one table), not an IPv4 one: one DUID reserved in two IPv6
+            # subnets read here as "2 reservations in subnet None". Subnet 0, Kea's global IPv4 reservations, is compared among its own rows as before.
+            continue
         ident_key = (sid, h.get("identifier_type"), (h.get("identifier") or "").lower())
         by_identifier.setdefault(ident_key, []).append(h)
         if h.get("ip"):
