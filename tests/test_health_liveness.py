@@ -659,19 +659,21 @@ class TestTheSweepRowSaysWhatTheErrorMeans:
         assert c.status == "fail"
         assert "/var/log/kea/kea-dhcp4.log" in c.detail and "Kea logging" in c.detail  # (Q249) the card that changes it
         assert "1447 sweeps" in c.detail
-        assert "SSH" not in c.detail and "SSH" not in c.fix_hint
+        # (Q250) the sentence names the SSH card (where the Kea log path is); what it never does is send the admin to check the connection
+        assert "over SSH" not in c.detail and "over SSH" not in c.fix_hint
         assert "Kea logging" in c.fix_hint and "dhcp4_log_path" not in c.fix_hint.replace(
             "log path", ""
         )  # the field is named by what it is on the page
 
     def test_missing_with_no_path_says_there_is_no_file_jen_may_read(self, monkeypatch):
         c = self._blind(monkeypatch, "missing", path="-")
-        assert "no log file it may read" in c.detail and "SSH" not in c.detail and "SSH" not in c.fix_hint
+        assert "no log file it may read" in c.detail and "over SSH" not in c.detail and "over SSH" not in c.fix_hint
 
     def test_a_row_written_before_the_path_was_recorded_says_so_without_inventing_one(self, monkeypatch):
         c = self._blind(monkeypatch, "missing", path="")
         assert "its log file is not on kea-a" in c.detail and "no log file it may read" not in c.detail
-        assert "SSH" not in c.detail and "SSH" not in c.fix_hint
+        # (Q250) the sentence names the SSH card (where the Kea log path is); what it never does is send the admin to check the connection
+        assert "over SSH" not in c.detail and "over SSH" not in c.fix_hint
 
     def test_no_helper_keeps_the_ssh_sentence(self, monkeypatch):
         c = self._blind(monkeypatch, "no-helper", misses=6)

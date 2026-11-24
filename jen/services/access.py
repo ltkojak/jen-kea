@@ -61,10 +61,8 @@ def _mark_min_role(decorated, f, role):
     return decorated
 
 
-def role_may_open(path, role) -> bool:
-    """Q249 - may an account of `role` open the page at `path` (a path of Jen; its query and fragment are not read)? The answer is the mark of the view the path
-    matches: a view the decorators did not mark is open to every signed-in role, and a path that matches no route is False. The one rule a link shown to a person
-    is held to (Health's rows); it reads the role only, never the account's subnets."""
+def _endpoint_of(path):
+    """The endpoint the GET page at `path` matches (a path of Jen; its query and fragment are not read), or None for a path that matches no route."""
     from urllib.parse import urlsplit
 
     from werkzeug.exceptions import HTTPException
@@ -72,7 +70,7 @@ def role_may_open(path, role) -> bool:
 
     path = str(path or "").split("#", 1)[0].split("?", 1)[0]
     if not path.startswith("/"):
-        return False
+        return None
     adapter = current_app.url_map.bind("localhost")
     endpoint = None
     for _ in range(
@@ -84,13 +82,67 @@ def role_may_open(path, role) -> bool:
         except RequestRedirect as moved:
             path = urlsplit(moved.new_url).path
         except HTTPException:
-            return False
+            return None
+    return endpoint
+
+
+def _role_may_open_endpoint(endpoint, role) -> bool:
     if endpoint is None:
         return False
     need = getattr(current_app.view_functions.get(endpoint), "_jen_min_role", None)
     if need is None:
         return True
     return _ROLE_RANK.get(role, -1) >= _ROLE_RANK.get(need, 99)
+
+
+def role_may_open(path, role) -> bool:
+    """Q249 - may an account of `role` open the page at `path` (a path of Jen; its query and fragment are not read)? The answer is the mark of the view the path
+    matches: a view the decorators did not mark is open to every signed-in role, and a path that matches no route is False. It reads the role only, never the
+    account's subnets: a link shown to a person is held to `account_may_open`, which asks this and then the account's scope."""
+    return _role_may_open_endpoint(_endpoint_of(path), role)
+
+
+#: Q250 - the GET pages whose view turns away an account that does not see every subnet, before it renders: each reads `current_user.all_subnets` in its own body
+#: (a redirect with a flash, or a 403), which the role mark above cannot see. Endpoint names. `tests/test_q250_b.py` opens every GET page that takes no argument as
+#: an unrestricted admin and as a one-subnet admin and fails when a page that turns the second away is not here; the ones that take a server id are read by hand.
+NEEDS_EVERY_SUBNET = frozenset(
+    {
+        "doctor.doctor_page",  # /tools/doctor
+        "trace.trace_page",  # /tools/trace
+        "users.audit_log",  # /settings/logs
+        "subnets.add_subnet",  # /subnets/add
+        "subnets.dhcp_classes_page",  # /subnets/classes
+        "subnets.dhcp_class_new_page",  # /subnets/classes/new
+        "subnets.dhcp_class_edit_page",  # /subnets/classes/edit
+        "servers.config_history",  # /servers/<id>/config-history and the three pages under it (`_history_gate`)
+        "servers.config_history_detail",
+        "servers.config_history_download",
+        "servers.config_history_download_raw",
+    }
+)
+
+
+def account_may_open(path, role, all_subnets) -> bool:
+    """Q250 - may an account of `role` that sees every subnet (`all_subnets`) or only some of them open the page at `path`? `role_may_open`, and for an account
+    that does not see every subnet the matched page is not one of `NEEDS_EVERY_SUBNET`. The one rule a link shown to a person is held to (Health's rows)."""
+    endpoint = _endpoint_of(path)
+    if not _role_may_open_endpoint(endpoint, role):
+        return False
+    return bool(all_subnets) or endpoint not in NEEDS_EVERY_SUBNET
+
+
+def sees_reservation_in(account, subnet_id) -> bool:
+    """Q250 - ONE rule for "this client has a reservation" on a list or a card (the Leases list, the Devices list, the dashboard's Top devices). `subnet_id` is the
+    `dhcp4_subnet_id` of a `hosts` row. An IPv4 reservation is a row whose id is not NULL (NULL is an IPv6 reservation: it never counts). An account that sees
+    every subnet counts every one. An account that does not counts a reservation in one of its own subnets and Kea's global ones (subnet 0, which belongs to no
+    subnet an account can be scoped out of - the rule `client_subject.authorize` has always applied on Investigate), and no reservation in a subnet it may not see."""
+    if subnet_id is None:
+        return False
+    if account.all_subnets:
+        return True
+    if not isinstance(subnet_id, bool) and subnet_id == 0:
+        return True
+    return account.can_access_subnet(subnet_id)
 
 
 def superadmin_required(f):

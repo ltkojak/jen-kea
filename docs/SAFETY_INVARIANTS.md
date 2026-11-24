@@ -178,19 +178,29 @@ difference". For every other write a daemon that cannot be read is still not a d
 ### INV-017 - A change of Kea's log output is proven by the log itself or put back
 **Rule.** Kea accepts a logger whose file it may not write ("Configuration successful.") and then logs nothing anywhere (measured on kea-dhcp4 3.0.5), so an accepted change proves
 nothing. When Settings → Kea → Kea logging moves a server's `kea-dhcp4` logger to a file (alone, or beside the journal), the tail of that file is read through the Kea host's helper
-before the change and again after the daemon was asked a harmless command, up to five times one second apart: the change stands only when the tail is not empty and differs from the one
-before. A logger whose severity is WARN, ERROR or FATAL writes no line for a command, so there an unchanged tail is not judged: the change stands and the operator is told it was not
-checked. Otherwise the previous `output-options` are put back through the same change path, and when that fails too the operator is told so and what the daemon runs now. A file choice
+before the change and again after the daemon was asked a harmless command, up to five times one second apart: the change stands only when the tail holds a line that was not there
+before and that names the daemon's own logger (`kea-dhcp4`; a line some other writer of the file added proves nothing). A logger whose severity is WARN, ERROR or FATAL writes no line
+for a command, so there two other facts are taken: a file that was not there before the change and is there after it (Kea made it, so Kea may write it) proves the change, and a file
+the logger already wrote to before the change stands with the operator told it was not checked. Anything else - at any severity - puts the previous `output-options` back through the
+same change path, and when that fails too the operator is told so and what the daemon runs now. From the change's first read to its last write the server is held
+(`hold_log_output`): a second change of the same server, and a turn-on of investigation logging for it, are refused while it is held and never wait, so nothing lands between a write
+and its proof or put-back; turning logging off, the sweep and the Kea host's own restore are never held back. A change that was put back is in the audit log. A file choice
 for a server Jen cannot read a log from (no SSH host, no helper) is refused before anything is sent, and so is ANY choice while investigation logging is on or unresolved for that
 server - a marker in the running config or in the file (readable or damaged), an entry in Jen's record, or a session the Kea host holds: the restore of a session that created the logger
-entry removes the whole entry, and the new output with it. Only the `kea-dhcp4` logger's `output-options` are ever written; its severity, debuglevel and user-context are not touched.
-**Established.** Q249.
-**Enforced at.** `jen/services/kea_log_trace.py` (`change_log_output`, the one function that applies and proves; `investigation_blocks_log_output`), over the pure edit
+entry removes the whole entry, and the new output with it. (A Kea host that cannot be asked is not a refusal of this check; measured on kea-dhcp4 3.0.5, with SSH away the change set itself
+refuses a Live API server's change, because it cannot read the file it must prove the write against.) Only the `kea-dhcp4` logger's `output-options` are ever written; its severity, debuglevel and user-context are not touched. One exception is stated,
+not hidden: a configuration with NO `kea-dhcp4` logger entry gets one, written as `severity: INFO, debuglevel: 0`, which is Kea's own default.
+**Established.** Q249; the hold, the proof by Kea's own line and by the file Kea created, Q250.
+**Enforced at.** `jen/services/kea_log_trace.py` (`change_log_output`, the one function that applies and proves; `hold_log_output`; `investigation_blocks_log_output`) and
+`investigation_logging.turn_on` (wrapped by `_holds_the_logger`), over the pure edit
 `kea_config_edit.set_logger_output` / `restore_logger_output` and the one predicate for a session on the host, `investigation_logging.host_session_refusal`.
 **Tests.**
 - `tests/test_q249_a.py::TestTheProof`
 - `tests/test_q249_a.py::TestTheRouteRefuses`
 - `tests/test_q249_a.py::TestThePureEdit`
+- `tests/test_q250_a.py::TestOneChangeAtATime`
+- `tests/test_q250_a.py::TestTheProofIsKeasOwnLine`
+- `tests/test_q250_a.py::TestAboveInfo`
 - `tests/test_investigation_model.py::TestTheWalk` (the operation `op_log_output`, I15)
 - `tests/test_investigation_model.py::TestTheLogOutputChangeIsRefusedWhileASessionIsOpen`
 

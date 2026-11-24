@@ -18,7 +18,7 @@ import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.view_prefs as __view_prefs
 from jen import extensions
-from jen.services.access import accessible_subnet6_map, assert_subnet6_access
+from jen.services.access import accessible_subnet6_map, assert_subnet6_access, sees_reservation_in
 from jen.services.access import admin_required as _admin_required
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 from jen.services.pools import parse_pool
@@ -32,17 +32,16 @@ bp = Blueprint("leases", __name__)
 EXPIRING_SOON = "l.expire <= NOW() + INTERVAL 1 HOUR"
 #: Q249 - "this lease has a reservation" reads only a host row that is an IPv4 reservation: one whose `dhcp4_subnet_id` is not NULL. Kea keeps an IPv6
 #: reservation in the same table with `dhcp4_subnet_id` NULL, and one identified by the same hardware address marked the client's IPv4 lease Reserved (and broke
-#: the page for a subnet-restricted account). Subnet 0 is Kea's GLOBAL IPv4 reservation and is one: it marks the lease for an account that sees every subnet,
-#: and, being in no account's list, for no subnet-restricted one - as it always did.
+#: the page for a subnet-restricted account). Subnet 0 is Kea's GLOBAL IPv4 reservation and is one: it marks the lease for every account (Q250: it belongs to
+#: no subnet an account can be scoped out of - `access.sees_reservation_in` is the one rule of who counts which reservation).
 #: `{h}` is the alias of the hosts table, with its dot, or nothing.
 V4_RESERVATION = "{h}dhcp4_subnet_id IS NOT NULL"
 #: "reserved": the lease's client has a reservation - what the summary's "N reserved" has counted since Q206 ...
 #: (written out as ONE literal: `tests/test_q249_b.py` holds it to `V4_RESERVATION`, and a string built with `+` reads as assembled SQL to bandit, B608)
 RESERVED_ANY = "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND h.dhcp4_subnet_id IS NOT NULL)"
-#: ... in a subnet the caller may see (Q206, SP-1: a hidden subnet's reservation never changes a visible answer). The parameter is the caller's own subnet ids, "1,3".
-RESERVED_VISIBLE = (
-    "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND FIND_IN_SET(h.dhcp4_subnet_id, %s))"
-)
+#: ... in a subnet the caller may see (Q206, SP-1: a hidden subnet's reservation never changes a visible answer), or a global one (Q250: subnet 0; the SQL of
+#: `access.sees_reservation_in`). The parameter is the caller's own subnet ids, "1,3". A NULL id (an IPv6 reservation) matches neither half.
+RESERVED_VISIBLE = "EXISTS (SELECT 1 FROM hosts h WHERE h.dhcp_identifier = l.hwaddr AND (h.dhcp4_subnet_id = 0 OR FIND_IN_SET(h.dhcp4_subnet_id, %s)))"
 
 
 def _JEN_VERSION():
@@ -107,7 +106,6 @@ def leases():
     leases_list = []
     total = 0
     expiring_soon = 0
-    reserved_macs = set()
     reserved_visible = set()
     minutes_applied = None
     try:
@@ -139,7 +137,7 @@ def leases():
                     params += [s, s, s.replace(":", "")]
                 # Q248 (addition 5): each filter is one more condition of this same `where` - inside the subnet restriction above, counted by the same COUNT, paged by
                 # the same LIMIT. "Reserved" asks about the hosts table, so it carries the caller's scope itself: a restricted account's filter matches a reservation
-                # only in a subnet it may see, which is what its "N reserved" counts.
+                # only in a subnet it may see, or a global one, which is what its "N reserved" counts.
                 if expiring_only:
                     where.append(EXPIRING_SOON)
                 if reserved_only:
@@ -202,18 +200,20 @@ def leases():
                             mac_hexes,
                         )
                         host_rows = res_cur.fetchall()
-                        reserved_macs = {row["mac_hex"].upper() for row in host_rows}
-                        # Q206 (SP-1): the summary's "N reserved" is a number a viewer reads, so it counts only a reservation in a subnet the caller may see (devices.py's rule); a hidden
-                        # subnet's reservation never changes a visible answer. `has_reservation` below keeps reading every reservation - the pre-existing behavior of the admin menu.
+                        # Q206 (SP-1): the summary's "N reserved" is a number a viewer reads, so it counts only a reservation the caller may see; a hidden subnet's
+                        # reservation never changes a visible answer. Q250: ONE rule (`sees_reservation_in`: the caller's subnets and Kea's global ones), and the admin's
+                        # checkbox and menu read it too. `has_reservation` read every subnet, so a one-subnet admin's row for a client reserved only in a hidden
+                        # subnet had a disabled box titled Reserved and "View reservation" where Create, Explain and Release belong.
                         reserved_visible = {
                             row["mac_hex"].upper()
                             for row in host_rows
-                            if current_user.all_subnets or current_user.can_access_subnet(row["subnet_id"])
+                            if sees_reservation_in(current_user, row["subnet_id"])
                         }
             for lease in leases_list:
-                lease["has_reservation"] = lease["mac"].replace(":", "").upper() in reserved_macs
-                # Q248 (addition 5): the row's "Reserved" mark is what the summary counts - a reservation the caller may see - never `has_reservation`, which reads them all
+                # Q248 (addition 5): the row's "Reserved" mark is what the summary counts - a reservation the caller may see. (Q250) `has_reservation`, which the
+                # admin's checkbox and menu read, is the same answer.
                 lease["reserved"] = lease["mac"].replace(":", "").upper() in reserved_visible
+                lease["has_reservation"] = lease["reserved"]
     except Exception as e:
         logger.error(f"Could not load leases: {e}")
         flash("Could not load leases. Check server logs for details.", "error")

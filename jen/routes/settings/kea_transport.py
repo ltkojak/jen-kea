@@ -280,12 +280,19 @@ def save_kea_logging(server_id):
         flash(line, result["level"])
     if result["ok"]:
         __user.audit("KEA_LOG_OUTPUT", name, f"{name}: {result['old']} -> {result['new']}{result.get('note', '')}")
+    elif result["code"] == "put-back":
+        # (Q250) Kea ran the new output for the seconds of the proof, and config history holds both revisions: the audit log says so too
+        __user.audit(
+            "KEA_LOG_OUTPUT",
+            name,
+            f"{name}: {result['old']} -> {result['new']} was accepted by Kea, not proven, and put back",
+        )
     elif result["code"] == "put-back-failed":
         __user.audit(
             "KEA_LOG_OUTPUT",
             name,
             f"{name}: {result['old']} -> {result['now']} (the change was not proven and could not be put back)",
         )
-    if result["code"] not in ("bad-choice", "nochange"):
+    if result["code"] not in ("bad-choice", "nochange", "busy", "no-write-path"):
         __caps.invalidate(server_id)
     return _back()  # the top of the page, where the message is; a field error goes back to the card, where the field is

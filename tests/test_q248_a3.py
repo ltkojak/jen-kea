@@ -596,10 +596,9 @@ class TestTheWideColumn:
     def test_the_rule_comes_after_the_rules_it_widens(self):
         wide = BASE.index(".content--wide { max-width: 1800px; }")
         assert BASE.index(".container { max-width: 1400px;") < wide
-        assert (
-            BASE.index(".nav-inner { display: flex;") < wide
-            and "max-width: 1400px" in BASE[BASE.index(".nav-inner { display: flex;") : wide]
-        )
+        # Q250: the top row is no longer a 1,400 px column; its rule carries no max-width
+        nav_inner = BASE[BASE.index(".nav-inner { display: flex;") :].split("}", 1)[0]
+        assert "max-width" not in nav_inner
 
     @pytest.mark.parametrize(
         "path", ["/leases", "/reservations", "/devices", "/settings/logs", "/settings/logs?tab=alerts"]
@@ -619,13 +618,14 @@ class TestTheWideColumn:
         assert 'class="section-tabs-wrap section-tabs-wrap--wide"' not in body
         assert 'class="container content--wide"' not in body
 
-    def test_the_bars_backgrounds_run_edge_to_edge_and_their_contents_do_not(self):
+    def test_the_bars_backgrounds_and_their_contents_all_span_the_window(self):
         nav = re.search(r"\n\s*\.nav \{([^}]*)\}", BASE).group(1)
         assert "background: var(--surface)" in nav and "max-width" not in nav
-        wrap = re.search(r"\.section-tabs-wrap \{ --page-w: 1400px;([^}]*)\}", BASE).group(1)
-        assert "background: var(--surface)" in wrap and "border-bottom: 1px solid var(--border)" in wrap
-        assert "section-tabs-wrap--wide" not in BASE  # Q249: the strip keeps one width on every page
-        assert re.search(r"\.section-tabs-wrap > \.section-tabs \{ max-width: var\(--page-w\); margin: 0 auto;", BASE)
+        wrap = re.search(r"\.section-tabs-wrap \{ background: var\(--surface\);([^}]*)\}", BASE).group(1)
+        assert "border-bottom: 1px solid var(--border)" in wrap
+        assert "section-tabs-wrap--wide" not in BASE
+        # Q250: the strip spans the window too
+        assert re.search(r"\.section-tabs-wrap > \.section-tabs \{ border-bottom: 0; min-height: 39px; \}", BASE)
 
     def test_abouts_release_notes_are_capped_near_80_characters(self):
         assert ".changelog-body { max-width: 80ch; }" in BASE

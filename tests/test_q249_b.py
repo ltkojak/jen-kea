@@ -386,8 +386,11 @@ class TestAReservationIsOneWithAnIpv4Subnet:
         assert "Could not load devices" not in devices and "q249b-reserved" in devices
 
     @pytest.mark.parametrize("role", ["admin", "viewer"])
-    def test_a_global_reservation_is_in_no_restricted_accounts_list(self, client, db, leases_and_hosts, role):
-        """As before Q249: subnet 0 is not one of the account's subnets, so the row carries no mark, the filter does not list it and the summary does not count it."""
+    def test_a_global_reservation_marks_the_lease_for_a_restricted_account_too(
+        self, client, db, leases_and_hosts, role
+    ):
+        """Q250 decided the other way from Q249: subnet 0 is Kea's global reservation, in no subnet an account can be scoped out of, so the row carries the mark,
+        the filter lists it and the summary counts it for a subnet-restricted account as well (`access.sees_reservation_in`; tests/test_q250_b.py)."""
         with db.cursor() as cur:
             cur.execute("UPDATE hosts SET dhcp4_subnet_id=0 WHERE hostname='q249b-host4'")
         db.commit()
@@ -395,10 +398,9 @@ class TestAReservationIsOneWithAnIpv4Subnet:
         html = client.get("/leases").get_data(as_text=True)
         assert "Could not load leases" not in html
         rows = _lease_rows(html)
-        assert set(rows) == {"q249b-v6only", "q249b-reserved"} and not any(
-            "badge-reserved" in tr for tr in rows.values()
-        )
-        assert _lease_rows(client.get("/leases?reserved=1").get_data(as_text=True)) == {}
+        assert set(rows) == {"q249b-v6only", "q249b-reserved"}
+        assert "badge-reserved" in rows["q249b-reserved"] and "badge-reserved" not in rows["q249b-v6only"]
+        assert set(_lease_rows(client.get("/leases?reserved=1").get_data(as_text=True))) == {"q249b-reserved"}
 
     def test_the_condition_is_the_decided_one(self):
         from jen.routes import leases
@@ -422,8 +424,8 @@ _NEEDS_V4_SUBNET = re.compile(
 _READS_EVERY_ROW = {
     # the stale-reservation alert asks whether ANY reservation row is kept for a device that has not been seen: it is about the reservation, not about a lease
     "jen/services/alerts.py": 1,
-    # Investigate lists each reservation row of the client with that row's own subnet, and `authorize` judges every row on it (a global one is kept for everyone)
-    "jen/services/client_subject.py": 1,
+    # (Q250) jen/services/client_subject.py left this list: `load_reservations4` requires an IPv4 subnet now. It was excused with "a global one is kept for
+    # everyone", and the row with no IPv4 subnet it read became that global one.
 }
 
 
@@ -863,7 +865,8 @@ class TestAHealthRowLinksWhereTheCallerMayGo:
         text = _src("jen/services/health.py")
         run = text.split("def run_checks(", 1)[1].split("\ndef ", 1)[0]
         assert run.count("return ") == 1 and "return _links_for_caller(out, ctx)" in run
-        assert text.count("role_may_open(") == 2, "the fix link and the detail link, in _links_for_caller only"
+        # (Q250) the question is `account_may_open`: the role, then the account's subnets
+        assert text.count("account_may_open(") == 2, "the fix link and the detail link, in _links_for_caller only"
         partial = _src("templates/_health_checks.html")
         assert "role" not in partial and "admin" not in partial
 

@@ -322,8 +322,10 @@ def load_reservations4(hw_hex: str = "", cid_hex: str = "") -> list[dict]:
             cur.execute(
                 "SELECT host_id, dhcp4_subnet_id AS subnet_id, dhcp_identifier_type AS identifier_type, "
                 "HEX(dhcp_identifier) AS identifier, inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_client_classes "
-                "FROM hosts WHERE (HEX(dhcp_identifier)=%s AND dhcp_identifier_type=0) "
-                "OR (HEX(dhcp_identifier)=%s AND dhcp_identifier_type=3)",
+                # (Q250) only an IPv4 reservation: a row with an IPv4 subnet id (0 is Kea's global one). Kea keeps an IPv6 reservation in this table with the id
+                # NULL; read here it became subnet 0 below, a "global IPv4 reservation" that `authorize` keeps for everyone, and Explain matched it as one.
+                "FROM hosts WHERE dhcp4_subnet_id IS NOT NULL AND ((HEX(dhcp_identifier)=%s AND dhcp_identifier_type=0) "
+                "OR (HEX(dhcp_identifier)=%s AND dhcp_identifier_type=3))",
                 (hw_hex or "", cid_hex or ""),
             )
             rows = []

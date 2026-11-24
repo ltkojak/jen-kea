@@ -719,7 +719,7 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
                 "Kea's log is not written to a file Jen can read",
                 "The kea-dhcp4 logger writes to "
                 + (", ".join(str(o.get("output")) for o in options if o.get("output")) or "no output at all")
-                + ", not to a *.log file under /var/log. Choose a file under Settings → Kea → Kea logging, or paste this into that logger's entry under "
+                + ", not to a *.log file under /var/log. A superadmin can choose a file under Settings → Kea → Kea logging; or paste this into that logger's entry under "
                 + '"loggers" in kea-dhcp4.conf, then reload Kea: '
                 + LOGGER_OUTPUT_JSON,
                 "loggers[" + LOGGER_NAME + "]",
@@ -732,8 +732,8 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
     for o in files:
         pattern = o.get("pattern")
         if (
-            isinstance(pattern, str) and "%D" not in pattern and "%d" not in pattern
-        ):  # %D is local time, %d is UTC: either prints the date and time
+            isinstance(pattern, str) and pattern and "%D" not in pattern and "%d" not in pattern
+        ):  # %D is local time, %d is UTC: either prints the date and time. (Q250) An EMPTY pattern is Kea's default, the dated one: `config-get` and `config-write` spell the default out as ""
             out.append(
                 _finding(
                     "logger-pattern-no-timestamp",

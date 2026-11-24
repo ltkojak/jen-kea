@@ -504,9 +504,10 @@ S10_MODULES = (
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
-    ("jen/services/access.py", "role_may_open", "HTTPException", "return False"): (
-        "False is 'this role may not open that page': a path that matches no route (or only another method) is a link nobody is shown (Q249). Nothing is opened "
-        "on a False; the route's own decorator is what lets a request in"
+    ("jen/services/access.py", "_endpoint_of", "HTTPException", "return None"): (
+        "None is 'this path is no page of Jen', and both callers (`role_may_open`, `account_may_open`) answer False for it: a path that matches no route (or "
+        "only another method) is a link nobody is shown (Q249; Q250 moved the match into this helper). Nothing is opened on it; the route's own decorator is "
+        "what lets a request in"
     ),
     ("jen/routes/settings/security.py", "_authority_key_id", "(x509.ExtensionNotFound, ValueError)", "return None"): (
         "None is 'the top names no key by an identifier', which is the common case; one that cannot be read is one no comparison can be made with. It is reached "

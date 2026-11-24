@@ -372,7 +372,9 @@ class Walk:
         if self.ssh_fake(server) is None:
             return {"ok": False, "code": "error", "detail": "ssh: no route to host", "transport": True}
         self.log_reads += 1
-        return {"ok": True, "code": "ok", "lines": [f"line {n}" for n in range(self.log_reads)], "via": "helper"}
+        # (Q250) the lines are Kea's own: the proof counts only a new line that names the daemon's logger
+        lines = [f"2026-11-24 00:00:00.{n:03d} INFO  [kea-dhcp4.commands/1.1] line {n}" for n in range(self.log_reads)]
+        return {"ok": True, "code": "ok", "lines": lines, "via": "helper"}
 
     def _read_config(self, server, service, *, errors=None, **kw):
         fake = self.ssh_fake(server)
@@ -1498,6 +1500,7 @@ class Walk:
         )
         raw_before = self.world.store.get(inv.RECORD_KEY, "")
         applies_before = len(self.applies)
+        self.held_refuses(server, choice, raw_before)
         out = _klt.change_log_output(server, choice, "/var/log/kea/kea-dhcp4.log", 10 * 1024 * 1024, 4)
         self.say(f"log_output {choice} on {server['id']}: code={out['code']} must_refuse={must_refuse}")
         if must_refuse and (out["ok"] or len(self.applies) != applies_before):
@@ -1509,6 +1512,31 @@ class Walk:
         if self.world.store.get(inv.RECORD_KEY, "") != raw_before:
             self.fail(
                 "I15", f"changing the log output of server {server['id']} changed the stored investigation record"
+            )
+
+    def held_refuses(self, server, choice, raw_before):
+        """Q250, I16: while a server's logger is HELD (a change of its output between its first read and its last write, or a turn-on in flight), a second change and a
+        turn-on of investigation logging are both refused at once, send nothing and leave the stored record as it was - in every state the walk reaches. It changes nothing,
+        so the walk goes on from the same world."""
+        applies_before = len(self.applies)
+        assert _klt.hold_log_output(server), "the walk found the logger held between two steps"
+        try:
+            change = _klt.change_log_output(server, choice, "/var/log/kea/kea-dhcp4.log", 10 * 1024 * 1024, 4)
+            turned = inv.turn_on(server, 5, actor="walk")
+        finally:
+            _klt.release_log_output(server)
+        busy = [_klt.busy_sentence(server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}")]
+        if (
+            change["code"] != "busy"
+            or turned["ok"]
+            or turned["lines"] != busy
+            or len(self.applies) != applies_before
+            or self.world.store.get(inv.RECORD_KEY, "") != raw_before
+        ):
+            self.fail(
+                "I16",
+                f"with the logger of server {server['id']} held: the change answered {change['code']}, the turn-on answered ok={turned['ok']} {turned['lines']}, "
+                f"writes on the wire={self.applies[applies_before:]}, record changed={self.world.store.get(inv.RECORD_KEY, '') != raw_before}",
             )
 
     def op_turn_on_of_an_api_server(self):
@@ -2078,6 +2106,13 @@ class TestTheLogOutputChangeIsRefusedWhileASessionIsOpen:
     def test_with_the_refusal_the_same_walks_are_green_at_ten_times_the_share(self, seed, walk_world, monkeypatch):
         monkeypatch.setattr(Walk, "LOG_OUTPUT_SHARE", 0.5)
         walk_world(seed, self.STEPS).run()
+
+    def test_i16_is_red_when_a_turn_on_does_not_take_the_hold(self, walk_world, monkeypatch):
+        """The mutation check of I16 (Q250): a `turn_on` that does not hold the logger is found by the first walk whose step changes a log output."""
+        monkeypatch.setattr(inv, "turn_on", inv.turn_on.__wrapped__)
+        monkeypatch.setattr(Walk, "LOG_OUTPUT_SHARE", 0.5)
+        with pytest.raises(InvariantViolated, match="I16 violated"):
+            walk_world(0, self.STEPS).run()
 
     def test_a_session_refuses_the_change_and_the_record_is_what_it_was(self, world):
         server = world.servers[0]

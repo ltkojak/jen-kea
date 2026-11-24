@@ -776,17 +776,6 @@ def edit_user(user_id):
                 if role is None:
                     role = row["role"]
 
-                # Subnet access. (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short; (Q248) nothing ticked is
-                # refused too. (Q249) with ONE exception: an account whose stored scope is already no subnets (what single sign-on stores for a sign-in whose
-                # groups match nothing, and what the dialog then shows: nothing ticked) keeps it. Its timeout could not be saved without granting it subnets.
-                if not subnet_ids_raw and role != "superadmin" and _stored_no_subnets(row["subnet_access"]):
-                    ok, subnet_access = True, "[]"
-                else:
-                    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, role)
-                if not ok:
-                    flash_field("edit-subnet_ids", subnet_access)
-                    return _keep_user_form("edit", user_id)
-
                 # v5.25.0 (Q21) — an OIDC-linked account's role is
                 # IdP-managed (recomputed on every login) and it has no
                 # usable local password. The edit form disables both
@@ -798,6 +787,17 @@ def edit_user(user_id):
                 if row["auth_provider"] == "oidc":
                     role = row["role"]
                     new_pw = ""
+
+                # Subnet access. (Q224, AJ5) as in `add_user` and `set_user_subnets`: refused whole, never None, never one id short; (Q248) nothing ticked is
+                # refused too. (Q249) with ONE exception: an account whose stored scope is already no subnets (what single sign-on stores for a sign-in whose
+                # groups match nothing, and what the dialog then shows: nothing ticked) keeps it. Its timeout could not be saved without granting it subnets.
+                if not subnet_ids_raw and role != "superadmin" and _stored_no_subnets(row["subnet_access"]):
+                    ok, subnet_access = True, "[]"
+                else:
+                    ok, subnet_access = _subnet_access_from_form(subnet_ids_raw, role)
+                if not ok:
+                    flash_field("edit-subnet_ids", subnet_access)
+                    return _keep_user_form("edit", user_id)
 
                 # Protect last superadmin from demotion
                 if row["role"] == "superadmin" and role != "superadmin":

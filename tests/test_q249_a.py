@@ -477,6 +477,9 @@ class TestTheRouteRefuses:
 
     def test_a_file_choice_without_ssh_is_refused(self, logged_in_client, server, daemon, host):
         server["ssh_host"] = ""
+        server["config_transport"] = (
+            "api"  # (Q250) on File over SSH a server with no SSH has no write path at all, and is told that first
+        )
         post(logged_in_client, output="file")
         assert flashes(logged_in_client) == [
             "Jen reads Kea's log over SSH, and kea-a has no SSH configured (or no helper). Set that up first; without it a file would be written that Jen cannot read."
@@ -595,7 +598,10 @@ class TestTheProof:
         assert daemon.file == before_file and running_options(daemon) == [PACKAGED]
         assert host.ops().count("apply-config") == 2 and host.ops().count("service") == 2
         assert host.ops().count("tail-log") == 1 + klt.LOG_OUTPUT_TRIES
-        assert audit_rows(db) == []
+        # (Q250) Kea ran the new output for the seconds of the proof: the audit log says so
+        assert audit_rows(db) == [
+            f"kea-a: the system journal (stdout) -> the file {LOG} was accepted by Kea, not proven, and put back"
+        ]
 
     def test_a_file_that_is_there_and_does_not_grow_is_not_a_proof(self, logged_in_client, server, daemon, host):
         host.writes_log = False
@@ -640,10 +646,9 @@ class TestTheProof:
             f"kea-a: the system journal (stdout) -> the file {LOG} (the change was not proven and could not be put back)"
         ]
 
-    UNCHECKED = (
-        "Kea accepted the change on kea-a. Its severity is WARN, so it wrote no line Jen could check; the file /var/log/kea/kea-dhcp4.log will fill when Kea next logs at "
-        "that level. If it stays empty, check that the account kea-dhcp4 runs as may write it."
-    )
+    # (Q250) above INFO the proof is the file Kea CREATED; `tests/test_q250_a.py::TestAboveInfo` holds the other two worlds (a file that was already there, and the file
+    # the logger already wrote to)
+    CREATED = "Kea created /var/log/kea/kea-dhcp4.log on kea-a. Its severity is WARN, so it has written no line yet; the file fills when Kea next logs at that level."
 
     def _at(self, daemon, severity):
         daemon.file["loggers"][0]["severity"] = severity
@@ -653,24 +658,26 @@ class TestTheProof:
         self, logged_in_client, server, daemon, host, db
     ):
         self._at(daemon, "WARN")
-        host.writes_log = False  # at WARN a command writes no line: the tail does not move, and that is not evidence
+        host.quiet = True  # at WARN a command writes no line: the tail does not move, and that is not evidence. Kea made the file, and that is
         post(logged_in_client, output="file")
         with logged_in_client.session_transaction() as sess:
             said = list(sess.get("_flashes", []))
-        assert said == [("warning", self.UNCHECKED)]
+        assert said[-1] == ("success", self.CREATED)
         assert file_options(daemon) == [FILE_LOGGER]  # the change stands
         assert host.ops().count("apply-config") == 1 and host.ops().count("service") == 1  # nothing was put back
-        assert audit_rows(db) == [f"kea-a: the system journal (stdout) -> the file {LOG} (not checked: severity WARN)"]
+        assert audit_rows(db) == [
+            f"kea-a: the system journal (stdout) -> the file {LOG} (proven by the file Kea created: severity WARN)"
+        ]
 
     @pytest.mark.parametrize("severity", ["warn", "Error", "FATAL"])
     def test_the_severity_is_compared_without_case(self, server, daemon, host, severity):
         self._at(daemon, severity)
-        host.writes_log = False
+        host.quiet = True
         out = klt.change_log_output(server, "both", LOG, MB10, 4)
-        assert (out["ok"], out["code"], out["level"]) == (True, "unchecked", "warning")
+        assert (out["ok"], out["code"], out["level"]) == (True, "created", "success")
         assert (
-            f"Its severity is {severity.upper()}," in out["lines"][0]
-            and out["note"] == f" (not checked: severity {severity.upper()})"
+            f"Its severity is {severity.upper()}," in out["lines"][-1]
+            and out["note"] == f" (proven by the file Kea created: severity {severity.upper()})"
         )
 
     def test_a_logger_above_info_whose_file_did_move_is_the_ordinary_proven_case(
@@ -701,7 +708,8 @@ class TestHealthAndDoctor:
         note = next(f for f in doctor.diagnose(dhcp4([packaged_logger()]), hosts=[]) if f["id"] == "logger-no-file")
         assert note["fix_url"] == "/settings/kea#kea-logging"
         assert (
-            "Choose a file under Settings → Kea → Kea logging, or paste this into that logger's entry" in note["detail"]
+            "A superadmin can choose a file under Settings → Kea → Kea logging; or paste this into that logger's entry"
+            in note["detail"]
         )
         assert doctor.LOGGER_OUTPUT_JSON in note["detail"]  # the paste line stays for a server Jen cannot write to
 
@@ -730,13 +738,15 @@ class TestHealthAndDoctor:
         )
         row = health._problems_sweep({})
         assert row.status == "fail" and row.fix_url == "/settings/kea#kea-logging"
+        # (Q250) the sentence says who can choose a file and names the card each answer is on; the link is a superadmin's (tests/test_q250_b.py)
         assert (
-            "; choose a file under Settings → Kea → Kea logging, or set the log path there if Kea already writes one (13495 sweeps without a read, last read never)"
+            "; a superadmin can choose a file under Settings → Kea → Kea logging, or set the Kea log path under Settings → Kea → SSH if Kea already writes one (13495 sweeps without a read, last read never)"
             in row.detail
         )
         assert row.fix_hint == (
-            "Choose a file under Settings → Kea → Kea logging, or set the log path there if Kea already writes one; the sweep retries every five minutes."
+            "A superadmin can choose a file under Settings → Kea → Kea logging, or set the Kea log path under Settings → Kea → SSH if Kea already writes one; the sweep retries every five minutes."
         )
+        assert health._problems_sweep({"role": "admin"}).fix_url == ""
 
 
 class TestOverTheDaemonsOwnApi:
@@ -787,10 +797,13 @@ class TestOverTheDaemonsOwnApi:
         # the file with that severity is one the daemon loaded: written before its last load (as `ProofWorld.loaded_file` sets the host's clock)
         self.clock.seen_sha = self.clock._sha()
         self.clock.mtime = self.clock.loaded_at - 100
-        host.writes_log = False
+        host.quiet = True
         out = klt.change_log_output(api, "file", LOG, MB10, 4)
-        assert (out["ok"], out["code"], out["level"]) == (True, "unchecked", "warning"), out
-        assert "Its severity is ERROR," in out["lines"][0] and out["note"] == " (not checked: severity ERROR)"
+        assert (out["ok"], out["code"], out["level"]) == (True, "created", "success"), out
+        assert (
+            "Its severity is ERROR," in out["lines"][-1]
+            and out["note"] == " (proven by the file Kea created: severity ERROR)"
+        )
         assert daemon.commands.count("config-set") == 1  # nothing was put back
         assert running_options(daemon) == [{k: v for k, v in FILE_LOGGER.items() if k != "flush"}]
 

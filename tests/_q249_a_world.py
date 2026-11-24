@@ -9,6 +9,7 @@ that side. The host is `KeaHost.helper_call`, which stands in for `kea_host.help
 
     writes_log=True    the daemon writes a line to every file its RUNNING logger names for every command it receives (COMMAND_RECEIVED), creating the file
     writes_log=False   Kea accepted the logger and writes nothing (a file the daemon may not write: `kea_log_probe.out`, row 7)
+    quiet=True         the daemon logs above INFO: a file it may write is CREATED and stays empty, because a command writes no line (`kea_warn_probe.out`; Q250)
 
 Nothing here knows what the product decides.
 """
@@ -53,6 +54,7 @@ class KeaHost:
     def __init__(self, daemon):
         self.daemon = daemon
         self.writes_log = True
+        self.quiet = False
         self.existing = {}  # path -> lines a file already holds (and Kea is not adding to)
         self.calls = []
         self.missing = False  # the helper is not installed
@@ -75,6 +77,8 @@ class KeaHost:
         return out
 
     def log_lines(self, path):
+        if self.writes_log and self.quiet and path in self._file_outputs():
+            return list(self.existing.get(path) or [])  # there (Kea made it, or it was there), and no line was added
         if self.writes_log and path in self._file_outputs():
             received = len(self.daemon.commands)
             return [

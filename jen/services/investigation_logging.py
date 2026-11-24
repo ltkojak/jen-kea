@@ -45,6 +45,7 @@ older file-writing path is the fallback when the host cannot.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import threading
@@ -947,6 +948,25 @@ def _did_not_take(
     return {"ok": False, "mode": "", "lines": head + [note] + ([] if stored else [UNSTORED]), "until": ""}
 
 
+def _holds_the_logger(turn_on_fn):
+    """(Q250) The whole of a turn-on holds the server's logger (`kea_log_trace.hold_log_output`), the hold the Kea logging card's change takes from its first read to its
+    last write. A turn-on that arrives while that change is between its write and its proof would arm the Kea host on an output nothing has proven, and the marker it sets
+    then refuses the card's put-back: Kea was left at DEBUG writing to a file it could not write. It never waits: a server that is held is refused, with nothing changed.
+    Turning logging OFF, the sweep and the host's own restore are never held back by it."""
+
+    @functools.wraps(turn_on_fn)
+    def held(server: dict, minutes: int, actor: str = "") -> dict:
+        if not _klt.hold_log_output(server):
+            return {"ok": False, "mode": "", "lines": [_klt.busy_sentence(_name(server))], "until": ""}
+        try:
+            return turn_on_fn(server, minutes, actor)
+        finally:
+            _klt.release_log_output(server)
+
+    return held
+
+
+@_holds_the_logger
 def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
     """Investigation logging on `server` for `minutes` (one of DURATIONS), through apply_change. Refused while ANOTHER server has
     it on (one at a time per Jen). Returns {"ok", "mode", "lines", "until"}.

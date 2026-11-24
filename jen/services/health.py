@@ -439,7 +439,9 @@ def _debug_logging_left_on(ctx) -> Check:
 
 _SWEEP_SSH_HINT = "Check that Jen can still reach the server over SSH (Settings → Kea → SSH) and that the Kea log path is set; the sweep retries every five minutes."
 _SWEEP_ERROR_HINT = "The error above is what the sweep last got back from the Kea server; the connection and the log path are under Settings → Kea, and the sweep retries every five minutes."
-_SWEEP_MISSING_HINT = "Choose a file under Settings → Kea → Kea logging, or set the log path there if Kea already writes one; the sweep retries every five minutes."
+# (Q250) the Kea logging card is drawn for a superadmin only, and the "Kea log path" field is on the SSH card: the sentence says who can choose a file and names
+# the card each of the two is on, and the Fix link to the card is a superadmin's alone (`_problems_sweep`)
+_SWEEP_MISSING_HINT = "A superadmin can choose a file under Settings → Kea → Kea logging, or set the Kea log path under Settings → Kea → SSH if Kea already writes one; the sweep retries every five minutes."
 _SWEEP_MISSING_URL = "/settings/kea#kea-logging"  # (Q249) the card that changes where Kea writes its log
 
 
@@ -489,10 +491,11 @@ def _problems_sweep(ctx) -> Check:
                     lead = f"{s['name']}: its log file is not on {s['name']} - kea-dhcp4 logs to stdout, the system journal or a file Jen may not read"
                 parts.append(
                     lead
-                    + f"; choose a file under Settings → Kea → Kea logging, or set the log path there if Kea already writes one ({s['misses']} sweeps without a read, last read {fmt(s['last_read'])})"
+                    + f"; a superadmin can choose a file under Settings → Kea → Kea logging, or set the Kea log path under Settings → Kea → SSH if Kea already writes one ({s['misses']} sweeps without a read, last read {fmt(s['last_read'])})"
                 )
                 hints.append(_SWEEP_MISSING_HINT)
-                c.fix_url = _SWEEP_MISSING_URL
+                # (Q250) the card is a superadmin's: an admin and a viewer keep the sentence and the hint and get no Fix link to a page without the card
+                c.fix_url = _SWEEP_MISSING_URL if _caller_role(ctx) == "superadmin" else ""
             else:
                 parts.append(
                     f"{s['name']}: its log has not been read for {s['misses']} sweeps (last read {fmt(s['last_read'])}"
@@ -2193,22 +2196,40 @@ def _caller_role(ctx) -> str:
     return "superadmin"
 
 
+def _caller_sees_every_subnet(ctx) -> bool:
+    """Q250 - the scope the rows' links are finished for, in the shape of `_caller_role`: `ctx["all_subnets"]` when the caller names it; else the signed-in
+    account's own `all_subnets`; and True - every link stays - for a caller that is not a signed-in session (an API key, a background run)."""
+    named = ctx.get("all_subnets")
+    if named is not None:
+        return bool(named)
+    from flask import has_request_context
+    from flask_login import current_user
+
+    if has_request_context() and getattr(current_user, "is_authenticated", False):
+        return bool(getattr(current_user, "all_subnets", False))
+    return True
+
+
 def _links_for_caller(checks: list[Check], ctx) -> list[Check]:
-    """Q249 - the one place a row's links are held to the caller's role: `fix_url` and `link` are emptied when the page they name refuses that role
-    (`access.role_may_open`). A viewer's failing row drew "Fix" to Settings -> Kea and to Doctor, which sent them back to the dashboard with a refusal. The
+    """Q249 - the one place a row's links are held to the caller: `fix_url` and `link` are emptied when the page they name refuses the caller
+    (`access.account_may_open`). A viewer's failing row drew "Fix" to Settings -> Kea and to Doctor, which sent them back to the dashboard with a refusal. The
     template and the dashboard draw what is left and carry no rule of their own. Outside an application (a script that imports this module) there is no route
-    table to ask and the rows are returned as they are."""
+    table to ask and the rows are returned as they are.
+
+    Q250: the question is the account's, not only the role's. Trace, Doctor and Client classes turn away an admin who does not see every subnet, inside the view
+    (a 403, or a redirect to another page), and that admin's rows kept the links to them."""
     from flask import has_app_context
 
     if not has_app_context():
         return checks
-    from jen.services.access import role_may_open
+    from jen.services.access import account_may_open
 
     role = _caller_role(ctx)
+    every = _caller_sees_every_subnet(ctx)
     for c in checks:
-        if c.fix_url and not role_may_open(c.fix_url, role):
+        if c.fix_url and not account_may_open(c.fix_url, role, every):
             c.fix_url, c.fix_hint = "", ""
-        if c.link and not role_may_open(c.link, role):
+        if c.link and not account_may_open(c.link, role, every):
             c.link, c.link_label = "", ""
     return checks
 

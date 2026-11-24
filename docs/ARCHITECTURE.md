@@ -1953,8 +1953,10 @@ guessing that nothing changed underneath it.
 **The Kea logging card (Q249, INV-017).** One more caller of `apply_change`, for ONE server at a time (`servers=[server]`): `kea_log_trace.change_log_output` rewrites the
 `kea-dhcp4` logger's `output-options` (the pure edit is `kea_config_edit.set_logger_output`) so Kea writes its log to the journal, to a file under `/var/log/kea`, or to both. It is
 a change set like any other - the server's own transport, preflight, Config history, revert - with one addition, because Kea answers "Configuration successful." for a file it may
-not write and then logs nothing: for a file choice the tail of the file is read through the helper's existing `tail-log` before the change and after it, and a tail that did not
-move puts the previous logger back through a second change set. No new helper op, no `sudo` string, no `ssh` from a route. It is refused while investigation logging is on or
+not write and then logs nothing: for a file choice the tail of the file is read through the helper's existing `tail-log` before the change and after it, and a tail with no new
+line of kea-dhcp4's own puts the previous logger back through a second change set (above INFO, where a command writes no line, the file Kea created is the proof instead). The
+write, the proof and the put-back are seconds apart and are two change sets, so the server is held across all three (`kea_log_trace.hold_log_output`, a set in the one serving
+process): a second save of that server and a turn-on of investigation logging for it are refused meanwhile, never queued. No new helper op, no `sudo` string, no `ssh` from a route. It is refused while investigation logging is on or
 unresolved for the server (the marker, Jen's record, or the host's session), because that restore may remove the whole logger entry.
 
 ### 3.12 The Jen-managed Kea CA: a CA private key on the Jen host (v5.29.0)

@@ -549,6 +549,9 @@
             <dt>Jen reads</dt><dd data-kl-reads>{% if k.reads %}<span class="mono">{{ k.reads }}</span> ({{ k.reads_from }}){% else %}nothing: there is no file Jen may read{% endif %}</dd>
             <dt>Severity</dt><dd data-kl-severity>{{ k.severity }}{% if k.investigation %} (investigation logging is on){% endif %}</dd>
         </dl>
+        {% if not k.can_change %}
+        <div class="alert alert-warning" data-kl-no-write-path>{{ icon("triangle-alert") }} {{ k.no_write_path }}</div>
+        {% else %}
         <form method="POST" action="/settings/infrastructure/kea-logging/{{ k.id }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="wm-modes" role="radiogroup" aria-label="Write the log of {{ k.name }} to">
@@ -575,6 +578,7 @@
             <div class="form-hint">The three fields apply to the two file choices.{% if not k.has_ssh %} This server has no SSH configured, so a file choice is refused: Jen could not read the file.{% endif %}</div>
             <button type="submit" class="btn btn-primary mt-3" data-confirm="{{ k.confirm }}" data-confirm-label="Change Logging">Save Kea Logging</button>
         </form>
+        {% endif %}
         {% endif %}
     </div>
     {% else %}

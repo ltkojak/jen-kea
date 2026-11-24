@@ -10,6 +10,18 @@ item below. The previous page, covering everything since 7.0.0 through
 the 7.1.0 baseline, is archived at
 [`docs/release-history/upgrading-7.0.0-to-7.1.0.md`](release-history/upgrading-7.0.0-to-7.1.0.md).
 
+## 7.2.0-beta.8: the top row from edge to edge, one change of Kea's logging at a time, and the fixes of the pass on 7.2.0-beta.7
+
+One step (7.2.0-beta.8). No migration, no helper build and no new setting. Nothing to do; these behave differently and are worth knowing.
+
+**The top row.** The logo is at the window's left edge and the account menus at its right edge on every page again, and the section tabs start under the logo. The page content keeps its width (1,400 px, 1,800 px on the list pages).
+
+**Kea logging.** While one change of a server's log output is being checked (a few seconds), a second save of that server and turning investigation logging on for it answer "The logging of ... is being changed right now ... Nothing was changed; try again in a few seconds." With a logger set to WARN, ERROR or FATAL, choose a file name that does not exist yet: Kea creates the file and that proves the change ("Kea created ..."); a file that is already there and that Kea was not writing to is put back. In 7.2.0-beta.7 such a change stood with a warning. A server whose Write mode is Read-only (or File over SSH with no SSH configured) shows no form in the card. A change that was put back now has a `KEA_LOG_OUTPUT` row in the audit log.
+
+**Words a script may match.** The audit detail of a change that was put back ends "was accepted by Kea, not proven, and put back"; a change proven by the file Kea created ends "(proven by the file Kea created: severity ...)". The Doctor no longer reports `logger-pattern-no-timestamp` for a file output whose `pattern` is the empty string. Health's "Problems inbox sweep" row now reads "a superadmin can choose a file under Settings → Kea → Kea logging, or set the Kea log path under Settings → Kea → SSH if Kea already writes one" where 7.2.0-beta.7 read "choose a file under Settings → Kea → Kea logging, or set the log path there", and its `fix_url` in Health's JSON is empty for an admin and a viewer.
+
+**Reserved, for an account restricted to some subnets.** Such an account now counts a reservation in one of its own subnets and Kea's global reservations, on Leases, Devices and the dashboard's Top devices alike, and never one in a subnet it may not see. Before, a global reservation did not mark its rows, and the Leases menu and Top devices read every subnet. Nothing changes for an account that sees every subnet.
+
 ## 7.2.0-beta.7: Kea logging from Jen, Edit Subnet without timers, and the fixes of the pass on 7.2.0-beta.6
 
 One step (7.2.0-beta.7). No migration, no helper build and no new setting. Nothing to do; these behave differently and are worth knowing.

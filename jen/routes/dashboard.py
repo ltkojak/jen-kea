@@ -29,6 +29,7 @@ from jen.services.access import (
     add_subnet_restriction,
     diagnostic_surface,
     paired_v4_id,
+    sees_reservation_in,
     subnet6_visible,
 )
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
@@ -658,12 +659,14 @@ def api_top_devices():
             with kdb.cursor() as kcur:
                 for row in rows:
                     mac_hex = row["mac"].replace(":", "")
-                    # (Q249) an IPv4 reservation, the rule of the Leases list (`leases.V4_RESERVATION`): a global one (subnet 0) counts, an IPv6 one (NULL) does not
+                    # (Q249) an IPv4 reservation, the rule of the Leases list (`leases.V4_RESERVATION`): a global one (subnet 0) counts, an IPv6 one (NULL) does not.
+                    # (Q250) and only one the caller counts (`sees_reservation_in`: its own subnets and the global ones): the pin read every subnet, so a
+                    # one-subnet account's device was pinned by a reservation in a subnet it may not see.
                     kcur.execute(
-                        "SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s AND dhcp4_subnet_id IS NOT NULL",
+                        "SELECT dhcp4_subnet_id AS subnet_id FROM hosts WHERE HEX(dhcp_identifier)=%s AND dhcp4_subnet_id IS NOT NULL",
                         (mac_hex,),
                     )
-                    has_reservation = bool(kcur.fetchone())
+                    has_reservation = any(sees_reservation_in(current_user, h["subnet_id"]) for h in kcur.fetchall())
                     subnet_name = accessible.get(row["last_subnet_id"], {}).get("name", "")
                     devices.append(
                         {

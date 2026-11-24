@@ -270,11 +270,10 @@ window.jenDialog = (function() {
         }
 
         /* Nav */
-        /* Q248 (V54) - the bar's background runs edge to edge; its CONTENTS sit in .nav-inner, a column 1,400 px wide with the page's side padding on EVERY page
-           (Q249: a table page's wider content no longer widens it), so on a wide monitor the logo lines up with a form page's title and never moves. It was the bar
-           itself that held the links, so at 2560 px the logo sat 580 px to the left of the title under it. */
+        /* Q250 - the top row spans the window on every page: the logo sits the bar's side padding from the window's left edge and the account menus the same from the
+           right edge, on a wide monitor as on a laptop. Only the page's content column below it is 1,400 px (1,800 px on a list page), centered. */
         .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 6px 0; padding-top: calc(6px + env(safe-area-inset-top)); display: flex; align-items: center; min-height: 56px; position: sticky; top: 0; z-index: 100; }
-        .nav-inner { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 0 20px; padding-left: calc(20px + env(safe-area-inset-left)); padding-right: calc(20px + env(safe-area-inset-right)); }
+        .nav-inner { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; padding: 0 20px; padding-left: calc(20px + env(safe-area-inset-left)); padding-right: calc(20px + env(safe-area-inset-right)); }
         .nav-brand { color: var(--primary); font-weight: 700; font-size: 16px; margin-right: 16px; text-decoration: none; flex-shrink: 0; }
         .nav-brand:hover { text-decoration: none; }
         .nav-brand span { color: var(--text-muted); font-size: 11px; font-weight: 400; display: block; }
@@ -334,15 +333,11 @@ window.jenDialog = (function() {
            edge had nothing to say there was more that way */
         .section-tabs-wrap::before { content: ""; position: absolute; left: 0; top: 0; bottom: 1px; width: 28px; z-index: 100; pointer-events: none; background: linear-gradient(to left, transparent, var(--surface)); opacity: 0; transition: opacity 0.15s; }
         .section-tabs-wrap.is-scrolled::before { opacity: 1; }
-        /* Q248 (V54) - the strip's background and its bottom line run edge to edge (they are the wrap's); the strip itself is a column with the page's own width and side
-           padding, centered, so the first tab lines up with the page title and the pin button sits at the content's right edge. The two fades follow the column's edges.
-           --page-w is that column: 1,400 px on every page. */
-        .section-tabs-wrap { --page-w: 1400px; background: var(--surface); border-bottom: 1px solid var(--border); }
-        /* Q249 - the two bars keep ONE column on every page. Q248 widened them with a table page's content, so the logo and every menu moved sideways by up to 200 px
-           between Leases and the dashboard on a wide monitor. Only the content under them widens now. */
-        .section-tabs-wrap > .section-tabs { max-width: var(--page-w); margin: 0 auto; border-bottom: 0; min-height: 39px; }   /* 39 + the wrap's line = the 40 px --sticky-top counts */
-        .section-tabs-wrap::before { left: max(0px, calc((100% - var(--page-w)) / 2)); bottom: 0; }
-        .section-tabs-wrap::after { right: max(0px, calc((100% - var(--page-w)) / 2)); bottom: 0; }
+        /* Q250 - the strip spans the window like the top row above it: its background and bottom line are the wrap's, its tabs start at the same side padding as the
+           logo, and the pin button sits at the window's right edge. The two fades are at the strip's own edges. */
+        .section-tabs-wrap { background: var(--surface); border-bottom: 1px solid var(--border); }
+        .section-tabs-wrap > .section-tabs { border-bottom: 0; min-height: 39px; }   /* 39 + the wrap's line = the 40 px --sticky-top counts */
+        .section-tabs-wrap::before, .section-tabs-wrap::after { bottom: 0; }
 
         /* ── The setup wizard's cards (Q248: V14, addition 9). The page reset takes every margin away, so a heading touched the control above it and a list's bullets hung
            outside the card's padding. A heading that follows anything has 16 px above it; a list keeps its bullets inside; the foot holds Back and Next (Finish on the last). ── */
@@ -401,7 +396,7 @@ window.jenDialog = (function() {
         /* Layout */
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
         /* Q248 (V54) - forms, settings and About stay 1,400 px wide; a TABLE page may use up to 1,800 px. A page asks for it by filling the content_class block with
-           content--wide; ONLY the content column takes it (Q249: the top row and the strip stay 1,400 px on every page, so nothing in them moves from page to page).
+           content--wide; ONLY the content column takes it (Q250: the top row and the strip span the window on every page and are not this column).
            After the rule it widens (.container), so it wins at equal weight. */
         .content--wide { max-width: 1800px; }
         /* Q248 (addition 4) - a detail page's one way back, the first element of its content */

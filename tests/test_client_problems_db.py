@@ -1423,7 +1423,9 @@ class TestTheSweepReadsTheFileTheServersLoggerWrites:
         assert (
             "/var/log/kea/kea-dhcp4.log" in row.detail and "Kea logging" in row.detail
         )  # (Q249) the card that changes it
-        assert "SSH" not in row.detail and "SSH" not in row.fix_hint
+        assert (
+            "over SSH" not in row.detail and "over SSH" not in row.fix_hint
+        )  # (Q250) the SSH card is named; the connection is not blamed
 
     def test_a_good_read_records_the_path_that_worked(self, db, stack, monkeypatch):
         from jen.services import log_tail

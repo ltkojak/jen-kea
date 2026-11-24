@@ -18,7 +18,12 @@ import jen.services.kea6 as __kea6
 import jen.services.setting_bounds as __bounds
 import jen.services.view_prefs as __view_prefs
 from jen import extensions
-from jen.services.access import accessible_subnet6_map, assert_subnet6_access, diagnostic_surface
+from jen.services.access import (
+    accessible_subnet6_map,
+    assert_subnet6_access,
+    diagnostic_surface,
+    sees_reservation_in,
+)
 from jen.services.access import admin_required as _admin_required
 from jen.services.reltime import plural as _plural
 
@@ -164,11 +169,12 @@ def devices():
                 # A client that moved subnets can have a reservation in a
                 # subnet this user cannot see: only a reservation in an
                 # accessible subnet is shown (unrestricted users see all).
+                # (Q250) and Kea's global ones (subnet 0): the one rule of the Leases list and the dashboard, `sees_reservation_in`.
                 res = next(
                     (
                         h
                         for h in reservations_by_mac.get(row["mac"].replace(":", "").upper(), [])
-                        if current_user.all_subnets or current_user.can_access_subnet(h["subnet_id"])
+                        if sees_reservation_in(current_user, h["subnet_id"])
                     ),
                     None,
                 )

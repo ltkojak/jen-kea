@@ -8,8 +8,8 @@ Q248, stage a3 - the lists, wide monitors and the way back, measured in a real b
 * V13  the four lists at 1024, 1100 and 1280 px: no sideways scroll, no date and no badge on two lines; Devices keeps Last seen, Leases keeps Expires.
 * V48  the list search boxes' placeholders fit their fields at 1440 px and on a phone; Phosphor's wider font does not wrap the Leases filter row at 1440 px.
 * V51  at 390 px each lease, reservation and device card shows its MAC; a device card its subnet and its status.
-* V54  at 2560 and 1920 px the first strip tab starts where the page title does, the pin button ends where the content does, a table page is wider than 1,400 px and
-       at most 1,800 px, Settings - Kea is at most 1,400 px, and both bars still run edge to edge.
+* V54  at 2560 and 1920 px a table page is wider than 1,400 px and at most 1,800 px, Settings - Kea is at most 1,400 px, and both bars span the window (Q250), the
+       first strip tab under the logo.
 * addition 4  a plugin's detail page, Trace and Saved searches show their parent's strip with its tab lit; the two core pages' back link goes back.
 * addition 5  the marks, the two summary filters (kept by a search and a sort, counted by the phone's Filters button, cleared by Clear), the relative expiry.
 """
@@ -514,42 +514,52 @@ def clean_nav():
 class TestWideMonitors:
     @pytest.mark.parametrize("width", [2560, 1920])
     @pytest.mark.parametrize("path", ["/reservations", "/devices", "/settings/logs"])
-    def test_a_table_pages_content_is_wider_and_its_bars_are_where_every_pages_are(
+    def test_a_table_pages_content_is_wider_and_its_bars_span_the_window_as_every_pages_do(
         self, page, base_url, clean_nav, path, width
     ):
-        # Q249: the bars do not follow the wider content. They are measured against a form page at the same width: the logo, the first tab and the search box
-        # are at the same x on both, so nothing in the two bars moves when a person goes from one page to the next.
+        # Q250: the bars span the window on every page (Q249 had kept them a 1,400 px column). They are measured against a form page at the same width: the logo,
+        # the first tab and the search box are at the same x on both, so nothing in the two bars moves when a person goes from one page to the next.
         errors = _at(page, base_url, width)
         page.goto(f"{base_url}/settings/kea")
         form = page.evaluate(BARS_JS)
         page.goto(f"{base_url}{path}")
         m = page.evaluate(BARS_JS)
         assert 1400 < m["content_width"] <= 1800, m
-        assert m["title_left"] < m["tab_left"], m  # the content is wider than the bars
+        assert m["title_left"] > m["tab_left"], (
+            m
+        )  # the content column is centered under bars that reach the window's edges
         for key in ("brand_left", "search_right", "tab_left"):
             assert abs(m[key] - form[key]) <= 1, (key, m, form)
-        # and both bars' backgrounds still run edge to edge
+        assert abs(m["brand_left"] - 20) <= 1 and abs(m["tab_left"] - m["brand_left"]) <= 1, m
+        assert abs((m["window"] - m["search_right"]) - 20) <= 1, m
+        # and both bars' backgrounds run edge to edge
         assert m["nav_width"] == m["window"] and m["strip_width"] == m["window"] and m["sideways"] <= 0, m
         assert not m["links_cut"] and m["fit"] == "0", m
         assert not errors, errors
 
     @pytest.mark.parametrize("width", [2560, 1920])
-    def test_leases_has_no_pin_and_lines_up_too(self, page, base_url, clean_nav, width):
+    def test_leases_has_no_pin_and_its_bars_span_the_window_too(self, page, base_url, clean_nav, width):
         _at(page, base_url, width)
         page.goto(f"{base_url}/leases")
         m = page.evaluate(BARS_JS)
         assert 1400 < m["content_width"] <= 1800 and m["pin_right"] is None, m
-        assert m["title_left"] < m["tab_left"], m  # Q249: the bars keep their one column; only the content is wider
+        assert m["title_left"] > m["tab_left"], m  # Q250: only the content is a column
+        assert abs(m["brand_left"] - 20) <= 1 and abs(m["tab_left"] - m["brand_left"]) <= 1, m
 
     @pytest.mark.parametrize("width", [2560, 1920])
     @pytest.mark.parametrize("path", ["/settings/kea", "/reports"])
-    def test_a_form_page_stays_1400_and_its_bars_line_up_with_it(self, page, base_url, clean_nav, path, width):
+    def test_a_form_page_stays_1400_and_its_bars_reach_the_window_edges(self, page, base_url, clean_nav, path, width):
         _at(page, base_url, width)
         page.goto(f"{base_url}{path}")
         m = page.evaluate(BARS_JS)
         assert m["content_width"] <= 1400, m
-        assert abs(m["tab_left"] - m["title_left"]) <= 2 and abs(m["pin_right"] - m["content_right"]) <= 2, m
-        assert abs(m["brand_left"] - m["content_left"]) <= 2 and abs(m["search_right"] - m["content_right"]) <= 2, m
+        # Q250: the content is centered in a column; the bars' items sit the bar's side padding from the window's edges
+        assert abs(m["tab_left"] - m["brand_left"]) <= 1 and abs(m["brand_left"] - 20) <= 1, m
+        assert abs((m["window"] - m["search_right"]) - 20) <= 1, m
+        assert abs((m["window"] - m["pin_right"]) - 20) <= 1, (
+            m
+        )  # the pin button ends the strip's side padding from the window edge
+        assert m["title_left"] > m["tab_left"], m
         assert m["nav_width"] == m["window"] and m["strip_width"] == m["window"], m
 
     @pytest.mark.parametrize("width", [1440, 1024])
@@ -561,12 +571,11 @@ class TestWideMonitors:
         form = page.evaluate(BARS_JS)
         page.goto(f"{base_url}/reservations")
         m = page.evaluate(BARS_JS)
-        # Q249: the bars are a form page's bars at every width; a table page's content may start up to the 20 px of the centered column's margin to their left
-        # (at 1440 px the bars' column is 1,400 px and the table uses the whole window), and at 1024 px the two are one column
+        # Q250: the bars are a form page's bars at every width, and at these widths the content column fills the window, so the logo, the first tab and the
+        # title are one line (within the content column's own 20 px padding, which the bar's side padding equals at 1440 px and under)
         assert abs(m["brand_left"] - form["brand_left"]) <= 1 and abs(m["tab_left"] - form["tab_left"]) <= 1, (m, form)
-        slack = 22 if width > 1400 else 2
-        assert -2 <= m["tab_left"] - m["title_left"] <= slack and -2 <= m["content_right"] - m["pin_right"] <= slack, m
-        assert -2 <= m["brand_left"] - m["content_left"] <= slack, m
+        assert -2 <= m["tab_left"] - m["title_left"] <= 2 and -2 <= m["content_right"] - m["pin_right"] <= 2, m
+        assert -2 <= m["brand_left"] - m["content_left"] <= 2, m
 
     def test_abouts_release_notes_are_about_80_characters_a_line(self, page, base_url):
         _at(page, base_url, 2560)
