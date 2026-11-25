@@ -144,6 +144,10 @@ def digest_of(cfg_section: dict, key: str = "Dhcp4") -> str:
     return hashlib.sha256(json.dumps({key: cfg_section}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+#: (Q252) what the Kea logging card's proof names its one-time value with (`kea_log_trace.PROOF_PREFIX`), written out here: this fake imports nothing of Jen's
+PROOF_PREFIX = "jen-log-proof-"
+
+
 class _StatefulHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
@@ -155,9 +159,12 @@ class _StatefulHandler(BaseHTTPRequestHandler):
         command = body.get("command", "")
         with fake.lock:
             fake.commands.append(command)
+            fake.received.append((command, copy.deepcopy(body.get("arguments") or {})))
             if fake.stopped:
                 self.connection.close()  # a daemon that stopped serving: no reply at all
                 return
+            if fake.on_command is not None:
+                fake.on_command(fake, command, body.get("arguments") or {})
             hook = fake.hooks.get(command)
             if hook:
                 hook(fake)  # a stranger's change (or a crash) injected at the exact moment this command arrives
@@ -199,6 +206,11 @@ class StatefulKeaServer:
         no_service_key     `config-get` answers without the Dhcp4/Dhcp6 section (a Control Agent answering for itself)
         no_digest          `config-get` answers without a `hash`
         stopped            every request is dropped
+        on_command         callable(fake, command, arguments) run when ANY command arrives, before it is answered: the place a test's Kea host writes the daemon's log (Q252)
+
+    Q252 - the two things the Kea logging card asks the daemon in order to prove a change, answered as kea-dhcp4 3.0.5 and 3.2.1 were measured to answer them: a command
+    named `jen-log-proof-<hex>` is one Kea does not know (`result 2`), and a `config-test` whose section carries a key of that name is refused (`result 1`) and applies
+    nothing. Every command is also kept WITH its arguments in `received`.
     """
 
     def __init__(self, config: dict | None = None, *, key: str = "Dhcp4", version: str = "3.0.5"):
@@ -208,6 +220,8 @@ class StatefulKeaServer:
         self.running = copy.deepcopy(config if config is not None else TWO_SUBNET_DHCP4)
         self.file = copy.deepcopy(self.running)
         self.commands: list[str] = []
+        self.received: list[tuple] = []  # (Q252) (command, arguments) of every command, in order
+        self.on_command = None  # (Q252) callable(fake, command, arguments)
         self.pid = 8  # (Q251) what `status-get` answers; a restart is a new process
         self.write_fails = None
         self.test_fails = None
@@ -255,7 +269,15 @@ class StatefulKeaServer:
             return {"result": 0, "arguments": args}
         if command == "config-hash-get":
             return {"result": 0, "arguments": {"hash": self.digest()}}
+        if command.startswith(PROOF_PREFIX):
+            return {"result": 2, "text": f"'{command}' command not supported."}
         if command == "config-test":
+            unknown = [k for k in (arguments.get(self.key) or {}) if isinstance(k, str) and k.startswith(PROOF_PREFIX)]
+            if unknown:
+                return {
+                    "result": 1,
+                    "text": f"unsupported global configuration parameter: {unknown[0]} (<string>:1:102)",
+                }
             if self.test_fails:
                 return {"result": 1, "text": self.test_fails}
             return {"result": 0, "text": "Configuration seems sane."}

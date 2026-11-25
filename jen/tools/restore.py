@@ -799,14 +799,24 @@ def _restore_tree(tar_path: Path, root: Path, exclude: tuple[str, ...] = ()) -> 
 
 def rollback_snapshot(snap: Path, etc_jen: Path, content_dir: Path) -> None:
     """Put the config dir, the content dir and the database back the way
-    the snapshot found them."""
+    the snapshot found them. Raises when the database came back only in part (Q252): both callers
+    then print ROLLBACK FAILED, keep the snapshot and exit 2, and neither says Jen is as it was."""
+    from jen.services import dbexport
+
     snap = Path(snap)
     _restore_tree(snap / "etc-jen.tar", Path(etc_jen))
     _restore_tree(snap / "content.tar", Path(content_dir), _SNAPSHOT_EXCLUDE)
     cfg = Path(etc_jen) / "jen.config"
     if cfg.is_file():
         _point_config_at(cfg)  # the DB credentials are the ORIGINAL ones again
-    _import_db((snap / "jen_db.json.gz").read_bytes())
+    lines = _import_db((snap / "jen_db.json.gz").read_bytes())
+    # (Q252) the put-back is an import too, and its result lines were dropped: a plugin whose migrations could not be replayed came back without its
+    # data under "rolled back — Jen is as it was before the restore"
+    if dbexport.import_status(lines) != "ok":
+        for line in lines:
+            if str(line).startswith(dbexport.ERR_MARK):
+                print(line, file=sys.stderr)
+        raise RuntimeError(f"the database was put back only in part. The snapshot is kept at {snap}")
 
 
 def _fail_with_rollback(snap: Path, etc_jen: Path, content_dir: Path, reason: str, manage: bool, restart: bool) -> int:

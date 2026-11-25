@@ -5,7 +5,7 @@ Q250 - the Kea logging card after the executing pass on v7.2.0-beta.7 (INV-017: 
 
     TestOneChangeAtATime        the server is held from the change's first read to its last write, by the card AND by a turn-on of investigation logging; neither waits
     TestTheProofIsKeasOwnLine   a line another writer of the file added proves nothing
-    TestAboveInfo               at WARN and above: a file Kea created is the proof, a file that was already there is put back, the file it already wrote to stands
+    TestAboveInfo               at WARN and ERROR Kea is asked for a line (Q252); at FATAL a file Kea created is the proof and the file it already wrote to stands
     TestNoWritePath             a server Jen has no way to change gets no form and a refusal that says why
     TestTheAuditRow             a change Kea ran for the seconds of the proof is in the audit log
     TestTheDoctor               an empty `pattern` is Kea's default, the dated one
@@ -36,7 +36,6 @@ LOG = "/var/log/kea/kea-dhcp4.log"
 OTHER = "/var/log/kea/second.log"
 MB10 = 10 * 1024 * 1024
 URL = f"/settings/infrastructure/kea-logging/{SID}"
-KEA_LINE = "2026-11-24 02:18:41.273 INFO  [kea-dhcp4.commands/81.140] COMMAND_RECEIVED Received command 'config-get'"
 
 
 @pytest.fixture
@@ -210,26 +209,6 @@ class TestOneChangeAtATime:
 
 
 class TestTheProofIsKeasOwnLine:
-    @pytest.mark.parametrize(
-        "before, tail, want",
-        [
-            ([], [KEA_LINE], True),
-            ([KEA_LINE], [KEA_LINE], False),
-            ([KEA_LINE], [KEA_LINE, KEA_LINE.replace("41.273", "42.001")], True),
-            ([], ["04:10:11 another-daemon line 1"], False),
-            (["a"], ["a", "04:10:12 another-daemon line 2", "04:10:13 another-daemon line 3"], False),
-            ([KEA_LINE, KEA_LINE], [KEA_LINE], False),
-            ([], [], False),
-            (
-                [],
-                ["2026-11-24 02:18:41.273 WARN  [kea-dhcp4.dhcpsrv/81.140] DHCPSRV_MT_DISABLED_QUEUE_CONTROL ..."],
-                True,
-            ),
-        ],
-    )
-    def test_what_counts_as_a_line_kea_added(self, before, tail, want):
-        assert klt._kea_wrote(tail, before, 81) is want  # (Q251) 81 is the process id the lines carry
-
     def test_a_file_another_process_appends_to_is_not_proof_and_the_change_is_put_back(
         self, server, daemon, host, monkeypatch
     ):
@@ -256,26 +235,30 @@ class TestAboveInfo:
         host.existing[LOG] = []
         before_file = copy.deepcopy(daemon.file)
         post(logged_in_client, output="file")
-        assert flashes(logged_in_client) == [
-            (
-                "error",
-                f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. Its severity is WARN, so Kea writes few lines, "
-                f"and {LOG} was already there, so Jen could not tell whether kea-dhcp4 may write it. Choose a file name that does not exist yet: Kea creates it, "
-                "and that is the proof.",
-            )
-        ]
+        assert (
+            flashes(logged_in_client)
+            == [
+                (
+                    "error",
+                    f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
+                    f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
+                    "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile.",  # (Q252) at WARN Kea is asked for a line: the cause is what Jen did and read
+                )
+            ]
+        )
         assert daemon.file == before_file and running_options(daemon) == [PACKAGED]
         assert audit_rows(db) == [
             f"kea-a: the system journal (stdout) -> the file {LOG} was accepted by Kea, not proven, and put back"
         ]
 
     def test_the_advice_is_satisfiable_a_name_that_does_not_exist_is_created_and_stands(self, server, daemon, host):
-        at(daemon, "ERROR")
-        host.quiet = True
+        at(
+            daemon, "FATAL"
+        )  # (Q252) at WARN and ERROR Kea is asked for a line; FATAL and NONE are where the file Kea created is the proof
         out = klt.change_log_output(server, "file", OTHER, MB10, 4)
         assert (out["ok"], out["code"]) == (True, "created"), out
         assert out["lines"][-1] == (
-            f"Kea created {OTHER} on kea-a. Its severity is ERROR, so it has written no line yet; the file fills when Kea next logs at that level."
+            f"Kea created {OTHER} on kea-a. Its severity is FATAL, so it has written no line yet; the file fills when Kea next logs at that level."
         )
 
     def test_a_file_kea_could_not_create_is_put_back(self, server, daemon, host):
@@ -283,33 +266,27 @@ class TestAboveInfo:
         host.writes_log = False  # nothing was there before, nothing is there after
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back")
-        assert out["lines"] == [  # (Q251) the cause is what was seen: at WARN, a file that was not created
-            f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. "
-            f"Its severity is WARN, and {LOG} was not created, so Jen could not tell whether kea-dhcp4 may write there."
+        assert out["lines"] == [  # (Q252) at WARN Kea is asked: the cause is the line that did not arrive
+            f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
+            f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
+            "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."
         ]
 
     def test_the_file_the_logger_already_wrote_to_stands_unchecked(self, server, daemon, host):
         """file -> the journal and the SAME file: nothing about the file is new, so there is nothing to prove and nothing to put back."""
-        entry = {"name": "kea-dhcp4", "output-options": [dict(FILE_LOGGER)], "severity": "WARN", "debuglevel": 0}
+        entry = {"name": "kea-dhcp4", "output-options": [dict(FILE_LOGGER)], "severity": "FATAL", "debuglevel": 0}
         daemon.file = dhcp4([entry])
         daemon.running = kea_writes_defaults(dhcp4([entry]))
-        host.quiet = True
-        host.existing[LOG] = [KEA_LINE]
+        host.existing[LOG] = []
         out = klt.change_log_output(server, "both", LOG, MB10, 4)
         assert (out["ok"], out["code"], out["level"]) == (True, "unchecked", "warning"), out
         assert out["lines"][
             -1
         ] == (  # (Q251) the sentence names the evidence, and the change set's own lines come before it
-            f"Kea accepted the change on kea-a. Its severity is WARN, so it wrote no line Jen could check; {LOG} is a file its logger already named, and this change takes no output away."
+            f"Kea accepted the change on kea-a. Its severity is FATAL, so it wrote no line Jen could check; {LOG} is a file its logger already named, and this change takes no output away."
         )
-        assert out["note"] == " (not checked: severity WARN)"
+        assert out["note"] == " (not checked: severity FATAL)"
         assert host.ops().count("apply-config") == 1
-
-    def test_at_info_a_created_file_with_no_line_is_still_put_back(self, server, daemon, host):
-        host.quiet = (
-            True  # (not a real kea-dhcp4 at INFO: the rule is that only a logger ABOVE INFO is excused the line)
-        )
-        assert klt.change_log_output(server, "file", LOG, MB10, 4)["code"] == "put-back"
 
 
 NO_WRITE = (

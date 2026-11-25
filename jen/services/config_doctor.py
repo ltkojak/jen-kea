@@ -703,6 +703,11 @@ def _dhcp4_logger(dhcp4_cfg) -> dict | None:
     return None
 
 
+#: (Q252) who can change where and how Kea writes its log from Jen, and where: both logger findings say it in these words (their link is to that card, and
+#: `jen/routes/doctor.py` takes the link away from an account that is not a superadmin)
+_SUPERADMIN_CHOOSES_A_FILE = "A superadmin can choose a file under Settings → Kea → Kea logging"
+
+
 def _check_logger_output(dhcp4_cfg) -> list[Finding]:
     """The `kea-dhcp4` logger (v5.69.0-beta.6, Q175). Jen reads Kea's own log for the Problems inbox, for Trace and Explain, and the Kea host reads it to prove that an
     investigation's logging was put back: all of them need a FILE the helper may read, and a logger that writes to stdout (the journal) gives them nothing - the
@@ -723,7 +728,7 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
                 "Kea's log is not written to a file Jen can read",
                 "The kea-dhcp4 logger writes to "
                 + (", ".join(str(o.get("output")) for o in options if o.get("output")) or "no output at all")
-                + ", not to a *.log file under /var/log. A superadmin can choose a file under Settings → Kea → Kea logging; or paste this into that logger's entry under "
+                + f", not to a *.log file under /var/log. {_SUPERADMIN_CHOOSES_A_FILE}; or paste this into that logger's entry under "
                 + '"loggers" in kea-dhcp4.conf, then reload Kea: '
                 + LOGGER_OUTPUT_JSON,
                 "loggers[" + LOGGER_NAME + "]",
@@ -744,9 +749,9 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
                     "warn",
                     "Kea's log lines carry no date and time",
                     f'The pattern {pattern!r} for {o["output"]} has no %D, so its lines start with the level and no time. Remove the "pattern" key, or use Kea\'s default: '
-                    f'"pattern": "{LOGGER_PATTERN}"',
+                    f'"pattern": "{LOGGER_PATTERN}". {_SUPERADMIN_CHOOSES_A_FILE}.',
                     f"loggers[{LOGGER_NAME}] → {o['output']}",
-                    "/settings/kea",
+                    "/settings/kea#kea-logging",
                     "Jen's line parser needs the timestamp Kea's default pattern prints at the start of every line - without it the Problems inbox, Trace and Explain find no "
                     "events in the file and the Kea host cannot tell when its restore happened.",
                 )

@@ -2,6 +2,71 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [7.2.1] - 2026-11-25
+
+*A PATCH to 7.2.0 on the **stable** channel (both channels are offered it). It carries what the two reviews of 7.2.0-beta.9 found and 7.2.0 listed under "Known at release": Opus's executing pass (BL1 to BL32) and the independent review (four findings, R1 to R4). It adds no migration, changes no helper build and no sudoers line, and nothing needs a manual step.*
+
+**What an operator does or notices.**
+
+1. **A change of where Kea writes its log is proven by a line Jen asks for.** After the change Jen sends the running kea-dhcp4 one request that carries a value made for that change, and the change stands only when a line with that value is in the new file. You will see that line in Kea's log: at INFO and DEBUG it is `COMMAND_RECEIVED Received command 'jen-log-proof-...'`; at WARN and ERROR it is one ERROR line, `DHCP4_PARSER_FAIL ... jen-log-proof-...`, from a configuration test Kea refuses and does not apply. If something watches Kea's log for ERROR lines, it will see one for each such change.
+2. **At severity FATAL or NONE Jen cannot ask Kea for a line.** A change then stands only when Kea created the file, or when the logger already named the file and the change takes no output away. Anything else is put back, with the reason: choose a file name that does not exist yet, or set the severity to ERROR or lower first.
+3. **The SSH card on Settings → Kea saves again when a stored Kea log path is one the rule refuses** and the field is hidden. The page no longer posts a value it did not show, and the save leaves that value as it was.
+4. **Linking a restricted account to single sign-on says what follows.** The question, the confirmation and the audit row now say that the account gets the subnets its groups map to at its next sign-in through the identity provider, and every subnet when no Subnet Mapping is set.
+5. **A Kea or Jen migration whose commit was not confirmed says so.** It no longer says the target was rolled back. Every failed migration now writes an audit row, `DB_MIGRATE_FAILED`.
+6. **An import or a restore in which one part failed is recorded as failed.** The audit action is `DB_IMPORT_FAILED` with the number of parts. A snapshot that could be put back only in part after a failed Replace is reported as not put back, and the snapshot is kept.
+7. **The support bundle masks the query values and the fragment of every address, also inside a sentence.**
+8. **Words a script may match changed:** seven hints in Health's JSON (`fix_hint`) are now sentences; the audit detail of an SSH card save may read `log_path=kept`; the `LINK_SSO` audit detail is longer for a restricted account; the sentences of a log output change that was put back.
+
+### The proof asks the daemon, and no longer judges the file
+
+Four passes in a row found a way past the proof of a log output change. "The file grew" was satisfied by any writer, "a new line of Kea's shape" by an imitation, "a line with the running daemon's process id" by a program that copies kea-dhcp4's own journal lines into the chosen file (BL1, P2) and by a writer that reads the process id (BL16, R4). Above INFO the proof fell back on the file's history and accepted one line of Kea's shape from any process (BL2), or put back a change that worked (BL3). Each of these asked who wrote a line, which a file cannot answer.
+
+The proof now asks something the daemon can answer. After the change is in force Jen makes a value for it (`jen-log-proof-` and 32 random characters) and sends it to the running kea-dhcp4: at INFO and DEBUG as the name of a command Kea does not know, which Kea logs and refuses; at WARN and ERROR as an unknown key of a configuration test, which Kea logs as an error, refuses and does not apply. The change stands when a whole line of Kea's own pattern with that value is in the file. A line from before the change, a line of a second daemon, an imitation and a forwarded journal line do not carry the value, and when the new output is a file Kea cannot write, the line exists nowhere to be copied from. Measured on kea-dhcp4 3.0.5 and 3.2.1: both requests leave the running configuration as it was.
+
+- **BL1, BL16, R4:** closed by the value. The process id, the `status-get` request and the comparison with the file's earlier lines are gone.
+- **BL2:** at WARN and ERROR the daemon is asked like at INFO, so there is no "not checked" result there. At FATAL and NONE the branch that accepted "the file already holds lines kea-dhcp4 wrote" is removed.
+- **BL3:** a file with a log pattern of its own is proven at ERROR. At FATAL it is put back, by decision, with advice that works.
+- **BL9, BL14:** a put-back says what Jen did and read ("Jen asked kea-dhcp4 on ... to write a line to ... and did not find it there"), never what Kea did. A failed `status-get` no longer matters.
+- **BL10:** when the daemon does not answer after a change that failed part way, the card and the audit row say that Jen could not ask what it writes to now.
+- INV-017 in `docs/SAFETY_INVARIANTS.md` states the rule and its assumption: the proof needs Kea's default line pattern, which the card's own file output always has, and it does not defend against a process on the Kea host that can read Jen's requests.
+
+### A commit that was not confirmed is never a rollback (R1, P2)
+
+This is the third return of one finding. 7.1.0 fixed the Jen import, 7.2.0 a plugin's commit, and the review found the same shape in the two migrations. So the rule is now held for the whole tree: a commit is never inside the `try` whose handler rolls back, removes what the run wrote or says so. A test walks every Python file under `jen/` and `plugins/` and refuses one that does.
+
+- **Kea migration:** a commit that raises is answered with "the database did not confirm the commit, so the outcome is not known". No rollback and no delete is sent after it.
+- **Jen migration:** the tables the run created are removed on a new connection, and the sentence that says so is used only when the removal ran. When it did not, the tables are named and the outcome is called unknown.
+- **The page and the audit log:** Settings → Databases → Migrate shows the sentence of a refusal and of an unknown outcome, and every failed run writes `DB_MIGRATE_FAILED`.
+
+### One status for the result of an import (R3)
+
+`import_status` reads the result of an import as `ok`, `partial` or `unknown`, and every caller that records or reports success asks it: the import page, the put-back of the snapshot after a failed Replace, and the restore tool's rollback. A plugin whose migrations could not be replayed, or whose rows were rolled back, used to be audited as `DB_IMPORT`.
+
+### One mask for every string of the support bundle (R2, P2)
+
+Every string of the bundle now goes through the function that masks each address inside a text: its user name and password, every query value and the whole fragment. Before, a string that was not itself an address lost only its user name and password. The bundle's README names the two additions. Not masked, and registered: a path and query printed without a scheme, as a library's error message can print one.
+
+### Smaller fixes
+
+- **BL4:** the SSH card (above).
+- **BL6:** the single sign-on link (above). Linking and signing in behave as before.
+- **BL11:** the last test of `test_form_submit_progress.py` that could fail by timing is rewritten as its three neighbors were.
+- **BL12:** every Health hint is a sentence; seven were page names that read as a bare line since 7.2.0.
+- **BL13:** the Doctor's note about a log pattern with no date links to the Kea logging card and says who can change it.
+- **BL15:** on a phone the Kea logging card's radios sit beside their labels.
+- `CLAUDE.md` rules 3 and 12 agree with the delegation paragraph under rule 1.
+
+### What this release proves and does not
+
+The log output proof was run with nothing faked against kea-dhcp4 3.0.5 and 3.2.1 on Live API and File over SSH, with 7.2.0 as the control: the forwarder, the writer that knows the process id and the unwritable file above INFO are proven on 7.2.0 and put back here. The database rows were run against a real MariaDB with a connection that applies a commit and then loses its answer. Not shown: a Control Agent in front of the daemon, Kea 3.3, Debian's own Kea package, an HA pair, a real phone.
+
+### Registered, not in this release
+
+- An account scoped to a subnet that Jen's subnet map does not name sees "Reserved" on Leases with a link that opens an empty list (BL5). A hostname shared with a second client's IPv6-only reservation still reads "More than one client uses that hostname" for an unrestricted account (BL7). A DUID reservation with the bytes of a hardware address counts as that client's reservation on Leases and Devices and not on Investigate (BL8). Each changes a definition on several pages and ships with a beta.
+- A path and query printed without a scheme inside an audit detail, an alert error or a Health line is not masked in the support bundle.
+- The restore tool with `--lenient-plugins` ends as restored when a plugin's part failed, as documented.
+- The two Kea behaviors the proof rests on are measured by hand and are not yet rows of the Kea compatibility suite. If a later Kea stops logging them, every change is put back; none is proven falsely.
+
 ## [7.2.0] - 2026-11-25
 
 *Stable. Everything below shipped beta-first between 2026-11-19 and 2026-11-24.*

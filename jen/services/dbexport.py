@@ -1334,7 +1334,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
             ok, msg, _count = _plugins.run_plugin_migrations(manifest)
             if not ok:
                 failures.append((pid, list(plugin_tables_all), f"migration replay failed ({msg})"))
-                results.append(f"❌ {pid}: migration replay failed ({msg}) — its tables/data may be incomplete")
+                results.append(f"{ERR_MARK} {pid}: migration replay failed ({msg}) — its tables/data may be incomplete")
                 continue
 
             # Only the tables the export's own `data` actually carries get rows imported — a
@@ -1358,14 +1358,14 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
                         f"row import failed and was rolled back ({e})",
                     )
                 )
-                results.append(f"❌ {pid}.{current_tbl}: row import failed and was rolled back ({e})")
+                results.append(f"{ERR_MARK} {pid}.{current_tbl}: row import failed and was rolled back ({e})")
                 continue
             try:
                 conn.commit()  # (Q242) outside the `try` above, for the reason given at the core tables
             except Exception as e:
                 logger.error(f"Import of plugin {pid}: the commit was not confirmed: {type(e).__name__}")
                 failures.append((pid, list(plugin_tables_to_import), COMMIT_NOT_CONFIRMED))
-                results.append(f"❌ {pid}: {COMMIT_NOT_CONFIRMED}")
+                results.append(f"{ERR_MARK} {pid}: {COMMIT_NOT_CONFIRMED}")
                 # (Q244, BB3) the connection a commit was lost on is closed: the next plugin's `begin()` and its handler's `rollback()` raised on it, a
                 # raw driver error left this function, the line above never reached the page and no later plugin was restored. The plugins still to come
                 # get a connection of their own. When the database cannot be reached again either, that error leaves this function as it did before
@@ -1471,7 +1471,7 @@ def _roll_back_to(snap: dict) -> None:
 
     with open(snap["path"], "rb") as f:
         blob = f.read()
-    import_jen(blob, strict=True, strict_plugins=False)
+    lines = import_jen(blob, strict=True, strict_plugins=False)
 
     conn = _direct_jen_conn()
     try:
@@ -1493,6 +1493,11 @@ def _roll_back_to(snap: dict) -> None:
                 cur.execute(f"DROP TABLE IF EXISTS `{t}`")
     finally:
         conn.close()
+    # (Q252) the put-back is an import too, and its result lines were dropped: a plugin whose migrations could not be replayed, or whose rows were
+    # rolled back, left "the database was put back exactly as it was" said over a database that was not. The rest of the put-back above ran first
+    if import_status(lines) != "ok":
+        failed = "; ".join(str(r)[len(ERR_MARK) :].strip()[:200] for r in lines if str(r).startswith(ERR_MARK))
+        raise RuntimeError(f"the snapshot was put back only in part: {failed}")
 
 
 def import_jen_guarded(file_bytes, tables_to_restore=None):
@@ -1553,9 +1558,29 @@ class ImportOutcomeUnknown(RuntimeError):
     client cannot tell, and a rollback sent afterward returns without an error either way. So no rollback is claimed and none is sent. `public` is safe to
     show an operator; the cause is named by its type only."""
 
-    def __init__(self, what, cause):
-        self.public = f"{what}: {COMMIT_NOT_CONFIRMED}."
-        super().__init__(f"{what}: {COMMIT_NOT_CONFIRMED} ({type(cause).__name__})")
+    def __init__(self, what, cause, again="importing again"):
+        # (Q252) a migration's lost commit is this too, and its last words say what the operator was doing: "before migrating again"
+        said = COMMIT_NOT_CONFIRMED
+        if again != "importing again":
+            said = f"{said.rsplit(' ', 2)[0]} {again}"
+        self.public = f"{what}: {said}."
+        super().__init__(f"{what}: {said} ({type(cause).__name__})")
+
+
+#: the glyph a line of an import's result starts with when that part FAILED (Q252): the one definition, read by `import_status` and by the Databases page
+ERR_MARK = "❌"
+
+
+def import_status(results) -> str:
+    """What an import's result lines say of the whole import (Q252, the independent review of 7.2.0-beta.9): "unknown" when a commit was not confirmed, else
+    "partial" when a part failed (a line that starts with `ERR_MARK`), else "ok". A warning line is not a failure. Pure. Whoever records an import as one that
+    worked asks this first: the audit row said DB_IMPORT over a page that showed a plugin's failed migration replay."""
+    lines = [str(r) for r in results or []]
+    if any(COMMIT_NOT_CONFIRMED in r for r in lines):
+        return "unknown"
+    if any(r.startswith(ERR_MARK) for r in lines):
+        return "partial"
+    return "ok"
 
 
 class ImportAborted(RuntimeError):
@@ -1667,7 +1692,6 @@ def import_kea(file_bytes, duplicate_mode="skip"):
     fmt = meta.get("format", 1)
     results = []
     conn = _direct_kea_conn()
-    committing = False
     try:
         conn.begin()
         order = {t: i for i, t in enumerate(KEA_RESTORE_ORDER)}
@@ -1858,20 +1882,22 @@ def import_kea(file_bytes, duplicate_mode="skip"):
             if overwrite:
                 line += f", {updated} updated in place"
             results.append(line + f", {dup} duplicates skipped")
-        committing = True
-        conn.commit()
     except ImportAborted:
         if not _rolled_back(conn):
             raise RuntimeError("Kea import failed and the rollback failed too: the outcome is not known") from None
         raise
     except Exception as e:
-        if committing:
-            # (Q242) the commit itself raised: it was answered with a rollback, which returns without an error after a commit the server applied and
-            # could not confirm, and the import was then reported as rolled back
-            raise ImportOutcomeUnknown("Kea import", e) from e
         if not _rolled_back(conn):
             raise RuntimeError(f"Kea import failed and the rollback failed too: the outcome is not known: {e}") from e
         raise ImportRolledBack(f"Kea import failed and was rolled back: {e}") from e
+    else:
+        # (Q242) a commit that raised was answered with a rollback, which returns without an error after a commit the server applied and could not
+        # confirm, and the import was then reported as rolled back. (Q252) The commit is sent after the `try` whose handlers roll back (its `else`),
+        # in a `try` of its own, the shape `import_jen` has: it was inside that `try` behind a flag the handler asked, which a reader had to trust
+        try:
+            conn.commit()
+        except Exception as e:
+            raise ImportOutcomeUnknown("Kea import", e) from e
     finally:
         conn.close()
     return results
@@ -2040,6 +2066,17 @@ def _delete_tracked(conn, order, pk_by_table, inserted):
     conn.commit()
 
 
+def _drop_created_tables(conn, created_tables) -> None:
+    """Drop the tables a migration of Jen's database created on its target, the last one first. Raises when one could not be dropped (Q252): the caller says
+    "removed" only after this returned."""
+    with conn.cursor() as cur:
+        cur.execute("SET FOREIGN_KEY_CHECKS=0")
+        for tbl in reversed(created_tables):
+            cur.execute(f"DROP TABLE IF EXISTS `{tbl}`")
+        cur.execute("SET FOREIGN_KEY_CHECKS=1")
+    conn.commit()
+
+
 def migrate_jen(
     target_host,
     target_port,
@@ -2059,7 +2096,8 @@ def migrate_jen(
     none of Jen's, is refused rather than quietly widened to everything. A failure drops only the tables THIS run
     created (existence is checked before each CREATE), never one that was there; the data is copied in one
     transaction with plain INSERTs, counted from what the server reports and verified per table against the
-    source (counts and a sample of primary keys).
+    source (counts and a sample of primary keys). "Removed" is said only of a drop that ran (Q252); a commit that raises is
+    answered by dropping the tables this run created on a connection of its own, and by `ImportOutcomeUnknown` when that fails.
     progress_cb(message): called with progress updates.
     target_ssl_ca: (v5.67.0-beta.15, Q129) a CA bundle path on this host; the target connection is TLS, verified
     against it, when given (empty keeps the plain connection every earlier release made).
@@ -2142,29 +2180,65 @@ def migrate_jen(
         for tbl in created_tables:
             _verify_copy(src, dst, tbl, 0, pk_by_table[tbl])
 
-        dst.commit()
-        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
-        _cb("✅ Migration complete — every table's row count and a sample of its primary keys verified.")
-
     except Exception as e:
         # the rows are one transaction: undone by the rollback; the tables are DDL (auto-committed), so they are
         # dropped — only the ones this run created
         with contextlib.suppress(Exception):
             dst.rollback()
-        with contextlib.suppress(Exception), dst.cursor() as cur:
-            cur.execute("SET FOREIGN_KEY_CHECKS=0")
-            for tbl in reversed(created_tables):
-                cur.execute(f"DROP TABLE IF EXISTS `{tbl}`")
-            cur.execute("SET FOREIGN_KEY_CHECKS=1")
-            dst.commit()
-        src.close()
-        dst.close()
+        # (Q252) the drop ran under `contextlib.suppress`, and "the tables it created on the target were removed" was said whether or not it had run
+        removed = True
+        try:
+            _drop_created_tables(dst, created_tables)
+        except Exception as gone:
+            removed = False
+            logger.error(f"Migration: the tables this run created could not be removed: {type(gone).__name__}")
+        with contextlib.suppress(Exception):
+            src.close()
+        with contextlib.suppress(Exception):
+            dst.close()
+        if not removed:
+            raise RuntimeError(
+                f"Migration failed and the tables it created on the target could not be removed: "
+                f"{', '.join(created_tables)}. Drop them before migrating again. Error: {e}"
+            ) from e
         if isinstance(e, MigrationRefused):
             raise
         raise RuntimeError(
             f"Migration failed — the tables it created on the target were removed and nothing that was there was "
             f"touched. Error: {e}"
         ) from e
+
+    # (Q252, the independent review of 7.2.0-beta.9) the commit is outside that `try`: a commit that raised was answered with a rollback, which returns
+    # without an error after a commit the server applied and could not confirm. Nothing more is sent on this connection
+    lost = None
+    try:
+        dst.commit()
+    except Exception as e:
+        lost = e
+    if lost is not None:
+        with contextlib.suppress(Exception):
+            dst.close()
+        with contextlib.suppress(Exception):
+            src.close()
+        # whether the rows are there is not known. The tables are: this run created every one of them in a database that had none of them, so removing them
+        # makes the state known again. On a connection of its own, and a removal that fails is never called one
+        try:
+            fresh = _direct_conn(target_host, target_port, target_user, target_password, target_db, target_ssl_ca)
+            try:
+                _drop_created_tables(fresh, created_tables)
+            finally:
+                fresh.close()
+        except Exception as gone:
+            logger.error(f"Migration: the tables this run created could not be removed: {type(gone).__name__}")
+            raise ImportOutcomeUnknown("Migration", lost, again="migrating again") from lost
+        raise RuntimeError(
+            "Migration failed: the database did not confirm the commit. The tables it created on the target were removed "
+            "and nothing that was there was touched."
+        ) from lost
+    with contextlib.suppress(Exception):
+        # the session ends with the connection: a failure here is not a failed migration
+        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
+    _cb("✅ Migration complete — every table's row count and a sample of its primary keys verified.")
 
     src.close()
     dst.close()
@@ -2189,9 +2263,10 @@ def migrate_kea(
     major version equals the source's and every table of the group that exists on the source; anything else is
     refused before a row is written, naming what is wrong. Rows are copied in one transaction with plain INSERTs
     (a primary-key or unique-key collision is an error, not a skipped row), counted from what the server
-    reports, and verified per table. On any failure the transaction is rolled back; if the rollback cannot be
+    reports, and verified per table. On any failure BEFORE the commit the transaction is rolled back; if the rollback cannot be
     confirmed, exactly the rows this run inserted (tracked by primary key) are deleted, children first — never
-    a table, never a row that was there.
+    a table, never a row that was there. A commit that raises (Q252) is `ImportOutcomeUnknown`: the rows may all be there
+    or none of them, no rollback and no delete is sent, and nothing claims an undo.
     """
 
     def _cb(msg):
@@ -2272,8 +2347,6 @@ def migrate_kea(
         _cb("Verifying...")
         for tbl in tables:
             _verify_copy(src, dst, tbl, before[tbl], pk_by_table[tbl], where=KEA_TABLE_WHERE.get(tbl))
-        dst.commit()
-        _cb("✅ Kea migration complete.")
     except Exception as e:
         rolled_back = True
         try:
@@ -2302,6 +2375,19 @@ def migrate_kea(
         raise RuntimeError(
             f"Kea migration failed — the target was rolled back and nothing that was there was touched. Error: {e}"
         ) from e
+
+    # (Q252, the independent review of 7.2.0-beta.9) the commit is outside that `try`. A commit that raised went to the handler above: the rollback it sent
+    # returns without an error after a commit the server applied and could not confirm, and "the target was rolled back" was said of rows that were there.
+    # A commit that raises has one answer: the outcome is not known. No rollback and no delete is sent, and nothing more goes over this connection
+    try:
+        dst.commit()
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            dst.close()
+        with contextlib.suppress(Exception):
+            src.close()
+        raise ImportOutcomeUnknown("Kea migration", e, again="migrating again") from e
+    _cb("✅ Kea migration complete.")
 
     dst.close()
     src.close()

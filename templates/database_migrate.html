@@ -271,7 +271,7 @@ function runMigration() {
                         if (line.startsWith('event: error')) {
                             document.getElementById('migration-result').style.display = '';
                             document.getElementById('migration-result').innerHTML =
-                                '<div class="alert alert-danger"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Migration failed — nothing was changed on the target (what the run wrote was removed). See log above.</div>';
+                                '<div class="alert alert-danger"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Migration did not complete. The last line of the log above says what is known about the target; the Jen log has the cause.</div>';
                         }
                     });
                     return pump();

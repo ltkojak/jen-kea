@@ -438,7 +438,8 @@
                 <input id="f-kea_conf" type="text" name="kea_conf" value="{{ infra.kea_conf }}">
             </div>
             {# Q251: the path is the fallback for a server whose kea-dhcp4 logger names no file Jen may read. When every server's logger names its own file (the Kea
-               logging card below), there is nothing for the field to decide: its stored value is kept and the card is named instead. #}
+               logging card below), there is nothing for the field to decide: the card is named instead, and the form posts no path at all (Q252), so the save keeps the stored
+               value without judging it. #}
             {% if log_path_field %}
             <div class="form-group">
                 <label for="f-dhcp4_log_path" title="Where kea-dhcp4 writes its log when its logger has no file output of its own: a .log file under /var/log. Blank is the default shown. Jen reads the logger's own file first; Tools → Doctor says when there is none.">Kea log path</label>
@@ -447,7 +448,6 @@
             {% else %}
             <div class="form-group" data-log-path-from-kea>
                 <label>Kea log path</label>
-                <input type="hidden" name="dhcp4_log_path" value="{{ infra.dhcp4_log_path }}">
                 <div class="form-hint">Not needed: Kea names the file itself. See <a href="#kea-logging">Kea logging</a> on this page.</div>
             </div>
             {% endif %}

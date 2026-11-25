@@ -106,11 +106,6 @@ def redact_ini_text(text: str) -> str:
     return "\n".join(out)
 
 
-def _address_key(key) -> bool:
-    """Is `key` one whose value is an address (`api_url`, `api6_url`, `api_d2_url`, a Kea `url`)? Such a value is split structurally; any other string is text."""
-    return str(key if key is not None else "").lower().replace("-", "_").endswith("url")
-
-
 def _is_secret_shape(value) -> bool:
     """Is `value` a thing that can CARRY a secret under a secret-named key? A non-empty string, bytes, or any container (a list of credentials, a dict of passwords - the value is masked whole,
     as `kea_authoring.redact_secrets` masks any shape). A bool, a number and None say that a secret exists or how long it is, never what it is: kept (Q223 AH7 decided; Q224 AJ12 the containers)."""
@@ -121,31 +116,32 @@ def _is_secret_shape(value) -> bool:
     return isinstance(value, (bytes, bytearray, dict, list, tuple, set, frozenset))
 
 
-def _scrubbed(data, key=None):
-    """`data` with no user-info left in any address, at any depth (Q221, AE7): THE pass every JSON member of the bundle goes through (`_json`), so a section added later is covered by being a
-    member. A string under an address key is a value (`secret_keys.without_credentials`: its user-info, its query values and its fragment go); any other string is text (`secret_keys.scrub_urls`). Keys, numbers, booleans and None are untouched."""
+def _scrubbed(data):
+    """`data` with no user-info, no query value and no fragment left in any address, at any depth (Q221, AE7): THE pass every JSON member of the bundle goes through (`_json`), so a section added
+    later is covered by being a member. EVERY string goes through ONE mask, `secret_keys.without_credentials`, whatever key it sits under and a key itself too (Q252, the independent review of
+    7.2.0-beta.9): only a string under a key ending `url` did, and an address inside a sentence (an audit detail, an alert's error, a Health line) kept its query values and its fragment. Numbers,
+    booleans and None are untouched."""
     if isinstance(data, dict):
         return {
-            (scrub_urls(k) if isinstance(k, str) else k): (
-                MASK if is_secret_key(k) and _is_secret_shape(v) else _scrubbed(v, k)
+            (without_credentials(k) if isinstance(k, str) else k): (
+                MASK if is_secret_key(k) and _is_secret_shape(v) else _scrubbed(v)
             )
             for k, v in data.items()
         }  # (Q222, AG11) a key is text too; (Q223, AH7) a string under a secret-named key is masked here, in the pass every member goes through, whoever made the member
     if isinstance(data, (list, tuple)):
-        return [_scrubbed(v, key) for v in data]
+        return [_scrubbed(v) for v in data]
     if isinstance(data, str):
-        return (
-            without_credentials(data) if _address_key(key) else scrub_urls(data)
-        )  # (Q244) `without_userinfo` until 7.2.0-beta.2
+        return without_credentials(data)  # (Q244) `without_userinfo` until 7.2.0-beta.2
     if isinstance(data, (int, float, bool)) or data is None:
         return data
-    return scrub_urls(
+    return without_credentials(
         str(data)
     )  # (Q222, AG11) an object the encoder would print with `default=str`: printed here, as text, so the pass covers it
 
 
 def scrub_log_line(line: str) -> str:
-    line = scrub_urls(line)  # (Q221, AE7) before the patterns: an address in a log line never keeps its user-info
+    # (Q221, AE7) before the patterns: an address in a log line never keeps its user-info. (Q252) Nor a query value or a fragment
+    line = without_credentials(line)
     for rx, repl in _LOG_SCRUBS:
         line = rx.sub(repl, line)
     return line
@@ -158,7 +154,7 @@ def scrub_log_text(text: str, max_lines: int = LOG_TAIL_LINES) -> str:
 
 def _json(data) -> str:
     return (
-        json.dumps(_scrubbed(data), indent=2, sort_keys=True, default=lambda o: scrub_urls(str(o))) + "\n"
+        json.dumps(_scrubbed(data), indent=2, sort_keys=True, default=lambda o: without_credentials(str(o))) + "\n"
     )  # (Q222, AG11) what the encoder adds is scrubbed too
 
 
@@ -184,6 +180,7 @@ def readme_text(version: str, channel: str, hostname: str, when: str, notes: lis
         "",
         "What is NOT here: passwords, API keys, TOTP secrets, alert-channel tokens,",
         "a user name or password inside an address (an address is host and port),",
+        "the value of a query parameter and the fragment of an address,",
         "the SSH / mTLS / CA private keys, users, or the config-revision history.",
         "Key FILE PATHS appear; key contents never do.",
     ]
@@ -228,7 +225,9 @@ def build_bundle(collected: dict, *, now: datetime | None = None, cap: int = SIZ
 
     def put(name: str, text: str):
         # (Q222, AG2; CRED-005) THE choke point: every member of the archive is written here and none keeps the user-info of an address, whoever made it. `scrub_urls` is idempotent, so a
-        # member a stricter pass already made (`_json`, `redact_ini_text`, `scrub_log_text`) is unchanged; README.txt and logs/README.txt are covered by being members
+        # member a stricter pass already made (`_json`, `redact_ini_text`, `scrub_log_text`) is unchanged; README.txt and logs/README.txt are covered by being members.
+        # (Q252) This is the ONE use of `scrub_urls` in the module, and it stays: this pass reads a member's whole SERIALIZED text. `without_credentials` reads each address to the next white
+        # space, and inside a JSON document that takes the closing quote and the comma with it and breaks the document; every string was already masked before it was serialized
         if not _MEMBER_NAME_RE.fullmatch(name):
             raise ValueError(
                 f"a bundle member's name is a plain relative path: {name!r}"

@@ -177,16 +177,19 @@ difference". For every other write a daemon that cannot be read is still not a d
 
 ### INV-017 - A change of Kea's log output is proven by the log itself or put back
 **Rule.** Kea accepts a logger whose file it may not write ("Configuration successful.") and then logs nothing anywhere (measured on kea-dhcp4 3.0.5), so an accepted change proves
-nothing. When Settings → Kea → Kea logging moves a server's `kea-dhcp4` logger to a file (alone, or beside the journal), the tail of that file is read through the Kea host's helper
-before the change and again after the daemon was asked a harmless command, up to five times one second apart: the change stands only when the tail holds a line that was not there
-before, has Kea's own line shape (`[kea-dhcp4.<part>/<pid>.<tid>]`) and carries the process id the running daemon itself answered on that command (`status-get`): a line some other
-writer of the file added, a line that only names the daemon, and the real lines of a second kea-dhcp4 all prove nothing, and a daemon that did not say its process id has proven
-nothing. A logger whose severity is WARN, ERROR, FATAL or NONE writes no line
-for a command, so there two other facts are taken: a file that was not there before the change and is there after it (Kea made it, so Kea may write it) proves the change, and a file
-the logger already named stands with the operator told it was not checked - on the name alone while the change takes no output away (Kea writes everywhere it wrote before),
-and, when the change drops an output (the journal from beside the file), only when the file holds lines kea-dhcp4 wrote before the change: the name alone is not evidence there,
-Kea accepts a file it can never write. Anything else - at any severity - puts the previous `output-options` back through the
-same change path, and when that fails too the operator is told so and what the daemon runs now. A change set that fails part way and cannot undo itself is told the same way. From the change's first read to its last write the server is held
+nothing. When Settings → Kea → Kea logging moves a server's `kea-dhcp4` logger to a file (alone, or beside the journal), the change stands only on a line that carries a one-time value
+Jen sent to the running daemon AFTER the change (`jen-log-proof-` and 32 hexadecimal digits, one value per change): the daemon is asked to write it and the file is read through the
+Kea host's helper, up to five times one second apart, and the line must be WHOLLY a line of Kea's default pattern whose message is `COMMAND_RECEIVED Received command '<value>'` (at
+INFO and DEBUG, where Jen sends a command of that name, which Kea does not know) or starts with `DHCP4_PARSER_FAIL ` and holds the value (at WARN and ERROR, where a command writes no
+line and Jen sends a `config-test` with one setting of that name, which Kea refuses and does not apply: measured on kea-dhcp4 3.0.5 and 3.2.1, the daemon's configuration digest and
+its whole `config-get` answer are the same before and after). A line that holds the value outside that shape, and a line of that shape without the value - a line Kea wrote before the
+change, a line of a second kea-dhcp4, a line a forwarder copied from the journal, a line that imitates Kea with the right process id - prove nothing. At FATAL and NONE no command makes
+Kea write a line, so there a change stands only on a file that was not there before the change and is there after it (Kea made it, so Kea may write it), or on a logger that already
+named the file when the change takes no output away (Kea writes everywhere it wrote before; the operator is told it was not checked). Anything else - at any severity, and at FATAL and
+NONE also a file Kea really writes when the change would leave it as the only output - puts the previous `output-options` back through the
+same change path, and when that fails too the operator is told so and what the daemon runs now, or that the daemon did not answer. A change set that fails part way and cannot undo itself is told the same way. The sentences say what Jen did and read, never what Kea did.
+Its assumption: the proof needs Kea's default line pattern, which the file output this card writes always has (it writes no `pattern`), and it does not defend against a process on the Kea host that can read the commands Jen sends to Kea.
+From the change's first read to its last write the server is held
 (`hold_log_output`): a second change of the same server, and a turn-on of investigation logging for it, are refused while it is held and never wait, so nothing lands between a write
 and its proof or put-back; turning logging off, the sweep and the Kea host's own restore are never held back. A change that was put back, one that could not be put back and one that failed part way and could not be undone are each in the audit log (`KEA_LOG_OUTPUT`). A file choice
 for a server Jen cannot read a log from (no SSH host, no helper) is refused before anything is sent, and so is ANY choice while investigation logging is on or unresolved for that
@@ -194,22 +197,32 @@ server - a marker in the running config or in the file (readable or damaged), an
 entry removes the whole entry, and the new output with it. (A Kea host that cannot be asked is not a refusal of this check; measured on kea-dhcp4 3.0.5, with SSH away the change set itself
 refuses a Live API server's change, because it cannot read the file it must prove the write against.) Only the `kea-dhcp4` logger's `output-options` are ever written; its severity, debuglevel and user-context are not touched. One exception is stated,
 not hidden: a configuration with NO `kea-dhcp4` logger entry gets one, written as `severity: INFO, debuglevel: 0`, which is Kea's own default.
-**Established.** Q249; the hold, the proof by Kea's own line and by the file Kea created, Q250; the process id in the proof, the evidence for a file the logger names and the audit row of a change that could not undo itself, Q251.
-**Enforced at.** `jen/services/kea_log_trace.py` (`change_log_output`, the one function that applies and proves; `hold_log_output`; `investigation_blocks_log_output`) and
+**Established.** Q249; the hold, the proof by Kea's own line and by the file Kea created, Q250; the audit row of a change that could not undo itself, Q251; the proof by a line that carries a value Jen sent after the change (in place of Q251's process id and of the lines a named file held), Q252.
+**Enforced at.** `jen/services/kea_log_trace.py` (`change_log_output`, the one function that applies and proves, with `_ask_for_a_line` and `_kea_wrote`; `hold_log_output`; `investigation_blocks_log_output`) and
 `investigation_logging.turn_on` (wrapped by `_holds_the_logger`), over the pure edit
 `kea_config_edit.set_logger_output` / `restore_logger_output` and the one predicate for a session on the host, `investigation_logging.host_session_refusal`.
 **Tests.**
+- `tests/test_q252_b.py::TestTheLineThatProves`
+- `tests/test_q252_b.py::TestWhatIsAsked`
+- `tests/test_q252_b.py::TestAskedAtInfoAndDebug`
+- `tests/test_q252_b.py::TestAskedAtWarnAndError`
+- `tests/test_q252_b.py::TestFatalAndNone`
+- `tests/test_q252_b.py::TestStatusGetIsNeverAsked`
+- `tests/test_q252_b.py::TestTheSentences`
+- `tests/test_q252_b.py::TestOverTheDaemonsOwnApi`
 - `tests/test_q249_a.py::TestTheProof`
 - `tests/test_q250_a.py::TestTheAuditRow`
 - `tests/test_q251_a.py::TestTheProofIsThisDaemonsLine`
 - `tests/test_q251_a.py::TestTheNameAloneIsNotEvidence`
+- `tests/test_q251_a.py::TestSeverityNone`
+- `tests/test_q251_a.py::TestThePutBackSaysWhatJenSaw`
 - `tests/test_q251_a.py::TestAChangeThatCouldNotUndoItself`
 - `tests/test_q249_a.py::TestTheRouteRefuses`
 - `tests/test_q249_a.py::TestThePureEdit`
 - `tests/test_q250_a.py::TestOneChangeAtATime`
 - `tests/test_q250_a.py::TestTheProofIsKeasOwnLine`
 - `tests/test_q250_a.py::TestAboveInfo`
-- `tests/test_investigation_model.py::TestTheWalk` (the operation `op_log_output`, I15)
+- `tests/test_investigation_model.py::TestTheWalk` (the operation `op_log_output`, I15 and I17)
 - `tests/test_investigation_model.py::TestTheLogOutputChangeIsRefusedWhileASessionIsOpen`
 
 ## Access control and shared definitions
@@ -552,13 +565,21 @@ later one fails; a revert that cannot finish is a persistent, named rollback fai
 
 ### TXN-002 - A commit that raised is an outcome nobody knows, never a rollback
 **Rule.** A handler that says "rolled back" or "nothing was changed" does not run for a failure of the commit itself. The server may have applied a commit whose reply was lost, and a
-rollback sent afterward returns without an error either way. A commit of an import that raises is `dbexport.ImportOutcomeUnknown`: no rollback is sent, none is claimed, and the page, the
+rollback sent afterward returns without an error either way. Every commit of an import or a migration that raises is `dbexport.ImportOutcomeUnknown`: no rollback is sent, none is claimed, and the page, the
 log and the audit row say the outcome is not known. A failure before the commit whose rollback returned is `dbexport.ImportRolledBack`, and only that one is recorded as rolled back.
-`dbexport.migrate_kea` compensates by primary key on a fresh connection when its rollback is not confirmed, and says the target was rolled back only when that delete ran (Q244, BB30): when
+For a failure BEFORE its commit, `dbexport.migrate_kea` compensates by primary key on a fresh connection when its rollback is not confirmed, and says the target was rolled back only when that delete ran (Q244, BB30): when
 neither is confirmed it says so (`KEA_MIGRATION_NOT_UNDONE`). And a plugin commit that was not confirmed ends neither the restore of the plugins after it nor the audit row's truth (Q244,
 BB3, BB4): they get a connection of their own, and the row is `DB_IMPORT_FAILED`.
-**Established.** Q242 (finding 2 of the independent review of v7.1.0-beta.10). Q238 (AW9: a rollback that itself failed). Q244 (BB3, BB4, BB30).
-**Enforced at.** `jen/services/dbexport.py::import_kea`, `::import_jen`; `jen/routes/database.py::import_confirm`.
+The rule as source (Q252): a `commit()` that ends a transaction is never in the body of a `try` one of whose handlers sends a rollback on the same connection or says "rolled back" or
+"was touched"; the commit is sent after that `try`, in one of its own. `migrate_kea` and `migrate_jen` had theirs inside it: a reply lost on a connection that stayed up was "the target
+was rolled back" with the rows there, and `migrate_jen` said "the tables it created on the target were removed" after a drop that ran under `suppress`. A lost commit of `migrate_kea` now
+sends no rollback and no delete. `migrate_jen` drops the tables it created (they are its own, in a database that had none of them) on a connection of its own and says "removed" only when
+that ran, before the commit or after it. Every migration that fails leaves a `DB_MIGRATE_FAILED` row. And one status says what an import's result lines mean
+(`dbexport.import_status`): the row is `DB_IMPORT` only when no part failed. A put-back is an import too: `dbexport._roll_back_to` and the restore tool's `rollback_snapshot` ask the
+same status of the lines their lenient import returns, and a put-back with a part that failed is a put-back that failed (the snapshot is kept), never "put back exactly as it was".
+**Established.** Q242 (finding 2 of the independent review of v7.1.0-beta.10). Q238 (AW9: a rollback that itself failed). Q244 (BB3, BB4, BB30). Q252 (findings R1 and R3 of the
+independent review of v7.2.0-beta.9).
+**Enforced at.** `jen/services/dbexport.py::import_kea`, `::import_jen`, `::migrate_kea`, `::migrate_jen`, `::import_status`; `::_roll_back_to`; `jen/routes/database.py::import_confirm`, `::migrate_run`; `jen/tools/restore.py::rollback_snapshot`.
 **Tests.**
 - `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestTheKeaImport`
 - `tests/test_a_commit_that_raised_is_not_a_rollback.py::TestTheJenImport`
@@ -566,6 +587,15 @@ BB3, BB4): they get a connection of their own, and the row is `DB_IMPORT_FAILED`
 - `tests/test_a_lost_plugin_commit_does_not_stop_the_plugins_after_it.py::TestTheFunction`
 - `tests/test_a_lost_plugin_commit_does_not_stop_the_plugins_after_it.py::TestTheRouteAndItsAuditRow`
 - `tests/test_migrate_contract.py::TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas`
+- `tests/test_q252_a.py::TestACommitIsNeverInsideTheTryThatUndoesIt`
+- `tests/test_q252_a.py::TestAKeaMigrationWhoseCommitWasLost`
+- `tests/test_q252_a.py::TestAJenMigrationWhoseCommitWasLost`
+- `tests/test_q252_a.py::TestAMigrationThatFailedLeavesARowAndItsOwnSentence`
+- `tests/test_q252_a.py::TestWhoeverRecordsAnImportThatWorkedAsksFirst`
+- `tests/test_q252_a.py::TestTheAuditRowOfAnImportSaysWhatThePageSays`
+- `tests/test_q252_a.py::TestAPutBackThatFailedInPartIsNotCalledExact`
+- `tests/test_q252_a.py::TestTheRestoreToolsPutBack`
+- `tests/test_q252_a.py::TestEveryCallOfTheImportIsAnswered`
 
 ### TXN-003 - A row that hangs on a replaced table stays only with the record it was on
 **Rule.** A restore in replace mode that replaces a parent table (`dbexport.JEN_DEPENDENTS`: today `users`) leaves no row of a dependent table on a parent row that is not the record

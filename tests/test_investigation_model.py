@@ -163,6 +163,12 @@ class Walk:
         self.api_on_rng = random.Random(f"api-on-{seed}")  # Q214: and for turning logging on over an API server
         self.log_rng = random.Random(f"log-output-{seed}")  # Q249: and for the Kea logging card's change
         self.log_reads = 0
+        # Q252: the stub's Kea WRITES its log when a command arrives, as the real daemon was measured to (`_kea_writes`). (host, path) -> lines; `kea_asked` is every value
+        # the card's proof sent and where the stub's Kea wrote its line; `cannot_write` the hosts whose kea-dhcp4 may not write its log directory (their file is root's,
+        # and another writer appends lines of Kea's shape to it between reads). Its own random source, so every seed this suite pins draws what it drew before.
+        self.kea_log: dict = {}
+        self.kea_asked: dict = {}
+        self.cannot_write = {h for h in HOSTS if random.Random(f"log-writable-{seed}-{h}").random() < 0.3}
         self.stale_next: dict = {}  # host -> the earlier marker the NEXT file write must leave behind (the fault `first_marker_left_behind`)
         self.stale_marker: dict = {}  # host -> that marker's `until`, once a write has left it: I12 tolerates exactly it, and nothing else, below the extended deadline
         self.world, self.tmp_path = world, tmp_path
@@ -354,10 +360,9 @@ class Walk:
         if fake is None:
             return {"result": 1, "text": "no route to host", "transport": "connect"}
         arguments = kw.get("arguments") if kw.get("arguments") is not None else (args[1] if len(args) > 1 else None)
-        if (
-            command == "status-get"
-        ):  # Q251: the proof's harmless command; its process id is the one the tail's lines carry (`_tail_log`)
-            return {"result": 0, "arguments": {"pid": 1, "uptime": 60, "reload": 60}}
+        proof = self._kea_writes(fake, command, arguments)  # Q252
+        if proof is not None:
+            return proof
         reply = fake.kea_command(command, arguments=arguments)
         if command == "config-get" and reply.get("result") == 0:
             self.answered_get.add(fake.host)
@@ -374,14 +379,73 @@ class Walk:
             fake._restart_failed = False
         return out
 
+    def _kea_logger(self, fake):
+        """(severity, file outputs) of the `kea-dhcp4` logger the stub's daemon RUNS (`loaded`): INFO and no file for a daemon with no such logger."""
+        loggers = ((fake.loaded or {}).get("Dhcp4") or {}).get("loggers")
+        for entry in loggers if isinstance(loggers, list) else []:
+            if isinstance(entry, dict) and entry.get("name") == "kea-dhcp4":
+                files = [
+                    o["output"]
+                    for o in entry.get("output-options") or []
+                    if isinstance(o, dict) and str(o.get("output", "")).startswith("/")
+                ]
+                return str(entry.get("severity") or "INFO").strip().upper(), files
+        return "INFO", []
+
+    def _kea_writes(self, fake, command, arguments):
+        """Q252 (BL29): the stub's kea-dhcp4 as the real one was measured (3.0.5 and 3.2.1, `pass/q252/b/out/measure.*.json`). A command it does not know, named with
+        the proof's prefix, is answered `result 2` and writes `COMMAND_RECEIVED Received command '<name>'` at INFO and DEBUG; a `config-test` whose section carries a
+        key of that name is answered `result 1`, applies nothing and writes `DHCP4_PARSER_FAIL ... <key> ...` at ERROR and lower. Each line goes ONLY to the files the
+        daemon's running logger has, only when its severity lets that level through, and only on a host whose Kea can write them. A daemon whose control channel does
+        not answer receives nothing. Returns the reply for those two, None for every other command (the fake's own answer)."""
+        section = arguments.get("Dhcp4") if isinstance(arguments, dict) else None
+        keys = (
+            [k for k in section if isinstance(k, str) and k.startswith(_klt.PROOF_PREFIX)]
+            if isinstance(section, dict)
+            else []
+        )
+        if command.startswith(_klt.PROOF_PREFIX):
+            value, level, part = command, "INFO", "commands"
+            message = f"COMMAND_RECEIVED Received command '{command}'"
+            reply = {"result": 2, "text": f"'{command}' command not supported."}
+        elif command == "config-test" and keys:
+            value, level, part = keys[0], "ERROR", "dhcp4"
+            message = f"DHCP4_PARSER_FAIL failed to create or run parser for configuration element {value}: unsupported global configuration parameter: {value} (<string>:1:102)"
+            reply = {"result": 1, "text": f"unsupported global configuration parameter: {value} (<string>:1:102)"}
+        else:
+            return None
+        if fake.api_silent or fake.list_unreachable:
+            return {"result": 1, "text": "connection refused", "transport": "connect"}
+        severity, files = self._kea_logger(fake)
+        through = {"INFO": ("DEBUG", "INFO"), "ERROR": ("DEBUG", "INFO", "WARN", "ERROR")}[level]
+        wrote = self.kea_asked.setdefault(value, set())
+        if severity in through and fake.host not in self.cannot_write:
+            for path in files:
+                stamp = f"2026-11-25 00:{len(self.kea_log) % 60:02d}:00.{len(wrote) % 1000:03d}"
+                self.kea_log.setdefault((fake.host, path), []).append(
+                    f"{stamp} {level:<5} [kea-dhcp4.{part}/1.140] {message}"
+                )
+                wrote.add((fake.host, path))
+        return reply
+
     def _tail_log(self, server, path, lines=200, timeout=None, helper_only=False):
-        """The host's log read: a file that has one line more on every read (Kea is writing to it)."""
-        if self.ssh_fake(server) is None:
+        """The host's log read: the file the stub's Kea on THAT host wrote (`_kea_writes`); "missing" when its logger does not name the file and nothing ever wrote it.
+        On a host whose Kea cannot write (`cannot_write`) the file is root's and is there, and another writer adds a line of Kea's own shape on every read: a line
+        that does not carry what Jen asked for (the worlds of BL1, BL2 and BL16)."""
+        fake = self.ssh_fake(server)
+        if fake is None:
             return {"ok": False, "code": "error", "detail": "ssh: no route to host", "transport": True}
         self.log_reads += 1
-        # (Q250) the lines are Kea's own: the proof counts only a new line that names the daemon's logger
-        lines = [f"2026-11-24 00:00:00.{n:03d} INFO  [kea-dhcp4.commands/1.1] line {n}" for n in range(self.log_reads)]
-        return {"ok": True, "code": "ok", "lines": lines, "via": "helper"}
+        if fake.host in self.cannot_write:
+            foreign = [
+                f"2026-11-24 00:00:00.{n:03d} INFO  [kea-dhcp4.commands/1.140] COMMAND_RECEIVED Received command 'status-get'"
+                for n in range(self.log_reads)
+            ]
+            return {"ok": True, "code": "ok", "lines": foreign[-int(lines) :], "via": "helper"}
+        held = self.kea_log.get((fake.host, path))
+        if held is None and path not in self._kea_logger(fake)[1]:
+            return {"ok": False, "code": "missing", "detail": "", "via": "helper"}
+        return {"ok": True, "code": "ok", "lines": list(held or [])[-int(lines) :], "via": "helper"}
 
     def _read_config(self, server, service, *, errors=None, **kw):
         fake = self.ssh_fake(server)
@@ -1482,7 +1546,8 @@ class Walk:
         """Q249 (INV-017): the Kea logging card changes where a server's kea-dhcp4 writes its log (`kea_log_trace.change_log_output`). The restore of a session that CREATED the logger
         entry removes the whole entry, so the change is refused while the config carries a marker or a session for that server is not finished - Jen's record or the Kea host's. I15: in
         such a state it never succeeds and nothing reaches the wire; in ANY state the stored investigation record is exactly what it was. The choice is `journal` or the journal and a
-        file whose tail the walk answers (a line more on every read), so the proof passes and no put-back runs: what the walk composes is the refusal against every state."""
+        file. Since Q252 the stub's Kea writes the line the proof asks for only where the real daemon would (`_kea_writes`), so the change is proven on some hosts and put back
+        on the rest, and I17 says which: a change that stands as proven is one whose asked line the stub's Kea really wrote to the file Jen reads."""
         rng = self.log_rng
         candidates = [s for s in self.world.servers if s.get("ssh_host")]
         if not candidates:
@@ -1508,8 +1573,18 @@ class Walk:
         raw_before = self.world.store.get(inv.RECORD_KEY, "")
         applies_before = len(self.applies)
         self.held_refuses(server, choice, raw_before)
+        asked_before = set(self.kea_asked)
         out = _klt.change_log_output(server, choice, "/var/log/kea/kea-dhcp4.log", 10 * 1024 * 1024, 4)
         self.say(f"log_output {choice} on {server['id']}: code={out['code']} must_refuse={must_refuse}")
+        # Q252, I17: a change to a file stands as PROVEN only when the stub's Kea wrote the line it was asked for, during this change, into the file Jen reads
+        if out["ok"] and out["code"] == "ok" and choice != "journal":
+            read_from = (fake.host, "/var/log/kea/kea-dhcp4.log")
+            if not any(read_from in self.kea_asked[value] for value in set(self.kea_asked) - asked_before):
+                self.fail(
+                    "I17",
+                    f"the log output of server {server['id']} stands as proven and the Kea of {fake.host} wrote no line it was asked for in this change to the file Jen "
+                    f"reads (asked: {len(set(self.kea_asked) - asked_before)} value(s); that Kea can write its log: {fake.host not in self.cannot_write})",
+                )
         if must_refuse and (out["ok"] or len(self.applies) != applies_before):
             self.fail(
                 "I15",
@@ -2120,6 +2195,29 @@ class TestTheLogOutputChangeIsRefusedWhileASessionIsOpen:
         monkeypatch.setattr(Walk, "LOG_OUTPUT_SHARE", 0.5)
         with pytest.raises(InvariantViolated, match="I16 violated"):
             walk_world(0, self.STEPS).run()
+
+    I17_RED = []
+
+    @pytest.mark.parametrize("seed", range(12))
+    def test_i17_is_red_when_any_line_of_keas_shape_is_taken_for_the_proof(self, seed, walk_world, monkeypatch):
+        """The mutation check of I17 (Q252, BL29): a proof that accepts any line of Kea's shape - whoever wrote it, whatever it carries - is found by the walk, whose
+        stub writes the asked line only where the real daemon would and lets another writer add lines of Kea's shape to a file Kea cannot write."""
+        monkeypatch.setattr(
+            _klt,
+            "_kea_wrote",
+            lambda tail, value: any(isinstance(line, str) and _klt._KEA_LINE.fullmatch(line) for line in tail),
+        )
+        monkeypatch.setattr(Walk, "LOG_OUTPUT_SHARE", 0.5)
+        try:
+            walk_world(seed, self.STEPS).run()
+        except InvariantViolated as red:
+            if "I17 violated" in str(red):
+                TestTheLogOutputChangeIsRefusedWhileASessionIsOpen.I17_RED.append(seed)
+
+    def test_with_that_proof_i17_goes_red_often_enough_to_mean_something(self):
+        red = TestTheLogOutputChangeIsRefusedWhileASessionIsOpen.I17_RED
+        print(f"MODEL I17 MUTATION: {len(red)} of 12 seeds red with a proof that takes any line of Kea's shape: {red}")
+        assert len(red) >= 4, red
 
     def test_a_session_refuses_the_change_and_the_record_is_what_it_was(self, world):
         server = world.servers[0]

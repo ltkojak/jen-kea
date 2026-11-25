@@ -4,8 +4,10 @@ tests/test_q251_a.py
 Q251 - the Kea logging card after the executing pass on v7.2.0-beta.8 (INV-017), the Problems sweep's record after a proven change, and three things the maintainer
 read on the pages.
 
-    TestTheProofIsThisDaemonsLine     a line proves a change only when it has Kea's shape AND the process id the running daemon answered (BK3)
-    TestTheNameAloneIsNotEvidence     above INFO, a file the logger names stands only when it holds lines kea-dhcp4 wrote (BK2); the flash keeps its lines (BK16)
+    TestTheProofIsThisDaemonsLine     the lines of another kea-dhcp4, and lines that only name the daemon, prove nothing (BK3; since Q252 the proof is the line
+                                      Jen asked for, `tests/test_q252_b.py`, and the process id is no part of it)
+    TestTheNameAloneIsNotEvidence     a file the logger names proves nothing by its name or by what it holds (BK2; Q252: Kea is asked at WARN and ERROR, and at
+                                      FATAL and NONE only a change that takes no output away stands on the name); the flash keeps its lines (BK16)
     TestSeverityNone                  NONE is a severity at which Kea writes nothing (BK14)
     TestThePutBackSaysWhatJenSaw      the put-back's cause is what was observed, not one guess (BK15)
     TestAChangeThatCouldNotUndoItself a change set that ends `rollback_failed` is in the audit log (BK8)
@@ -141,61 +143,27 @@ def sweep_record(db, server):
 
 
 class TestTheProofIsThisDaemonsLine:
-    @pytest.mark.parametrize(
-        "line, want",
-        [
-            (kea_line(81), 81),
-            (
-                "2026-11-24 02:18:41.273 WARN  [kea-dhcp4.dhcpsrv/4012.139822] DHCPSRV_MT_DISABLED_QUEUE_CONTROL ...",
-                4012,
-            ),
-            ("2026-11-24 02:18:41.273 INFO  [kea-dhcp4/7.0x7f2a] a line of the root logger", 7),
-            ("2026-11-24 02:18:41.273 INFO  [kea-dhcp4.commands/81] no thread id", 81),
-            ("04:10:11 another-daemon says kea-dhcp4 is fine", None),
-            ("2026-11-24 02:18:41.273 INFO  [kea-dhcp6.commands/81.140] the other daemon", None),
-            ("2026-11-24 02:18:41.273 INFO  [kea-dhcp4.commands/x.140] no process id", None),
-            ("", None),
-            (None, None),
-        ],
-    )
-    def test_the_process_id_of_a_line(self, line, want):
-        assert klt._line_pid(line) == want
-
-    @pytest.mark.parametrize(
-        "before, tail, pid, want",
-        [
-            ([], [kea_line(81)], 81, True),
-            ([], [kea_line(81)], 82, False),  # a second kea-dhcp4's real line
-            ([], [kea_line(81)], None, False),  # the daemon did not say who it is: nothing proves
-            ([kea_line(81)], [kea_line(81)], 81, False),  # the tail did not move
-            ([kea_line(81)], [kea_line(81), kea_line(81, 1)], 81, True),
-            ([], ["2026-11-24 02:18:41 INFO kea-dhcp4 imitation line"], 81, False),
-            ([], ["x [kea-dhcp4.commands/999.1] an imitation with a made-up process"], 81, False),
-            ([kea_line(81), kea_line(81)], [kea_line(81)], 81, False),
-            ([], [], 81, False),
-        ],
-    )
-    def test_what_counts_as_a_line_this_daemon_added(self, before, tail, pid, want):
-        assert klt._kea_wrote(tail, before, pid) is want
-
-    def test_the_daemons_process_id_is_its_own_answer(self, server, daemon):
-        assert klt._daemon_pid(server) == daemon.pid == 8
-        daemon.pid = "8"  # an answer that is not a number is no answer
-        assert klt._daemon_pid(server) is None
-        daemon.pid = True
-        assert klt._daemon_pid(server) is None
-        daemon.pid = 0
-        assert klt._daemon_pid(server) is None
-
     def test_a_change_the_daemon_itself_writes_is_proven(self, server, daemon, host):
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (True, "ok"), out
         assert out["lines"][-1] == f"Kea is writing to {LOG} on kea-a."
-        assert "status-get" in daemon.commands, "the proof's harmless command is the one whose answer names the process"
+        assert "status-get" not in daemon.commands, "(Q252) the process id is no part of the proof: nothing asks for it"
+        assert [c for c in daemon.commands if c.startswith(klt.PROOF_PREFIX)], (
+            "the daemon was asked for a line that carries Jen's value"
+        )
 
-    def test_the_lines_of_a_second_kea_dhcp4_prove_nothing_and_the_change_is_put_back(self, server, daemon, host):
+    def test_the_lines_of_a_second_kea_dhcp4_prove_nothing_and_the_change_is_put_back(
+        self, server, daemon, host, monkeypatch
+    ):
         """The pass's world (b): the file fills with REAL kea-dhcp4 lines, written by another daemon; this one may not write it."""
-        host.line_pid = 4999
+        host.writes_log = False
+        reads = {"n": 0}
+
+        def log_lines(path):
+            reads["n"] += 1
+            return [kea_line(4999, n) for n in range(reads["n"])]
+
+        monkeypatch.setattr(host, "log_lines", log_lines)
         before_file = copy.deepcopy(daemon.file)
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back"), out
@@ -215,11 +183,6 @@ class TestTheProofIsThisDaemonsLine:
         assert (out["ok"], out["code"]) == (False, "put-back"), out
         assert running_options(daemon) == [PACKAGED]
 
-    def test_a_daemon_that_does_not_say_who_it_is_is_put_back(self, server, daemon, host, monkeypatch):
-        monkeypatch.setattr(klt, "_daemon_pid", lambda server: None)
-        out = klt.change_log_output(server, "file", LOG, MB10, 4)
-        assert (out["ok"], out["code"]) == (False, "put-back"), out
-
 
 class TestTheNameAloneIsNotEvidence:
     BOTH = [dict(PACKAGED), dict(FILE_LOGGER)]
@@ -231,14 +194,17 @@ class TestTheNameAloneIsNotEvidence:
         host.existing[LOG] = []  # root's file: there, and no line of Kea's in it
         before_file = copy.deepcopy(daemon.file)
         post(logged_in_client, output="file")
-        assert flashes(logged_in_client) == [
-            (
-                "error",
-                f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. Its severity is WARN, so Kea writes few lines, "
-                f"and {LOG} was already there without a line kea-dhcp4 wrote, so Jen could not tell whether kea-dhcp4 may write it. "
-                "Choose a file name that does not exist yet: Kea creates it, and that is the proof.",
-            )
-        ]
+        assert (
+            flashes(logged_in_client)
+            == [
+                (
+                    "error",
+                    f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
+                    f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
+                    "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile.",  # (Q252) at WARN Kea is ASKED for a line: the cause is what Jen did and read
+                )
+            ]
+        )
         assert daemon.file == before_file
         assert [o["output"] for o in running_options(daemon)] == ["stdout", LOG]
         assert audit_rows(db) == [
@@ -247,16 +213,18 @@ class TestTheNameAloneIsNotEvidence:
 
     def test_a_change_that_takes_no_output_away_stands_on_the_name(self, server, daemon, host):
         """The file alone, then the journal added beside it (and a rotation size changed on the same file): Kea writes everywhere it wrote before, so an empty
-        file the logger already named is no reason to put anything back - the world Kea leaves after it CREATED a file at ERROR."""
-        logger_on(daemon, [dict(FILE_LOGGER)], "ERROR")
-        host.quiet = True
+        file the logger already named is no reason to put anything back - the world Kea leaves after it CREATED a file at FATAL. (Q252: at WARN and ERROR Kea is
+        asked for a line there too, `tests/test_q252_b.py::TestAskedAtWarnAndError`.)"""
+        logger_on(daemon, [dict(FILE_LOGGER)], "FATAL")
         host.existing[LOG] = []
         out = klt.change_log_output(server, "both", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (True, "unchecked"), out
         assert out["lines"][-1] == (
-            f"Kea accepted the change on kea-a. Its severity is ERROR, so it wrote no line Jen could check; {LOG} is a file its logger already named, "
+            f"Kea accepted the change on kea-a. Its severity is FATAL, so it wrote no line Jen could check; {LOG} is a file its logger already named, "
             "and this change takes no output away."
         )
+        assert len(out["lines"]) > 1 and any("Kea logging" in line for line in out["lines"][:-1]), out["lines"]  # BK16
+        assert out["note"] == " (not checked: severity FATAL)"
         out = klt.change_log_output(server, "both", LOG, 2 * MB10, 4)
         assert (out["ok"], out["code"]) == (True, "unchecked"), out
 
@@ -267,19 +235,17 @@ class TestTheNameAloneIsNotEvidence:
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back"), out
 
-    def test_a_file_that_holds_keas_own_lines_stands_unchecked_and_keeps_the_change_sets_lines(
-        self, server, daemon, host
+    @pytest.mark.parametrize("severity", ["WARN", "FATAL"])
+    def test_a_file_that_holds_keas_own_lines_and_that_kea_cannot_write_is_put_back(
+        self, server, daemon, host, severity
     ):
-        logger_on(daemon, self.BOTH, "WARN")
-        host.quiet = True
-        host.existing[LOG] = [kea_line(3, level="WARN")]  # written before a restart: the process id is an older one
+        """Q251 let this stand "unchecked" on the lines the file held (BL2: a line of Kea's shape can be anyone's, and Kea then logged nowhere)."""
+        logger_on(daemon, self.BOTH, severity)
+        host.unwritable = {LOG}
+        host.existing[LOG] = [kea_line(3, level="WARN")]  # written before the file was taken from Kea's account
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
-        assert (out["ok"], out["code"], out["level"]) == (True, "unchecked", "warning"), out
-        assert out["lines"][-1] == (
-            f"Kea accepted the change on kea-a. Its severity is WARN, so it wrote no line Jen could check; {LOG} already holds lines kea-dhcp4 wrote before this change."
-        )
-        assert len(out["lines"]) > 1 and any("Kea logging" in line for line in out["lines"][:-1]), out["lines"]  # BK16
-        assert out["note"] == " (not checked: severity WARN)"
+        assert (out["ok"], out["code"], out["level"]) == (False, "put-back", "error"), out
+        assert [o["output"] for o in running_options(daemon)] == ["stdout", LOG]
 
 
 class TestSeverityNone:
@@ -290,7 +256,6 @@ class TestSeverityNone:
 
     def test_a_new_name_is_created_and_the_sentence_does_not_promise_lines(self, server, daemon, host):
         at(daemon, "NONE")
-        host.quiet = True
         out = klt.change_log_output(server, "file", OTHER, MB10, 4)
         assert (out["ok"], out["code"]) == (True, "created"), out
         assert out["lines"][-1] == (
@@ -299,14 +264,13 @@ class TestSeverityNone:
 
     def test_a_file_that_was_there_is_put_back_for_the_true_reason(self, server, daemon, host):
         at(daemon, "NONE")
-        host.quiet = True
         host.existing[LOG] = []
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back"), out
         assert out["lines"] == [
-            f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. Its severity is NONE, so Kea writes nothing, "
-            f"and {LOG} was already there, so Jen could not tell whether kea-dhcp4 may write it. Choose a file name that does not exist yet: Kea creates it, "
-            "and that is the proof."
+            f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
+            f"Its severity is NONE, so there is no line Jen can ask kea-dhcp4 to write, and {LOG} was already there, so Jen could not tell whether kea-dhcp4 may "
+            "write it. Choose a file name that does not exist yet (Kea creates it, and that is the proof), or set the severity to ERROR or lower first."
         ]
 
 
@@ -316,19 +280,27 @@ class TestThePutBackSaysWhatJenSaw:
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back"), out
         assert out["lines"] == [
-            f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. "
-            f"The running kea-dhcp4 added no line of its own to {LOG} in the seconds Jen watched. Check that the file is writable by the account "
-            "kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."
+            f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
+            f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
+            "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."
         ]
 
-    def test_above_info_a_file_kea_could_not_create_says_so(self, server, daemon, host):
-        at(daemon, "WARN")
+    def test_where_kea_cannot_be_asked_a_file_it_could_not_create_says_so(self, server, daemon, host):
+        at(daemon, "FATAL")
         host.writes_log = False
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back"), out
         assert out["lines"][0].endswith(
-            f"Its severity is WARN, and {LOG} was not created, so Jen could not tell whether kea-dhcp4 may write there."
+            f"Its severity is FATAL, so there is no line Jen can ask kea-dhcp4 to write, and {LOG} was not created, so Jen could not tell whether kea-dhcp4 "
+            "may write there."
         )
+
+    def test_at_warn_kea_is_asked_and_the_cause_is_the_line_that_did_not_arrive(self, server, daemon, host):
+        at(daemon, "WARN")
+        host.writes_log = False
+        out = klt.change_log_output(server, "file", LOG, MB10, 4)
+        assert (out["ok"], out["code"]) == (False, "put-back"), out
+        assert f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there" in out["lines"][0]
 
 
 class TestAChangeThatCouldNotUndoItself:
@@ -382,10 +354,9 @@ class TestAProvenChangeIsARead:
         assert after["last_read"] is not None
         assert health._problems_sweep({}).status != "fail"
 
-    def test_a_file_kea_created_above_info_is_a_read_too(self, server, daemon, host, db):
+    def test_a_file_kea_created_where_it_cannot_be_asked_is_a_read_too(self, server, daemon, host, db):
         seed_blind(db)
-        at(daemon, "ERROR")
-        host.quiet = True
+        at(daemon, "FATAL")  # (Q252) at ERROR Kea is asked for a line and the outcome is `ok`
         assert klt.change_log_output(server, "file", OTHER, MB10, 4)["code"] == "created"
         after = sweep_record(db, server)
         assert (after["misses"], after["last_error"], after["last_path"]) == (0, "", OTHER)
@@ -515,7 +486,9 @@ class TestTheLogPathField:
         )
         html = logged_in_client.get("/settings/kea").get_data(as_text=True)
         assert 'id="f-dhcp4_log_path"' not in html
-        assert '<input type="hidden" name="dhcp4_log_path" value="/var/log/kea/old.log">' in html
+        # (Q252) the form posts no path while the field is not drawn (it posted the stored one in a hidden input, and a stored value the rule refuses then
+        # blocked every save of the card): the save keeps what is stored - tests/test_q252_c.py
+        assert 'name="dhcp4_log_path"' not in html and "data-log-path-from-kea" in html
         assert 'Not needed: Kea names the file itself. See <a href="#kea-logging">Kea logging</a> on this page.' in html
 
     def test_a_logger_on_the_journal_keeps_the_field(self, logged_in_client, server, daemon, host):

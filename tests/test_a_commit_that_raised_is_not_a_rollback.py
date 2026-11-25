@@ -245,14 +245,11 @@ class TestThePageAndTheAuditRowSayWhichOfTheThreeItWas:
         assert _hosts(kea) == ["from-file"]
 
 
-#: a `try` that sends a commit and whose handler says "rolled back" or "nothing was changed", and is not changed by Q242. Each with why.
-REVIEWED = {
-    # its handler deletes what the run inserted, by primary key on a fresh connection, when the rollback is not confirmed: after a commit whose reply was
-    # lost the rollback fails on the dead connection, the delete runs and "the target was rolled back" is true. (Q244, BB8, BB30) The reason written here
-    # by Q242 said the sentence was wrong after a lost commit; it was wrong only when that DELETE failed, and that case now has a sentence of its own
-    # (`KEA_MIGRATION_NOT_UNDONE`; `tests/test_migrate_contract.py::TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas`)
-    ("jen/services/dbexport.py", "migrate_kea"),
-}
+#: a `try` that sends a commit and whose handler says "rolled back" or "nothing was changed". (Q252) None is left: `migrate_kea` was here, reviewed twice
+#: (Q242, Q244) as right because its handler deleted what the run had copied when the rollback was not confirmed. A reply lost on a connection that stays
+#: up was the case neither review named: the rollback returned, nothing was deleted and "the target was rolled back" was said of rows that were there. Its
+#: commit is outside that `try` now; the wider rule over the whole tree is `tests/test_q252_a.py::TestACommitIsNeverInsideTheTryThatUndoesIt`
+REVIEWED = set()
 
 
 def _claims_after_a_commit(path):
@@ -296,9 +293,12 @@ class TestNoHandlerOfACommitClaimsARollback:
         )
         assert _claims_after_a_commit(old) == ["f"]
 
-    def test_the_kea_import_asks_before_it_claims(self):
+    def test_the_kea_import_commits_after_the_try_that_rolls_back(self):
+        """(Q252) It asked a flag (`committing`) inside the handler before it claimed a rollback. The commit is now in the `else` of that `try`, in a `try`
+        of its own, so no handler that rolls back can run for it."""
         source = (ROOT / "jen/services/dbexport.py").read_text(encoding="utf-8")
         fn = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == "import_kea")
         text = ast.get_source_segment(source, fn)
-        assert text.count("committing = True\n        conn.commit()") == 1 and text.count("conn.commit()") == 1
-        assert text.index("if committing:") < text.index("if not _rolled_back(conn):\n            raise RuntimeError(f")
+        assert "committing" not in text and text.count("conn.commit()") == 1
+        assert text.index("raise ImportRolledBack(") < text.index("\n    else:\n") < text.index("conn.commit()")
+        assert text.index("conn.commit()") < text.index('raise ImportOutcomeUnknown("Kea import", e) from e')

@@ -482,7 +482,8 @@ carry that exact suffix (the box would re-install itself forever).
    `git add`, `git commit`, `git push`, `git tag`, tag push. Never abbreviate or skip a
    step, and always show the exact commands before running them.
 3. **Hold tags until CI is confirmed green.** A push to `main` triggers CI only; the
-   release workflow triggers on tag push. Never tag before the user confirms CI passed.
+   release workflow triggers on tag push. Never tag before the user confirms CI passed
+   (a builder session started under rule 1's delegation confirms it itself, from `gh run view` on the pushed commit).
 4. **Never reuse a version number once it's been described as deployed**, even to fix
    something found immediately afterward — bump to a new version instead.
 5. **Batch related work into meaningful releases.** Don't bump the version after every
@@ -545,4 +546,4 @@ carry that exact suffix (the box would re-install itself forever).
    on a push. A red TAG run is never re-run by the builder: it reports three facts (what failed, from the raw log; whether the `release` job
    started; whether CI on the same commit is green on the same leg) and stops, and one re-run is the maintainer's word (`LESSONS.md` section 4,
    "A red TAG run: the one rule"). The stops are few and named in the entry: product behavior the entry does not prescribe; the helper, a sudoers line, a
-   migration, a version spot, a tag; a security judgment; the same test red after two fixups. A stop comes back with the builder's proposed fix.
+   migration, a version spot, a tag the entry's template does not prescribe; a security judgment; the same test red after two fixups. A stop comes back with the builder's proposed fix.

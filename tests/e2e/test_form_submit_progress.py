@@ -77,25 +77,24 @@ class TestProgressCounter:
     def test_a_failed_request_stops_the_bar_once_not_twice(self, logged_in_page, base_url):
         page = logged_in_page
         page.goto(f"{base_url}/")
-        still_up = page.evaluate(
+        # (Q252) one synchronous script, as the three tests above (Q251): read in a second `evaluate`, the bar was sometimes the dashboard's own request's
+        # (about one run in twenty on v7.2.0). Both facts are read where no request of the page can start or end between the events and the reading.
+        seen = page.evaluate(
             """() => {
+                const active = () => document.getElementById('jen-progress').classList.contains('active');
                 jenProgress.reset();
                 document.body.dispatchEvent(new CustomEvent('htmx:beforeRequest'));   // the request that will fail
                 document.body.dispatchEvent(new CustomEvent('htmx:beforeRequest'));   // one still in flight
                 // htmx 1.9 fires both of these for a 4xx/5xx
                 document.body.dispatchEvent(new CustomEvent('htmx:responseError'));
                 document.body.dispatchEvent(new CustomEvent('htmx:afterRequest'));
-                return document.getElementById('jen-progress').classList.contains('active');
-            }"""
-        )
-        assert still_up is True, "the second request is still in flight: the bar must stay up"
-        hidden = page.evaluate(
-            """() => {
+                const stillUp = active();
                 document.body.dispatchEvent(new CustomEvent('htmx:afterRequest'));
-                return !document.getElementById('jen-progress').classList.contains('active');
+                return {still_up: stillUp, hidden: !active()};
             }"""
         )
-        assert hidden is True
+        assert seen["still_up"] is True, "the second request is still in flight: the bar must stay up"
+        assert seen["hidden"] is True
 
 
 class TestExportIsUsableTwice:

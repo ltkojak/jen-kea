@@ -655,7 +655,7 @@ class TestTheDoctorHandsAnAdminNoLinkToACardItIsNotShown:
     def test_the_pattern_finding_follows_the_same_rule(self, client, logged_in_client, db, kea_config):
         kea_config(NO_TIME)
         title = "Kea&#39;s log lines carry no date and time"
-        assert '<a class="btn btn-sm" href="/settings/kea">Fix →</a>' in _finding(
+        assert '<a class="btn btn-sm" href="/settings/kea#kea-logging">Fix →</a>' in _finding(
             logged_in_client.get("/tools/doctor").get_data(as_text=True), title
         )
         _as(client, db, "admin", None, "q251b_admin")

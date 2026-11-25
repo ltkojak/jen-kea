@@ -216,8 +216,11 @@
         <label class="u-b9037b">Single Sign-On</label>
     </div>
     <div id="edit-sso-linked" class="md muted mb-2" hidden></div>
+    {# Q252 (BL6): for an account that stores a subnet restriction, the confirmation also says what the first sign-in does to it (openEditModal adds
+       data-confirm-restricted to the question; jen/routes/users.py holds the same words for the flash). #}
     <form id="link-sso-form" method="POST" action=""
-          data-confirm="Link this account to SSO? Local username/password login will be disabled for it immediately.">
+          data-confirm="Link this account to SSO? Local username/password login will be disabled for it immediately."
+          data-confirm-restricted="This account is restricted to some subnets now. After it signs in through the identity provider it gets the subnets its groups map to under Settings → Access &amp; Security → Single Sign-On → Subnet Mapping, and every subnet when no mapping is set.">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group u-fdf33f">
             <input type="text" name="external_id" placeholder="External ID (the identity provider's sub claim)" class="u-046678">
@@ -288,12 +291,17 @@ function openAddModal(opener) {
     jenDialog.open(document.getElementById('add-modal'), opener);
 }
 
+var LINK_SSO_QUESTION = document.getElementById('link-sso-form').getAttribute('data-confirm');
+
 function openEditModal(u, opener) {
     document.getElementById('edit-username-label').textContent = u.username;
     document.getElementById('edit-form').action = '/users/edit/' + u.id;
     document.getElementById('reset-mfa-form').action = '/mfa/admin-reset/' + u.id;
     document.getElementById('delete-form').action = '/users/delete/' + u.id;
-    document.getElementById('link-sso-form').action = '/users/link-sso/' + u.id;
+    var linkSso = document.getElementById('link-sso-form');
+    linkSso.action = '/users/link-sso/' + u.id;
+    // (Q252) the stored scope is a list for a restricted account and null for every subnet: the question the confirmation asks says so for the first
+    linkSso.setAttribute('data-confirm', LINK_SSO_QUESTION + (Array.isArray(u.subnet_ids) ? ' ' + linkSso.getAttribute('data-confirm-restricted') : ''));
 
     document.getElementById('edit-role').value = u.role;
     toggleEditSubnets();

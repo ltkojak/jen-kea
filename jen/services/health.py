@@ -731,7 +731,7 @@ def _direct_socket_recovery(ctx) -> Check:
         "Direct-socket changes are proved",
         "kea",
         fix_url="/servers",
-        fix_hint="Check the daemon, then acknowledge on Servers",
+        fix_hint="Check the daemon, then acknowledge on Servers.",
     )
     try:
         incidents = kea_changeset.recovery_incidents(strict=True)
@@ -1871,7 +1871,8 @@ def _reachable_versions(ctx) -> list[tuple[str, tuple]]:
 
 def _kea32_control_transport(ctx) -> Check:
     c = Check("kea32_control_transport", "Control transport ready for 3.2", "readiness", fix_url="/settings/kea")
-    c.fix_hint = "Settings → Kea"
+    # (Q252) a hint is a sentence that says what to do there: since Q251 the row prints it as a line of its own and the link reads "Fix"
+    c.fix_hint = "Set up a direct socket for each server and daemon under Settings → Kea."
     versions = _reachable_versions(ctx)
     if extensions.KEA_CONNECTION_MODE != "direct":
         if any(v >= (3, 0, 0) for _n, v in versions):
@@ -1916,7 +1917,7 @@ def _kea32_control_transport(ctx) -> Check:
 
 def _kea32_helper_version(ctx) -> Check:
     c = Check("kea32_helper_version", "Kea host helper current for 3.2", "readiness", fix_url="/settings/kea")
-    c.fix_hint = "Settings → Kea → SSH"
+    c.fix_hint = "Update the Kea host helper under Settings → Kea → SSH."
     ssh_servers = [s for s in extensions.KEA_SERVERS if s.get("ssh_host")]
     if not ssh_servers:
         c.status, c.detail = "skip", "no Kea host has SSH configured — nothing for the helper to do"
@@ -1957,7 +1958,7 @@ def _kea32_removed_keys(ctx) -> Check:
     from jen.services import kea_readiness
 
     c = Check("kea32_removed_keys", "No removed config keys", "readiness", fix_url="/subnets/classes")
-    c.fix_hint = "Client Classes"
+    c.fix_hint = "Edit and save each class named above under Client Classes; Jen writes the spelling Kea uses now."
     if not ctx.get(
         "unrestricted", True
     ):  # Q204 second pass H1 (RBAC-005): the path of a finding names a subnet by id, a shared network and a class by name, over the whole config
@@ -1976,7 +1977,8 @@ def _kea32_removed_keys(ctx) -> Check:
     c.status = "warn"
     c.detail = f"{_plural(len(found), 'key')} Kea has removed or renamed: " + "; ".join(shown) + more
     if any(f["key"] == "reservation-mode" for f in found):
-        c.fix_url, c.fix_hint = "/servers", "Servers"
+        c.fix_url = "/servers"
+        c.fix_hint = "Edit kea-dhcp4.conf by hand; Servers → Config history shows what Jen has pushed."
     return c
 
 
@@ -1984,7 +1986,7 @@ def _kea32_ha_versions_match(ctx) -> Check:
     from jen.services import kea_readiness
 
     c = Check("kea32_ha_versions_match", "HA peers on the same Kea", "readiness", fix_url="/servers")
-    c.fix_hint = "Servers"
+    c.fix_hint = "Finish the upgrade so both peers run the same Kea version; planned maintenance is on Servers."
     if not _ha_configured():
         c.status, c.detail = "skip", "not an HA deployment"
         return c
@@ -2007,7 +2009,7 @@ def _kea32_ha_versions_match(ctx) -> Check:
 
 def _kea32_d2_socket(ctx) -> Check:
     c = Check("kea32_d2_socket", "kea-dhcp-ddns on its own socket", "readiness", fix_url="/settings/kea")
-    c.fix_hint = "Settings → Kea → D2"
+    c.fix_hint = "Set kea-dhcp-ddns's own control socket under Settings → Kea → D2 Control Socket."
     if ctx.get("dhcp4_config") is None:
         c.status, c.detail = "skip", "config-get unavailable"
         return c

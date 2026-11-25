@@ -686,6 +686,16 @@ def set_user_subnets(user_id):
     return redirect(url_for("users.users"))
 
 
+#: (Q252, BL6) what linking does to the subnets of an account that is restricted today: the identity provider writes them at every sign-in
+#: (`oidc.find_or_create_user`), so the restriction stored now lasts until the first one. The link's confirmation says both sentences before
+#: (templates/users.html holds the same words), the success flash says the second after, and the audit row records the list that was stored.
+LINK_SSO_RESTRICTED_NOW = "This account is restricted to some subnets now."
+LINK_SSO_SUBNETS_AFTER = (
+    "After it signs in through the identity provider it gets the subnets its groups map to under "
+    "Settings → Access & Security → Single Sign-On → Subnet Mapping, and every subnet when no mapping is set."
+)
+
+
 @bp.route("/users/link-sso/<int:user_id>", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -705,7 +715,7 @@ def link_user_to_sso(user_id):
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT username, auth_provider FROM users WHERE id=%s", (user_id,))
+                cur.execute("SELECT username, auth_provider, subnet_access FROM users WHERE id=%s", (user_id,))
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
@@ -713,6 +723,8 @@ def link_user_to_sso(user_id):
                 if row["auth_provider"] == "oidc":
                     flash(f"'{row['username']}' is already linked to SSO.", "error")
                     return redirect(url_for("users.users"))
+                # (Q252, BL6) the restriction the account stores now, read the way the account itself is read: None is every subnet. The link does not change it.
+                was_scope = __user.read_subnet_scope(row["subnet_access"])
                 cur.execute(
                     "UPDATE users SET auth_provider='oidc', external_id=%s, must_change_password=0, "
                     "token_version=token_version+1 WHERE id=%s",
@@ -720,8 +732,14 @@ def link_user_to_sso(user_id):
                 )
             db.commit()
         session.pop("_user_cache", None)
-        flash(f"'{row['username']}' is now linked to SSO — local login is disabled for this account.", "success")
-        __user.audit("LINK_SSO", row["username"], f"external_id={external_id}")
+        said = f"'{row['username']}' is now linked to SSO — local login is disabled for this account."
+        detail = f"external_id={external_id}"
+        if was_scope is not None:
+            said += " " + LINK_SSO_SUBNETS_AFTER
+            was = ", ".join(str(s) for s in was_scope) or "none"
+            detail += f"; was restricted to subnets {was}; the identity provider sets them from the next sign-in"
+        flash(said, "success")
+        __user.audit("LINK_SSO", row["username"], detail)
     except pymysql.err.IntegrityError:
         flash("That external ID is already linked to another account.", "error")
     except Exception as e:

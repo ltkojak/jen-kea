@@ -530,24 +530,23 @@ class TestTheCopyHelpers:
         tgt.close()
 
 
-class _TargetLost(pymysql.connections.Connection):
-    """The target applies the commit, the server then ends this connection, and the client gets the error of a lost one. Nothing stands in for the
-    connection's state: the rollback the handler sends next really fails."""
-
-    def commit(self):
-        super().commit()
-        other = pymysql.connect(host=self.host, port=self.port, user=self.user, password=self.password, autocommit=True)
-        try:
-            with other.cursor() as cur:
-                cur.execute(f"KILL {int(self.thread_id())}")
-        finally:
-            other.close()
-        raise pymysql.err.OperationalError(2013, "Lost connection to MySQL server during query")
+def _target_goes_away(src, dst, *a, **k):
+    """Stands in for `dbexport._verify_copy`: the server ends the connection to the target (`KILL`, from a second one) and the verification fails. Nothing
+    stands in for the connection's state: the rollback the handler sends next really fails. (Q252) This class of tests used to lose the COMMIT to get
+    there; a commit that raises no longer reaches this handler at all (`tests/test_q252_a.py::TestAKeaMigrationWhoseCommitWasLost`)."""
+    other = pymysql.connect(host=dst.host, port=dst.port, user=dst.user, password=dst.password, autocommit=True)
+    try:
+        with other.cursor() as cur:
+            cur.execute(f"KILL {int(dst.thread_id())}")
+    finally:
+        other.close()
+    raise RuntimeError("the verification failed")
 
 
 class TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas:
     """Q244 (BB30, BB8 of the pass on v7.1.0-beta.11). When the rollback is not confirmed, `migrate_kea` deletes what the run copied, by primary key, on a
-    fresh connection. That delete ran under `contextlib.suppress`, and "the target was rolled back" was said whether it had worked or not."""
+    fresh connection. That delete ran under `contextlib.suppress`, and "the target was rolled back" was said whether it had worked or not.
+    (Q252) The failure here is BEFORE the commit, on a connection the server then ended; the two tests lost the commit itself until 7.2.1."""
 
     def _lose(self, monkeypatch, second_connection_fails):
         real = dbexport._direct_conn
@@ -558,12 +557,10 @@ class TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas:
                 opened.append(1)
                 if len(opened) == 2 and second_connection_fails:
                     raise pymysql.err.OperationalError(2003, "Can't connect to MySQL server")
-            conn = real(host, port, user, password, database, ssl_ca)
-            if database == SCRATCH and len(opened) == 1:
-                conn.__class__ = _TargetLost
-            return conn
+            return real(host, port, user, password, database, ssl_ca)
 
         monkeypatch.setattr(dbexport, "_direct_conn", direct)
+        monkeypatch.setattr(dbexport, "_verify_copy", _target_goes_away)
         return opened
 
     def _target_hosts(self):
@@ -582,7 +579,6 @@ class TestAMigrationThatCouldNotBeUndoneDoesNotSayItWas:
         assert dbexport.KEA_MIGRATION_NOT_UNDONE in said, said
         assert "was rolled back" not in said and "nothing that was there was touched" not in said
         assert len(opened) == 2, "the target was asked for a second connection, and refused it"
-        assert len(self._target_hosts()) == 3, "the commit was applied: the rows are there, as the sentence allows"
 
     def test_the_delete_that_ran_is_still_called_one(self, db, scratch, kea_source, monkeypatch):
         initialize_kea_target(db).close()

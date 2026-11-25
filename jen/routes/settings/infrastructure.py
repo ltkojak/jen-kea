@@ -4768,6 +4768,8 @@ def save_infra_ssh():
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
     kea_conf = request.form.get("kea_conf", "").strip()
+    # Q252 (BL4): the form posts the Kea log path only while the page draws the field. A save that did not post it neither judges nor changes what is stored.
+    log_path_posted = "dhcp4_log_path" in request.form
     dhcp4_log_path = request.form.get("dhcp4_log_path", "").strip()
     if host and not _ssh_host_unchanged(host, 1) and not __auth.valid_ssh_target(host):
         flash_field(
@@ -4785,7 +4787,7 @@ def save_infra_ssh():
     if kea_conf and not kea_conf.endswith(".conf"):
         flash_field("kea_conf", f"Invalid Kea config path — the file name must end in .conf: {kea_conf}")
         return redirect(url_for("settings.settings_kea"))
-    if dhcp4_log_path and not __auth.valid_log_path(dhcp4_log_path):
+    if log_path_posted and dhcp4_log_path and not __auth.valid_log_path(dhcp4_log_path):
         # v5.69.0-beta.6 (Q175): the rule the Kea host's helper applies to a log it reads - a path outside /var/log would only be refused there
         flash_field(
             "dhcp4_log_path",
@@ -4801,7 +4803,7 @@ def save_infra_ssh():
     items = [("kea_ssh", "host", host), ("kea_ssh", "user", user)]
     if kea_conf:
         items.append(("kea_ssh", "kea_conf", kea_conf))
-    if dhcp4_log_path:
+    if log_path_posted and dhcp4_log_path:
         items.append(("kea", "dhcp4_log_path", dhcp4_log_path))
 
     def _apply(parser):
@@ -4809,7 +4811,7 @@ def save_infra_ssh():
             if not parser.has_section(section):
                 parser.add_section(section)
             parser.set(section, key, value)
-        if not dhcp4_log_path and parser.has_section("kea"):
+        if log_path_posted and not dhcp4_log_path and parser.has_section("kea"):
             parser.remove_option(
                 "kea", "dhcp4_log_path"
             )  # blank is the default again: the key is removed, not saved empty
@@ -4823,7 +4825,8 @@ def save_infra_ssh():
     mismatch = __host_match.api_ssh_mismatch(extensions.cfg.get("kea", "api_url", fallback=""), host)
     if mismatch:
         flash(mismatch, "warning")
-    __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user} log_path={dhcp4_log_path or 'default'}")
+    log_path_said = (dhcp4_log_path or "default") if log_path_posted else "kept"
+    __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user} log_path={log_path_said}")
     return redirect(url_for("settings.settings_kea"))
 
 

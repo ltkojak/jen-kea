@@ -432,16 +432,6 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "pool_utilisation",
         "the API field's name as it shipped in that release; the entry records what a script against it used, and a record is not re-spelled",
     ),
-    (
-        "docs/upgrading.md",
-        "WOL_ADD_FAVOURITE",
-        "the audit action's name as the wol plugin wrote it until 1.2.0: the page tells a script that reads the Audit log which name its older rows carry",
-    ),
-    (
-        "docs/upgrading.md",
-        "WOL_DELETE_FAVOURITE",
-        "the same, for the second audit action that 1.2.0 renamed",
-    ),
     ("jen/services/investigation_logging.py", '"signalled"', _HELPER),
     ("tests/test_kea_helper_investigation.py", '"signalled"', _HELPER),
     (
@@ -810,8 +800,6 @@ class TestTheAllowlistIsLive:
         contract with its reason, never a sentence someone would rather not re-spell."""
         assert sorted((p, lit) for p, lit, _r in ALLOWLIST) == [
             ("CHANGELOG.md", "pool_utilisation"),
-            ("docs/upgrading.md", "WOL_ADD_FAVOURITE"),
-            ("docs/upgrading.md", "WOL_DELETE_FAVOURITE"),
             ("jen/services/credentials.py", "credentials_materialised"),
             ("jen/services/investigation_logging.py", '"signalled"'),
             ("jen/services/provider_budget.py", "CancelledError"),

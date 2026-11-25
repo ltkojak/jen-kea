@@ -594,9 +594,9 @@ class TestTheProof:
         assert (
             flashes(logged_in_client)
             == [
-                f"Kea accepted the change but wrote nothing to {LOG} on kea-a, so the previous logging was put back. "
-                f"The running kea-dhcp4 added no line of its own to {LOG} in the seconds Jen watched. Check that the file is writable by the account "
-                "kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."  # (Q251) what was seen, then what to check
+                f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
+                f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
+                "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."  # (Q252) what Jen did and read, then what to check
             ]
         )
         assert daemon.file == before_file and running_options(daemon) == [PACKAGED]
@@ -612,7 +612,9 @@ class TestTheProof:
         host.existing[LOG] = ["2026-11-01 00:00:00.000 INFO  [kea-dhcp4.dhcp4/1.1] DHCP4_STARTED an old line"]
         before_file = copy.deepcopy(daemon.file)
         post(logged_in_client, output="both")
-        assert flashes(logged_in_client)[0].startswith("Kea accepted the change but wrote nothing to")
+        assert flashes(logged_in_client)[0].startswith(
+            "Kea accepted the change on kea-a but Jen could not prove that it writes to"
+        )
         assert daemon.file == before_file
 
     def test_the_put_back_removes_an_entry_the_change_created(self, logged_in_client, server, daemon, host):
@@ -620,7 +622,9 @@ class TestTheProof:
         daemon.running = dhcp4()
         host.writes_log = False
         post(logged_in_client, output="file")
-        assert flashes(logged_in_client)[0].startswith("Kea accepted the change but wrote nothing to")
+        assert flashes(logged_in_client)[0].startswith(
+            "Kea accepted the change on kea-a but Jen could not prove that it writes to"
+        )
         assert daemon.file == dhcp4() and "loggers" not in daemon.running or daemon.running.get("loggers") == []
 
     def test_kea_refuses_and_its_own_text_is_shown(self, logged_in_client, server, daemon, host, db):
@@ -641,7 +645,7 @@ class TestTheProof:
         said = flashes(logged_in_client)
         assert len(said) == 1
         assert said[0].startswith(
-            f"Kea accepted the change but wrote nothing to {LOG} on kea-a, and putting the previous logging back failed: "
+            f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, and putting the previous logging back failed: "
         )
         assert "No space left on device" in said[0]
         assert f"kea-a now writes its log to the file {LOG}." in said[0]
@@ -650,9 +654,9 @@ class TestTheProof:
             f"kea-a: the system journal (stdout) -> the file {LOG} (the change was not proven and could not be put back)"
         ]
 
-    # (Q250) above INFO the proof is the file Kea CREATED; `tests/test_q250_a.py::TestAboveInfo` holds the other two worlds (a file that was already there, and the file
-    # the logger already wrote to)
-    CREATED = "Kea created /var/log/kea/kea-dhcp4.log on kea-a. Its severity is WARN, so it has written no line yet; the file fills when Kea next logs at that level."
+    # (Q250) where Kea writes no line for anything it is asked the proof is the file Kea CREATED; `tests/test_q250_a.py::TestAboveInfo` holds the other two worlds (a
+    # file that was already there, and the file the logger already wrote to). Q252: that is FATAL and NONE; at WARN and ERROR Kea is asked for a line (`tests/test_q252_b.py`)
+    CREATED = "Kea created /var/log/kea/kea-dhcp4.log on kea-a. Its severity is FATAL, so it has written no line yet; the file fills when Kea next logs at that level."
 
     def _at(self, daemon, severity):
         daemon.file["loggers"][0]["severity"] = severity
@@ -661,8 +665,9 @@ class TestTheProof:
     def test_a_logger_above_info_is_not_judged_by_a_tail_that_did_not_move(
         self, logged_in_client, server, daemon, host, db
     ):
-        self._at(daemon, "WARN")
-        host.quiet = True  # at WARN a command writes no line: the tail does not move, and that is not evidence. Kea made the file, and that is
+        self._at(
+            daemon, "FATAL"
+        )  # at FATAL nothing makes Kea write a line: the tail does not move, and that is not evidence. Kea made the file, and that is
         post(logged_in_client, output="file")
         with logged_in_client.session_transaction() as sess:
             said = list(sess.get("_flashes", []))
@@ -670,13 +675,12 @@ class TestTheProof:
         assert file_options(daemon) == [FILE_LOGGER]  # the change stands
         assert host.ops().count("apply-config") == 1 and host.ops().count("service") == 1  # nothing was put back
         assert audit_rows(db) == [
-            f"kea-a: the system journal (stdout) -> the file {LOG} (proven by the file Kea created: severity WARN)"
+            f"kea-a: the system journal (stdout) -> the file {LOG} (proven by the file Kea created: severity FATAL)"
         ]
 
-    @pytest.mark.parametrize("severity", ["warn", "Error", "FATAL"])
+    @pytest.mark.parametrize("severity", ["fatal", "None", "FATAL"])
     def test_the_severity_is_compared_without_case(self, server, daemon, host, severity):
         self._at(daemon, severity)
-        host.quiet = True
         out = klt.change_log_output(server, "both", LOG, MB10, 4)
         assert (out["ok"], out["code"], out["level"]) == (True, "created", "success")
         assert (
@@ -796,17 +800,18 @@ class TestOverTheDaemonsOwnApi:
         assert running_options(daemon) == [PACKAGED]
 
     def test_a_logger_above_info_is_not_put_back_over_the_api(self, api, daemon, host):
-        daemon.running["loggers"][0]["severity"] = "ERROR"
+        daemon.running["loggers"][0]["severity"] = (
+            "FATAL"  # (Q252) at ERROR Kea is asked for a line and the outcome is `ok`
+        )
         daemon.file = copy.deepcopy(daemon.running)
         # the file with that severity is one the daemon loaded: written before its last load (as `ProofWorld.loaded_file` sets the host's clock)
         self.clock.seen_sha = self.clock._sha()
         self.clock.mtime = self.clock.loaded_at - 100
-        host.quiet = True
         out = klt.change_log_output(api, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"], out["level"]) == (True, "created", "success"), out
         assert (
-            "Its severity is ERROR," in out["lines"][-1]
-            and out["note"] == " (proven by the file Kea created: severity ERROR)"
+            "Its severity is FATAL," in out["lines"][-1]
+            and out["note"] == " (proven by the file Kea created: severity FATAL)"
         )
         assert daemon.commands.count("config-set") == 1  # nothing was put back
         assert running_options(daemon) == [{k: v for k, v in FILE_LOGGER.items() if k != "flush"}]

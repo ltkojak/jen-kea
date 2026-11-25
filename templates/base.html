@@ -672,6 +672,10 @@ window.jenDialog = (function() {
         .kl-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
         @media screen and (max-width: 600px) { .kl-facts { grid-template-columns: 1fr; gap: 0; } .kl-facts dd { margin-bottom: 6px; } }
         @media screen and (min-width: 769px) { .form-row.kl-fields { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); } }  /* the file, and its two numbers beside it */
+        /* Q252: a radio of the Kea logging card and its label's text are one row at every width - the radio keeps its size at the left and the text wraps beside it (at 390 px the two long labels wrapped under their radio) */
+        [data-kea-logging] .wm-mode-label { align-items: flex-start; }
+        [data-kea-logging] .wm-mode-label > input { flex: 0 0 auto; }
+        [data-kea-logging] .wm-mode-label > strong { flex: 1 1 0; min-width: 0; }
         /* v5.70.0-beta.2 (Q206, AV1/AV2): a flash can be dismissed; a toast is the same alert made small and fixed. Both leave through `.leaving`; with prefers-reduced-motion the script removes them at once. */
         .alert-flash { display: flex; align-items: flex-start; gap: 12px; }
         .alert-flash[hidden] { display: none; }

@@ -121,7 +121,8 @@ def test_a_file_kea_does_not_write_is_put_back_and_the_card_says_so(logged_in_pa
     card = _save(page, card, "both")
     said = page.locator("body").inner_text()
     assert (
-        f"Kea accepted the change but wrote nothing to {LOG} on {name}, so the previous logging was put back." in said
+        f"Kea accepted the change on {name} but Jen could not prove that it writes to {LOG}, so the previous logging was put back."
+        in said
     )
     assert card.locator("[data-kl-writes]").inner_text() == "the system journal (stdout)"
     assert card.locator('input[name="output"]:checked').get_attribute("value") == "journal"

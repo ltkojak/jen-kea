@@ -1953,10 +1953,11 @@ guessing that nothing changed underneath it.
 **The Kea logging card (Q249, INV-017).** One more caller of `apply_change`, for ONE server at a time (`servers=[server]`): `kea_log_trace.change_log_output` rewrites the
 `kea-dhcp4` logger's `output-options` (the pure edit is `kea_config_edit.set_logger_output`) so Kea writes its log to the journal, to a file under `/var/log/kea`, or to both. It is
 a change set like any other - the server's own transport, preflight, Config history, revert - with one addition, because Kea answers "Configuration successful." for a file it may
-not write and then logs nothing: for a file choice the tail of the file is read through the helper's existing `tail-log` before the change and after it, and a tail with no new
-line of the RUNNING kea-dhcp4's own - Kea's line shape carrying the process id the daemon answers on `status-get` (Q251) - puts the previous logger back through a second change
-set. Above INFO, where a command writes no line, there are two more outcomes: a file that was not there and that Kea created is the proof, and a file the logger already named
-stands and says it was not checked (`unchecked`) - on the name while the change takes no output away, and only on lines kea-dhcp4 wrote there when it drops one. A change set that fails part way and
+not write and then logs nothing: for a file choice, after the change is in force, Jen sends the running kea-dhcp4 one request that carries a value made for that change
+(Q252: `jen-log-proof-` and 32 random characters; at INFO and DEBUG the name of a command Kea does not know, at WARN and ERROR an unknown key of a `config-test` Kea refuses
+and does not apply), reads the tail of the file through the helper's existing `tail-log`, and a tail with no whole line of Kea's own pattern carrying that value puts the
+previous logger back through a second change set. At FATAL and NONE Kea writes nothing Jen can ask for, and there are two outcomes that stand: a file that was not there and
+that Kea created is the proof, and a file the logger already named stands and says it was not checked (`unchecked`) while the change takes no output away. Anything else is put back. A change set that fails part way and
 cannot undo itself is answered `change-failed` with what the daemon runs now and an audit row. A change that stands on a file is recorded as a read of that server's log
 (`client_problems.note_read`), so the Problems sweep's Health row follows at once. The
 write, the proof and the put-back are seconds apart and are two change sets, so the server is held across all three (`kea_log_trace.hold_log_output`, a set in the one serving

@@ -227,7 +227,7 @@
         "desc": "Just the five-check readiness group — the same summary Settings → Kea shows as \"Ready for Kea 3.2\" or \"3 actions before upgrading to Kea 3.2\".",
         "params": [],
         "example_path": "/api/v1/health/readiness",
-        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ready": false, "actions": 1, "checked": 3},\n  "checks": [\n    {\n      "id": "kea32_control_transport",\n      "title": "Control transport ready for 3.2",\n      "group": "readiness",\n      "status": "warn",\n      "detail": "Control Agent mode — set up a direct socket before Kea 3.2",\n      "fix_hint": "Settings → Kea",\n      "fix_url": "/settings/kea",\n      "elapsed_ms": 8,\n      "link": "",\n      "link_label": ""\n    }\n  ]\n}'
+        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ready": false, "actions": 1, "checked": 3},\n  "checks": [\n    {\n      "id": "kea32_control_transport",\n      "title": "Control transport ready for 3.2",\n      "group": "readiness",\n      "status": "warn",\n      "detail": "Control Agent mode — set up a direct socket before Kea 3.2",\n      "fix_hint": "Set up a direct socket for each server and daemon under Settings → Kea.",\n      "fix_url": "/settings/kea",\n      "elapsed_ms": 8,\n      "link": "",\n      "link_label": ""\n    }\n  ]\n}'
     }
 ] %}
 

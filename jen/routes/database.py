@@ -143,7 +143,7 @@ def _split_mark(line: str) -> tuple[bool, str]:
     """(is_ok, text without the leading status glyph) — the glyph is a service-layer
     convention; the UI shows plain text (icons are the SVG sprite, Q57)."""
     ok = line.startswith(_OK_MARK)
-    return ok, line.lstrip(_OK_MARK + "\u26a0\u274c\ufe0f ").strip()
+    return ok, line.lstrip(_OK_MARK + "\u26a0" + dbexport.ERR_MARK + "\ufe0f ").strip()
 
 
 # ── Export ────────────────────────────────────────────────────────────────────
@@ -828,25 +828,29 @@ def import_confirm():
                 results = dbexport.import_jen_guarded(file_bytes, tables)
             else:
                 results = dbexport.import_jen(file_bytes, tables, truncate=False)
-            if any(dbexport.COMMIT_NOT_CONFIRMED in r for r in results):
-                # (Q244, BB4) a plugin's commit that was not confirmed comes back as a line, not an exception: the row said DB_IMPORT, the action of an
-                # import that worked, under a page that said its outcome is not known
-                __user.audit(
-                    "DB_IMPORT_FAILED",
-                    "jen",
-                    f"tables={tables or 'all'} mode={mode}; a plugin's commit was not confirmed; the outcome is not known",
-                )
-            else:
-                __user.audit("DB_IMPORT", "jen", f"tables={tables or 'all'} mode={mode}")
+            scope = f"tables={tables or 'all'} mode={mode}"
         elif db == "kea":
             results = dbexport.import_kea(file_bytes, duplicate_mode=dup)
-            __user.audit("DB_IMPORT", "kea", f"duplicate_mode={dup}")
+            scope = f"duplicate_mode={dup}"
         else:
             flash(f"Unknown database type '{db}' in export file.", "error")
             return redirect(url_for("database.database", tab="import"))
+        # (Q252, the independent review of 7.2.0-beta.9) ONE status for what the lines say, for both databases. (Q244, BB4) asked only whether a plugin's
+        # commit was lost, so a plugin whose migration replay failed, or whose rows were rolled back, was audited DB_IMPORT: the action of an import that
+        # worked, over a page with a red line. No line's text goes into the row
+        status = dbexport.import_status(results)
+        if status == "ok":
+            __user.audit("DB_IMPORT", db, scope)
+        elif status == "unknown":
+            __user.audit(
+                "DB_IMPORT_FAILED", db, f"{scope}; a plugin's commit was not confirmed; the outcome is not known"
+            )
+        else:
+            failed = sum(1 for r in results if r.startswith(dbexport.ERR_MARK))
+            __user.audit("DB_IMPORT_FAILED", db, f"{scope}; {_plural(failed, 'part')} failed and the rest was imported")
         for r in results:
             ok, msg = _split_mark(r)
-            flash(msg, "success" if ok else ("error" if r.startswith(_ERR_MARK) else "warning"))
+            flash(msg, "success" if ok else ("error" if r.startswith(dbexport.ERR_MARK) else "warning"))
     except dbexport.GuardedImportError as e:
         __user.audit("DB_IMPORT_FAILED", "jen", f"state={e.state}")
         flash(e.public, "error")
@@ -885,7 +889,6 @@ def import_confirm():
 
 
 # ── Reservation identifiers (v5.67.0-beta.11, Q123) ──────────────────────────
-_ERR_MARK = chr(0x274C)  # the refused/failed glyph dbexport prefixes a refused table's line with
 
 
 # The damage a pre-fix restore/migration already did to Kea's hosts table: GET is the dry run (read-only,
@@ -1061,10 +1064,23 @@ def migrate_run():
                 results = dbexport.migrate_kea(host, port, user, pw, db, kea_grp, _progress, target_ssl_ca=ca)
             q.put(("done", results))
             __user.audit("DB_MIGRATE", which, f"target={host}/{db} tables={tables or 'all'}")
+        # (Q252) Two endings have a sentence of their own, made by Jen and holding nothing of the driver's: a refusal before anything was written, and a
+        # commit that was not confirmed. And every failed run leaves an audit row, as a failed import does: there was none
+        except dbexport.MigrationRefused as e:
+            logger.exception("database migration refused")
+            _failed(str(e), "refused")
+        except dbexport.ImportOutcomeUnknown as e:
+            logger.exception("database migration: the commit was not confirmed")
+            _failed(e.public, "the commit was not confirmed; the outcome is not known")
         except Exception:
             # the stream is read by the browser: a driver message can name the target host's account and schema (v5.69.0-beta.2, Q171)
             logger.exception("database migration failed")
-            q.put(("error", "failed: see the Jen log"))
+            _failed("failed: see the Jen log", "failed")
+
+    def _failed(shown, how):
+        """The audit row of a run that did not complete, then the stream's last event. Never the exception's text in the row."""
+        __user.audit("DB_MIGRATE_FAILED", which, f"target={host}/{db} tables={tables or 'all'}; {how}")
+        q.put(("error", shown))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

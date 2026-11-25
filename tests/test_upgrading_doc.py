@@ -35,6 +35,10 @@ v7.2.0-beta.1 (Q243) - the first release after the 7.1.0 promotion starts a fres
 docs/release-history/upgrading-7.0.0-to-7.1.0.md, and the floor moves to 7.2.0-beta.1 in the same commit (7.1.0 itself is the baseline;
 its eleven beta headings are folded onto the 7.1.0 entry's Beta history line and are no longer asked of this page).
 
+v7.2.1 (Q252) - the first release after the 7.2.0 promotion starts a fresh "Upgrading from 7.2.0" page, the old one moved to
+docs/release-history/upgrading-7.1.0-to-7.2.0.md, and the floor moves to 7.2.1 in the same commit (7.2.0 itself is the baseline;
+its nine beta headings are folded onto the 7.2.0 entry's Beta history line and are no longer asked of this page).
+
 Also covers docs/runbooks.md (Q105 b): it exists and is linked from the two
 places an operator would actually go looking for it.
 """
@@ -53,7 +57,7 @@ _CHANGELOG = _ROOT / "CHANGELOG.md"
 _ADMIN_GUIDE = _ROOT / "docs" / "admin-guide.md"
 _SECURITY = _ROOT / "SECURITY.md"
 
-_FLOOR = "7.2.0-beta.1"  # the oldest heading upgrading.md must cover — 7.1.0 itself is the baseline
+_FLOOR = "7.2.1"  # the oldest heading upgrading.md must cover — 7.2.0 itself is the baseline
 
 
 def _beta_history_versions() -> list[str]:

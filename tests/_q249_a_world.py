@@ -5,19 +5,26 @@ Q249 - one Kea host for the tests of the Kea logging card (`tests/test_q249_a.py
 
 The daemon is the stateful fake Kea (`tests/e2e/_fake_kea_server.py::StatefulKeaServer`), a real HTTP server reached by the REAL `kea_command` - nothing of Jen's is faked on
 that side. The host is `KeaHost.helper_call`, which stands in for `kea_host.helper_call` (the one function that runs a remote command): it holds the daemon's config FILE
-(`daemon.file`), restarts the daemon from it, and answers `tail-log` the way the measured kea-dhcp4 3.0.5 behaves:
+(`daemon.file`), restarts the daemon from it, and answers `tail-log` from the log the daemon WROTE. Since Q252 the daemon writes when a command ARRIVES
+(`StatefulKeaServer.on_command`), to the files its running logger names at that moment, what the measured kea-dhcp4 3.0.5 and 3.2.1 write:
 
-    writes_log=True    the daemon writes a line to every file its RUNNING logger names for every command it receives (COMMAND_RECEIVED), creating the file
-    writes_log=False   Kea accepted the logger and writes nothing (a file the daemon may not write: `kea_log_probe.out`, row 7)
-    quiet=True         the daemon logs above INFO: a file it may write is CREATED and stays empty, because a command writes no line (`kea_warn_probe.out`; Q250)
+    severity INFO, DEBUG    one line per command: `INFO  [kea-dhcp4.commands/<pid>.<tid>] COMMAND_RECEIVED Received command '<name>'`
+    a refused config-test   (a section with a key Kea does not know) two WARN lines at WARN or lower, and at ERROR or lower
+                            `ERROR [kea-dhcp4.dhcp4/<pid>.<tid>] DHCP4_PARSER_FAIL failed to create or run parser for configuration element <key>: ...`
+    severity FATAL, NONE    nothing, whatever it is asked
 
-Nothing here knows what the product decides.
+    writes_log=False   Kea accepted the logger and may write NO file (`kea_log_probe.out`, row 7); `unwritable` names single files it may not write
+    existing           path -> lines a file already holds: the file is there, whoever may write it
+    journal            what the daemon wrote to stdout (an output with a `pattern` of its own is written without the bracket)
+
+A file Kea may write is there (empty) as soon as its running logger names it: Kea creates it. Nothing here knows what the product decides.
 """
 
 import copy
 import hashlib
 import json
 
+PROOF_PREFIX = "jen-log-proof-"  # as the fake daemon has it (`tests/e2e/_fake_kea_server.py`): the name of the one thing Kea is asked that it does not know
 FILE_LOGGER = {"output": "/var/log/kea/kea-dhcp4.log", "flush": True, "maxsize": 10485760, "maxver": 4}
 PACKAGED = {"output": "stdout", "pattern": "%-5p %m\n"}
 
@@ -54,9 +61,12 @@ class KeaHost:
     def __init__(self, daemon):
         self.daemon = daemon
         self.writes_log = True
-        self.quiet = False
-        self.existing = {}  # path -> lines a file already holds (and Kea is not adding to)
-        self.line_pid = None  # (Q251) the process id in the lines written; None is the daemon's own (`status-get`), a number is some OTHER kea-dhcp4
+        self.unwritable = set()  # (Q252) files Kea may not write while it writes the others
+        self.existing = {}  # path -> lines a file already holds
+        self.written = {}  # (Q252) path -> the lines the daemon wrote, in order
+        self.journal = []  # (Q252) the lines the daemon wrote to stdout, in order
+        self.clock = 0
+        daemon.on_command = self.kea_received
         self.calls = []
         self.missing = False  # the helper is not installed
         self.test_refusal = None  # Kea's own text from `kea-dhcp4 -t`
@@ -68,26 +78,88 @@ class KeaHost:
     def ops(self):
         return [op for op, _payload in self.calls]
 
-    def _file_outputs(self):
-        out = []
+    def _options(self):
+        """The outputs of the running `kea-dhcp4` logger; a daemon with no such logger writes to stdout."""
         for entry in self.daemon.running.get("loggers") or []:
             if isinstance(entry, dict) and entry.get("name") == "kea-dhcp4":
-                for option in entry.get("output-options") or []:
-                    if isinstance(option, dict) and str(option.get("output", "")).startswith("/"):
-                        out.append(option["output"])
-        return out
+                return [o for o in entry.get("output-options") or [] if isinstance(o, dict)] or [{"output": "stdout"}]
+        return [{"output": "stdout"}]
+
+    def _file_outputs(self):
+        return [o["output"] for o in self._options() if str(o.get("output", "")).startswith("/")]
+
+    def may_write(self, path):
+        return self.writes_log and path not in self.unwritable
+
+    def severity(self):
+        entry = next(
+            (
+                e
+                for e in self.daemon.running.get("loggers") or []
+                if isinstance(e, dict) and e.get("name") == "kea-dhcp4"
+            ),
+            None,
+        )
+        return str((entry or {}).get("severity") or "INFO").strip().upper()
+
+    def kea_line(self, level, part, message):
+        self.clock += 1
+        stamp = f"2026-11-25 14:{self.clock // 60 % 60:02d}:{self.clock % 60:02d}.{self.clock % 1000:03d}"
+        return f"{stamp} {level:<5} [kea-dhcp4.{part}/{self.daemon.pid}.140262] {message}"
+
+    def kea_received(self, fake, command, arguments):
+        """What kea-dhcp4 writes when a command arrives, with the logger it runs at that moment (measured: Q252, `pass/q252/b/out/measure.*.json`)."""
+        severity = self.severity()
+        section = arguments.get(fake.key) if isinstance(arguments, dict) else None
+        refused = (
+            [k for k in section if isinstance(k, str) and k.startswith(PROOF_PREFIX)]
+            if command == "config-test" and isinstance(section, dict)
+            else []
+        )
+        wrote = []
+        if severity in ("DEBUG", "INFO"):
+            wrote.append(self.kea_line("INFO", "commands", f"COMMAND_RECEIVED Received command '{command}'"))
+        if refused and severity in ("DEBUG", "INFO", "WARN"):
+            wrote.append(
+                self.kea_line(
+                    "WARN",
+                    "dhcpsrv",
+                    "DHCPSRV_MT_DISABLED_QUEUE_CONTROL disabling dhcp queue control when multi-threading is enabled.",
+                )
+            )
+            wrote.append(
+                self.kea_line(
+                    "WARN",
+                    "dhcp4",
+                    "DHCP4_RESERVATIONS_LOOKUP_FIRST_ENABLED Multi-threading is enabled and host reservations lookup is always performed first.",
+                )
+            )
+        if refused and severity in ("DEBUG", "INFO", "WARN", "ERROR"):
+            key = refused[0]
+            wrote.append(
+                self.kea_line(
+                    "ERROR",
+                    "dhcp4",
+                    f"DHCP4_PARSER_FAIL failed to create or run parser for configuration element {key}: unsupported global configuration parameter: {key} (<string>:1:102)",
+                )
+            )
+        for option in self._options():
+            output = str(option.get("output", ""))
+            lines = wrote
+            if option.get("pattern"):  # an output with a pattern of its own: no bracket (here the package's `%-5p %m`)
+                lines = [f"{line.split(' ', 3)[2]:<5} {line.split('] ', 1)[1]}" for line in wrote]
+            if output == "stdout":
+                self.journal.extend(lines)
+            elif output.startswith("/") and self.may_write(output):
+                self.written.setdefault(output, []).extend(lines)
 
     def log_lines(self, path):
-        if self.writes_log and self.quiet and path in self._file_outputs():
-            return list(self.existing.get(path) or [])  # there (Kea made it, or it was there), and no line was added
-        if self.writes_log and path in self._file_outputs():
-            received = len(self.daemon.commands)
-            pid = self.daemon.pid if self.line_pid is None else self.line_pid
-            return [
-                f"2026-11-23 14:15:{n % 60:02d}.000 INFO  [kea-dhcp4.commands/{pid}.1] COMMAND_RECEIVED Received command 'status-get' ({n})"
-                for n in range(received)
-            ]
-        return self.existing.get(path)
+        """The file as the helper's read finds it: None when it is not there."""
+        if path in self.existing or path in self.written:
+            return list(self.existing.get(path) or []) + list(self.written.get(path) or [])
+        if path in self._file_outputs() and self.may_write(path):
+            return []  # Kea made it when its logger named it, and has written nothing yet
+        return None
 
     def helper_call(self, server, op, payload=None, timeout=60):
         from jen.services import kea_host
