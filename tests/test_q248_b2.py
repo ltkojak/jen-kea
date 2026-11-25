@@ -32,6 +32,10 @@ HIDDEN = {"name": "ZZ-HIDDEN-LAB", "cidr": "10.77.0.0/24"}
 HIDDEN_MARKS = ("ZZ-HIDDEN-LAB", "10.77.0", "subnet=2", "subnet_id=2")
 
 
+def _tracking_codes(text):
+    return [t for t in changelog._TRACKING_TOKEN_RE.findall(text) if changelog._is_tracking_code(t)]
+
+
 def _src(name):
     return (TEMPLATES / name).read_text(encoding="utf-8").replace("\r\n", "\n")
 
@@ -758,7 +762,9 @@ class TestTrackingCodesAreLeftOut:
             r"\((?:[A-Z]{1,6}-?\d{1,4})(?:(?:\s*[,;/]\s*(?:and\s+)?|\s+(?:and|to)\s+)[A-Z]{1,6}-?\d{1,4})*\)"
         )
         for e in read:
-            assert not only_codes.search(e["html"]), (e["version"], only_codes.search(e["html"]).group(0))
+            # a group is a code group by the product's own definition: "(D2)", the DDNS daemon, is a word and stays
+            for found in only_codes.finditer(e["html"]):
+                assert not _tracking_codes(found.group(0)), (e["version"], found.group(0))
             assert not re.search(r"<(?:p|h4)>(?:<strong>|<em>)*Registered\b", e["html"]), e["version"]
             assert e["lead"].startswith("<p>") and e["lead"].endswith("</p>") and e["lead"].count("<p>") == 1
             assert e["lead"] + e["rest"] == e["html"]
@@ -810,7 +816,8 @@ class TestAboutShowsTheNewestLead:
             "Registered, not in this beta",
         ):
             assert gone not in card, gone
-        assert not re.search(r"\((?:[A-Z]{1,6}-?\d{1,4})(?:, [A-Z]{1,6}-?\d{1,4})*\)", card)
+        for found in re.finditer(r"\((?:[A-Z]{1,6}-?\d{1,4})(?:, [A-Z]{1,6}-?\d{1,4})*\)", card):
+            assert not _tracking_codes(found.group(0)), found.group(0)
 
     def test_a_file_with_one_short_entry_draws_no_more(self, logged_in_client, mock_kea, monkeypatch, tmp_path):
         path = tmp_path / "CHANGELOG.md"

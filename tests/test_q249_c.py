@@ -166,15 +166,17 @@ class TestAGroupWithACodeGoesWhole:
         plain = changelog.parse_changelog(limit=6)
         read = changelog.whats_new(limit=6)
         assert len(read) == 6 and [e["version"] for e in read] == [e["version"] for e in plain]
-        dropped = 0
         for shown, whole in zip(read, plain, strict=True):
             for group in re.findall(r"\(([^()]*)\)", shown["html"]):
                 assert not _codes(group), (shown["version"], group)
-            dropped += sum(1 for group in re.findall(r"\(([^()]*)\)", whole["html"]) if _codes(group))
             # nothing is left where a group was: no empty pair and no space before a period that the file itself does not have
             assert shown["html"].count("()") <= whole["html"].count("()"), shown["version"]
             assert shown["html"].count(" .") <= whole["html"].count(" ."), shown["version"]
-        assert dropped > 20, dropped
+        # the canary is the whole file and its stable entries: a promotion folds the beta entries, which carry most of the groups, away
+        in_file = sum(
+            1 for e in changelog.parse_changelog() for group in re.findall(r"\(([^()]*)\)", e["html"]) if _codes(group)
+        )
+        assert in_file > 10, in_file
 
     def test_the_entry_the_pass_read_prints_no_code_at_all(self):
         """7.2.0-beta.6 said About no longer prints the codes, and seventeen stayed behind "More" in three groups that also held the word "additions"."""
