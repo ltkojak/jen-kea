@@ -1043,6 +1043,32 @@ def logger_severity_above_info(cfg) -> str:
     return text if text in LOGGER_SEVERITIES_ABOVE_INFO else ""
 
 
+LOGGER_PROOF_ASKS = ("command", "config-test", "none")
+#: the logger each line Jen can ask for is written by (measured on kea-dhcp4 3.0.5 and 3.2.1, Q252)
+LOGGER_PROOF_PARTS = {"command": "kea-dhcp4.commands", "config-test": "kea-dhcp4.dhcp4"}
+
+
+def logger_proof_ask(cfg) -> str:
+    """Which line Jen can ask the running kea-dhcp4 to write through its `kea-dhcp4` logger (Q253), one of `LOGGER_PROOF_ASKS`:
+
+    - `"command"`: an unknown command, which Kea's `kea-dhcp4.commands` logger records at INFO. Only when the `kea-dhcp4` logger's severity is INFO or DEBUG (or it
+      has none) AND the configuration has no logger entry named `kea-dhcp4.commands`;
+    - `"config-test"`: a configuration test Kea refuses, which its `kea-dhcp4.dhcp4` logger records at ERROR. Only when the severity is INFO, DEBUG, WARN or ERROR
+      AND the configuration has no logger entry named `kea-dhcp4.dhcp4`;
+    - `"none"`: neither (severity FATAL or NONE, or both of those loggers have entries of their own).
+
+    A logger entry of its own can give that logger another severity or other outputs, so its line may never reach the file the `kea-dhcp4` logger writes (measured:
+    a working change was put back). Jen does not model what such an entry does: an entry of that name is enough to choose the other line."""
+    _section, loggers = _dhcp4_loggers(cfg if isinstance(cfg, dict) else {}, create=False)
+    named = {x.get("name") for x in loggers or [] if isinstance(x, dict)}
+    severity = logger_severity_above_info(cfg)
+    if severity == "" and LOGGER_PROOF_PARTS["command"] not in named:
+        return "command"
+    if severity in ("", "WARN", "ERROR") and LOGGER_PROOF_PARTS["config-test"] not in named:
+        return "config-test"
+    return "none"
+
+
 def logger_output_snapshot(cfg) -> dict:
     """What `restore_logger_output` needs to put the `kea-dhcp4` logger's output back exactly: whether the config had a `loggers` list at all, whether the entry was there,
     and its `output-options` (None when it had none)."""

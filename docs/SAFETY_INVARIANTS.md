@@ -179,16 +179,17 @@ difference". For every other write a daemon that cannot be read is still not a d
 **Rule.** Kea accepts a logger whose file it may not write ("Configuration successful.") and then logs nothing anywhere (measured on kea-dhcp4 3.0.5), so an accepted change proves
 nothing. When Settings → Kea → Kea logging moves a server's `kea-dhcp4` logger to a file (alone, or beside the journal), the change stands only on a line that carries a one-time value
 Jen sent to the running daemon AFTER the change (`jen-log-proof-` and 32 hexadecimal digits, one value per change): the daemon is asked to write it and the file is read through the
-Kea host's helper, up to five times one second apart, and the line must be WHOLLY a line of Kea's default pattern whose message is `COMMAND_RECEIVED Received command '<value>'` (at
+Kea host's helper (its last 1000 lines each time, the most the helper returns), up to five times one second apart, and the line must be WHOLLY a line of Kea's default pattern whose message is `COMMAND_RECEIVED Received command '<value>'` (at
 INFO and DEBUG, where Jen sends a command of that name, which Kea does not know) or starts with `DHCP4_PARSER_FAIL ` and holds the value (at WARN and ERROR, where a command writes no
 line and Jen sends a `config-test` with one setting of that name, which Kea refuses and does not apply: measured on kea-dhcp4 3.0.5 and 3.2.1, the daemon's configuration digest and
-its whole `config-get` answer are the same before and after). A line that holds the value outside that shape, and a line of that shape without the value - a line Kea wrote before the
-change, a line of a second kea-dhcp4, a line a forwarder copied from the journal, a line that imitates Kea with the right process id - prove nothing. At FATAL and NONE no command makes
+its whole `config-get` answer are the same before and after). Which of the two lines is asked for is read from the configuration (`kea_config_edit.logger_proof_ask`): the command's when the severity is INFO or DEBUG and no logger entry is named `kea-dhcp4.commands`, else the configuration test's when the severity is ERROR or lower and no logger entry is named `kea-dhcp4.dhcp4` - a logger with an entry of its own may send its line elsewhere, and Jen does not model what the entry does; with neither, no line is asked for and the change is judged as at FATAL and NONE. A line that holds the value outside that shape, and a line of that shape without the value - a line Kea wrote before the
+change, a line of a second kea-dhcp4, a line that imitates Kea with the right process id - prove nothing. At FATAL and NONE no command makes
 Kea write a line, so there a change stands only on a file that was not there before the change and is there after it (Kea made it, so Kea may write it), or on a logger that already
 named the file when the change takes no output away (Kea writes everywhere it wrote before; the operator is told it was not checked). Anything else - at any severity, and at FATAL and
 NONE also a file Kea really writes when the change would leave it as the only output - puts the previous `output-options` back through the
 same change path, and when that fails too the operator is told so and what the daemon runs now, or that the daemon did not answer. A change set that fails part way and cannot undo itself is told the same way. The sentences say what Jen did and read, never what Kea did.
 Its assumption: the proof needs Kea's default line pattern, which the file output this card writes always has (it writes no `pattern`), and it does not defend against a process on the Kea host that can read the commands Jen sends to Kea.
+That assumption reaches further than the control channel (measured on kea-dhcp4 3.0.5 and 3.2.1, Q253): when the change keeps the journal beside the file, the line Jen asks for is written to the journal too, so a program that reads the journal, rewrites that line into Kea's default pattern and appends it to a file Kea may not write proves the change - Kea then still logs to the journal, never nowhere; and a reader of a control channel that is not encrypted, which can also write the file, does the same for the file alone.
 From the change's first read to its last write the server is held
 (`hold_log_output`): a second change of the same server, and a turn-on of investigation logging for it, are refused while it is held and never wait, so nothing lands between a write
 and its proof or put-back; turning logging off, the sweep and the Kea host's own restore are never held back. A change that was put back, one that could not be put back and one that failed part way and could not be undone are each in the audit log (`KEA_LOG_OUTPUT`). A file choice
@@ -197,12 +198,15 @@ server - a marker in the running config or in the file (readable or damaged), an
 entry removes the whole entry, and the new output with it. (A Kea host that cannot be asked is not a refusal of this check; measured on kea-dhcp4 3.0.5, with SSH away the change set itself
 refuses a Live API server's change, because it cannot read the file it must prove the write against.) Only the `kea-dhcp4` logger's `output-options` are ever written; its severity, debuglevel and user-context are not touched. One exception is stated,
 not hidden: a configuration with NO `kea-dhcp4` logger entry gets one, written as `severity: INFO, debuglevel: 0`, which is Kea's own default.
-**Established.** Q249; the hold, the proof by Kea's own line and by the file Kea created, Q250; the audit row of a change that could not undo itself, Q251; the proof by a line that carries a value Jen sent after the change (in place of Q251's process id and of the lines a named file held), Q252.
+**Established.** Q249; the hold, the proof by Kea's own line and by the file Kea created, Q250; the audit row of a change that could not undo itself, Q251; the proof by a line that carries a value Jen sent after the change (in place of Q251's process id and of the lines a named file held), Q252; the line chosen from the configuration, the helper's whole read, the record of a read only where the read found the file, and the journal case stated, Q253.
 **Enforced at.** `jen/services/kea_log_trace.py` (`change_log_output`, the one function that applies and proves, with `_ask_for_a_line` and `_kea_wrote`; `hold_log_output`; `investigation_blocks_log_output`) and
 `investigation_logging.turn_on` (wrapped by `_holds_the_logger`), over the pure edit
 `kea_config_edit.set_logger_output` / `restore_logger_output` and the one predicate for a session on the host, `investigation_logging.host_session_refusal`.
 **Tests.**
 - `tests/test_q252_b.py::TestTheLineThatProves`
+- `tests/test_q253.py::TestALoggerWithAnEntryOfItsOwn`
+- `tests/test_q253.py::TestABusyServer`
+- `tests/test_q253.py::TestWhatTheRegistryAssumes`
 - `tests/test_q252_b.py::TestWhatIsAsked`
 - `tests/test_q252_b.py::TestAskedAtInfoAndDebug`
 - `tests/test_q252_b.py::TestAskedAtWarnAndError`

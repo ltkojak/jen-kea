@@ -595,8 +595,8 @@ class TestTheProof:
             flashes(logged_in_client)
             == [
                 f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
-                f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
-                "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."  # (Q252) what Jen did and read, then what to check
+                f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find that line in the last 1000 lines of the file, on any of 5 reads. Check that the file is writable by the "
+                "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile. A server that logs more lines than that between the ask and the read gives the same result."  # (Q252) what Jen did and read, then what to check
             ]
         )
         assert daemon.file == before_file and running_options(daemon) == [PACKAGED]

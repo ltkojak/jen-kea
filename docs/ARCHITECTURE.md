@@ -1955,7 +1955,9 @@ guessing that nothing changed underneath it.
 a change set like any other - the server's own transport, preflight, Config history, revert - with one addition, because Kea answers "Configuration successful." for a file it may
 not write and then logs nothing: for a file choice, after the change is in force, Jen sends the running kea-dhcp4 one request that carries a value made for that change
 (Q252: `jen-log-proof-` and 32 random characters; at INFO and DEBUG the name of a command Kea does not know, at WARN and ERROR an unknown key of a `config-test` Kea refuses
-and does not apply), reads the tail of the file through the helper's existing `tail-log`, and a tail with no whole line of Kea's own pattern carrying that value puts the
+and does not apply; which of the two is read from the configuration since Q253, `kea_config_edit.logger_proof_ask`: a logger with an entry of its own may send its line elsewhere, so the line of the
+logger that has none is asked for, and with neither no line is asked for and the change is judged as at FATAL and NONE), reads the last 1000 lines of the file through the helper's existing `tail-log`
+(its cap), and a tail with no whole line of Kea's own pattern carrying that value puts the
 previous logger back through a second change set. At FATAL and NONE Kea writes nothing Jen can ask for, and there are two outcomes that stand: a file that was not there and
 that Kea created is the proof, and a file the logger already named stands and says it was not checked (`unchecked`) while the change takes no output away. Anything else is put back. A change set that fails part way and
 cannot undo itself is answered `change-failed` with what the daemon runs now and an audit row. A change that stands on a file is recorded as a read of that server's log

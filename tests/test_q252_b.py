@@ -147,8 +147,8 @@ def unproven(path=LOG):
 
 def not_found(path=LOG):
     return (
-        f"Jen asked kea-dhcp4 on kea-a to write a line to {path} and did not find it there in the seconds it watched. Check that the file is writable by the "
-        "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."
+        f"Jen asked kea-dhcp4 on kea-a to write a line to {path} and did not find that line in the last 1000 lines of the file, on any of 5 reads. Check that the file is writable by the "
+        "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile. A server that logs more lines than that between the ask and the read gives the same result."
     )
 
 
@@ -221,8 +221,9 @@ class TestTheLineThatProves:
         assert klt._KEA_LINE.pattern.startswith("^") and klt._KEA_LINE.pattern.endswith("$")
         assert klt._KEA_LINE.fullmatch(received()).group(1) == f"COMMAND_RECEIVED Received command '{V}'"
 
-    def test_the_tail_is_sixty_lines(self):
-        assert klt.LOG_OUTPUT_TAIL == 60
+    def test_the_tail_is_the_most_the_helper_returns(self):
+        """(Q253) 60 until 7.2.1: a server writing about 150 lines a second pushed the asked line out of what Jen read, every time."""
+        assert klt.LOG_OUTPUT_TAIL == 1000
 
     def test_the_process_id_proof_is_gone__whole_tree(self):
         """Q251's proof asked whose process wrote a line. Its four names are in no file of the product."""
@@ -244,18 +245,18 @@ class TestWhatIsAsked:
         assert a != b and a.startswith(klt.PROOF_PREFIX) and klt.PROOF_PREFIX == "jen-log-proof-"
         assert len(a) == len(klt.PROOF_PREFIX) + 32 and int(a[len(klt.PROOF_PREFIX) :], 16) >= 0
 
-    @pytest.mark.parametrize("severity", ["", "WARN", "ERROR"])
-    def test_what_goes_to_the_daemon(self, server, daemon, severity):
-        assert klt._ask_for_a_line(server, V, severity) is None
-        if severity:
+    @pytest.mark.parametrize("ask", ["command", "config-test"])
+    def test_what_goes_to_the_daemon(self, server, daemon, ask):
+        assert klt._ask_for_a_line(server, V, ask) is True  # (Q253) the daemon answered
+        if ask == "config-test":
             assert daemon.received == [("config-test", {"Dhcp4": {V: 1}})]
         else:
             assert daemon.received == [(V, {})]
 
-    @pytest.mark.parametrize("severity", ["", "WARN"])
-    def test_a_daemon_that_does_not_answer_raises_nothing(self, server, daemon, severity):
+    @pytest.mark.parametrize("ask", ["command", "config-test"])
+    def test_a_daemon_that_does_not_answer_raises_nothing(self, server, daemon, ask):
         daemon.stopped = True
-        assert klt._ask_for_a_line(server, V, severity) is None
+        assert klt._ask_for_a_line(server, V, ask) is False  # (Q253) and says so
 
     def test_the_fake_answers_as_the_real_daemon_was_measured(self, server, daemon):
         """`pass/q252/b/out/measure.*.json`: `result 2` for the command, `result 1` for the configuration test, and the running configuration is what it was."""
@@ -548,8 +549,8 @@ class TestTheSentences:
             (
                 "error",
                 f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
-                f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
-                "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile.",
+                f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find that line in the last 1000 lines of the file, on any of 5 reads. Check that the file is writable by the "
+                "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile. A server that logs more lines than that between the ask and the read gives the same result.",
             )
         ]
         assert audit_rows(db) == [

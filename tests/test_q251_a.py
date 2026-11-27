@@ -200,8 +200,8 @@ class TestTheNameAloneIsNotEvidence:
                 (
                     "error",
                     f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
-                    f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
-                    "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile.",  # (Q252) at WARN Kea is ASKED for a line: the cause is what Jen did and read
+                    f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find that line in the last 1000 lines of the file, on any of 5 reads. Check that the file is writable by the "
+                    "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile. A server that logs more lines than that between the ask and the read gives the same result.",  # (Q252) at WARN Kea is ASKED for a line: the cause is what Jen did and read
                 )
             ]
         )
@@ -281,8 +281,8 @@ class TestThePutBackSaysWhatJenSaw:
         assert (out["ok"], out["code"]) == (False, "put-back"), out
         assert out["lines"] == [
             f"Kea accepted the change on kea-a but Jen could not prove that it writes to {LOG}, so the previous logging was put back. "
-            f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there in the seconds it watched. Check that the file is writable by the "
-            "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile."
+            f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find that line in the last 1000 lines of the file, on any of 5 reads. Check that the file is writable by the "
+            "account kea-dhcp4 runs as, and that nothing moved or replaced it meanwhile. A server that logs more lines than that between the ask and the read gives the same result."
         ]
 
     def test_where_kea_cannot_be_asked_a_file_it_could_not_create_says_so(self, server, daemon, host):
@@ -300,7 +300,7 @@ class TestThePutBackSaysWhatJenSaw:
         host.writes_log = False
         out = klt.change_log_output(server, "file", LOG, MB10, 4)
         assert (out["ok"], out["code"]) == (False, "put-back"), out
-        assert f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find it there" in out["lines"][0]
+        assert f"Jen asked kea-dhcp4 on kea-a to write a line to {LOG} and did not find that line" in out["lines"][0]
 
 
 class TestAChangeThatCouldNotUndoItself:

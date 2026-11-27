@@ -107,51 +107,71 @@ class KeaHost:
         stamp = f"2026-11-25 14:{self.clock // 60 % 60:02d}:{self.clock % 60:02d}.{self.clock % 1000:03d}"
         return f"{stamp} {level:<5} [kea-dhcp4.{part}/{self.daemon.pid}.140262] {message}"
 
+    _RANK = {"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3, "FATAL": 4, "NONE": 5}
+
+    def _entry_of(self, name):
+        return next(
+            (e for e in self.daemon.running.get("loggers") or [] if isinstance(e, dict) and e.get("name") == name),
+            None,
+        )
+
+    def _routes(self, part):
+        """(severity, outputs) the logger `kea-dhcp4.<part>` writes with (Q253). With no entry of its own it is the `kea-dhcp4` logger's. An entry of its own gives
+        it its own severity, and its own outputs when it names any (measured by Opus's pass on v7.2.1, rows BM3: `kea-dhcp4.commands` at WARN under INFO, and with a
+        stdout output of its own, keeps COMMAND_RECEIVED out of the main logger's file; `kea-dhcp4.dhcp4` at FATAL, and with an output of its own, keeps
+        DHCP4_PARSER_FAIL out of it). Where an entry with NO outputs writes was not measured; here it writes to the main logger's, and nothing the product decides
+        reads that."""
+        own = self._entry_of(f"kea-dhcp4.{part}")
+        if own is None:
+            return self.severity(), self._options()
+        severity = str(own.get("severity") or "INFO").strip().upper()
+        outputs = [o for o in own.get("output-options") or [] if isinstance(o, dict)]
+        return severity, outputs or self._options()
+
     def kea_received(self, fake, command, arguments):
-        """What kea-dhcp4 writes when a command arrives, with the logger it runs at that moment (measured: Q252, `pass/q252/b/out/measure.*.json`)."""
-        severity = self.severity()
+        """What kea-dhcp4 writes when a command arrives, with the loggers it runs at that moment (measured: Q252, `pass/q252/b/out/measure.*.json`)."""
         section = arguments.get(fake.key) if isinstance(arguments, dict) else None
         refused = (
             [k for k in section if isinstance(k, str) and k.startswith(PROOF_PREFIX)]
             if command == "config-test" and isinstance(section, dict)
             else []
         )
-        wrote = []
-        if severity in ("DEBUG", "INFO"):
-            wrote.append(self.kea_line("INFO", "commands", f"COMMAND_RECEIVED Received command '{command}'"))
-        if refused and severity in ("DEBUG", "INFO", "WARN"):
-            wrote.append(
-                self.kea_line(
+        candidates = [("INFO", "commands", f"COMMAND_RECEIVED Received command '{command}'")]
+        if refused:
+            key = refused[0]
+            candidates += [
+                (
                     "WARN",
                     "dhcpsrv",
                     "DHCPSRV_MT_DISABLED_QUEUE_CONTROL disabling dhcp queue control when multi-threading is enabled.",
-                )
-            )
-            wrote.append(
-                self.kea_line(
+                ),
+                (
                     "WARN",
                     "dhcp4",
                     "DHCP4_RESERVATIONS_LOOKUP_FIRST_ENABLED Multi-threading is enabled and host reservations lookup is always performed first.",
-                )
-            )
-        if refused and severity in ("DEBUG", "INFO", "WARN", "ERROR"):
-            key = refused[0]
-            wrote.append(
-                self.kea_line(
+                ),
+                (
                     "ERROR",
                     "dhcp4",
                     f"DHCP4_PARSER_FAIL failed to create or run parser for configuration element {key}: unsupported global configuration parameter: {key} (<string>:1:102)",
-                )
-            )
-        for option in self._options():
-            output = str(option.get("output", ""))
-            lines = wrote
-            if option.get("pattern"):  # an output with a pattern of its own: no bracket (here the package's `%-5p %m`)
-                lines = [f"{line.split(' ', 3)[2]:<5} {line.split('] ', 1)[1]}" for line in wrote]
-            if output == "stdout":
-                self.journal.extend(lines)
-            elif output.startswith("/") and self.may_write(output):
-                self.written.setdefault(output, []).extend(lines)
+                ),
+            ]
+        for level, part, message in candidates:
+            severity, outputs = self._routes(part)
+            if self._RANK[level] < self._RANK.get(severity, 1):
+                continue
+            line = self.kea_line(level, part, message)
+            for option in outputs:
+                output = str(option.get("output", ""))
+                text = line
+                if option.get(
+                    "pattern"
+                ):  # an output with a pattern of its own: no bracket (here the package's `%-5p %m`)
+                    text = f"{line.split(' ', 3)[2]:<5} {line.split('] ', 1)[1]}"
+                if output == "stdout":
+                    self.journal.append(text)
+                elif output.startswith("/") and self.may_write(output):
+                    self.written.setdefault(output, []).append(text)
 
     def log_lines(self, path):
         """The file as the helper's read finds it: None when it is not there."""
