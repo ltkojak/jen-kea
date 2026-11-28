@@ -177,6 +177,28 @@ def install_probes(monkeypatch, *, valid=True):
     return data
 
 
+ROOMY_WAIT = 10.0  # seconds a command that is NOT made to hang may take before a test calls it a timeout
+HUNG_WAIT = 0.4  # seconds Jen waits for a command a test made the fake hang on (`fake.hang`); the fake's `hang_seconds` is longer
+
+
+def install_wait(monkeypatch, *fakes):
+    """Q254: the ONE place a test sets `kea_api_config.COMMAND_TIMEOUT`. Twelve files set it to 0.4 or 0.6 s for EVERY command against a real local server, so a runner that stalled one
+    handler thread for that long turned a working change into "Kea API request timed out." (the pass on v7.1.0-beta.8: a family of 572 tests, one red tag). A command no test hangs now gets
+    `ROOMY_WAIT`; only a command named in a given fake's `hang` at the moment it is sent gets `HUNG_WAIT`, and only when the product passed no wait of its own. The product's `_cmd` still sends."""
+    monkeypatch.setattr(_real_api, "COMMAND_TIMEOUT", ROOMY_WAIT)
+    if not fakes:
+        return
+    send = _real_api._cmd
+
+    def _cmd(server, service, command, arguments=None, timeout=None):
+        url = (server or {}).get("api_url")
+        if not timeout and any(f.url == url and command in f.hang for f in fakes):
+            timeout = HUNG_WAIT
+        return send(server, service, command, arguments, timeout=timeout)
+
+    monkeypatch.setattr(_real_api, "_cmd", _cmd)
+
+
 def host_reads_the_fakes_file(monkeypatch, fake, store=None, server_id=None):
     """Q218 - the Kea HOST's file for a test whose daemon is `fake` (tests/e2e/_fake_kea_server.py::StatefulKeaServer): `kea_host.read_config_versioned` answers the fake's own held FILE (`fake.file`,
     which `config-write` overwrites with what runs, as Kea does), never a canned value, so "the operator's edit is gone" is observed and not inferred. With a `store`, a CAPTURING read records what the

@@ -11,7 +11,6 @@ import copy
 import pytest
 
 from jen import extensions
-from jen.services import kea_api_config as api
 from jen.services import kea_host
 from tests import _kea_api_world as world
 from tests._kea_host_fakes import FakeHelper
@@ -31,7 +30,7 @@ def _world(monkeypatch):
     world.install_store(monkeypatch)
     world.install_probes(monkeypatch)
     monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
-    monkeypatch.setattr(api, "COMMAND_TIMEOUT", 2.0)
+    world.install_wait(monkeypatch)
     monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "Office", "cidr": "10.99.0.0/24"}})
     monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
 

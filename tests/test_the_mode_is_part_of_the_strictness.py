@@ -44,14 +44,15 @@ def _quiet(monkeypatch):
     monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
     monkeypatch.setattr(cs, "record_outcome", lambda *a, **k: None)
     monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
-    monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.6)
+    world.install_wait(monkeypatch)
 
 
 @pytest.fixture
-def fake():
+def fake(monkeypatch):
     f = StatefulKeaServer(copy.deepcopy(TWO_SUBNET_DHCP4))
     f.hang_seconds = 1.2
     f.start()
+    world.install_wait(monkeypatch, f)
     yield f
     f.stop()
 

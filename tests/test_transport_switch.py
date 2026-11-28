@@ -28,7 +28,7 @@ def _quiet(monkeypatch):
     monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: "")
     monkeypatch.setattr("jen.services.investigation_logging.restore_window", lambda server, now=None: "")
     monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
-    monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.4)
+    world.install_wait(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

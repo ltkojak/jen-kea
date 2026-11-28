@@ -59,7 +59,7 @@ def fake(monkeypatch, store, refusal):
     f = StatefulKeaServer(cfg)
     f.start()
     monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
-    monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.4)
+    world.install_wait(monkeypatch, f)
     f.hang_seconds = 1.2
     yield f
     f.stop()

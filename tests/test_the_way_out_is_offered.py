@@ -44,7 +44,7 @@ def fake(monkeypatch, store):
     f = StatefulKeaServer(copy.deepcopy(TWO_SUBNET_DHCP4))
     f.start()
     monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
-    monkeypatch.setattr(api, "COMMAND_TIMEOUT", 0.6)
+    world.install_wait(monkeypatch)
     yield f
     f.stop()
 
